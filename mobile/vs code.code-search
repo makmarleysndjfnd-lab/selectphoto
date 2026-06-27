@@ -1,0 +1,9 @@
+# Query: vs code
+# ContextLines: 1
+
+1 result - 1 file
+
+mobile\.gitignore:
+  19  # The .vscode folder contains launch configuration and tasks you configure in
+  20: # VS Code which you may wish to be included in version control, so this line
+  21  # is commented out by default.

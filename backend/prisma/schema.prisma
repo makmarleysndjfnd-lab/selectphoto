@@ -1,0 +1,277 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id          String   @id @default(uuid())
+  name        String
+  cnpj        String?  @unique
+  isActive    Boolean  @default(true)
+  planLimit   Int      @default(500)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  users             User[]
+  teams             Team[]
+  clients           Client[]
+  cars              Car[]
+  commercialEvents  CommercialEvent[]
+  costs             Cost[]
+  sales             Sale[]
+  nonSales          NonSale[]
+  sellerPhotos      SellerPhoto[]
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  name      String
+  prefix    String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  type      String   @default("SALES")
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  clients   Client[]
+  costs     Cost[]
+  users     User[]
+}
+
+model User {
+  id                String         @id @default(uuid())
+  name              String
+  email             String         @unique
+  password          String
+  role              String         @default("OPERATOR")
+  active            Boolean        @default(true)
+  teamId            String?
+  companyId         String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  address           String?
+  cpf               String?
+  criminalRecordUrl String?
+  emergencyPhone    String?
+  isTeamLeader      Boolean        @default(false)
+  phone             String?
+  profilePhotoUrl   String?
+  rg                String?
+  usesOwnCar        Boolean        @default(false)
+  company           Company?       @relation(fields: [companyId], references: [id])
+  appointments      Appointment[]
+  currentCars       Car[]          @relation("CarCurrentUser")
+  carChecklists     CarChecklist[]
+  clients           Client[]
+  costs             Cost[]
+  nonSales          NonSale[]
+  sales             Sale[]
+  sellerPhotos      SellerPhoto[]
+  team              Team?          @relation(fields: [teamId], references: [id])
+}
+
+model Client {
+  id             String        @id @default(uuid())
+  sequenceNumber String        @unique
+  createdAt      DateTime      @default(now())
+  name           String
+  cep            String?
+  street         String?
+  number         String?
+  complement     String?
+  block          String?
+  apartment      String?
+  neighborhood   String?
+  city           String?
+  state          String?
+  phone1         String?
+  phone2         String?
+  mainContact    String?
+  event          String?
+  eventDate      DateTime?
+  eventTime      String?
+  visitDate      DateTime?
+  visitTime      String?
+  condo          String?
+  houseColor     String?
+  gateColor      String?
+  gateObservation String?
+  referencePoint String?
+  profession     String?
+  clothesColor   String?
+  latitude       Float?
+  longitude      Float?
+  status         String        @default("PENDING")
+  photographerId String?
+  teamId         String?
+  companyId      String?
+  signatureUrl   String?
+  company        Company?      @relation(fields: [companyId], references: [id])
+  appointments   Appointment[]
+  children       Child[]
+  photographer   User?         @relation(fields: [photographerId], references: [id])
+  team           Team?         @relation(fields: [teamId], references: [id])
+  evaluation     Evaluation?
+  nonSales       NonSale[]
+  sales          Sale[]
+  sellerPhotos   SellerPhoto[]
+}
+
+model Child {
+  id       String @id @default(uuid())
+  name     String
+  age      Int
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model Appointment {
+  id            String   @id @default(uuid())
+  date          DateTime
+  time          String
+  observation   String?
+  status        String   @default("SCHEDULED")
+  clientId      String
+  responsibleId String?
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  responsible   User?    @relation(fields: [responsibleId], references: [id])
+}
+
+model Sale {
+  id            String   @id @default(uuid())
+  value         Float
+  city          String
+  date          DateTime @default(now())
+  sellerId      String
+  clientId      String
+  companyId     String?
+  paymentMethod String   @default("CASH")
+  fichaNumber   String?
+  paymentStatus String   @default("PAID")
+  product       String   @default("Mídias fotográficas")
+  status        String   @default("PRONTO")
+  company       Company? @relation(fields: [companyId], references: [id])
+  client        Client   @relation(fields: [clientId], references: [id])
+  seller        User     @relation(fields: [sellerId], references: [id])
+}
+
+model NonSale {
+  id           String   @id @default(uuid())
+  reason       String
+  date         DateTime @default(now())
+  sellerId     String
+  clientId     String
+  companyId    String?
+  signatureUrl String?
+  company      Company? @relation(fields: [companyId], references: [id])
+  client       Client   @relation(fields: [clientId], references: [id])
+  seller       User     @relation(fields: [sellerId], references: [id])
+}
+
+model SellerPhoto {
+  id        String   @id @default(uuid())
+  photoPath String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  sellerId  String
+  clientId  String
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  client    Client   @relation(fields: [clientId], references: [id])
+  seller    User     @relation(fields: [sellerId], references: [id])
+}
+
+model Evaluation {
+  id                String   @id @default(uuid())
+  photographerStars Int
+  sellerStars       Int
+  createdAt         DateTime @default(now())
+  clientId          String   @unique
+  client            Client   @relation(fields: [clientId], references: [id])
+}
+
+model Car {
+  id                 String         @id @default(uuid())
+  plate              String         @unique
+  model              String
+  trackerLink        String?
+  status             String         @default("AVAILABLE")
+  createdAt          DateTime       @default(now())
+  currentUserId      String?
+  companyId          String?
+  nextOilChangeKm    Int            @default(0)
+  pendingMaintenance String?
+  warrantyParts      String?
+  company            Company?       @relation(fields: [companyId], references: [id])
+  currentUser        User?          @relation("CarCurrentUser", fields: [currentUserId], references: [id])
+  checklists         CarChecklist[]
+  costs              Cost[]
+}
+
+model CarChecklist {
+  id                String   @id @default(uuid())
+  mileage           Int
+  date              DateTime @default(now())
+  carId             String
+  driverId          String
+  backPhotoUrl      String?
+  damageReport      String?
+  dashboardPhotoUrl String?
+  frontPhotoUrl     String?
+  fuelLevel         String
+  leftPhotoUrl      String?
+  rightPhotoUrl     String?
+  car               Car      @relation(fields: [carId], references: [id])
+  driver            User     @relation(fields: [driverId], references: [id])
+}
+
+model Cost {
+  id            String           @id @default(uuid())
+  amount        Float
+  category      String
+  description   String
+  date          DateTime         @default(now())
+  userId        String
+  paymentMethod String           @default("CASH")
+  receiptUrl    String?
+  status        String           @default("PENDING")
+  teamId        String?
+  eventId       String?
+  carId         String?
+  companyId     String?
+  subcategory   String?
+  company       Company?         @relation(fields: [companyId], references: [id])
+  car           Car?             @relation(fields: [carId], references: [id])
+  event         CommercialEvent? @relation(fields: [eventId], references: [id])
+  team          Team?            @relation(fields: [teamId], references: [id])
+  user          User             @relation(fields: [userId], references: [id])
+}
+
+model CommercialEvent {
+  id               String    @id @default(uuid())
+  name             String
+  city             String
+  category         String
+  score            String
+  audience         String?
+  organizerContact String?
+  socialMedia      String?
+  notes            String?
+  isFavorite       Boolean   @default(false)
+  isProspect       Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  startDate        DateTime?
+  observations     String?
+  expectedRevenue  Float?    @default(0)
+  cityAge          String?
+  cityIncome       String?
+  cityPerCapita    String?
+  cityEconomy      String?
+  companyId        String?
+  company          Company?  @relation(fields: [companyId], references: [id])
+  costs            Cost[]
+}
