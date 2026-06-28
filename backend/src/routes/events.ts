@@ -231,7 +231,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     const { id } = req.params;
     const { observations, expectedRevenue, isProspect, isFavorite, name, city, category, score, audience, organizerContact, socialMedia, startDate, notes } = req.body;
 
-    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id } });
+    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: id as string } });
     if (!existingEvent || existingEvent.companyId !== req.user?.companyId) {
       res.status(404).json({ error: 'Evento não encontrado' });
       return;
@@ -253,7 +253,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     if (startDate !== undefined) dataToUpdate.startDate = startDate ? new Date(startDate) : null;
 
     const updated = await prisma.commercialEvent.update({
-      where: { id },
+      where: { id: id as string },
       data: dataToUpdate
     });
     res.json(updated);
@@ -266,13 +266,13 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
 router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id } });
+    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: id as string } });
     if (!existingEvent || existingEvent.companyId !== req.user?.companyId) {
       res.status(404).json({ error: 'Evento não encontrado' });
       return;
     }
 
-    await prisma.commercialEvent.delete({ where: { id } });
+    await prisma.commercialEvent.delete({ where: { id: id as string } });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao deletar evento' });

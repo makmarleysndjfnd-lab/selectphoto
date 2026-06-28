@@ -1,0 +1,47 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
+const client_1 = require("@prisma/client");
+const dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
+const app = (0, express_1.default)();
+const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const port = process.env.PORT || 3000;
+app.use((0, cors_1.default)());
+app.use(express_1.default.json({ limit: '50mb' })); // Increased limit for base64 signatures
+const path_1 = __importDefault(require("path"));
+app.use('/uploads', express_1.default.static(path_1.default.join(__dirname, '../uploads')));
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date() });
+});
+const auth_1 = __importDefault(require("./routes/auth"));
+const teams_1 = __importDefault(require("./routes/teams"));
+const users_1 = __importDefault(require("./routes/users"));
+const clients_1 = __importDefault(require("./routes/clients"));
+const sales_1 = __importDefault(require("./routes/sales"));
+const upload_1 = __importDefault(require("./routes/upload"));
+const fleet_1 = __importDefault(require("./routes/fleet"));
+const finance_1 = __importDefault(require("./routes/finance"));
+const costs_1 = __importDefault(require("./routes/costs"));
+const events_1 = __importDefault(require("./routes/events"));
+const superadmin_1 = __importDefault(require("./routes/superadmin"));
+const app_1 = __importDefault(require("./routes/app"));
+app.use('/api/auth', auth_1.default);
+app.use('/api/teams', teams_1.default);
+app.use('/api/users', users_1.default);
+app.use('/api/clients', clients_1.default);
+app.use('/api/sales', sales_1.default);
+app.use('/api/upload', upload_1.default);
+app.use('/api/fleet', fleet_1.default);
+app.use('/api/finance', finance_1.default);
+app.use('/api/costs', costs_1.default);
+app.use('/api/events', events_1.default);
+app.use('/api/superadmin', superadmin_1.default);
+app.use('/api/app', app_1.default);
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+});

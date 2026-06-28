@@ -99,13 +99,13 @@ router.put('/costs/:id/status', authenticateToken, async (req: AuthRequest, res)
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    const existing = await prisma.cost.findUnique({ where: { id } });
+    const existing = await prisma.cost.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'Cost not found' });
     }
 
     const updated = await prisma.cost.update({
-      where: { id },
+      where: { id: id as string },
       data: { status }
     });
     res.json(updated);

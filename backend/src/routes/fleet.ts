@@ -56,13 +56,13 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
     const { id } = req.params;
     const data = req.body;
     
-    const existing = await prisma.car.findUnique({ where: { id } });
+    const existing = await prisma.car.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'Car not found' });
     }
 
     const updated = await prisma.car.update({
-      where: { id },
+      where: { id: id as string },
       data
     });
     res.json(updated);

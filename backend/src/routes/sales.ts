@@ -81,7 +81,7 @@ router.get('/metrics', authenticateToken, async (req: AuthRequest, res: any) => 
     });
 
     // Grouping logic
-    const citySellerTotals: Record<String, Record<String, { totalValue: number, count: number }>> = {};
+    const citySellerTotals: Record<string, Record<string, { totalValue: number, count: number }>> = {};
 
     for (const sale of sales) {
       if (!citySellerTotals[sale.city]) {

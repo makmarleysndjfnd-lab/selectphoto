@@ -41,13 +41,13 @@ router.post('/companies', authenticateToken, requireSuperAdmin, async (req: Auth
 router.put('/companies/:id/toggle', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const company = await prisma.company.findUnique({ where: { id } });
+    const company = await prisma.company.findUnique({ where: { id: id as string } });
     if (!company) {
       res.status(404).json({ error: 'Company not found' });
       return;
     }
     const updated = await prisma.company.update({
-      where: { id },
+      where: { id: id as string },
       data: { isActive: !company.isActive }
     });
     res.json(updated);
@@ -61,7 +61,7 @@ router.put('/companies/:id/toggle', authenticateToken, requireSuperAdmin, async 
 router.post('/impersonate/:companyId', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { companyId } = req.params;
-    const company = await prisma.company.findUnique({ where: { id: companyId } });
+    const company = await prisma.company.findUnique({ where: { id: companyId as string } });
     
     if (!company) {
       res.status(404).json({ error: 'Company not found' });

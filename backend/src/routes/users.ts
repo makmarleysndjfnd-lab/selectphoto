@@ -94,7 +94,7 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
     const { name, email, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
 
     // Fetch existing to get old URLs
-    const existingUser = await prisma.user.findUnique({ where: { id } });
+    const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
     if (!existingUser || existingUser.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -133,21 +133,21 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
     }
 
     const updatedUser = await prisma.user.update({
-      where: { id },
+      where: { id: id as string },
       data: updateData
     });
 
     if (carId !== undefined) {
       // Clear previous car assignments for this user
       await prisma.car.updateMany({
-        where: { currentUserId: id },
+        where: { currentUserId: id as string },
         data: { currentUserId: null }
       });
       // Assign new car if valid
       if (carId && carId !== 'null' && carId !== '') {
         await prisma.car.update({
           where: { id: carId },
-          data: { currentUserId: id }
+          data: { currentUserId: id as string }
         });
       }
     }
@@ -163,12 +163,12 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
 router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const existingUser = await prisma.user.findUnique({ where: { id } });
+    const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
     if (!existingUser || existingUser.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    await prisma.user.delete({ where: { id } });
+    await prisma.user.delete({ where: { id: id as string } });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete user' });

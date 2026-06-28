@@ -35,12 +35,12 @@ router.put('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
   const { id } = req.params;
   const { name, prefix, active, type } = req.body;
   try {
-    const existing = await prisma.team.findUnique({ where: { id } });
+    const existing = await prisma.team.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'Team not found' });
     }
     const updatedTeam = await prisma.team.update({
-      where: { id },
+      where: { id: id as string },
       data: { name, prefix, active, type }
     });
     res.json(updatedTeam);
@@ -53,12 +53,12 @@ router.put('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
 router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   try {
-    const existing = await prisma.team.findUnique({ where: { id } });
+    const existing = await prisma.team.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'Team not found' });
     }
     await prisma.team.delete({
-      where: { id }
+      where: { id: id as string }
     });
     res.status(204).send();
   } catch (error) {
