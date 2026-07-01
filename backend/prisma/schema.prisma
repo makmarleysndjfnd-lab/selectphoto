@@ -163,6 +163,8 @@ model Sale {
   product       String   @default("Books")
   status        String   @default("PRONTO")
   hasCover      Boolean  @default(true)
+  receiptUrl    String?
+
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?

@@ -16,6 +16,12 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     {'id': '2', 'name': 'Vendedor 2'}
   ];
   String? _selectedSeller;
+  
+  final List<String> _mockReceipts = [
+    'https://images.unsplash.com/photo-1621501103258-3e135c7c2e35?auto=format&fit=crop&w=200&q=80',
+    'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=200&q=80',
+    'https://images.unsplash.com/photo-1589829085413-56de8ae18c73?auto=format&fit=crop&w=200&q=80'
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -107,6 +113,23 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             onPressed: () {},
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text('Registrar Pagamento de Repasse')
+         ),
+         const SizedBox(height: 24),
+         const Divider(color: Colors.white24, height: 1),
+         const SizedBox(height: 16),
+         const Text('Comprovantes de Vendas (Hoje)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+         const SizedBox(height: 12),
+         SingleChildScrollView(
+           scrollDirection: Axis.horizontal,
+           child: Row(
+             children: _mockReceipts.map((url) => Padding(
+               padding: const EdgeInsets.only(right: 12),
+               child: ClipRRect(
+                 borderRadius: BorderRadius.circular(8),
+                 child: Image.network(url, width: 100, height: 140, fit: BoxFit.cover),
+               ),
+             )).toList(),
+           ),
          ),
       ]
     );

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { upload } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -33,6 +34,39 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     res.status(201).json(sale);
   } catch (error) {
     console.error('Create sale error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Upload a receipt for a Sale
+router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res: any) => {
+  try {
+    const { id } = req.params;
+    const sellerId = req.user.id;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Receipt photo is required' });
+    }
+
+    const sale = await prisma.sale.findUnique({ where: { id } });
+    if (!sale) {
+      return res.status(404).json({ error: 'Sale not found' });
+    }
+
+    if (sale.sellerId !== sellerId && req.user.role !== 'COMPANY_ADMIN' && req.user.role !== 'ADMIN') {
+      return res.status(403).json({ error: 'Access denied to this sale' });
+    }
+
+    const receiptUrl = `/uploads/${req.file.filename}`;
+
+    const updatedSale = await prisma.sale.update({
+      where: { id },
+      data: { receiptUrl }
+    });
+
+    res.json(updatedSale);
+  } catch (error) {
+    console.error('Upload receipt error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
