@@ -8,23 +8,26 @@ datasource db {
 }
 
 model Company {
-  id          String   @id @default(uuid())
-  name        String
-  cnpj        String?  @unique
-  isActive    Boolean  @default(true)
-  planLimit   Int      @default(500)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  users             User[]
-  teams             Team[]
-  clients           Client[]
-  cars              Car[]
-  commercialEvents  CommercialEvent[]
-  costs             Cost[]
-  sales             Sale[]
-  nonSales          NonSale[]
-  sellerPhotos      SellerPhoto[]
+  id        String   @id @default(uuid())
+  name      String
+  cnpj      String?  @unique
+  isActive  Boolean  @default(true)
+  planLimit Int      @default(500)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                User[]
+  teams                Team[]
+  clients              Client[]
+  cars                 Car[]
+  commercialEvents     CommercialEvent[]
+  costs                Cost[]
+  sales                Sale[]
+  nonSales             NonSale[]
+  sellerPhotos         SellerPhoto[]
+  coverStockBatches    CoverStockBatch[]
+  sellerCoverTransfers SellerCoverTransfer[]
+  bookBatches          BookBatch[]
 }
 
 model Team {
@@ -43,82 +46,87 @@ model Team {
 }
 
 model User {
-  id                String         @id @default(uuid())
-  name              String
-  email             String         @unique
-  password          String
-  role              String         @default("OPERATOR")
-  active            Boolean        @default(true)
-  teamId            String?
-  companyId         String?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  address           String?
-  cpf               String?
-  criminalRecordUrl String?
-  emergencyPhone    String?
-  isTeamLeader      Boolean        @default(false)
-  phone             String?
-  profilePhotoUrl   String?
-  rg                String?
-  usesOwnCar        Boolean        @default(false)
-  company           Company?       @relation(fields: [companyId], references: [id])
-  appointments      Appointment[]
-  currentCars       Car[]          @relation("CarCurrentUser")
-  carChecklists     CarChecklist[]
-  clients           Client[]
-  costs             Cost[]
-  nonSales          NonSale[]
-  sales             Sale[]
-  sellerPhotos      SellerPhoto[]
-  team              Team?          @relation(fields: [teamId], references: [id])
+  id                      String                @id @default(uuid())
+  name                    String
+  email                   String                @unique
+  password                String
+  role                    String                @default("OPERATOR")
+  active                  Boolean               @default(true)
+  teamId                  String?
+  companyId               String?
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  address                 String?
+  cpf                     String?
+  criminalRecordUrl       String?
+  emergencyPhone          String?
+  isTeamLeader            Boolean               @default(false)
+  phone                   String?
+  profilePhotoUrl         String?
+  rg                      String?
+  usesOwnCar              Boolean               @default(false)
+  company                 Company?              @relation(fields: [companyId], references: [id])
+  appointments            Appointment[]
+  currentCars             Car[]                 @relation("CarCurrentUser")
+  carChecklists           CarChecklist[]
+  clients                 Client[]
+  costs                   Cost[]
+  nonSales                NonSale[]
+  sales                   Sale[]
+  sellerPhotos            SellerPhoto[]
+  team                    Team?                 @relation(fields: [teamId], references: [id])
+  photographerBookBatches BookBatch[]           @relation("PhotographerBookBatches")
+  coverTransfersSent      SellerCoverTransfer[] @relation("CoverTransfersSent")
+  coverTransfersReceived  SellerCoverTransfer[] @relation("CoverTransfersReceived")
+  coverBalance            SellerCoverBalance?
+  dailyClosings           DailyClosing[]
 }
 
 model Client {
-  id             String        @id @default(uuid())
-  sequenceNumber String        @unique
-  createdAt      DateTime      @default(now())
-  name           String
-  cep            String?
-  street         String?
-  number         String?
-  complement     String?
-  block          String?
-  apartment      String?
-  neighborhood   String?
-  city           String?
-  state          String?
-  phone1         String?
-  phone2         String?
-  mainContact    String?
-  event          String?
-  eventDate      DateTime?
-  eventTime      String?
-  visitDate      DateTime?
-  visitTime      String?
-  condo          String?
-  houseColor     String?
-  gateColor      String?
+  id              String        @id @default(uuid())
+  sequenceNumber  String        @unique
+  createdAt       DateTime      @default(now())
+  name            String
+  cep             String?
+  street          String?
+  number          String?
+  complement      String?
+  block           String?
+  apartment       String?
+  neighborhood    String?
+  city            String?
+  state           String?
+  phone1          String?
+  phone2          String?
+  mainContact     String?
+  event           String?
+  eventDate       DateTime?
+  eventTime       String?
+  visitDate       DateTime?
+  visitTime       String?
+  condo           String?
+  houseColor      String?
+  gateColor       String?
   gateObservation String?
-  referencePoint String?
-  profession     String?
-  clothesColor   String?
-  latitude       Float?
-  longitude      Float?
-  status         String        @default("PENDING")
-  photographerId String?
-  teamId         String?
-  companyId      String?
-  signatureUrl   String?
-  company        Company?      @relation(fields: [companyId], references: [id])
-  appointments   Appointment[]
-  children       Child[]
-  photographer   User?         @relation(fields: [photographerId], references: [id])
-  team           Team?         @relation(fields: [teamId], references: [id])
-  evaluation     Evaluation?
-  nonSales       NonSale[]
-  sales          Sale[]
-  sellerPhotos   SellerPhoto[]
+  referencePoint  String?
+  profession      String?
+  clothesColor    String?
+  latitude        Float?
+  longitude       Float?
+  status          String        @default("PENDING")
+  photographerId  String?
+  teamId          String?
+  companyId       String?
+  signatureUrl    String?
+  company         Company?      @relation(fields: [companyId], references: [id])
+  appointments    Appointment[]
+  children        Child[]
+  photographer    User?         @relation(fields: [photographerId], references: [id])
+  team            Team?         @relation(fields: [teamId], references: [id])
+  evaluation      Evaluation?
+  nonSales        NonSale[]
+  sales           Sale[]
+  sellerPhotos    SellerPhoto[]
 }
 
 model Child {
@@ -152,8 +160,12 @@ model Sale {
   paymentMethod String   @default("CASH")
   fichaNumber   String?
   paymentStatus String   @default("PAID")
-  product       String   @default("Mídias fotográficas")
+  product       String   @default("Books")
   status        String   @default("PRONTO")
+  hasCover      Boolean  @default(true)
+  sellerRating       Int?
+  photographerRating Int?
+  contactRating      Int?
   company       Company? @relation(fields: [companyId], references: [id])
   client        Client   @relation(fields: [clientId], references: [id])
   seller        User     @relation(fields: [sellerId], references: [id])
@@ -167,6 +179,9 @@ model NonSale {
   clientId     String
   companyId    String?
   signatureUrl String?
+  sellerRating       Int?
+  photographerRating Int?
+  contactRating      Int?
   company      Company? @relation(fields: [companyId], references: [id])
   client       Client   @relation(fields: [clientId], references: [id])
   seller       User     @relation(fields: [sellerId], references: [id])
@@ -274,4 +289,56 @@ model CommercialEvent {
   companyId        String?
   company          Company?  @relation(fields: [companyId], references: [id])
   costs            Cost[]
+}
+
+model CoverStockBatch {
+  id        String   @id @default(uuid())
+  quantity  Int
+  entryDate DateTime @default(now())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+}
+
+model SellerCoverTransfer {
+  id        String   @id @default(uuid())
+  sellerId  String
+  adminId   String
+  quantity  Int
+  date      DateTime @default(now())
+  companyId String?
+  seller    User     @relation("CoverTransfersReceived", fields: [sellerId], references: [id])
+  admin     User     @relation("CoverTransfersSent", fields: [adminId], references: [id])
+  company   Company? @relation(fields: [companyId], references: [id])
+}
+
+model SellerCoverBalance {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  balance  Int    @default(0)
+  seller   User   @relation(fields: [sellerId], references: [id])
+}
+
+model DailyClosing {
+  id              String   @id @default(uuid())
+  date            DateTime @default(now())
+  sellerId        String
+  totalSalesValue Float
+  cashValue       Float
+  pixValue        Float
+  debitValue      Float
+  creditValue     Float
+  commission      Float
+  repasseDebt     Float
+  seller          User     @relation(fields: [sellerId], references: [id])
+}
+
+model BookBatch {
+  id             String   @id @default(uuid())
+  name           String
+  date           DateTime @default(now())
+  photographerId String
+  companyId      String?
+  status         String   @default("CREATED") // CREATED, DISTRIBUTED
+  photographer   User     @relation("PhotographerBookBatches", fields: [photographerId], references: [id])
+  company        Company? @relation(fields: [companyId], references: [id])
 }

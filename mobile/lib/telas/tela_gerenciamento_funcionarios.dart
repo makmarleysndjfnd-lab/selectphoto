@@ -317,7 +317,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        const Text('Foto Perfil', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                        const Text('book Perfil', style: TextStyle(color: Colors.white70, fontSize: 12)),
                         
                         const SizedBox(height: 20),
                         

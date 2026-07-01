@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:signature/signature.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
@@ -20,7 +22,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
     Tab(icon: Icon(Icons.attach_money_rounded), text: 'Venda'),
     Tab(icon: Icon(Icons.cancel_rounded), text: 'Não Venda'),
     Tab(icon: Icon(Icons.calendar_month_rounded), text: 'Agendar'),
-    Tab(icon: Icon(Icons.camera_alt_rounded), text: 'Fotos'),
+    Tab(icon: Icon(Icons.camera_alt_rounded), text: 'books'),
   ];
 
   @override
@@ -145,9 +147,21 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                     _infoRow(Icons.phone_rounded,
                         client['phone1'] ?? 'Sem telefone'),
                     const SizedBox(height: 4),
-                    _infoRow(
-                        Icons.location_on_rounded,
-                        "${client['street']}, ${client['number']} — ${client['city']}"),
+                    GestureDetector(
+                      onTap: () async {
+                        final q = "${client['street']}, ${client['number']} ${client['city']}";
+                        final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                        }
+                      },
+                      child: Container(
+                        color: Colors.transparent, // to make it tappable
+                        child: _infoRow(
+                            Icons.location_on_rounded,
+                            "${client['street']}, ${client['number']} — ${client['city']}"),
+                      ),
+                    ),
                     if (client['referencePoint'] != null && client['referencePoint'].toString().isNotEmpty) ...[
                       const SizedBox(height: 4),
                       _infoRow(Icons.place, "Ref: ${client['referencePoint']}"),
@@ -280,6 +294,27 @@ InputDecoration _fieldDecoration(String label, IconData icon) {
   );
 }
 
+Widget _buildRatingField(String label, void Function(double) onRatingUpdate) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+      const SizedBox(height: 4),
+      RatingBar.builder(
+        initialRating: 0,
+        minRating: 1,
+        direction: Axis.horizontal,
+        allowHalfRating: false,
+        itemCount: 5,
+        itemSize: 30,
+        unratedColor: Colors.white24,
+        itemBuilder: (context, _) => const Icon(Icons.star_rounded, color: Colors.amber),
+        onRatingUpdate: onRatingUpdate,
+      ),
+    ],
+  );
+}
+
 Widget _confirmButton(
     {required bool isLoading,
     required VoidCallback? onPressed,
@@ -339,17 +374,19 @@ class _SaleTabState extends State<_SaleTab> {
   final _fichaController = TextEditingController();
   bool _isLoading = false;
 
-  String _product = 'Mídias fotográficas';
-  String _status = 'PRONTO';
-  String _paymentStatus = 'PAID';
+  String _product = 'Book completo capa +Book+mídias';
   String _paymentMethod = 'CASH';
+  bool _hasCover = true;
+  double _sellerRating = 0;
+  double _photoRating = 0;
+  double _contactRating = 0;
 
   void _submit() async {
     if (_valueController.text.isEmpty) return;
     setState(() => _isLoading = true);
     
     // In a real app, this would be an API call to POST /sales
-    // with body: { clientId, city, value, product, status, paymentStatus, fichaNumber, paymentMethod }
+    // with body: { clientId, city, value, product, status, paymentStatus, fichaNumber, paymentMethod, hasCover }
     await Future.delayed(const Duration(milliseconds: 700));
     
     if (!mounted) return;
@@ -394,16 +431,47 @@ class _SaleTabState extends State<_SaleTab> {
           ),
           const SizedBox(height: 16),
 
-          _buildDropdown('Produto', _product, ['Book fotográfico', 'Capa do book', 'Mídias fotográficas', 'Álbum / Fotos Impressas'], (v) => setState(() => _product = v!)),
+          _buildDropdown('Produto', _product, ['Book completo capa +Book+mídias', 'Book sem mídias', 'Book sem capa', 'Book com defeito'], (v) {
+            setState(() {
+              _product = v!;
+              if (_product == 'Book sem capa') {
+                _hasCover = false;
+              } else if (_product == 'Book completo capa +Book+mídias' || _product == 'Book sem mídias') {
+                _hasCover = true;
+              }
+            });
+          }),
           const SizedBox(height: 16),
           
-          _buildDropdown('Status de Entrega', _status, ['PRONTO', 'EM ROTA'], (v) => setState(() => _status = v!)),
-          const SizedBox(height: 16),
-          
-          _buildDropdown('Status de Pagamento', _paymentStatus, ['PAID', 'PENDING', 'OVERDUE'], (v) => setState(() => _paymentStatus = v!)),
-          const SizedBox(height: 16),
+          if (_product == 'Book com defeito') ...[
+            Theme(
+              data: Theme.of(context).copyWith(
+                unselectedWidgetColor: Colors.white54,
+              ),
+              child: CheckboxListTile(
+                title: const Text('O book tinha capa?', style: TextStyle(color: Colors.white)),
+                subtitle: const Text('Marque se a capa precisou ser usada.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                value: _hasCover,
+                activeColor: const Color(0xFF4FC3F7),
+                checkColor: Colors.black,
+                tileColor: Colors.white.withOpacity(0.05),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onChanged: (val) => setState(() => _hasCover = val ?? false),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           
           _buildDropdown('Método de Pagamento', _paymentMethod, ['CASH', 'PIX', 'DEBIT', 'CREDIT'], (v) => setState(() => _paymentMethod = v!)),
+          const SizedBox(height: 24),
+          
+          const Text('Avaliação do Atendimento', style: TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(height: 12),
+          _buildRatingField('Vendedor', (r) => _sellerRating = r),
+          const SizedBox(height: 12),
+          _buildRatingField('Fotógrafo', (r) => _photoRating = r),
+          const SizedBox(height: 12),
+          _buildRatingField('O Contato', (r) => _contactRating = r),
           const SizedBox(height: 24),
 
           _confirmButton(
@@ -462,6 +530,9 @@ class _NonSaleTabState extends State<_NonSaleTab> {
     exportBackgroundColor: Colors.white,
   );
   bool _isLoading = false;
+  double _sellerRating = 0;
+  double _photoRating = 0;
+  double _contactRating = 0;
 
   void _submit() async {
     if (_selectedReason == null) {
@@ -529,7 +600,7 @@ class _NonSaleTabState extends State<_NonSaleTab> {
               borderRadius: BorderRadius.circular(12),
               child: Signature(
                   controller: _sigController,
-                  height: 140,
+                  height: 280,
                   backgroundColor: Colors.white),
             ),
           ),
@@ -541,6 +612,16 @@ class _NonSaleTabState extends State<_NonSaleTab> {
                 style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           ),
           const SizedBox(height: 12),
+          
+          const Text('Avaliação do Atendimento', style: TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(height: 12),
+          _buildRatingField('Vendedor', (r) => _sellerRating = r),
+          const SizedBox(height: 12),
+          _buildRatingField('Fotógrafo', (r) => _photoRating = r),
+          const SizedBox(height: 12),
+          _buildRatingField('O Contato', (r) => _contactRating = r),
+          const SizedBox(height: 24),
+
           _confirmButton(
             isLoading: _isLoading,
             onPressed: _submit,
@@ -708,7 +789,7 @@ class _ScheduleTabState extends State<_ScheduleTab> {
   }
 }
 
-// ── ABA FOTOS ─────────────────────────────────────────────────────────────────
+// ── ABA books ─────────────────────────────────────────────────────────────────
 class _PhotosTab extends StatefulWidget {
   final String clientId;
   final void Function(String) onSuccess;
@@ -736,7 +817,7 @@ class _PhotosTabState extends State<_PhotosTab> {
       _isUploading = false;
       _fakeImageLabel = null;
     });
-    widget.onSuccess('Foto enviada! Será deletada automaticamente em 10 dias.');
+    widget.onSuccess('book enviada! Será deletada automaticamente em 10 dias.');
   }
 
   @override
@@ -752,13 +833,13 @@ class _PhotosTabState extends State<_PhotosTab> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(height: 4),
-                  Text('Fotos do Cliente',
+                  Text('books do Cliente',
                       style: TextStyle(
                           color: Colors.white,
                           fontSize: 18,
                           fontWeight: FontWeight.bold)),
                   Text(
-                      'Fotos são armazenadas por 10 dias e deletadas automaticamente.',
+                      'books são armazenadas por 10 dias e deletadas automaticamente.',
                       style: TextStyle(
                           color: Color(0xFF90CAF9), fontSize: 12)),
                   SizedBox(height: 20),
@@ -801,7 +882,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                             Icon(Icons.add_photo_alternate_outlined,
                                 color: Color(0xFF546E7A), size: 56),
                             SizedBox(height: 12),
-                            Text('Nenhuma foto selecionada',
+                            Text('Nenhuma book selecionada',
                                 style: TextStyle(
                                     color: Color(0xFF546E7A),
                                     fontSize: 13)),
@@ -819,7 +900,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                     onPressed: _isUploading ? null : _fakeCapture,
                     icon: const Icon(Icons.camera_alt_rounded,
                         color: Color(0xFF4FC3F7)),
-                    label: const Text('Tirar Foto',
+                    label: const Text('Tirar book',
                         style: TextStyle(color: Color(0xFF4FC3F7))),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),

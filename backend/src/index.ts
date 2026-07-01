@@ -30,6 +30,9 @@ import costsRoutes from './routes/costs';
 import eventsRoutes from './routes/events';
 import superadminRoutes from './routes/superadmin';
 import appRoutes from './routes/app';
+import closingRoutes from './routes/closing';
+import stockRoutes from './routes/stock';
+import booksRoutes from './routes/books';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);
@@ -43,6 +46,9 @@ app.use('/api/costs', costsRoutes);
 app.use('/api/events', eventsRoutes);
 app.use('/api/superadmin', superadminRoutes);
 app.use('/api/app', appRoutes);
+app.use('/api/closing', closingRoutes);
+app.use('/api/stock', stockRoutes);
+app.use('/api/books', booksRoutes);
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

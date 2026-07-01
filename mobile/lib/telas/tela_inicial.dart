@@ -195,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen>
           Text(
             isSeller
                 ? 'Escaneie fichas e registre vendas.'
-                : 'Gerencie seus clientes e fotos.',
+                : 'Gerencie seus clientes e books.',
             style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 14),
           ),
           const SizedBox(height: 24),
@@ -218,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen>
                       ? Icons.attach_money_rounded
                       : Icons.photo_library_rounded,
                   value: isSeller ? 'R\$ 4.280' : '312',
-                  label: isSeller ? 'Vendas hoje' : 'Fotos tiradas',
+                  label: isSeller ? 'Vendas hoje' : 'books tiradas',
                   color: const Color(0xFF66BB6A),
                 ),
               ),
@@ -449,12 +449,12 @@ class _HomeScreenState extends State<HomeScreen>
                 icon: Icons.camera_rounded,
                 color: Color(0xFF4FC3F7),
                 title: 'Sess\u00e3o conclu\u00edda \u2013 Carlos Mendes',
-                subtitle: '24 fotos \u00b7 h\u00e1 20 min'),
+                subtitle: '24 books \u00b7 h\u00e1 20 min'),
             const _ActivityItem(
                 icon: Icons.camera_rounded,
                 color: Color(0xFF4FC3F7),
                 title: 'Sess\u00e3o conclu\u00edda \u2013 Fam\u00edlia Rocha',
-                subtitle: '31 fotos \u00b7 h\u00e1 1h'),
+                subtitle: '31 books \u00b7 h\u00e1 1h'),
             const _ActivityItem(
                 icon: Icons.pending_rounded,
                 color: Color(0xFFFFA726),

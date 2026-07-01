@@ -101,7 +101,7 @@ class ApiService {
     try {
       await _dio.post('/sales/photos', data: photoData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload da foto');
+      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload da book');
     }
   }
 

@@ -262,7 +262,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           backgroundColor: const Color(0xFF1A1A2E),
           title: const Text('Aviso Legal', style: TextStyle(color: Colors.white)),
           content: const Text(
-            'Autorizo fotografar minha criança(s) ganhar uma foto presente e demonstrar as outras fotos sem compromisso de compra em até 90 dias.',
+            'Autorizo fotografar minha criança(s) ganhar uma book presente e demonstrar as outras books sem compromisso de compra em até 90 dias.',
             style: TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -716,7 +716,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   const SizedBox(height: 16),
                   const Text('Ficha Gerada com Sucesso!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
                   const SizedBox(height: 8),
-                  const Text('Peça para o fotógrafo tirar uma foto deste QR Code na casa do cliente.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
+                  const Text('Peça para o fotógrafo tirar uma book deste QR Code na casa do cliente.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.all(16),

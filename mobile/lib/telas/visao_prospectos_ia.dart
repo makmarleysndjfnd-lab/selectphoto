@@ -203,51 +203,70 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                 return const Center(child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54)));
               }
 
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SingleChildScrollView(
-                  child: Theme(
-                    data: Theme.of(context).copyWith(
-                      dividerColor: Colors.white10,
-                    ),
-                    child: DataTable(
-                      headingTextStyle: const TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold),
-                      dataTextStyle: const TextStyle(color: Colors.white),
-                      columnSpacing: 24,
-                      columns: const [
-                        DataColumn(label: Text('Cidade')),
-                        DataColumn(label: Text('Evento')),
-                        DataColumn(label: Text('Data')),
-                        DataColumn(label: Text('População')),
-                        DataColumn(label: Text('Renda Per Capita')),
-                        DataColumn(label: Text('PIB')),
-                        DataColumn(label: Text('Nota')),
-                        DataColumn(label: Text('Ação')),
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Resultados para $state', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                        ElevatedButton.icon(
+                          onPressed: () => _loadDataForState(state),
+                          icon: const Icon(Icons.refresh, color: Colors.white),
+                          label: const Text('Atualizar', style: TextStyle(color: Colors.white)),
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047)),
+                        ),
                       ],
-                      rows: events.map<DataRow>((evt) {
-                        return DataRow(
-                          cells: [
-                            DataCell(Text(evt['city'] ?? '')),
-                            DataCell(Text(evt['name'] ?? '')),
-                            DataCell(Text(evt['startDate'] ?? '')),
-                            DataCell(Text(evt['population']?.toString() ?? '')),
-                            DataCell(Text(evt['perCapitaIncome']?.toString() ?? evt['income']?.toString() ?? '')),
-                            DataCell(Text(evt['gdp']?.toString() ?? '-')),
-                            DataCell(
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(evt['score']?.toString() ?? '', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                              )
-                            ),
-                            DataCell(
-                              ElevatedButton.icon(
-                                onPressed: () => _addProspect(evt, state),
-                                icon: const Icon(Icons.add, size: 16, color: Colors.white),
-                                label: const Text('Adicionar aos Prospectos', style: TextStyle(color: Colors.white, fontSize: 12)),
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SingleChildScrollView(
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            dividerColor: Colors.white10,
+                          ),
+                          child: DataTable(
+                            headingTextStyle: const TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold),
+                            dataTextStyle: const TextStyle(color: Colors.white),
+                            columnSpacing: 24,
+                            columns: const [
+                              DataColumn(label: Text('Cidade')),
+                              DataColumn(label: Text('Evento')),
+                              DataColumn(label: Text('Data')),
+                              DataColumn(label: Text('População')),
+                              DataColumn(label: Text('Renda Per Capita')),
+                              DataColumn(label: Text('PIB')),
+                              DataColumn(label: Text('Nota')),
+                              DataColumn(label: Text('Ação')),
+                            ],
+                            rows: events.map<DataRow>((evt) {
+                              return DataRow(
+                                cells: [
+                                  DataCell(Text(evt['city'] ?? '')),
+                                  DataCell(Text(evt['name'] ?? '')),
+                                  DataCell(Text(evt['startDate'] ?? '')),
+                                  DataCell(Text(evt['population']?.toString() ?? '')),
+                                  DataCell(Text(evt['perCapitaIncome']?.toString() ?? evt['income']?.toString() ?? '')),
+                                  DataCell(Text(evt['gdp']?.toString() ?? '-')),
+                                  DataCell(
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(evt['score']?.toString() ?? '', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                                    )
+                                  ),
+                                  DataCell(
+                                    ElevatedButton.icon(
+                                      onPressed: () => _addProspect(evt, state),
+                                      icon: const Icon(Icons.add, size: 16, color: Colors.white),
+                                      label: const Text('Adicionar aos Prospectos', style: TextStyle(color: Colors.white, fontSize: 12)),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFF9C27B0),
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -261,7 +280,10 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                     ),
                   ),
                 ),
-              );
+                ),
+                ),
+              ],
+            );
             }).toList(),
           ),
         ),

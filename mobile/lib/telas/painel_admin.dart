@@ -8,6 +8,8 @@ import 'tela_cadastro_custos.dart';
 import 'painel_saude.dart';
 import 'tela_gerenciamento_funcionarios.dart';
 import 'visao_prospectos_ia.dart';
+import 'visao_fechamento_admin.dart';
+import 'visao_estoque_admin.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -75,7 +77,7 @@ final _teamData = [
   },
 ];
 
-// ── Mock: Fotos por equipe ────────────────────────────────────────────────────
+// ── Mock: books por equipe ────────────────────────────────────────────────────
 final _photoEvents = [
   {
     'team': 'Equipe 1 — SP',
@@ -166,7 +168,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with TickerProviderStateMixin {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  int _navIndex = 0;
+  int _navIndex = 7; // Fechamentos is default agora
   // métricas
   int _selectedMonth = 5;
   int _selectedTeam = 0;
@@ -274,27 +276,56 @@ class _AdminDashboardState extends State<AdminDashboard>
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
-                _buildSidebarHeader('OPERAÇÕES E PRODUTOS'),
-                _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
-                _sideMenuItem(1, Icons.photo_library_rounded, 'Fotos'),
-                _sideMenuItem(2, Icons.inventory_2_rounded, 'Estoque'),
+                Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    title: const Text('OPERAÇÕES E PRODUTOS', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    initiallyExpanded: true,
+                    iconColor: const Color(0xFF90CAF9),
+                    collapsedIconColor: const Color(0xFF90CAF9),
+                    children: [
+                      _sideMenuItem(7, Icons.account_balance_wallet_rounded, 'Fechamentos'),
+                      _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
+                      _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
+                      _sideMenuItem(2, Icons.inventory_2_rounded, 'Estoque'),
+                    ],
+                  ),
+                ),
                 
-                const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Divider(color: Colors.white12, height: 1)),
+                const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider(color: Colors.white12, height: 1)),
                 
-                _buildSidebarHeader('FINANCEIRO E SAÚDE'),
-                _sideMenuItem(4, Icons.attach_money_rounded, 'Custos e Caixa'),
-                _sideMenuItem(6, Icons.bar_chart_rounded, 'Métricas e Saúde'),
-                ListTile(
-                  leading: const Icon(Icons.money_off, color: Color(0xFFE57373)),
-                  title: const Text('Despesas', style: TextStyle(color: Color(0xFFE57373))),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CostEntryScreen())),
+                Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    title: const Text('FINANCEIRO E SAÚDE', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    iconColor: const Color(0xFF90CAF9),
+                    collapsedIconColor: const Color(0xFF90CAF9),
+                    children: [
+                      _sideMenuItem(4, Icons.attach_money_rounded, 'Custos e Caixa'),
+                      _sideMenuItem(6, Icons.bar_chart_rounded, 'Métricas e Saúde'),
+                      ListTile(
+                        leading: const Icon(Icons.money_off, color: Color(0xFFE57373)),
+                        title: const Text('Despesas', style: TextStyle(color: Color(0xFFE57373))),
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CostEntryScreen())),
+                      ),
+                    ],
+                  ),
                 ),
 
-                const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Divider(color: Colors.white12, height: 1)),
+                const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider(color: Colors.white12, height: 1)),
 
-                _buildSidebarHeader('RH E LOGÍSTICA'),
-                _sideMenuItem(5, Icons.people_alt_rounded, 'Funcionários'),
-                _sideMenuItem(3, Icons.directions_car_rounded, 'Frota'),
+                Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    title: const Text('RH E LOGÍSTICA', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    iconColor: const Color(0xFF90CAF9),
+                    collapsedIconColor: const Color(0xFF90CAF9),
+                    children: [
+                      _sideMenuItem(5, Icons.people_alt_rounded, 'Funcionários'),
+                      _sideMenuItem(3, Icons.directions_car_rounded, 'Frota'),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -368,11 +399,16 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
-    const tabs = ['Métricas', 'Fotos', 'Estoque'];
+    const tabs = ['Eventos IA', 'Books', 'Estoque', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos'];
     const icons = [
-      Icons.bar_chart_rounded,
-      Icons.photo_library_rounded,
+      Icons.auto_awesome,
+      Icons.menu_book_rounded,
       Icons.inventory_2_rounded,
+      Icons.directions_car_rounded,
+      Icons.attach_money_rounded,
+      Icons.people_alt_rounded,
+      Icons.bar_chart_rounded,
+      Icons.account_balance_wallet_rounded
     ];
     return Container(
       decoration: const BoxDecoration(
@@ -443,16 +479,17 @@ class _AdminDashboardState extends State<AdminDashboard>
             if (!isDesktop)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: Row(
-                  children: List.generate(3, (i) {
-                    final selected = _navIndex == i;
-                    return Expanded(
-                      child: GestureDetector(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: List.generate(8, (i) {
+                      final selected = _navIndex == i;
+                      return GestureDetector(
                         onTap: () => setState(() => _navIndex = i),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
-                          margin: EdgeInsets.only(right: i < 2 ? 8 : 0),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          margin: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                           decoration: BoxDecoration(
                             color: selected
                                 ? Colors.white.withOpacity(0.15)
@@ -464,6 +501,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     : Colors.transparent),
                           ),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Icon(icons[i],
@@ -484,9 +522,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                             ],
                           ),
                         ),
-                      ),
-                    );
-                  }),
+                      );
+                    }),
+                  ),
                 ),
               ),
           ],
@@ -502,7 +540,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       case 1:
         return _buildPhotosTab();
       case 2:
-        return _buildStockTab();
+        return const VisaoEstoqueAdmin();
       case 3:
         return const FleetAdminView();
       case 4:
@@ -511,8 +549,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         return const EmployeeManagementScreen();
       case 6:
         return const HealthDashboardView();
+      case 7:
+        return const VisaoFechamentoAdmin();
       default:
-        return const StateProspectsView();
+        return const VisaoFechamentoAdmin();
     }
   }
 
@@ -1036,7 +1076,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ABA 2 — FOTOS POR EQUIPE
+  // ABA 2 — books POR EQUIPE
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildPhotosTab() {
     int totalGeral = 0;
@@ -1077,10 +1117,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Total de Fotos Criadas',
+                    const Text('Total de books Criadas',
                         style: TextStyle(
                             color: Color(0xFF90CAF9), fontSize: 12)),
-                    Text('$totalGeral fotos',
+                    Text('$totalGeral books',
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 24,
@@ -1159,7 +1199,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     color: color,
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold)),
-                            const Text('fotos totais',
+                            const Text('books totais',
                                 style: TextStyle(
                                     color: Color(0xFF90CAF9),
                                     fontSize: 10)),
@@ -1238,7 +1278,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                       fontSize: 18,
                                       fontWeight:
                                           FontWeight.bold)),
-                              const Text('fotos',
+                              const Text('books',
                                   style: TextStyle(
                                       color: Color(0xFF90CAF9),
                                       fontSize: 10)),

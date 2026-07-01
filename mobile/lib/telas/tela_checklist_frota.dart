@@ -45,7 +45,7 @@ class _FleetChecklistScreenState extends State<FleetChecklistScreen> {
       return;
     }
     if (_frontPhoto == null || _backPhoto == null || _leftPhoto == null || _rightPhoto == null || _dashboardPhoto == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tire todas as 5 fotos obrigatórias')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tire todas as 5 books obrigatórias')));
       return;
     }
 
@@ -179,7 +179,7 @@ class _FleetChecklistScreenState extends State<FleetChecklistScreen> {
               onChanged: (v) => setState(() => _fuelLevel = v!),
             ),
             const SizedBox(height: 24),
-            const Text('Fotos Obrigatórias', style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+            const Text('books Obrigatórias', style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             _buildPhotoTile('Frente', 'front', _frontPhoto),
             _buildPhotoTile('Traseira', 'back', _backPhoto),

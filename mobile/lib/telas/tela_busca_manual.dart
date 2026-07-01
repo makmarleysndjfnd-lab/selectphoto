@@ -315,7 +315,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton(
-                        onPressed: () => _performSearch(_searchController.text),
+                        onPressed: _isSearching ? null : () => _performSearch(_searchController.text),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF43A047), // Green to indicate refresh/search
                           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),

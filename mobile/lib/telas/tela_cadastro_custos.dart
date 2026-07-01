@@ -14,22 +14,22 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
   final _amountController = TextEditingController();
   final _descController = TextEditingController();
   String _category = 'Produção';
-  String? _subcategory;
   String? _carId;
   String _paymentMethod = 'Dinheiro';
 
   File? _receiptPhoto;
   final ImagePicker _picker = ImagePicker();
 
-  final Map<String, List<String>> _subcategoriesMap = {
-    'Produção': ['Capa', 'Impressão', 'Embalagem'],
-    'Equipamentos': ['Câmera', 'Lente', 'Flash', 'Manutenção'],
-    'Frota': ['Combustível', 'Pneus', 'Seguro', 'IPVA', 'Oficina'],
-    'Operacional': ['Internet', 'Energia', 'Aluguel', 'Limpeza'],
-    'Comissão': ['Comissão Fixa', 'Comissão Variável'],
-    'Impostos': ['Municipal', 'Estadual', 'Federal'],
-    'Outros': ['Geral']
-  };
+  final List<String> _categories = [
+    'Produção',
+    'Equipamentos',
+    'Operacional',
+    'Alimentação',
+    'Combustível',
+    'Hotel',
+    'Conserto Carro',
+    'Outros'
+  ];
 
   final List<Map<String, String>> _mockCars = [
     {'id': 'car_1', 'plate': 'ABC-1234'},
@@ -39,7 +39,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
   @override
   void initState() {
     super.initState();
-    _subcategory = _subcategoriesMap[_category]?.first;
   }
 
   Future<void> _takePhoto() async {
@@ -56,11 +55,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha o valor')));
       return;
     }
-    if (_category == 'Frota' && _carId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Selecione um veículo para gastos de frota')));
-      return;
-    }
-
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0.0;
 
     final db = await DbHelper.instance.database;
@@ -81,8 +75,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
         'teamId': 'mock_team_123', 
         'amount': amount,
         'category': _category,
-        'subcategory': _subcategory,
-        'carId': _carId,
         'description': _descController.text,
         'paymentMethod': _paymentMethod,
         'localFiles': _receiptPhoto != null ? [
@@ -129,7 +121,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                         children: [
                           Icon(Icons.camera_alt, color: Colors.white54, size: 40),
                           SizedBox(height: 8),
-                          Text('Tirar Foto do Recibo (Opcional)', style: TextStyle(color: Colors.white54)),
+                          Text('Tirar book do Recibo (Opcional)', style: TextStyle(color: Colors.white54)),
                         ],
                       )
                     : null,
@@ -166,57 +158,19 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 fillColor: const Color(0xFF1A1A2E),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
               ),
-              items: _subcategoriesMap.keys.map((cat) {
+              items: _categories.map((cat) {
                 return DropdownMenuItem(value: cat, child: Text(cat));
               }).toList(),
               onChanged: (v) {
                 setState(() {
                   _category = v!;
-                  _subcategory = _subcategoriesMap[_category]?.first;
                 });
               },
             ),
             const SizedBox(height: 16),
 
-            if (_subcategoriesMap[_category] != null && _subcategoriesMap[_category]!.isNotEmpty)
-              DropdownButtonFormField<String>(
-                value: _subcategory,
-                dropdownColor: const Color(0xFF1A1A2E),
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Subcategoria',
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF1A1A2E),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                ),
-                items: _subcategoriesMap[_category]!.map((sub) {
-                  return DropdownMenuItem(value: sub, child: Text(sub));
-                }).toList(),
-                onChanged: (v) => setState(() => _subcategory = v),
-              ),
-            if (_subcategoriesMap[_category] != null && _subcategoriesMap[_category]!.isNotEmpty)
-              const SizedBox(height: 16),
 
-            if (_category == 'Frota')
-              DropdownButtonFormField<String>(
-                value: _carId,
-                dropdownColor: const Color(0xFF1A1A2E),
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Veículo da Frota',
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF1A1A2E),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                ),
-                items: _mockCars.map((car) {
-                  return DropdownMenuItem(value: car['id'], child: Text(car['plate']!));
-                }).toList(),
-                onChanged: (v) => setState(() => _carId = v),
-              ),
-            if (_category == 'Frota')
-              const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
             DropdownButtonFormField<String>(
               value: _paymentMethod,

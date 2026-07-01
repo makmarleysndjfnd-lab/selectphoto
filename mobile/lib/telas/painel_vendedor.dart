@@ -3,6 +3,7 @@ import 'tela_detalhes_cliente_vendedor.dart';
 import 'tela_login.dart';
 import 'tela_checklist_frota.dart';
 import 'tela_cadastro_custos.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ── Mock clients data ────────────────────────────────────────────────────────
 final List<Map<String, dynamic>> _mockClients = [
@@ -148,6 +149,109 @@ class _SellerDashboardState extends State<SellerDashboard>
     }).toList();
   }
 
+  void _showFechamentoCidadeDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          title: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Estatísticas do dia:', style: TextStyle(color: Colors.white70)),
+              SizedBox(height: 12),
+              Text('Total de Vendas: 0', style: TextStyle(color: Colors.white)),
+              Text('Total Recebido (R\$): 0.00', style: TextStyle(color: Colors.white)),
+              SizedBox(height: 12),
+              Text('Atenção: Ao confirmar o fechamento, as fichas desta cidade serão bloqueadas e o relatório será enviado ao Admin.',
+                  style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Fechamento enviado ao admin e cidade bloqueada.')));
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
+              child: const Text('Confirmar Fechamento'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDevolverCapasDialog() {
+    final qtyController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          title: const Text('Devolver Capas ao Admin', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Informe a quantidade de capas para devolução em auditoria:', style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: qtyController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Qtd de Capas',
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.05),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${qtyController.text} capas devolvidas ao admin!')));
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+              child: const Text('Confirmar Devolução', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openQRScanner() {
+    Navigator.push(context, MaterialPageRoute(builder: (context) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Ler QR Code', style: TextStyle(color: Colors.white)), backgroundColor: const Color(0xFF0D1B2A), iconTheme: const IconThemeData(color: Colors.white)),
+        body: MobileScanner(
+          onDetect: (capture) {
+            final List<Barcode> barcodes = capture.barcodes;
+            if (barcodes.isNotEmpty && barcodes.first.rawValue != null) {
+              final String code = barcodes.first.rawValue!;
+              Navigator.pop(context);
+              _codeController.text = code;
+              _searchClient();
+            }
+          },
+        ),
+      );
+    }));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -233,6 +337,11 @@ class _SellerDashboardState extends State<SellerDashboard>
                 tooltip: 'Checklist do Veículo',
               ),
               IconButton(
+                onPressed: _showDevolverCapasDialog,
+                icon: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
+                tooltip: 'Devolver Capas',
+              ),
+              IconButton(
                 onPressed: () {
                   Navigator.push(context, MaterialPageRoute(
                     builder: (_) => const CostEntryScreen(),
@@ -269,16 +378,26 @@ class _SellerDashboardState extends State<SellerDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(children: [
-            Icon(Icons.qr_code_scanner_rounded,
-                color: Color(0xFF4FC3F7), size: 20),
-            SizedBox(width: 8),
-            Text('Buscar por código da ficha',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14)),
-          ]),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(children: [
+                Icon(Icons.qr_code_scanner_rounded,
+                    color: Color(0xFF4FC3F7), size: 20),
+                SizedBox(width: 8),
+                Text('Buscar por código da ficha',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14)),
+              ]),
+              IconButton(
+                onPressed: _openQRScanner,
+                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+                tooltip: 'Ler QR Code',
+              ),
+            ],
+          ),
           const SizedBox(height: 4),
           const Text('Ex: CF-EQP1-0001',
               style:
@@ -382,6 +501,20 @@ class _SellerDashboardState extends State<SellerDashboard>
                 style: const TextStyle(
                     color: Color(0xFF90CAF9), fontSize: 12)),
           ],
+        ),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: () {
+            // "Fechamento de Cidade" button to show stats AND send report/lock city for Admin
+            _showFechamentoCidadeDialog();
+          },
+          icon: const Icon(Icons.check_circle_outline, color: Colors.white),
+          label: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFCE93D8),
+            minimumSize: const Size(double.infinity, 45),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
         ),
         const SizedBox(height: 12),
         // Filtro
