@@ -25,29 +25,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     if (!ai && !process.env.GROQ_API_KEY) {
-      // Mocked fallback if no keys are present
-      console.warn("Nenhuma chave de IA configurada (GEMINI_API_KEY ou GROQ_API_KEY). Usando dados mockados.");
-      return res.json({
-        cityInfo: {
-          rendaDomiciliarPerCapitaMedia: "R$ 1.500,00",
-          rendaPerCapita: "R$ 2.000,00",
-          cityAge: "100 anos",
-          economicActivities: "Comércio, Serviços, Agropecuária"
-        },
-        events: [
-          {
-            name: "Festa do Peão de " + city,
-            city: city,
-            category: "AGRO",
-            score: "HIGH",
-            startDate: new Date(Date.now() + 86400000 * 10).toISOString().split('T')[0],
-            audience: "10000 pessoas",
-            ticketPrice: "R$ 50,00",
-            organizerContact: "(11) 99999-9999",
-            socialMedia: "@festadopeao",
-            notes: "Evento de grande porte, ideal para venda de fotos."
-          }
-        ]
+      return res.status(503).json({ 
+        error: 'Chaves de IA não configuradas. Contate o suporte.' 
       });
     }
 
@@ -114,29 +93,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     res.json(result);
   } catch (error: any) {
     console.error('Erro na IA de Eventos:', error);
-    console.warn('Acionando Fallback de Segurança com Mock Data devido a falha nas APIs de IA...');
-    // Mock fallback if APIs throw (e.g. invalid keys)
-    return res.json({
-      cityInfo: {
-        rendaDomiciliarPerCapitaMedia: "R$ 1.500,00",
-        rendaPerCapita: "R$ 2.000,00",
-        cityAge: "100 anos",
-        economicActivities: "Comércio, Serviços, Agropecuária"
-      },
-      events: [
-        {
-          name: "Festa do Peão de " + req.body.city,
-          city: req.body.city,
-          category: "AGRO",
-          score: "HIGH",
-          startDate: new Date(Date.now() + 86400000 * 10).toISOString().split('T')[0],
-          audience: "10000 pessoas",
-          ticketPrice: "R$ 50,00",
-          organizerContact: "(11) 99999-9999",
-          socialMedia: "@festadopeao",
-          notes: "Evento de grande porte, ideal para venda de fotos."
-        }
-      ]
+    return res.status(503).json({ 
+      error: 'Servidor das IAs (Google/Groq) sobrecarregado ou chaves inválidas. Aguarde um pouco e tente novamente.' 
     });
   }
 });
