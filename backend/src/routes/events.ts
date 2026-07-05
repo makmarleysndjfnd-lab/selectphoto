@@ -46,12 +46,12 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     
     if (serapiKey) {
       try {
-        const query = encodeURIComponent(`principais grandes eventos festas agropecuárias exposições em ${city} ${currentDate.getFullYear()} ${currentDate.getFullYear() + 1}`);
-        const serpRes = await fetch(`https://serpapi.com/search.json?q=${query}&hl=pt-br&gl=br&api_key=${serapiKey}`);
+        const query = encodeURIComponent(`agenda de principais eventos shows circos festas exposições em ${city} ${currentDate.getFullYear()} ${currentDate.getFullYear() + 1}`);
+        const serpRes = await fetch(`https://serpapi.com/search.json?q=${query}&num=20&hl=pt-br&gl=br&api_key=${serapiKey}`);
         if (serpRes.ok) {
           const serpData = await serpRes.json();
           const results = serpData.organic_results || [];
-          searchContext = results.slice(0, 10).map((r: any) => `Título: ${r.title}\nResumo: ${r.snippet}`).join('\n\n');
+          searchContext = results.slice(0, 15).map((r: any) => `Título: ${r.title}\nResumo: ${r.snippet}`).join('\n\n');
         }
       } catch (e) {
         console.warn("Erro ao buscar no SerpAPI", e);

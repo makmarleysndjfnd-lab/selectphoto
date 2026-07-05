@@ -31,8 +31,8 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
     _loadDataForState(_states[0]);
   }
 
-  Future<void> _loadDataForState(String state) async {
-    if (_stateData.containsKey(state) && _stateData[state]!.isNotEmpty) return;
+  Future<void> _loadDataForState(String state, {bool force = false}) async {
+    if (!force && _stateData.containsKey(state) && _stateData[state]!.isNotEmpty) return;
     
     setState(() {
       _isLoading[state] = true;
@@ -172,7 +172,28 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
             controller: _tabController,
             children: _states.map((state) {
               if (_isLoading[state] == true) {
-                return const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)));
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 3),
+                        SizedBox(height: 24),
+                        Text(
+                          'Estamos fazendo aquele pente fino para você ter os melhores eventos à disposição... Aguarde!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0xFFCE93D8),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
               }
               if (_errors[state] != null) {
                 return Center(
@@ -213,7 +234,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                       children: [
                         Text('Resultados para $state', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                         ElevatedButton.icon(
-                          onPressed: () => _loadDataForState(state),
+                          onPressed: () => _loadDataForState(state, force: true),
                           icon: const Icon(Icons.refresh, color: Colors.white),
                           label: const Text('Atualizar', style: TextStyle(color: Colors.white)),
                           style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047)),
