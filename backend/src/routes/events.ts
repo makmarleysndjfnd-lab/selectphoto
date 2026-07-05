@@ -36,10 +36,11 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const currentDateStr = currentDate.toISOString().split('T')[0];
     const targetDateStr = targetDate.toISOString().split('T')[0];
 
-    const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com datas. Procure e liste eventos reais que ocorrem na cidade "${city}".
+    const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com datas e fatos. Procure e liste eventos reais que ocorrem na cidade "${city}".
     ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
-    É EXPRESSAMENTE PROIBIDO retornar eventos que já aconteceram, mesmo que no ano atual. Verifique o mês e o ano com atenção!
+    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar datas para forçar um evento a parecer no futuro. Se o evento já aconteceu neste ano ou você não sabe a data exata futura, NÃO coloque ele na lista de 'events'. Em vez disso, apenas cite o nome dele no campo 'principaisFestasFixas' da cidade.
     PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público (ex: Moto Week, Festa do Morango, Festa do Milho, etc).
+    Para o campo 'audience' (público), tente fornecer o número estimado (ex: '5000 pessoas'). Se não souber o número, use 'Médio público' ou 'Grande público'.
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
     ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
@@ -67,6 +68,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }`;
 
     let text = '';
+    let aiSource = '';
     try {
       if (!ai) throw new Error('Gemini AI not initialized');
       const response = await ai.models.generateContent({
@@ -75,6 +77,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         config: { temperature: 0.1 }
       });
       text = response.text || '';
+      aiSource = 'Gemini (Google)';
     } catch (err: any) {
       console.warn("[Gemini] Falhou ou não configurado. Acionando API de Fallback (Groq)...");
       const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -93,10 +96,17 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       if (!groqResponse.ok) throw new Error('Groq failed');
       const data = await groqResponse.json();
       text = data.choices[0].message.content || '';
+      aiSource = 'Llama 3.3 (Groq)';
     }
 
     const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
     let result = JSON.parse(cleanJson);
+    
+    // Inject the AI source into the response
+    if (result.cityInfo) {
+      result.cityInfo.aiSource = aiSource;
+    }
+
     res.json(result);
   } catch (error: any) {
     console.error('Erro na IA de Eventos:', error);

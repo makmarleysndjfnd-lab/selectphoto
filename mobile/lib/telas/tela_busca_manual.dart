@@ -379,6 +379,8 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                               Text('Resultados da Inteligência', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 16, fontWeight: FontWeight.bold)),
                             ],
                           ),
+                          const SizedBox(height: 8),
+                          Text('Fonte da IA: ${_cityInfo!['aiSource'] ?? 'Desconhecida'}', style: const TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic)),
                           const SizedBox(height: 20),
                           _buildDemographicItem('Renda Domiciliar Média', _cityInfo!['rendaDomiciliarPerCapitaMedia'] ?? 'N/A', Icons.monetization_on),
                           const Divider(color: Colors.white12, height: 24),
