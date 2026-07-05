@@ -345,6 +345,18 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                         );
                       },
                     ),
+                  ] else if (_cityInfo != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(color: Colors.orangeAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.event_busy, color: Colors.orangeAccent),
+                          SizedBox(width: 12),
+                          Expanded(child: Text('Nenhum grande evento futuro encontrado para esta cidade. Procure em outra região.', style: TextStyle(color: Colors.orangeAccent, fontSize: 16))),
+                        ],
+                      ),
+                    ),
                   ]
                 ],
               ),
