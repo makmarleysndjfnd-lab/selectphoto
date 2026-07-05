@@ -288,7 +288,28 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       child: Text('Erro: $_error', style: const TextStyle(color: Colors.redAccent)),
                     ),
                   
-                  if (_searchResults.isNotEmpty) ...[
+                  if (_isSearching)
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+                      alignment: Alignment.center,
+                      child: Column(
+                        children: [
+                          const CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 3),
+                          const SizedBox(height: 24),
+                          const Text(
+                            'Estamos fazendo aquele pente fino para você ter os melhores eventos à disposição... Aguarde!',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Color(0xFFCE93D8), 
+                              fontSize: 16, 
+                              fontWeight: FontWeight.w500,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_searchResults.isNotEmpty) ...[
                     ListView.builder(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),

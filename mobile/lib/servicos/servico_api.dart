@@ -15,8 +15,8 @@ class ApiService {
         'Bypass-Tunnel-Reminder': 'true',
         'User-Agent': 'loca.lt'
       },
-      connectTimeout: const Duration(seconds: 40),
-      receiveTimeout: const Duration(seconds: 40),
+      connectTimeout: const Duration(seconds: 90),
+      receiveTimeout: const Duration(seconds: 90),
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
