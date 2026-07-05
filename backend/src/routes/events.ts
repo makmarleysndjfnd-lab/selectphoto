@@ -30,9 +30,15 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       });
     }
 
-    const currentDate = new Date().toISOString().split('T')[0];
-    const prompt = `Você é um agente de Inteligência Comercial. Procure e liste eventos reais que ocorrem na cidade "${city}".
-    ATENÇÃO: Hoje é ${currentDate}. Você DEVE retornar APENAS eventos que ainda vão acontecer no futuro, com pelo menos 1 dia de antecedência. NÃO retorne eventos do passado.
+    const currentDate = new Date();
+    const targetDate = new Date();
+    targetDate.setDate(currentDate.getDate() + 15);
+    const currentDateStr = currentDate.toISOString().split('T')[0];
+    const targetDateStr = targetDate.toISOString().split('T')[0];
+
+    const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com datas. Procure e liste eventos reais que ocorrem na cidade "${city}".
+    ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
+    É EXPRESSAMENTE PROIBIDO retornar eventos que já aconteceram, mesmo que no ano atual. Verifique o mês e o ano com atenção!
     PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias.
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
     ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
@@ -41,7 +47,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         "rendaDomiciliarPerCapitaMedia": "...",
         "rendaPerCapita": "...",
         "cityAge": "...",
-        "economicActivities": "..."
+        "economicActivities": "...",
+        "principaisFestasFixas": "..."
       },
       "events": [
         {

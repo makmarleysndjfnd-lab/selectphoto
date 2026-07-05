@@ -387,6 +387,8 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                           _buildDemographicItem('Idade / Fundação', _cityInfo!['cityAge'] ?? 'N/A', Icons.history),
                           const Divider(color: Colors.white12, height: 24),
                           _buildDemographicItem('Atividades Econômicas Principais', _cityInfo!['economicActivities'] ?? 'N/A', Icons.factory),
+                          const Divider(color: Colors.white12, height: 24),
+                          _buildDemographicItem('Principais Festas Fixas Anuais', _cityInfo!['principaisFestasFixas'] ?? 'N/A', Icons.celebration),
                         ],
                       ),
                     )
