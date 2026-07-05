@@ -10,9 +10,9 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+    const { cpf, password } = req.body;
     try {
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({ where: { cpf } });
         if (!user) {
             res.status(401).json({ error: 'Invalid credentials' });
             return;
@@ -27,13 +27,13 @@ router.post('/login', async (req, res) => {
             return;
         }
         // Token expires in 30 days for offline persistence
-        const token = jsonwebtoken_1.default.sign({ id: user.id, email: user.email, role: user.role, teamId: user.teamId, companyId: user.companyId }, process.env.JWT_SECRET, { expiresIn: '30d' });
+        const token = jsonwebtoken_1.default.sign({ id: user.id, cpf: user.cpf, role: user.role, teamId: user.teamId, companyId: user.companyId }, process.env.JWT_SECRET, { expiresIn: '30d' });
         res.json({
             token,
             user: {
                 id: user.id,
                 name: user.name,
-                email: user.email,
+                cpf: user.cpf,
                 role: user.role,
                 teamId: user.teamId,
                 companyId: user.companyId,

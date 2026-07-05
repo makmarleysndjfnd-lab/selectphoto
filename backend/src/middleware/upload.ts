@@ -19,10 +19,10 @@ export const upload = multer({
     s3: s3,
     bucket: process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app',
     acl: 'public-read', // Permite que a foto seja lida publicamente pelo app
-    metadata: function (req, file, cb) {
+    metadata: function (req: any, file: any, cb: any) {
       cb(null, { fieldName: file.fieldname });
     },
-    key: function (req, file, cb) {
+    key: function (req: any, file: any, cb: any) {
       const ext = path.extname(file.originalname) || '.jpg';
       const fileName = `${uuidv4()}${ext}`;
       cb(null, fileName);

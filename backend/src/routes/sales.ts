@@ -41,7 +41,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
 // Upload a receipt for a Sale
 router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res: any) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const sellerId = req.user.id;
 
     if (!req.file) {

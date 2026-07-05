@@ -115,7 +115,6 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
 
     const updateData: any = {
       name,
-      email,
       role,
       teamId: teamId || null,
       cpf: cpf || null,

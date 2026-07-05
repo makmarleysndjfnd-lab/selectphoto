@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const upload_1 = require("../middleware/upload");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
 // Register a Sale
@@ -31,6 +32,34 @@ router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
     }
     catch (error) {
         console.error('Create sale error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// Upload a receipt for a Sale
+router.post('/:id/receipt', authMiddleware_1.authenticateToken, upload_1.upload.single('receipt'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sellerId = req.user.id;
+        if (!req.file) {
+            return res.status(400).json({ error: 'Receipt photo is required' });
+        }
+        const sale = await prisma.sale.findUnique({ where: { id } });
+        if (!sale) {
+            return res.status(404).json({ error: 'Sale not found' });
+        }
+        if (sale.sellerId !== sellerId && req.user.role !== 'COMPANY_ADMIN' && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Access denied to this sale' });
+        }
+        // A URL pública é retornada pelo multer-s3 no atributo 'location'
+        const receiptUrl = req.file.location;
+        const updatedSale = await prisma.sale.update({
+            where: { id },
+            data: { receiptUrl }
+        });
+        res.json(updatedSale);
+    }
+    catch (error) {
+        console.error('Upload receipt error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

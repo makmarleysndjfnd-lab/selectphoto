@@ -35,7 +35,9 @@ router.get('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmi
 // Create user (Admin only)
 router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmin, upload_1.upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req, res) => {
     try {
-        const { name, email, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+        const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+        if (!cpf)
+            return res.status(400).json({ error: 'CPF is required' });
         let profilePhotoUrl = null;
         let criminalRecordUrl = null;
         if (req.files) {
@@ -51,7 +53,6 @@ router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdm
         const newUser = await prisma.user.create({
             data: {
                 name,
-                email,
                 password: hashedPassword,
                 role: role || 'OPERATOR',
                 teamId: teamId || null,
@@ -73,18 +74,18 @@ router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdm
                 data: { currentUserId: newUser.id }
             });
         }
-        res.status(201).json({ id: newUser.id, email: newUser.email });
+        res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
     }
     catch (error) {
         console.error('Error creating user:', error);
-        res.status(500).json({ error: 'Failed to create user. Email might be in use.' });
+        res.status(500).json({ error: 'Failed to create user. CPF might be in use.' });
     }
 });
 // Update user (Admin only)
 router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmin, upload_1.upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, email, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
+        const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
         // Fetch existing to get old URLs
         const existingUser = await prisma.user.findUnique({ where: { id: id } });
         if (!existingUser || existingUser.companyId !== req.user?.companyId) {
@@ -103,7 +104,6 @@ router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireA
         }
         const updateData = {
             name,
-            email,
             role,
             teamId: teamId || null,
             cpf: cpf || null,
