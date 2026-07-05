@@ -21,7 +21,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
-  final _emailController = TextEditingController();
+  final _cpfController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -96,17 +96,17 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _animController.dispose();
-    _emailController.dispose();
+    _cpfController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   void _login() async {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
+    final cpf = _cpfController.text.trim();
+    final password = _passwordController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      _showError('Preencha e-mail e senha.');
+    if (cpf.isEmpty || password.isEmpty) {
+      _showError('Preencha CPF e senha.');
       return;
     }
 
@@ -115,7 +115,7 @@ class _LoginScreenState extends State<LoginScreen>
     String? role;
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
-      final response = await apiService.login(email, password);
+      final response = await apiService.login(cpf, password);
       
       final token = response['token'];
       final user = response['user'];
@@ -243,10 +243,10 @@ class _LoginScreenState extends State<LoginScreen>
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             _buildField(
-                              controller: _emailController,
-                              label: 'E-mail',
-                              icon: Icons.email_outlined,
-                              keyboardType: TextInputType.emailAddress,
+                              controller: _cpfController,
+                              label: 'CPF',
+                              icon: Icons.person_outline,
+                              keyboardType: TextInputType.number,
                             ),
                             const SizedBox(height: 16),
                             _buildField(

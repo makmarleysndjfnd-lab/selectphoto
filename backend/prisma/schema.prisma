@@ -48,7 +48,7 @@ model Team {
 model User {
   id                      String                @id @default(uuid())
   name                    String
-  email                   String                @unique
+  email                   String?               @unique
   password                String
   role                    String                @default("OPERATOR")
   active                  Boolean               @default(true)
@@ -57,7 +57,7 @@ model User {
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
   address                 String?
-  cpf                     String?
+  cpf                     String?               @unique
   criminalRecordUrl       String?
   emergencyPhone          String?
   isTeamLeader            Boolean               @default(false)

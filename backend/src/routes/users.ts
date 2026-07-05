@@ -36,7 +36,9 @@ router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: R
 // Create user (Admin only)
 router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
   try {
-    const { name, email, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+    
+    if (!cpf) return res.status(400).json({ error: 'CPF is required' });
     
     let profilePhotoUrl = null;
     let criminalRecordUrl = null;
@@ -56,7 +58,6 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
     const newUser = await prisma.user.create({
       data: { 
         name, 
-        email, 
         password: hashedPassword, 
         role: role || 'OPERATOR', 
         teamId: teamId || null,
@@ -80,10 +81,10 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
       });
     }
     
-    res.status(201).json({ id: newUser.id, email: newUser.email });
+    res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
   } catch (error: any) {
     console.error('Error creating user:', error);
-    res.status(500).json({ error: 'Failed to create user. Email might be in use.' });
+    res.status(500).json({ error: 'Failed to create user. CPF might be in use.' });
   }
 });
 
@@ -91,7 +92,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
 router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, email, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
+    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
 
     // Fetch existing to get old URLs
     const existingUser = await prisma.user.findUnique({ where: { id: id as string } });

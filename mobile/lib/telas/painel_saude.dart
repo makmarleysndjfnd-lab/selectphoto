@@ -88,7 +88,6 @@ class _HealthDashboardViewState extends State<HealthDashboardView> {
             _kpiCard('Receita', (_kpis['receita'] ?? 0).toDouble(), Icons.trending_up, Colors.green),
             _kpiCard('Lucro', (_kpis['lucro'] ?? 0).toDouble(), Icons.monetization_on, Colors.amber),
             _kpiCard('Custos', (_kpis['custos'] ?? 0).toDouble(), Icons.trending_down, Colors.redAccent),
-            _kpiCard('Inadimplência', (_kpis['inadimplencia'] ?? 0).toDouble(), Icons.warning_amber, Colors.orange),
             _kpiCard('Gastos da Frota', (_kpis['frota'] ?? 0).toDouble(), Icons.directions_car, Colors.purple),
           ],
         );

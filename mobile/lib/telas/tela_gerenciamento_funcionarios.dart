@@ -179,7 +179,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   final _formKey = GlobalKey<FormState>();
 
   late TextEditingController _nameCtrl;
-  late TextEditingController _emailCtrl;
   late TextEditingController _passwordCtrl;
   late TextEditingController _cpfCtrl;
   late TextEditingController _rgCtrl;
@@ -204,7 +203,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     super.initState();
     final emp = widget.employee;
     _nameCtrl = TextEditingController(text: emp?['name'] ?? '');
-    _emailCtrl = TextEditingController(text: emp?['email'] ?? '');
     _passwordCtrl = TextEditingController();
     _cpfCtrl = TextEditingController(text: emp?['cpf'] ?? '');
     _rgCtrl = TextEditingController(text: emp?['rg'] ?? '');
@@ -243,7 +241,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     try {
       final formData = FormData.fromMap({
         'name': _nameCtrl.text,
-        'email': _emailCtrl.text,
         'password': _passwordCtrl.text, // Backend handles empty password logic for PUT
         'role': _role,
         'cpf': _cpfCtrl.text,
@@ -350,24 +347,25 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                             validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
                           ),
                           TextFormField(
-                            controller: _emailCtrl,
+                            controller: _cpfCtrl,
                             style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'Email (Login)', labelStyle: TextStyle(color: Colors.white54)),
+                            decoration: const InputDecoration(labelText: 'CPF (Login)', labelStyle: TextStyle(color: Colors.white54)),
                             validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
                           ),
                           TextFormField(
                             controller: _passwordCtrl,
                             obscureText: true,
                             style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'Senha', labelStyle: TextStyle(color: Colors.white54)),
+                            decoration: const InputDecoration(labelText: 'Senha de Acesso', labelStyle: TextStyle(color: Colors.white54)),
+                            validator: (v) => (v!.isEmpty && widget.employee == null) ? 'Obrigatório para novo funcionário' : null,
                           ),
                           Row(
                             children: [
                               Expanded(
                                 child: TextFormField(
-                                  controller: _cpfCtrl,
+                                  controller: _rgCtrl,
                                   style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(labelText: 'CPF', labelStyle: TextStyle(color: Colors.white54)),
+                                  decoration: const InputDecoration(labelText: 'RG', labelStyle: TextStyle(color: Colors.white54)),
                                 ),
                               ),
                               const SizedBox(width: 16),

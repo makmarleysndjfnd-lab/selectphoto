@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../servicos/ajudante_bd.dart';
+import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 
 class CostEntryScreen extends StatefulWidget {
   const CostEntryScreen({super.key});
@@ -55,7 +56,8 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha o valor')));
       return;
     }
-    final amount = double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0.0;
+    final cleanAmount = _amountController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
+    final amount = double.tryParse(cleanAmount) ?? 0.0;
 
     final db = await DbHelper.instance.database;
     await db.insert('local_costs', {
@@ -135,6 +137,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
             TextField(
               controller: _amountController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [CurrencyTextInputFormatter.currency(locale: 'pt_BR', symbol: 'R\$')],
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 labelText: 'Valor (R\$)',

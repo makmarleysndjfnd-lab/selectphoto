@@ -153,36 +153,60 @@ class _SellerDashboardState extends State<SellerDashboard>
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A2535),
-          title: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Estatísticas do dia:', style: TextStyle(color: Colors.white70)),
-              SizedBox(height: 12),
-              Text('Total de Vendas: 0', style: TextStyle(color: Colors.white)),
-              Text('Total Recebido (R\$): 0.00', style: TextStyle(color: Colors.white)),
-              SizedBox(height: 12),
-              Text('Atenção: Ao confirmar o fechamento, as fichas desta cidade serão bloqueadas e o relatório será enviado ao Admin.',
-                  style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Fechamento enviado ao admin e cidade bloqueada.')));
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
-              child: const Text('Confirmar Fechamento'),
-            ),
-          ],
+        String _selectedSeller = 'João Vendedor';
+        final List<String> _sellers = ['João Vendedor', 'Maria Vendedora', 'Carlos Vendedor'];
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              title: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Estatísticas do dia:', style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 12),
+                  const Text('Total de Vendas: 0', style: TextStyle(color: Colors.white)),
+                  const Text('Total Recebido (R\$): 0.00', style: TextStyle(color: Colors.white)),
+                  const SizedBox(height: 16),
+                  const Text('Vendedor Responsável:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  DropdownButtonFormField<String>(
+                    value: _selectedSeller,
+                    dropdownColor: const Color(0xFF1A2535),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                    ),
+                    items: _sellers.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => _selectedSeller = val);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Atenção: Ao confirmar o fechamento, as fichas desta cidade serão bloqueadas e o relatório será enviado ao Admin.',
+                      style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fechamento enviado ao admin por $_selectedSeller.')));
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
+                  child: const Text('Confirmar Fechamento'),
+                ),
+              ],
+            );
+          }
         );
       },
     );
@@ -503,19 +527,6 @@ class _SellerDashboardState extends State<SellerDashboard>
           ],
         ),
         const SizedBox(height: 12),
-        ElevatedButton.icon(
-          onPressed: () {
-            // "Fechamento de Cidade" button to show stats AND send report/lock city for Admin
-            _showFechamentoCidadeDialog();
-          },
-          icon: const Icon(Icons.check_circle_outline, color: Colors.white),
-          label: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFCE93D8),
-            minimumSize: const Size(double.infinity, 45),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
         const SizedBox(height: 12),
         // Filtro
         TextField(
@@ -545,6 +556,19 @@ class _SellerDashboardState extends State<SellerDashboard>
         ),
         const SizedBox(height: 12),
         ..._filteredClients.map((client) => _buildClientCard(client)),
+        const SizedBox(height: 24),
+        ElevatedButton.icon(
+          onPressed: () {
+            _showFechamentoCidadeDialog();
+          },
+          icon: const Icon(Icons.check_circle_outline, color: Colors.white),
+          label: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFFCE93D8),
+            minimumSize: const Size(double.infinity, 45),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
       ],
     );
   }

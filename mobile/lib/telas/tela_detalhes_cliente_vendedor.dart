@@ -5,7 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_rating_bar/flutter_rating_bar.dart';
+import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
@@ -124,19 +124,20 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
   }
 
   Widget _buildClientInfo(Map<String, dynamic> client) {
-    // Parse houseColor string to Color object
-    Color? parsedHouseColor;
-    if (client['houseColor'] != null && client['houseColor']!.startsWith('Color(')) {
-      final valueString = client['houseColor']!.split('(0x')[1].split(')')[0];
-      parsedHouseColor = Color(int.parse(valueString, radix: 16));
+    Color? parseColor(String? colorStr) {
+      if (colorStr == null || colorStr.isEmpty) return null;
+      if (colorStr.startsWith('Color(')) {
+        final val = colorStr.split('(0x')[1].split(')')[0];
+        return Color(int.parse(val, radix: 16));
+      }
+      // handle integer string
+      final intVal = int.tryParse(colorStr);
+      if (intVal != null) return Color(intVal);
+      return null;
     }
     
-    // Parse gateColor string to Color object
-    Color? parsedGateColor;
-    if (client['gateColor'] != null && client['gateColor']!.startsWith('Color(')) {
-      final valueString = client['gateColor']!.split('(0x')[1].split(')')[0];
-      parsedGateColor = Color(int.parse(valueString, radix: 16));
-    }
+    Color? parsedHouseColor = parseColor(client['houseColor']);
+    Color? parsedGateColor = parseColor(client['gateColor']);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -289,6 +290,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
 
   Widget _buildTabView(Map<String, dynamic> client) {
     return TabBarView(
+      physics: const NeverScrollableScrollPhysics(),
       controller: _tabController,
       children: [
         _SaleTab(clientId: client['id'], city: client['city'] ?? '',
@@ -397,8 +399,8 @@ class _SaleTab extends StatefulWidget {
 }
 
 class _SaleTabState extends State<_SaleTab> {
-  final _valueController = TextEditingController();
-  final _fichaController = TextEditingController();
+  final _valorVendaController = TextEditingController();
+  final _numeroFichaController = TextEditingController();
   bool _isLoading = false;
 
   String _product = 'Book completo capa +Book+mídias';
@@ -413,7 +415,9 @@ class _SaleTabState extends State<_SaleTab> {
   final ImagePicker _picker = ImagePicker();
 
   void _submit() async {
-    if (_valueController.text.isEmpty) return;
+    final cleanAmount = _valorVendaController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
+    final double valor = double.tryParse(cleanAmount) ?? 0.0;
+    if (_valorVendaController.text.isEmpty) return;
     setState(() => _isLoading = true);
     
     // In a real app, this would be an API call to POST /sales
@@ -451,8 +455,8 @@ class _SaleTabState extends State<_SaleTab> {
       _saleFinalized = false;
       _receiptPhoto = null;
     });
-    _valueController.clear();
-    _fichaController.clear();
+    _valorVendaController.clear();
+    _numeroFichaController.clear();
     widget.onSuccess('Comprovante anexado com sucesso!');
   }
 
@@ -476,17 +480,18 @@ class _SaleTabState extends State<_SaleTab> {
           const SizedBox(height: 20),
           
           TextField(
-            controller: _valueController,
-            style: const TextStyle(color: Colors.white),
+            controller: _valorVendaController,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [CurrencyTextInputFormatter.currency(locale: 'pt_BR', symbol: 'R\$')],
+            style: const TextStyle(color: Colors.white),
             decoration: _fieldDecoration(r'Valor da Venda (R$)', Icons.attach_money_rounded),
           ),
           const SizedBox(height: 16),
 
           TextField(
-            controller: _fichaController,
+            controller: _numeroFichaController,
             style: const TextStyle(color: Colors.white),
-            decoration: _fieldDecoration('Número da Ficha (Opcional)', Icons.tag_rounded),
+            decoration: _fieldDecoration('Observações', Icons.notes_rounded),
           ),
           const SizedBox(height: 16),
 
@@ -590,8 +595,8 @@ class _SaleTabState extends State<_SaleTab> {
                       onPressed: () {
                         setState(() {
                           _saleFinalized = false;
-                          _valueController.clear();
-                          _fichaController.clear();
+                          _valorVendaController.clear();
+                          _numeroFichaController.clear();
                         });
                       },
                       child: const Text('Pular / Fechar', style: TextStyle(color: Colors.white54)),

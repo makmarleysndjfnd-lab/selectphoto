@@ -38,10 +38,10 @@ class ApiService {
     return e.message ?? 'Erro de conexão';
   }
 
-  Future<Map<String, dynamic>> login(String email, String password) async {
+  Future<Map<String, dynamic>> login(String cpf, String password) async {
     try {
       final response = await _dio.post('/auth/login', data: {
-        'email': email,
+        'cpf': cpf,
         'password': password,
       });
       return response.data as Map<String, dynamic>;
