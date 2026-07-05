@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 import '../servicos/servico_api.dart';
 import 'tela_inicial.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -247,6 +248,10 @@ class _LoginScreenState extends State<LoginScreen>
                               label: 'CPF',
                               icon: Icons.person_outline,
                               keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(11),
+                              ],
                             ),
                             const SizedBox(height: 16),
                             _buildField(
@@ -331,11 +336,13 @@ class _LoginScreenState extends State<LoginScreen>
     TextInputType? keyboardType,
     bool obscure = false,
     Widget? suffixIcon,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscure,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
