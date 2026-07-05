@@ -191,68 +191,22 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
         title: const Text('Busca de Eventos e Cidades (IA)', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Esquerda: Contexto Demográfico
-          Expanded(
-            flex: 2,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('Análise Demográfica da Cidade', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  if (_cityInfo == null)
-                    const Text('Faça uma busca para ver a análise da IA sobre a cidade.', style: TextStyle(color: Colors.white54, fontSize: 16))
-                  else
-                    Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A1A2E),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFCE93D8).withOpacity(0.5)),
-                      ),
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.analytics, color: Color(0xFFCE93D8), size: 28),
-                              SizedBox(width: 12),
-                              Text('Resultados da Inteligência', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 20, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                          _buildDemographicItem('Renda Domiciliar Média', _cityInfo!['rendaDomiciliarPerCapitaMedia'] ?? 'N/A', Icons.monetization_on),
-                          const Divider(color: Colors.white12, height: 32),
-                          _buildDemographicItem('Renda Per Capita (Geral)', _cityInfo!['rendaPerCapita'] ?? 'N/A', Icons.attach_money),
-                          const Divider(color: Colors.white12, height: 32),
-                          _buildDemographicItem('Idade / Fundação', _cityInfo!['cityAge'] ?? 'N/A', Icons.history),
-                          const Divider(color: Colors.white12, height: 32),
-                          _buildDemographicItem('Atividades Econômicas Principais', _cityInfo!['economicActivities'] ?? 'N/A', Icons.factory),
-                        ],
-                      ),
-                    )
-                ],
-              ),
-            ),
-          ),
-          
-          // Direita: Busca e Resultados
-          Expanded(
-            flex: 3,
-            child: Container(
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Área de Busca e Resultados (Topo no mobile)
+            Container(
               color: const Color(0xFF111122),
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(20.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
+                  // Campo de busca e botão em coluna para caber na tela
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(
-                        child: Autocomplete<String>(
+                      Autocomplete<String>(
                           optionsBuilder: (TextEditingValue textEditingValue) {
                             if (textEditingValue.text.isEmpty || _ibgeCities.isEmpty) {
                               return const Iterable<String>.empty();
@@ -311,14 +265,13 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                               ),
                             );
                           },
-                        ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(height: 12),
                       ElevatedButton(
                         onPressed: _isSearching ? null : () => _performSearch(_searchController.text),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF43A047), // Green to indicate refresh/search
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                          backgroundColor: const Color(0xFF43A047),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         child: _isSearching
@@ -335,8 +288,10 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       child: Text('Erro: $_error', style: const TextStyle(color: Colors.redAccent)),
                     ),
                   
-                  Expanded(
-                    child: ListView.builder(
+                  if (_searchResults.isNotEmpty) ...[
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
                       itemCount: _searchResults.length,
                       itemBuilder: (context, index) {
                         final evt = _searchResults[index];
@@ -345,36 +300,18 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                           margin: const EdgeInsets.only(bottom: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           child: Padding(
-                            padding: const EdgeInsets.all(20.0),
+                            padding: const EdgeInsets.all(16.0),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(evt['name'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                                          const SizedBox(height: 4),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                                            child: Text(evt['category'] ?? 'OTHER', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
-                                          )
-                                        ],
-                                      ),
-                                    ),
-                                    ElevatedButton.icon(
-                                      onPressed: () => _addProspect(evt),
-                                      icon: const Icon(Icons.bookmark_add, size: 20, color: Colors.white),
-                                      label: const Text('Salvar Prospecto', style: TextStyle(color: Colors.white)),
-                                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16)),
-                                    )
-                                  ],
+                                Text(evt['name'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
+                                  child: Text(evt['category'] ?? 'OTHER', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
                                 ),
-                                const SizedBox(height: 16),
+                                const SizedBox(height: 12),
                                 _buildEventDetailRow(Icons.calendar_month, 'Data: ${evt['startDate'] ?? 'A definir'}'),
                                 _buildEventDetailRow(Icons.groups, 'Público Esperado: ${evt['audience'] ?? 'N/A'}'),
                                 _buildEventDetailRow(Icons.local_activity, 'Entrada/Ingresso: ${evt['ticketPrice'] ?? 'N/A'}'),
@@ -391,6 +328,16 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                                       Expanded(child: Text('Análise da IA: ${evt['notes'] ?? ''}', style: const TextStyle(color: Colors.blueAccent, fontStyle: FontStyle.italic))),
                                     ],
                                   ),
+                                ),
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () => _addProspect(evt),
+                                    icon: const Icon(Icons.bookmark_add, size: 20, color: Colors.white),
+                                    label: const Text('Salvar Prospecto', style: TextStyle(color: Colors.white)),
+                                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047), padding: const EdgeInsets.symmetric(vertical: 14)),
+                                  ),
                                 )
                               ],
                             ),
@@ -398,12 +345,56 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                         );
                       },
                     ),
-                  )
+                  ]
                 ],
               ),
             ),
-          )
-        ],
+
+            // Contexto Demográfico (Base no mobile)
+            Container(
+              color: const Color(0xFF0D0D1A),
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Análise Demográfica da Cidade', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  if (_cityInfo == null)
+                    const Text('Faça uma busca para ver a análise da IA sobre a cidade.', style: TextStyle(color: Colors.white54, fontSize: 14))
+                  else
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A2E),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFCE93D8).withOpacity(0.5)),
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.analytics, color: Color(0xFFCE93D8), size: 24),
+                              SizedBox(width: 12),
+                              Text('Resultados da Inteligência', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 16, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          _buildDemographicItem('Renda Domiciliar Média', _cityInfo!['rendaDomiciliarPerCapitaMedia'] ?? 'N/A', Icons.monetization_on),
+                          const Divider(color: Colors.white12, height: 24),
+                          _buildDemographicItem('Renda Per Capita (Geral)', _cityInfo!['rendaPerCapita'] ?? 'N/A', Icons.attach_money),
+                          const Divider(color: Colors.white12, height: 24),
+                          _buildDemographicItem('Idade / Fundação', _cityInfo!['cityAge'] ?? 'N/A', Icons.history),
+                          const Divider(color: Colors.white12, height: 24),
+                          _buildDemographicItem('Atividades Econômicas Principais', _cityInfo!['economicActivities'] ?? 'N/A', Icons.factory),
+                        ],
+                      ),
+                    )
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

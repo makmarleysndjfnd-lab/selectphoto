@@ -57,7 +57,8 @@ router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (
       return res.status(403).json({ error: 'Access denied to this sale' });
     }
 
-    const receiptUrl = `/uploads/${req.file.filename}`;
+    // A URL pública é retornada pelo multer-s3 no atributo 'location'
+    const receiptUrl = (req.file as any).location;
 
     const updatedSale = await prisma.sale.update({
       where: { id },
