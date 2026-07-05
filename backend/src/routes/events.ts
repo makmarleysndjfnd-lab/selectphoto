@@ -39,7 +39,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com datas. Procure e liste eventos reais que ocorrem na cidade "${city}".
     ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
     É EXPRESSAMENTE PROIBIDO retornar eventos que já aconteceram, mesmo que no ano atual. Verifique o mês e o ano com atenção!
-    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias.
+    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público (ex: Moto Week, Festa do Morango, Festa do Milho, etc).
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
     ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
