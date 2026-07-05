@@ -25,35 +25,21 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
             return;
         }
         if (!ai && !process.env.GROQ_API_KEY) {
-            // Mocked fallback if no keys are present
-            console.warn("Nenhuma chave de IA configurada (GEMINI_API_KEY ou GROQ_API_KEY). Usando dados mockados.");
-            return res.json({
-                cityInfo: {
-                    rendaDomiciliarPerCapitaMedia: "R$ 1.500,00",
-                    rendaPerCapita: "R$ 2.000,00",
-                    cityAge: "100 anos",
-                    economicActivities: "Comércio, Serviços, Agropecuária"
-                },
-                events: [
-                    {
-                        name: "Festa do Peão de " + city,
-                        city: city,
-                        category: "AGRO",
-                        score: "HIGH",
-                        startDate: new Date(Date.now() + 86400000 * 10).toISOString().split('T')[0],
-                        audience: "10000 pessoas",
-                        ticketPrice: "R$ 50,00",
-                        organizerContact: "(11) 99999-9999",
-                        socialMedia: "@festadopeao",
-                        notes: "Evento de grande porte, ideal para venda de fotos."
-                    }
-                ]
+            return res.status(503).json({
+                error: 'Chaves de IA não configuradas. Contate o suporte.'
             });
         }
-        const currentDate = new Date().toISOString().split('T')[0];
-        const prompt = `Você é um agente de Inteligência Comercial. Procure e liste eventos reais que ocorrem na cidade "${city}".
-    ATENÇÃO: Hoje é ${currentDate}. Você DEVE retornar APENAS eventos que ainda vão acontecer no futuro, com pelo menos 1 dia de antecedência. NÃO retorne eventos do passado.
-    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias.
+        const currentDate = new Date();
+        const targetDate = new Date();
+        targetDate.setDate(currentDate.getDate() + 15);
+        const currentDateStr = currentDate.toISOString().split('T')[0];
+        const targetDateStr = targetDate.toISOString().split('T')[0];
+        const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
+    ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
+    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar eventos, datas ou dados. Se você não tiver 100% de certeza de que um grande evento vai ocorrer nesta cidade no futuro, deixe a lista "events" VAZIA: []. NÃO INVENTE NADA.
+    Se o evento já aconteceu neste ano ou você não sabe a data exata futura, NÃO coloque na lista de 'events'. Em vez disso, cite o nome dele no campo 'principaisFestasFixas' da cidade.
+    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público.
+    Para o campo 'audience' (público), tente fornecer o número estimado (ex: '5000 pessoas'). Se não souber o número, use 'Médio público' ou 'Grande público'.
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
     ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
@@ -61,7 +47,8 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
         "rendaDomiciliarPerCapitaMedia": "...",
         "rendaPerCapita": "...",
         "cityAge": "...",
-        "economicActivities": "..."
+        "economicActivities": "...",
+        "principaisFestasFixas": "..."
       },
       "events": [
         {
@@ -79,6 +66,7 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
       ]
     }`;
         let text = '';
+        let aiSource = '';
         try {
             if (!ai)
                 throw new Error('Gemini AI not initialized');
@@ -88,6 +76,7 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
                 config: { temperature: 0.1 }
             });
             text = response.text || '';
+            aiSource = 'Gemini (Google)';
         }
         catch (err) {
             console.warn("[Gemini] Falhou ou não configurado. Acionando API de Fallback (Groq)...");
@@ -108,14 +97,21 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
                 throw new Error('Groq failed');
             const data = await groqResponse.json();
             text = data.choices[0].message.content || '';
+            aiSource = 'Llama 3.3 (Groq)';
         }
         const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
         let result = JSON.parse(cleanJson);
+        // Inject the AI source into the response
+        if (result.cityInfo) {
+            result.cityInfo.aiSource = aiSource;
+        }
         res.json(result);
     }
     catch (error) {
         console.error('Erro na IA de Eventos:', error);
-        res.status(500).json({ error: 'Erro ao buscar eventos.' });
+        return res.status(503).json({
+            error: 'Servidor das IAs (Google/Groq) sobrecarregado ou chaves inválidas. Aguarde um pouco e tente novamente.'
+        });
     }
 });
 // GET /api/events/state-radar

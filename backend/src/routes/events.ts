@@ -36,9 +36,31 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const currentDateStr = currentDate.toISOString().split('T')[0];
     const targetDateStr = targetDate.toISOString().split('T')[0];
 
+    // SERPAPI Web Search Integration
+    const serapiKey = process.env.SERPAPI_API_KEY || '9a0fb4cdec7f3ebacca0b69ddf39191bb3d2ee7a0fe7b4344a7f2625ebded5dc'; // Using provided key if env is not set
+    let searchContext = "";
+    
+    if (serapiKey) {
+      try {
+        const query = encodeURIComponent(`principais grandes eventos festas agropecuárias exposições em ${city} ${currentDate.getFullYear()} ${currentDate.getFullYear() + 1}`);
+        const serpRes = await fetch(`https://serpapi.com/search.json?q=${query}&hl=pt-br&gl=br&api_key=${serapiKey}`);
+        if (serpRes.ok) {
+          const serpData = await serpRes.json();
+          const results = serpData.organic_results || [];
+          searchContext = results.slice(0, 10).map((r: any) => `Título: ${r.title}\nResumo: ${r.snippet}`).join('\n\n');
+        }
+      } catch (e) {
+        console.warn("Erro ao buscar no SerpAPI", e);
+      }
+    }
+
     const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
     ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
-    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar eventos, datas ou dados. Se você não tiver 100% de certeza de que um grande evento vai ocorrer nesta cidade no futuro, deixe a lista "events" VAZIA: []. NÃO INVENTE NADA.
+    
+    CONTEXTO DA INTERNET (RESULTADOS DE BUSCA ATUAIS):
+    ${searchContext ? searchContext : "Nenhum contexto da internet disponível."}
+    
+    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar eventos, datas ou dados. Use EXCLUSIVAMENTE o "CONTEXTO DA INTERNET" acima para encontrar eventos futuros. Se não houver nenhum evento futuro claro no contexto, ou se você não tiver 100% de certeza, deixe a lista "events" VAZIA: []. NÃO INVENTE NADA.
     Se o evento já aconteceu neste ano ou você não sabe a data exata futura, NÃO coloque na lista de 'events'. Em vez disso, cite o nome dele no campo 'principaisFestasFixas' da cidade.
     PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público.
     Para o campo 'audience' (público), tente fornecer o número estimado (ex: '5000 pessoas'). Se não souber o número, use 'Médio público' ou 'Grande público'.
