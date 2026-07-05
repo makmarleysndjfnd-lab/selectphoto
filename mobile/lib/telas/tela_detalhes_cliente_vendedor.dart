@@ -125,10 +125,17 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
 
   Widget _buildClientInfo(Map<String, dynamic> client) {
     // Parse houseColor string to Color object
-    Color? parsedColor;
+    Color? parsedHouseColor;
     if (client['houseColor'] != null && client['houseColor']!.startsWith('Color(')) {
       final valueString = client['houseColor']!.split('(0x')[1].split(')')[0];
-      parsedColor = Color(int.parse(valueString, radix: 16));
+      parsedHouseColor = Color(int.parse(valueString, radix: 16));
+    }
+    
+    // Parse gateColor string to Color object
+    Color? parsedGateColor;
+    if (client['gateColor'] != null && client['gateColor']!.startsWith('Color(')) {
+      final valueString = client['gateColor']!.split('(0x')[1].split(')')[0];
+      parsedGateColor = Color(int.parse(valueString, radix: 16));
     }
 
     return Container(
@@ -191,15 +198,15 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
             ],
           ),
           
-          // Additional Info Row (Cor da Casa, Profissao, Horario, Criancas)
-          if (parsedColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && (client['children'] as List).isNotEmpty)) ...[
+          // Additional Info Row (Cor da Casa, Cor do Portão, Profissao, Horario, Criancas)
+          if (parsedHouseColor != null || parsedGateColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && (client['children'] as List).isNotEmpty)) ...[
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
             const SizedBox(height: 8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (parsedColor != null) ...[
+                if (parsedHouseColor != null) ...[
                   Column(
                     children: [
                       const Text('Cor da Casa', style: TextStyle(color: Colors.white54, fontSize: 10)),
@@ -207,7 +214,24 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                       Container(
                         width: 24, height: 24,
                         decoration: BoxDecoration(
-                          color: parsedColor,
+                          color: parsedHouseColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white30),
+                        ),
+                      )
+                    ],
+                  ),
+                  const SizedBox(width: 16),
+                ],
+                if (parsedGateColor != null) ...[
+                  Column(
+                    children: [
+                      const Text('Cor do Portão', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                      const SizedBox(height: 4),
+                      Container(
+                        width: 24, height: 24,
+                        decoration: BoxDecoration(
+                          color: parsedGateColor,
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white30),
                         ),
