@@ -47,6 +47,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
     
     REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, deixe a lista VAZIA.
+    FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
     Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
     renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
 
@@ -168,6 +169,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
       
       REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, deixe a lista VAZIA.
+      FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
       Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
       
       Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
