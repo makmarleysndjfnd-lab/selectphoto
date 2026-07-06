@@ -227,10 +227,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
               }
 
               final events = _stateData[state] ?? [];
-              if (events.isEmpty) {
-                return const Center(child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54)));
-              }
-
+              
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -249,6 +246,13 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                       ],
                     ),
                   ),
+                  if (events.isEmpty)
+                    const Expanded(
+                      child: Center(
+                        child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54)),
+                      ),
+                    )
+                  else
                   Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
