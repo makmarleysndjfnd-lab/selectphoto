@@ -24,7 +24,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       return;
     }
 
-    if (!ai && !process.env.GROQ_API_KEY) {
+    if (!ai) {
       return res.status(503).json({ 
         error: 'Chaves de IA não configuradas. Contate o suporte.' 
       });
@@ -40,34 +40,16 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const targetDateStr = targetDate.toISOString().split('T')[0];
     const maxDateStr = maxDate.toISOString().split('T')[0];
 
-    // SERPAPI Web Search Integration
-    const serapiKey = process.env.SERPAPI_API_KEY || '9a0fb4cdec7f3ebacca0b69ddf39191bb3d2ee7a0fe7b4344a7f2625ebded5dc'; // Using provided key if env is not set
-    let searchContext = "";
-    
-    if (serapiKey) {
-      try {
-        const query = encodeURIComponent(`agenda de principais eventos shows circos festas exposições em ${city} ${currentDate.getFullYear()} ${currentDate.getFullYear() + 1}`);
-        const serpRes = await fetch(`https://serpapi.com/search.json?q=${query}&num=20&hl=pt-br&gl=br&api_key=${serapiKey}`);
-        if (serpRes.ok) {
-          const serpData = await serpRes.json();
-          const results = serpData.organic_results || [];
-          searchContext = results.slice(0, 15).map((r: any) => `Título: ${r.title}\nResumo: ${r.snippet}`).join('\n\n');
-        }
-      } catch (e) {
-        console.warn("Erro ao buscar no SerpAPI", e);
-      }
-    }
-
     const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
-    ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr} (ou seja, uma janela de 15 a 380 dias no futuro).
+    Hoje é dia ${currentDateStr}.
+    Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
     
-    CONTEXTO DA INTERNET (RESULTADOS DE BUSCA ATUAIS):
-    ${searchContext ? searchContext : "Nenhum contexto da internet disponível."}
+    Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
     
-    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar eventos, datas ou dados. Use EXCLUSIVAMENTE o "CONTEXTO DA INTERNET" acima para encontrar eventos futuros. Se não houver nenhum evento futuro claro no contexto ocorrendo na janela solicitada, deixe a lista "events" VAZIA: []. NÃO INVENTE NADA.
-    Se o evento já aconteceu neste ano ou você não sabe a data exata futura, NÃO coloque na lista de 'events'. Em vez disso, cite o nome dele no campo 'principaisFestasFixas' da cidade.
-    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público.
-    Para o campo 'audience' (público), tente fornecer o número estimado (ex: '5000 pessoas'). Se não souber o número, use 'Médio público' ou 'Grande público'.
+    REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, deixe a lista VAZIA.
+    Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
+    renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
+
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
     ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
@@ -101,29 +83,16 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
-        config: { temperature: 0.1 }
+        config: { 
+          temperature: 0.1,
+          tools: [{ googleSearch: {} }] 
+        }
       });
       text = response.text || '';
-      aiSource = 'Gemini (Google)';
+      aiSource = 'Gemini (Google Search Grounding)';
     } catch (err: any) {
-      console.warn("[Gemini] Falhou ou não configurado. Acionando API de Fallback (Groq)...");
-      const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.1,
-          response_format: { type: "json_object" }
-        })
-      });
-      if (!groqResponse.ok) throw new Error('Groq failed');
-      const data = await groqResponse.json();
-      text = data.choices[0].message.content || '';
-      aiSource = 'Llama 3.3 (Groq)';
+      console.error("[Gemini] Falhou ao buscar dados com Grounding.", err);
+      throw err;
     }
 
     const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
