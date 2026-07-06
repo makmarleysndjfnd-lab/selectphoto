@@ -106,9 +106,16 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
           'startDate': event['startDate'],
           'score': event['score']?.toString() ?? 'MEDIUM',
           'category': event['category'] ?? 'OTHER',
+          'audience': event['audience'],
+          'organizerContact': event['organizerContact'],
+          'socialMedia': event['socialMedia'],
           'notes': event['notes'] ?? 'Pop: ${event['population']} | Renda: ${event['perCapitaIncome'] ?? event['income']} | PIB: ${event['gdp']}',
           'observations': obsController.text,
           'isProspect': true,
+          'cityAge': event['cityAge'] ?? 'N/A',
+          'cityIncome': event['perCapitaIncome'] ?? event['income'] ?? 'N/A',
+          'cityPerCapita': event['perCapitaIncome'] ?? event['income'] ?? 'N/A',
+          'cityEconomy': event['gdp'] ?? 'N/A',
         });
 
         if (mounted) {

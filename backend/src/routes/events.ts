@@ -185,6 +185,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
             "gdp": "...",
             "score": "HIGH",
             "category": "AGRO",
+            "audience": "...",
+            "organizerContact": "...",
+            "socialMedia": "...",
             "notes": "..."
           }
         ]
