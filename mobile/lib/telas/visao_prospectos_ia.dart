@@ -41,7 +41,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
 
     try {
       final api = Provider.of<ApiService>(context, listen: false);
-      final data = await api.fetchStateRadar(state);
+      final data = await api.fetchStateRadar(state, force: force);
       setState(() {
         _stateData[state] = data['events'] ?? [];
         _isLoading[state] = false;

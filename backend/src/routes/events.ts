@@ -130,8 +130,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     const existingKeys = new Set(existingProspects.map(p => `${p.city.toLowerCase()}-${p.name.toLowerCase()}`));
 
     let resultData: any = null;
+    const forceRefresh = req.query.force === 'true';
 
-    if (fs.existsSync(cachePath)) {
+    if (!forceRefresh && fs.existsSync(cachePath)) {
       const stat = fs.statSync(cachePath);
       const ageInDays = (new Date().getTime() - stat.mtime.getTime()) / (1000 * 3600 * 24);
       if (ageInDays < 10) {
@@ -150,17 +151,66 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         return;
       }
 
-      const prompt = `Gere 10 prospectos de cidades em ${stateUF} com eventos... (Resumido p/ script) Retorne JSON no formato {"events":[{"city":"","name":"","startDate":"","population":"","perCapitaIncome":"","gdp":"","score":"","category":"","notes":""}]}`;
+      const currentDate = new Date();
+      const targetDate = new Date();
+      targetDate.setDate(currentDate.getDate() + 15);
+      const maxDate = new Date();
+      maxDate.setDate(currentDate.getDate() + 380);
+      
+      const currentDateStr = currentDate.toISOString().split('T')[0];
+      const targetDateStr = targetDate.toISOString().split('T')[0];
+      const maxDateStr = maxDate.toISOString().split('T')[0];
+
+      const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure as principais cidades no estado "${stateUF}" que terão grandes eventos.
+      Hoje é dia ${currentDateStr}.
+      Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+      
+      Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
+      
+      REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, deixe a lista VAZIA.
+      Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
+      
+      Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
+      Formato esperado:
+      {
+        "events": [
+          {
+            "city": "Nome da Cidade",
+            "name": "Nome do Evento",
+            "startDate": "YYYY-MM-DD",
+            "population": "...",
+            "perCapitaIncome": "...",
+            "gdp": "...",
+            "score": "HIGH",
+            "category": "AGRO",
+            "notes": "..."
+          }
+        ]
+      }`;
+      
       let text = '';
       try {
-        const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt, config: { temperature: 0.2 } });
+        const response = await ai.models.generateContent({ 
+          model: 'gemini-2.5-flash', 
+          contents: prompt, 
+          config: { 
+            temperature: 0.1,
+            tools: [{ googleSearch: {} }] 
+          } 
+        });
         text = response.text || '';
       } catch (err: any) {
-        text = '{"events":[]}'; // simplify fallback for space
+        console.error("[Gemini State-Radar] Falhou.", err);
+        text = '{"events":[]}'; 
       }
+      
       const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      resultData = JSON.parse(cleanJson);
-      fs.writeFileSync(cachePath, JSON.stringify(resultData), 'utf8');
+      try {
+        resultData = JSON.parse(cleanJson);
+        fs.writeFileSync(cachePath, JSON.stringify(resultData), 'utf8');
+      } catch (e) {
+        resultData = { events: [] };
+      }
     }
 
     if (resultData && resultData.events) {

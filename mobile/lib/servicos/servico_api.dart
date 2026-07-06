@@ -152,9 +152,9 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> fetchStateRadar(String state) async {
+  Future<Map<String, dynamic>> fetchStateRadar(String state, {bool force = false}) async {
     try {
-      final response = await _dio.get('/events/state-radar?state=$state');
+      final response = await _dio.get('/events/state-radar?state=$state&force=$force');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao buscar radar por estado: ${e.message}');
