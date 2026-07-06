@@ -252,6 +252,7 @@ class _LoginScreenState extends State<LoginScreen>
                                 FilteringTextInputFormatter.digitsOnly,
                                 LengthLimitingTextInputFormatter(11),
                               ],
+                              maxLength: 11,
                             ),
                             const SizedBox(height: 16),
                             _buildField(
@@ -337,12 +338,14 @@ class _LoginScreenState extends State<LoginScreen>
     bool obscure = false,
     Widget? suffixIcon,
     List<TextInputFormatter>? inputFormatters,
+    int? maxLength,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscure,
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
+      maxLength: maxLength,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
