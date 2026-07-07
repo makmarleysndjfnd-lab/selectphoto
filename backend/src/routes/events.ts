@@ -4,6 +4,7 @@ import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { enrichCityData } from '../services/ibgeService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -230,6 +231,19 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
       try {
         resultData = JSON.parse(cleanJson);
+        
+        // Enrich data with IBGE
+        if (resultData && resultData.events && Array.isArray(resultData.events)) {
+          for (let ev of resultData.events) {
+            if (ev.city) {
+              const ibgeData = await enrichCityData(stateUF, ev.city);
+              ev.population = ibgeData.population;
+              ev.gdp = ibgeData.gdp;
+              ev.perCapitaIncome = ibgeData.perCapitaIncome;
+            }
+          }
+        }
+        
       } catch (e) {
         console.warn("[Gemini State-Radar] JSON Parse Failed, defaulting to empty:", cleanJson);
         resultData = { events: [] };
