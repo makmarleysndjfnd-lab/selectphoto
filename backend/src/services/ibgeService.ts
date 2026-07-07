@@ -76,7 +76,22 @@ export async function enrichCityData(stateUF: string, cityName: string) {
     if (population > 0 && pib > 0) {
       const annualPerCapita = pib / population;
       const monthlyPerCapita = annualPerCapita / 12;
-      defaultData.perCapitaIncome = `R$ ${monthlyPerCapita.toFixed(2)}`;
+      
+      let creditPotential = '';
+      if (monthlyPerCapita >= 4000) {
+        creditPotential = ' (Potencial de Crédito: Altíssimo 💳)';
+      } else if (monthlyPerCapita >= 2500) {
+        creditPotential = ' (Potencial de Crédito: Alto 💳)';
+      } else if (monthlyPerCapita >= 1500) {
+        creditPotential = ' (Potencial de Crédito: Médio 💳)';
+      } else {
+        creditPotential = ' (Potencial de Crédito: Baixo)';
+      }
+
+      // Format to Brazilian currency format manually since toLocaleString inside Node sometimes ignores pt-BR without full ICU
+      const formattedIncome = monthlyPerCapita.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      
+      defaultData.perCapitaIncome = `R$ ${formattedIncome}${creditPotential}`;
     }
 
   } catch (e) {
