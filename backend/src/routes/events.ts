@@ -52,14 +52,14 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
 
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
+    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado (se não souber alguma informação, use "N/A" ao invés de "..."):
     {
       "cityInfo": {
-        "rendaDomiciliarPerCapitaMedia": "...",
-        "rendaPerCapita": "...",
-        "cityAge": "...",
-        "economicActivities": "...",
-        "principaisFestasFixas": "..."
+        "rendaDomiciliarPerCapitaMedia": "N/A",
+        "rendaPerCapita": "N/A",
+        "cityAge": "N/A",
+        "economicActivities": "N/A",
+        "principaisFestasFixas": "N/A"
       },
       "events": [
         {
@@ -68,11 +68,11 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           "category": "AGRO",
           "score": "HIGH",
           "startDate": "YYYY-MM-DD",
-          "audience": "...",
-          "ticketPrice": "...",
-          "organizerContact": "...",
-          "socialMedia": "...",
-          "notes": "..."
+          "audience": "N/A",
+          "ticketPrice": "N/A",
+          "organizerContact": "N/A",
+          "socialMedia": "N/A",
+          "notes": "N/A"
         }
       ]
     }`;
@@ -179,22 +179,22 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
       
       Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-      Formato esperado:
+      Formato esperado (se não souber a informação, use "N/A" ao invés de "..."):
       {
         "events": [
           {
             "city": "Nome da Cidade",
             "name": "Nome do Evento",
             "startDate": "YYYY-MM-DD",
-            "population": "...",
-            "perCapitaIncome": "...",
-            "gdp": "...",
+            "population": "N/A",
+            "perCapitaIncome": "N/A",
+            "gdp": "N/A",
             "score": "HIGH",
             "category": "AGRO",
-            "audience": "...",
-            "organizerContact": "...",
-            "socialMedia": "...",
-            "notes": "..."
+            "audience": "N/A",
+            "organizerContact": "N/A",
+            "socialMedia": "N/A",
+            "notes": "N/A"
           }
         ]
       }`;
@@ -218,9 +218,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
       try {
         resultData = JSON.parse(cleanJson);
+      } catch (e) {
+        console.warn("[Gemini State-Radar] JSON Parse Failed, defaulting to empty:", cleanJson);
+        resultData = { events: [] };
+      }
+      // Sempre salvar o cache, mesmo que seja vazio, para não ficar travado no dado antigo
+      try {
         fs.writeFileSync(cachePath, JSON.stringify(resultData), 'utf8');
       } catch (e) {
-        resultData = { events: [] };
+        console.error("Erro ao salvar cache", e);
       }
     }
 
