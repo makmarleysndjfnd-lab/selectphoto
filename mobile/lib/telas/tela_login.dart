@@ -21,13 +21,14 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _cpfController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
 
   late AnimationController _animController;
+  late AnimationController _logoAnimController;
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
 
@@ -38,12 +39,17 @@ class _LoginScreenState extends State<LoginScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
+    _logoAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4), // 4 seconds per rotation
+    );
     _fadeAnim =
         CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _slideAnim =
         Tween<Offset>(begin: const Offset(0, 0.15), end: Offset.zero).animate(
             CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
+    _logoAnimController.repeat(); // Loop the rotation
     
     // Check for OTA updates (Disabled for local testing)
     // WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -97,6 +103,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _animController.dispose();
+    _logoAnimController.dispose();
     _cpfController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -189,30 +196,34 @@ class _LoginScreenState extends State<LoginScreen>
                     children: [
                       // Logo
                       Center(
-                        child: Container(
-                          width: 90,
-                          height: 90,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF4FC3F7), Color(0xFF0288D1)],
+                        child: RotationTransition(
+                          turns: _logoAnimController,
+                          child: Container(
+                            width: 140,
+                            height: 140,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.transparent,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF0288D1).withOpacity(0.5),
+                                  blurRadius: 40,
+                                  spreadRadius: 4,
+                                ),
+                              ],
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color:
-                                    const Color(0xFF0288D1).withOpacity(0.5),
-                                blurRadius: 30,
-                                spreadRadius: 4,
+                            child: ClipOval(
+                              child: Image.asset(
+                                'assets/images/logo.png',
+                                fit: BoxFit.cover,
                               ),
-                            ],
+                            ),
                           ),
-                          child: const Icon(Icons.camera_alt_rounded,
-                              size: 46, color: Colors.white),
                         ),
                       ),
                       const SizedBox(height: 28),
                       const Text(
-                        'Central Fotográfica',
+                        'Lumos Photos',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
