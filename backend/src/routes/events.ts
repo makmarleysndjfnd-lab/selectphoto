@@ -46,7 +46,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     
     Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
     
-    REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
+    REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se não houver clareza se o evento vai acontecer no futuro, retorne a lista "events" VAZIA (ex: "events": []).
     FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
     Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
     renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
@@ -92,7 +92,10 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       text = response.text || '';
       aiSource = 'Gemini (Google Search Grounding)';
     } catch (err: any) {
-      console.error("[Gemini] Falhou ao buscar dados com Grounding.", err);
+      console.error("[Gemini Search] Falhou.", err);
+      if (err.status === 429 || (err.message && err.message.includes('429'))) {
+        throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
+      }
       throw err;
     }
 
@@ -113,6 +116,9 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     res.json(result);
   } catch (error: any) {
     console.error('Erro na IA de Eventos:', error);
+    if (error.status === 429) {
+      return res.status(429).json({ error: error.message });
+    }
     return res.status(503).json({ 
       error: 'Servidor das IAs (Google/Groq) sobrecarregado ou chaves inválidas. Aguarde um pouco e tente novamente.' 
     });
@@ -174,7 +180,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       
       Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
       
-      REGRA DE OURO ANTI-ALUCINAÇÃO: É EXPRESSAMENTE PROIBIDO inventar eventos ou datas. Use EXCLUSIVAMENTE as notícias acima. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
+      REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se o evento já passou ou a data for antiga, NÃO o inclua. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
       FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
       Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
       
@@ -212,6 +218,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         text = response.text || '';
       } catch (err: any) {
         console.error("[Gemini State-Radar] Falhou.", err);
+        if (err.status === 429 || (err.message && err.message.includes('429'))) {
+          throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
+        }
         text = '{"events":[]}'; 
       }
       
@@ -235,6 +244,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
     res.json(resultData);
   } catch (error: any) {
+    if (error.status === 429) {
+      return res.status(429).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Erro ao buscar dados.' });
   }
 });

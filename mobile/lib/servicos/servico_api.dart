@@ -147,8 +147,8 @@ class ApiService {
     } on DioException catch (e) {
       print('=== DIO ERROR IN SEARCH ===');
       print(e.message);
-      print(e.response?.data);
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar eventos na IA: ${e.message}');
+      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ?? 'Erro ao buscar eventos na IA: ${e.message}');
     }
   }
 
@@ -157,7 +157,8 @@ class ApiService {
       final response = await _dio.get('/events/state-radar?state=$state&force=$force');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar radar por estado: ${e.message}');
+      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ?? 'Erro ao buscar radar por estado: ${e.message}');
     }
   }
 
