@@ -32,7 +32,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
     const currentDate = new Date();
     const targetDate = new Date();
-    targetDate.setDate(currentDate.getDate() + 15);
+    // Inicia a pesquisa a partir de hoje
+    targetDate.setDate(currentDate.getDate());
     const maxDate = new Date();
     maxDate.setDate(currentDate.getDate() + 380);
     
@@ -48,6 +49,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     
     REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se não houver clareza se o evento vai acontecer no futuro, retorne a lista "events" VAZIA (ex: "events": []).
     FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
+    PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
     Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
     renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
 
@@ -165,7 +167,8 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
       const currentDate = new Date();
       const targetDate = new Date();
-      targetDate.setDate(currentDate.getDate() + 15);
+      // Inicia a pesquisa a partir de hoje
+      targetDate.setDate(currentDate.getDate());
       const maxDate = new Date();
       maxDate.setDate(currentDate.getDate() + 380);
       
@@ -181,6 +184,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       
       REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se o evento já passou ou a data for antiga, NÃO o inclua. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
       FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
+      PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
       Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
       
       Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
