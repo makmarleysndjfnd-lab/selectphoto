@@ -145,15 +145,14 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     let resultData: any = null;
     const forceRefresh = req.query.force === 'true';
 
-    if (!forceRefresh && fs.existsSync(cachePath)) {
-      const stat = fs.statSync(cachePath);
-      const ageInDays = (new Date().getTime() - stat.mtime.getTime()) / (1000 * 3600 * 24);
-      if (ageInDays < 10) {
-        try {
-          const rawData = fs.readFileSync(cachePath, 'utf8');
-          resultData = JSON.parse(rawData);
-        } catch (e) {
-          resultData = null;
+    if (!forceRefresh) {
+      const cached = await prisma.stateRadarCache.findUnique({
+        where: { state: stateUF }
+      });
+      if (cached) {
+        const ageInDays = (new Date().getTime() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
+        if (ageInDays < 10) {
+          resultData = cached.data;
         }
       }
     }
@@ -233,9 +232,13 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       }
       // Sempre salvar o cache, mesmo que seja vazio, para não ficar travado no dado antigo
       try {
-        fs.writeFileSync(cachePath, JSON.stringify(resultData), 'utf8');
+        await prisma.stateRadarCache.upsert({
+          where: { state: stateUF },
+          update: { data: resultData },
+          create: { state: stateUF, data: resultData }
+        });
       } catch (e) {
-        console.error("Erro ao salvar cache", e);
+        console.error("Erro ao salvar cache no DB", e);
       }
     }
 

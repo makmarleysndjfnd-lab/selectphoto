@@ -344,3 +344,10 @@ model BookBatch {
   photographer   User     @relation("PhotographerBookBatches", fields: [photographerId], references: [id])
   company        Company? @relation(fields: [companyId], references: [id])
 }
+
+model StateRadarCache {
+  id        String   @id @default(uuid())
+  state     String   @unique
+  data      Json
+  updatedAt DateTime @updatedAt
+}
