@@ -1,5 +1,3 @@
-import axios from 'axios';
-
 // Cache in memory for city IDs to avoid fetching municipalities repeatedly
 let municipalitiesCache: { [uf: string]: { id: number; nome: string }[] } = {};
 
@@ -7,8 +5,9 @@ export async function getIbgeCityId(stateUF: string, cityName: string): Promise<
   const uf = stateUF.toUpperCase();
   if (!municipalitiesCache[uf]) {
     try {
-      const response = await axios.get(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios`);
-      municipalitiesCache[uf] = response.data;
+      const response = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${uf}/municipios`);
+      if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
+      municipalitiesCache[uf] = await response.json();
     } catch (e) {
       console.error(`Erro ao buscar municípios para UF ${uf}:`, e);
       return null;
@@ -36,33 +35,39 @@ export async function enrichCityData(stateUF: string, cityName: string) {
   try {
     // Busca População (Agregado 4709 - Censo 2022)
     // variavel 93: População residente
-    const popResponse = await axios.get(
+    const popResponse = await fetch(
       `https://servicodados.ibge.gov.br/api/v3/agregados/4709/periodos/2022/variaveis/93?localidades=N6[${cityId}]`
     );
     let population = 0;
-    if (popResponse.data && popResponse.data.length > 0) {
-      population = parseInt(popResponse.data[0].resultados[0].series[0].serie['2022'], 10);
-      if (!isNaN(population)) {
-        defaultData.population = population.toLocaleString('pt-BR');
+    if (popResponse.ok) {
+      const popData = await popResponse.json();
+      if (popData && popData.length > 0) {
+        population = parseInt(popData[0].resultados[0].series[0].serie['2022'], 10);
+        if (!isNaN(population)) {
+          defaultData.population = population.toLocaleString('pt-BR');
+        }
       }
     }
 
     // Busca PIB (Agregado 5938 - PIB dos Municípios)
     // variavel 37: Produto Interno Bruto a preços correntes (em mil reais)
-    const pibResponse = await axios.get(
+    const pibResponse = await fetch(
       `https://servicodados.ibge.gov.br/api/v3/agregados/5938/periodos/2021/variaveis/37?localidades=N6[${cityId}]`
     );
     let pib = 0;
-    if (pibResponse.data && pibResponse.data.length > 0) {
-      // Valor vem em Mil Reais (x 1000)
-      const pibMilReais = parseFloat(pibResponse.data[0].resultados[0].series[0].serie['2021']);
-      if (!isNaN(pibMilReais)) {
-        pib = pibMilReais * 1000;
-        // Format as R$ bilhões or milhões
-        if (pib >= 1000000000) {
-          defaultData.gdp = `R$ ${(pib / 1000000000).toFixed(2)} Bi`;
-        } else {
-          defaultData.gdp = `R$ ${(pib / 1000000).toFixed(2)} Mi`;
+    if (pibResponse.ok) {
+      const pibData = await pibResponse.json();
+      if (pibData && pibData.length > 0) {
+        // Valor vem em Mil Reais (x 1000)
+        const pibMilReais = parseFloat(pibData[0].resultados[0].series[0].serie['2021']);
+        if (!isNaN(pibMilReais)) {
+          pib = pibMilReais * 1000;
+          // Format as R$ bilhões or milhões
+          if (pib >= 1000000000) {
+            defaultData.gdp = `R$ ${(pib / 1000000000).toFixed(2)} Bi`;
+          } else {
+            defaultData.gdp = `R$ ${(pib / 1000000).toFixed(2)} Mi`;
+          }
         }
       }
     }
