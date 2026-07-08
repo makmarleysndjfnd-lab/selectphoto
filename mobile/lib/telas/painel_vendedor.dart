@@ -79,6 +79,7 @@ class SellerDashboard extends StatefulWidget {
 class _SellerDashboardState extends State<SellerDashboard>
     with SingleTickerProviderStateMixin {
   final _codeController = TextEditingController();
+  final _filterController = TextEditingController();
   String _searchQuery = '';
   bool _searched = false;
   Map<String, dynamic>? _foundClient;
@@ -99,8 +100,15 @@ class _SellerDashboardState extends State<SellerDashboard>
   @override
   void dispose() {
     _codeController.dispose();
+    _filterController.dispose();
     _animController.dispose();
     super.dispose();
+  }
+
+  void _filterClientList(String query) {
+    setState(() {
+      _searchQuery = query;
+    });
   }
 
   void _searchClient() {
@@ -517,7 +525,7 @@ class _SellerDashboardState extends State<SellerDashboard>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text('Booking Calendar',
+            const Text('Clientes do Dia',
                 style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -528,11 +536,33 @@ class _SellerDashboardState extends State<SellerDashboard>
           ],
         ),
         const SizedBox(height: 16),
-        _buildWeekCalendar(),
-        const SizedBox(height: 24),
-        // Filtro ocultado para focar no calendário, mas mantido caso precise
-        // TextField(...)
-        const SizedBox(height: 12),
+        _buildAppointmentsSummaryCard(),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _filterController,
+          onChanged: _filterClientList,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Filtrar por nome ou ficha',
+            hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
+            prefixIcon: const Icon(Icons.filter_list_rounded,
+                color: Color(0xFF90CAF9)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide:
+                  const BorderSide(color: Color(0xFF4FC3F7), width: 1.5),
+            ),
+            filled: true,
+            fillColor: Colors.white.withOpacity(0.05),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          ),
+        ),
+        const SizedBox(height: 16),
         ..._filteredClients.map((client) => _buildClientCard(client)),
         const SizedBox(height: 24),
         ElevatedButton.icon(
@@ -551,158 +581,68 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  Widget _buildWeekCalendar() {
-    final today = DateTime.now();
-    final firstDayOfWeek = today.subtract(Duration(days: today.weekday % 7));
-    final List<DateTime> weekDays = List.generate(7, (index) => firstDayOfWeek.add(Duration(days: index)));
-
-    final List<String> dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      physics: const BouncingScrollPhysics(),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: weekDays.map((date) {
-          final isSelected = date.day == _selectedDate.day && date.month == _selectedDate.month && date.year == _selectedDate.year;
-          final hasEvents = date.day == today.day || isSelected;
-
-          return GestureDetector(
-            onTap: () => setState(() => _selectedDate = date),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-              decoration: isSelected
-                  ? BoxDecoration(
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFFFD54F).withOpacity(0.3),
-                          blurRadius: 15,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                      border: Border.all(color: const Color(0xFFFFD54F), width: 1.5),
-                    )
-                  : const BoxDecoration(shape: BoxShape.circle),
-              child: Column(
-                children: [
-                  Text(
-                    dayNames[date.weekday % 7],
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.white54,
-                      fontSize: 13,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${date.day}',
-                    style: TextStyle(
-                      color: isSelected ? const Color(0xFFFFD54F) : Colors.white70,
-                      fontSize: 16,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  if (hasEvents)
-                    Container(
-                      width: 4,
-                      height: 4,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFFFD54F),
-                        shape: BoxShape.circle,
-                      ),
-                    )
-                  else
-                    const SizedBox(height: 4),
-                ],
+  Widget _buildAppointmentsSummaryCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF283593), Color(0xFF1976D2)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1976D2).withOpacity(0.3),
+            blurRadius: 10,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.event_note_rounded, color: Colors.white),
+              const SizedBox(width: 8),
+              const Text('Agendamentos de Hoje', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text('3', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
-            ),
-          );
-        }).toList(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text('10:00 - Ficha 4589 (João Silva)', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          const SizedBox(height: 4),
+          const Text('14:30 - Ficha 4590 (Maria Sousa)', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          const SizedBox(height: 4),
+          const Text('16:00 - Ficha 4595 (Carlos Maia)', style: TextStyle(color: Colors.white70, fontSize: 13)),
+        ],
       ),
     );
   }
 
   Widget _buildClientCard(Map<String, dynamic> client) {
-    final seq = client['sequenceNumber'] as String;
-    final colorVal = seq.hashCode;
-    final borderColors = [
-      const Color(0xFFFFD54F), // Amber/Gold
-      const Color(0xFFB39DDB), // Light Purple
-      const Color(0xFF81C784), // Light Green
-      const Color(0xFF4FC3F7), // Light Blue
-    ];
-    final borderColor = borderColors[colorVal.abs() % borderColors.length];
-    final time = client['visitTime'] ?? '08:00';
-
-    return GestureDetector(
-      onTap: () => _openClientDetail(client),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E2A3A),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
+    final initials = client['name'].toString().substring(0, 1).toUpperCase();
+    return Card(
+      color: Colors.white.withOpacity(0.05),
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ListTile(
+        onTap: () => _openClientDetail(client),
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFF0288D1).withOpacity(0.2),
+          child: Text(initials, style: const TextStyle(color: Color(0xFF4FC3F7))),
         ),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Glowing left border indicator
-              Container(
-                width: 6,
-                decoration: BoxDecoration(
-                  color: borderColor,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(16),
-                    bottomLeft: Radius.circular(16),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: borderColor.withOpacity(0.5),
-                      blurRadius: 8,
-                      offset: const Offset(2, 0),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            client['name'],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Icon(Icons.chevron_right_rounded, color: Colors.white.withOpacity(0.3), size: 20),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '$time - ${client['sequenceNumber']}',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+        title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text('Ficha ${client['sequenceNumber']}', style: TextStyle(color: Colors.white.withOpacity(0.7))),
+        trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white54),
       ),
     );
   }

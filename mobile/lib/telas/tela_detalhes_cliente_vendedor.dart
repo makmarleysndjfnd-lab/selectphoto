@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:signature/signature.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:table_calendar/table_calendar.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
@@ -296,7 +297,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
         _SaleTab(clientId: client['id'], city: client['city'] ?? '',
             onSuccess: _showSuccess),
         _NonSaleTab(clientId: client['id'], onSuccess: _showSuccess),
-        _ScheduleTab(clientId: client['id'], onSuccess: _showSuccess),
+        _ScheduleTab(client: client, onSuccess: _showSuccess),
         _PhotosTab(clientId: client['id'], onSuccess: _showSuccess),
       ],
     );
@@ -762,57 +763,30 @@ class _NonSaleTabState extends State<_NonSaleTab> {
 
 // ── ABA AGENDAMENTO ───────────────────────────────────────────────────────────
 class _ScheduleTab extends StatefulWidget {
-  final String clientId;
+  final Map<String, dynamic> client;
   final void Function(String) onSuccess;
-  const _ScheduleTab({required this.clientId, required this.onSuccess});
+  const _ScheduleTab({required this.client, required this.onSuccess});
 
   @override
-  // ignore: library_private_types_in_public_api
   State<_ScheduleTab> createState() => _ScheduleTabState();
 }
 
 class _ScheduleTabState extends State<_ScheduleTab> {
-  DateTime? _date;
-  TimeOfDay? _time;
-  final _obsController = TextEditingController();
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  CalendarFormat _calendarFormat = CalendarFormat.week;
+  String? _selectedTime;
+  final TextEditingController _obsController = TextEditingController();
   bool _isLoading = false;
 
-  void _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now().add(const Duration(days: 1)),
-      firstDate: DateTime.now(),
-      lastDate: DateTime(2100),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF4FC3F7),
-              surface: Color(0xFF1A2535)),
-        ),
-        child: child!,
-      ),
-    );
-    if (d != null) setState(() => _date = d);
-  }
-
-  void _pickTime() async {
-    final t = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.dark(
-              primary: Color(0xFF4FC3F7),
-              surface: Color(0xFF1A2535)),
-        ),
-        child: child!,
-      ),
-    );
-    if (t != null) setState(() => _time = t);
+  @override
+  void initState() {
+    super.initState();
+    _selectedDay = _focusedDay;
   }
 
   void _submit() async {
-    if (_date == null || _time == null) {
+    if (_selectedDay == null || _selectedTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Selecione data e hora.'),
           behavior: SnackBarBehavior.floating));
@@ -821,39 +795,92 @@ class _ScheduleTabState extends State<_ScheduleTab> {
     setState(() => _isLoading = true);
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    final dateStr = DateFormat('dd/MM/yyyy').format(_date!);
-    final timeStr = _time!.format(context);
+    final dateStr = DateFormat('dd/MM/yyyy').format(_selectedDay!);
     setState(() {
       _isLoading = false;
-      _date = null;
-      _time = null;
+      _selectedDay = DateTime.now();
+      _selectedTime = null;
     });
     _obsController.clear();
-    widget.onSuccess('Agendamento salvo: $dateStr às $timeStr');
+    widget.onSuccess('Agendamento salvo: $dateStr às $_selectedTime');
   }
 
-  Widget _dateButton(
-      {required IconData icon,
-      required String label,
-      required VoidCallback onTap}) {
+  Widget _buildTimeSlot(String time) {
+    bool isSelected = _selectedTime == time;
+    
+    int hour = int.parse(time.split(':')[0]);
+    int currentHour = DateTime.now().hour;
+    int diff = (hour - currentHour).abs();
+    
+    Color neonColor = const Color(0xFF00E676); 
+    if (diff > 5) neonColor = const Color(0xFF00B0FF); 
+    if (diff > 10) neonColor = const Color(0xFFD500F9); 
+    
+    double glowOpacity = isSelected ? 0.8 : (1.0 - (diff * 0.1)).clamp(0.1, 0.4);
+
     return GestureDetector(
-      onTap: onTap,
+      onTap: () => setState(() => _selectedTime = time),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
+          color: const Color(0xFF1E2A3A),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.15)),
+          border: Border.all(
+            color: isSelected ? neonColor : neonColor.withOpacity(0.3),
+            width: isSelected ? 2 : 1,
+          ),
+          boxShadow: [
+            if (isSelected)
+              BoxShadow(
+                color: neonColor.withOpacity(0.6),
+                blurRadius: 12,
+                spreadRadius: 2,
+              )
+            else
+              BoxShadow(
+                color: neonColor.withOpacity(glowOpacity),
+                blurRadius: 6,
+                spreadRadius: 0,
+              ),
+          ],
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: const Color(0xFF4FC3F7), size: 18),
-            const SizedBox(width: 8),
-            Text(label,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 13)),
+            Text(
+              time,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white70,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Container(
+              width: 2,
+              height: 24,
+              color: neonColor.withOpacity(0.5),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: isSelected
+                  ? Text(
+                      '${widget.client['name']} (Ficha: ${widget.client['sequenceNumber']})',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  : Text(
+                      'Horário Livre',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.4),
+                        fontSize: 14,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+            ),
           ],
         ),
       ),
@@ -862,38 +889,113 @@ class _ScheduleTabState extends State<_ScheduleTab> {
 
   @override
   Widget build(BuildContext context) {
+    List<String> hours = ['08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 4),
-          const Text('Agendar Visita',
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Agendamento',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E676).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF00E676).withOpacity(0.5)),
+                ),
+                child: const Text('Neon Calendar', style: TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E2A3A),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: TableCalendar(
+              firstDay: DateTime.utc(2020, 10, 16),
+              lastDay: DateTime.utc(2030, 3, 14),
+              focusedDay: _focusedDay,
+              calendarFormat: _calendarFormat,
+              selectedDayPredicate: (day) {
+                return isSameDay(_selectedDay, day);
+              },
+              onDaySelected: (selectedDay, focusedDay) {
+                setState(() {
+                  _selectedDay = selectedDay;
+                  _focusedDay = focusedDay;
+                });
+              },
+              onFormatChanged: (format) {
+                if (_calendarFormat != format) {
+                  setState(() {
+                    _calendarFormat = format;
+                  });
+                }
+              },
+              onPageChanged: (focusedDay) {
+                _focusedDay = focusedDay;
+              },
+              calendarStyle: CalendarStyle(
+                defaultTextStyle: const TextStyle(color: Colors.white),
+                weekendTextStyle: const TextStyle(color: Color(0xFFFF8A65)),
+                outsideTextStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                selectedDecoration: const BoxDecoration(
+                  color: Color(0xFF00E676),
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Color(0xFF00E676), blurRadius: 10)],
+                ),
+                todayDecoration: BoxDecoration(
+                  color: Colors.transparent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF00B0FF), width: 2),
+                ),
+              ),
+              headerStyle: HeaderStyle(
+                titleTextStyle: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                formatButtonTextStyle: const TextStyle(color: Colors.white, fontSize: 13),
+                formatButtonDecoration: BoxDecoration(
+                  color: const Color(0xFF00B0FF).withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF00B0FF)),
+                ),
+                leftChevronIcon: const Icon(Icons.chevron_left, color: Colors.white),
+                rightChevronIcon: const Icon(Icons.chevron_right, color: Colors.white),
+              ),
+              daysOfWeekStyle: const DaysOfWeekStyle(
+                weekdayStyle: TextStyle(color: Colors.white70),
+                weekendStyle: TextStyle(color: Color(0xFFFF8A65)),
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 24),
+          const Text('Planilha de Horários',
               style: TextStyle(
                   color: Colors.white,
-                  fontSize: 18,
+                  fontSize: 16,
                   fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-          Row(children: [
-            Expanded(
-              child: _dateButton(
-                icon: Icons.calendar_today_rounded,
-                label: _date == null
-                    ? 'Selecionar data'
-                    : DateFormat('dd/MM/yyyy').format(_date!),
-                onTap: _pickDate,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _dateButton(
-                icon: Icons.access_time_rounded,
-                label:
-                    _time == null ? 'Selecionar hora' : _time!.format(context),
-                onTap: _pickTime,
-              ),
-            ),
-          ]),
+          const SizedBox(height: 12),
+          
+          ...hours.map((time) => _buildTimeSlot(time)),
+          
           const SizedBox(height: 16),
           TextField(
             controller: _obsController,
@@ -905,9 +1007,11 @@ class _ScheduleTabState extends State<_ScheduleTab> {
           const SizedBox(height: 20),
           _confirmButton(
             isLoading: _isLoading,
-            onPressed: _submit,
+            onPressed: _selectedTime != null ? _submit : null,
             label: 'Confirmar Agendamento',
-            colors: const [Color(0xFF6A1B9A), Color(0xFFAB47BC)],
+            colors: _selectedTime != null 
+                ? const [Color(0xFF00E676), Color(0xFF00C853)]
+                : const [Colors.grey, Colors.grey],
           ),
         ],
       ),

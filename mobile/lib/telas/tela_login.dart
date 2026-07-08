@@ -196,34 +196,31 @@ class _LoginScreenState extends State<LoginScreen>
                     children: [
                       // Logo
                       Center(
-                        child: RotationTransition(
-                          turns: _logoAnimController,
-                          child: Container(
-                            width: 140,
-                            height: 140,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.transparent,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF0288D1).withOpacity(0.5),
-                                  blurRadius: 40,
-                                  spreadRadius: 4,
-                                ),
-                              ],
-                            ),
-                            child: ClipOval(
-                              child: Image.asset(
-                                'assets/images/logo.png',
-                                fit: BoxFit.cover,
+                        child: Container(
+                          width: 140,
+                          height: 140,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.transparent,
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF0288D1).withOpacity(0.5),
+                                blurRadius: 40,
+                                spreadRadius: 4,
                               ),
+                            ],
+                          ),
+                          child: ClipOval(
+                            child: Image.asset(
+                              'assets/images/logo.png',
+                              fit: BoxFit.cover,
                             ),
                           ),
                         ),
                       ),
                       const SizedBox(height: 28),
                       const Text(
-                        'Lumos Photos',
+                        'Lumora',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
@@ -289,47 +286,6 @@ class _LoginScreenState extends State<LoginScreen>
                         ),
                       ),
 
-                      const SizedBox(height: 28),
-
-                      // Dica logins
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                              color:
-                                  const Color(0xFF4FC3F7).withOpacity(0.3)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Row(children: [
-                              Icon(Icons.info_outline,
-                                  color: Color(0xFF4FC3F7), size: 16),
-                              SizedBox(width: 6),
-                              Text('Logins de teste',
-                                  style: TextStyle(
-                                      color: Color(0xFF4FC3F7),
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13)),
-                            ]),
-                            const SizedBox(height: 10),
-                            _loginHint(Icons.sell_outlined, 'Vendedor',
-                                'vendedor@teste.com'),
-                            const SizedBox(height: 6),
-                            _loginHint(Icons.camera_alt_outlined, 'Fotógrafo',
-                                'fotografo@teste.com'),
-                            const SizedBox(height: 6),
-                            _loginHint(Icons.admin_panel_settings_outlined,
-                                'Admin', 'admin@teste.com'),
-                            const SizedBox(height: 4),
-                            const Text('  Senha: 123456',
-                                style: TextStyle(
-                                    color: Color(0xFF90CAF9), fontSize: 12)),
-                          ],
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -423,13 +379,5 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _loginHint(IconData icon, String role, String email) {
-    return Row(children: [
-      Icon(icon, color: const Color(0xFF90CAF9), size: 14),
-      const SizedBox(width: 6),
-      Text('$role: $email',
-          style:
-              const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
-    ]);
-  }
+  // _loginHint removed
 }
