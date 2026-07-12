@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../servicos/ajudante_bd.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _chartGreen = Color(0xFF43A047);
@@ -176,6 +177,12 @@ class _AdminDashboardState extends State<AdminDashboard>
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
+  // Mock Rotas Inteligentes
+  final List<Map<String, dynamic>> _rotas = [
+    {'city': 'Campinas', 'count': 42, 'lote': 'CAMPINAS01'},
+    {'city': 'São Paulo', 'count': 15, 'lote': 'SP01'},
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -242,21 +249,6 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
         );
       }
-    );
-  }
-
-  Widget _buildSidebarHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        title,
-        style: const TextStyle(
-          color: Color(0xFF90CAF9),
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-        ),
-      ),
     );
   }
 
@@ -449,7 +441,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
-    const tabs = ['Eventos IA', 'Books', 'Estoque', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
+    const tabs = ['Eventos IA', 'Books e Rotas', 'Estoque', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
     const icons = [
       Icons.auto_awesome,
       Icons.menu_book_rounded,
