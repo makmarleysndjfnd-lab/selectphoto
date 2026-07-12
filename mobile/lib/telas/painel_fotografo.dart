@@ -807,7 +807,6 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                 ],
               ),
-              ),
             ),
             const SizedBox(height: 32),
             Row(
