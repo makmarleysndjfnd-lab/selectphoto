@@ -140,6 +140,75 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
     }
   }
 
+  Future<void> _buyEvent(Map<String, dynamic> prospect) async {
+    final TextEditingController costController = TextEditingController();
+    final TextEditingController photographerController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          title: Text('Comprar Evento: ${prospect['name']}', style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Isso gerará uma despesa no Fluxo de Caixa.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: costController,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Custo de Aquisição (R\$)',
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: Colors.white10,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: photographerController,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Nome do Fotógrafo Responsável',
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: Colors.white10,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
+              child: const Text('Confirmar Compra', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      }
+    );
+
+    if (result == true) {
+      try {
+        final api = Provider.of<ApiService>(context, listen: false);
+        // Em um app real, chamaria api.buyEvent
+        await Future.delayed(const Duration(milliseconds: 800)); // Mock
+        _loadProspects();
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evento comprado com sucesso! Despesa gerada.'), backgroundColor: Colors.green));
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
   Widget _buildEventDetailRow(IconData icon, String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
@@ -276,7 +345,21 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
                                 _buildEventDetailRow(Icons.factory, 'Economia: ${p['cityEconomy'] ?? 'N/A'}'),
                               ],
                             ),
-                          )
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () => _buyEvent(p),
+                              icon: const Icon(Icons.shopping_cart_checkout, color: Colors.white),
+                              label: const Text('COMPRAR EVENTO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF4CAF50),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),

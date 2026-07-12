@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 class VisaoEstoqueAdmin extends StatefulWidget {
   const VisaoEstoqueAdmin({super.key});
@@ -8,10 +9,21 @@ class VisaoEstoqueAdmin extends StatefulWidget {
 }
 
 class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
+  // Mock Rotas Inteligentes
+  final List<Map<String, dynamic>> _rotas = [
+    {'city': 'Campinas', 'count': 42, 'lote': 'CAMPINAS01'},
+    {'city': 'São Paulo', 'count': 15, 'lote': 'SP01'},
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      appBar: AppBar(
+        title: const Text('Books & Rotas', style: TextStyle(color: Colors.white)),
+        backgroundColor: const Color(0xFF1A0030),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -20,7 +32,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
              Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Estoque de Capas', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                const Text('Estoque & Books', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 ElevatedButton.icon(
                   onPressed: () {
                      // refresh action
@@ -36,10 +48,101 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             const SizedBox(height: 20),
             _buildListaLotes(),
             const SizedBox(height: 20),
+            _buildRotasInteligentes(),
+            const SizedBox(height: 20),
             _buildTransferencia(),
+            const SizedBox(height: 40),
           ],
         ),
       ),
+    );
+  }
+
+  void _scanAndDistributeBooks() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A1A2E),
+      builder: (context) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.8,
+          child: Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text('Leitura de Saída (QR Code)', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                child: MobileScanner(
+                  onDetect: (capture) {
+                    final List<Barcode> barcodes = capture.barcodes;
+                    if (barcodes.isNotEmpty) {
+                      final code = barcodes.first.rawValue;
+                      if (code != null) {
+                        Navigator.pop(context);
+                        _assignBookToSellerDialog(code);
+                      }
+                    }
+                  },
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text('Aponte a câmera para o QR Code impresso no book', style: TextStyle(color: Colors.white70)),
+              )
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  void _assignBookToSellerDialog(String qrCode) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          title: const Text('Atribuir Book a Vendedor', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ficha/Book: $qrCode', style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              const Text('Selecione o Vendedor ou Gerente:', style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 8),
+              // Mock dropdown
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+                child: DropdownButton<String>(
+                  items: const [
+                    DropdownMenuItem(value: 'v1', child: Text('João (Gerente)', style: TextStyle(color: Colors.white))),
+                    DropdownMenuItem(value: 'v2', child: Text('Maria', style: TextStyle(color: Colors.white))),
+                  ],
+                  onChanged: (v) {},
+                  dropdownColor: const Color(0xFF1E1E2C),
+                  isExpanded: true,
+                  underline: const SizedBox(),
+                  hint: const Text('Selecionar', style: TextStyle(color: Colors.white54)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Confirmar Atribuição'),
+            ),
+          ],
+        );
+      }
     );
   }
 
@@ -112,7 +215,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
     );
   }
 
-  Widget _loteCard(String title, String subtitle, Color color) {
+  Widget _loteCard(String title, String subtitle, Color color, {Widget? trailing}) {
      return Container(
        padding: const EdgeInsets.all(12),
        decoration: BoxDecoration(
@@ -123,8 +226,14 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
        child: Row(
          mainAxisAlignment: MainAxisAlignment.spaceBetween,
          children: [
-           Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
-           Text(subtitle, style: const TextStyle(color: Colors.white)),
+           Column(
+             crossAxisAlignment: CrossAxisAlignment.start,
+             children: [
+               Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+               Text(subtitle, style: const TextStyle(color: Colors.white)),
+             ],
+           ),
+           if (trailing != null) trailing,
          ],
        ),
      );
@@ -141,16 +250,55 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Transferência para Vendedores', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Distribuição de Books (Saída)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.send_rounded),
-            label: const Text('Transferir Capas'),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+            onPressed: _scanAndDistributeBooks,
+            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+            label: const Text('Distribuir Books via QR Code', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0), padding: const EdgeInsets.symmetric(vertical: 14)),
           ),
           const SizedBox(height: 16),
-          const Text('Gerenciar transferências permite: Incluir, Editar e Excluir.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+          const Text('Aponte a câmera para os QR Codes dos books impressos para registrá-los no estoque do vendedor e na respectiva rota.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+        ],
+      )
+    );
+  }
+
+  Widget _buildRotasInteligentes() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Rotas Inteligentes', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text('Os books recém criados pelos fotógrafos são agrupados por cidade para facilitar a impressão e logística.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          const SizedBox(height: 16),
+          ..._rotas.map((r) => Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: _loteCard(
+              'Rota: ${r['city']} (Lote: ${r['lote']})', 
+              '${r['count']} Books Prontos', 
+              Colors.blue.shade400,
+              trailing: Row(
+                children: [
+                  IconButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Editando/Transferindo Rota...')));
+                    },
+                    icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
+                    tooltip: 'Editar / Transferir Rota',
+                  ),
+                ],
+              ),
+            ),
+          )),
         ],
       )
     );

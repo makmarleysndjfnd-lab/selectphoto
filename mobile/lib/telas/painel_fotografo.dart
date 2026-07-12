@@ -8,6 +8,10 @@ import '../servicos/servico_api.dart';
 import 'tela_login.dart';
 import 'tela_checklist_frota.dart';
 import 'tela_cadastro_custos.dart';
+import 'tela_config_impressora.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'tela_cadastro_custos.dart';
+import 'tela_config_impressora.dart';
 
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [
@@ -354,6 +358,54 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     });
   }
 
+  void _printFicha() async {
+    final bluetooth = BlueThermalPrinter.instance;
+    bool? isConnected = await bluetooth.isConnected;
+    if (isConnected != true) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      return;
+    }
+    
+    bluetooth.printNewLine();
+    bluetooth.printCustom("LUMORA - FICHA", 2, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Cliente: ${_nameController.text}", 0, 0);
+    bluetooth.printCustom("Evento: $_currentEventName", 0, 0);
+    bluetooth.printCustom("Lote: $_currentCityLote", 0, 0);
+    bluetooth.printCustom("Ficha: $_generatedQrCodeData", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printQRcode(_generatedQrCodeData!, 200, 200, 1);
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+  }
+
+  void _printLote() async {
+    final bluetooth = BlueThermalPrinter.instance;
+    bool? isConnected = await bluetooth.isConnected;
+    if (isConnected != true) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      return;
+    }
+    
+    bluetooth.printNewLine();
+    bluetooth.printCustom("LUMORA - FECHAMENTO DE LOTE", 2, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Evento: $_currentEventName", 1, 1);
+    bluetooth.printCustom("Lote/Cidade: $_currentCityLote", 1, 1);
+    bluetooth.printCustom("Total de Fichas: ${_sequenceCount - 1}", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("_________________________________", 0, 1);
+    bluetooth.printCustom("Assinatura do Fotografo", 0, 1);
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo fechamento do lote...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+    }
+  }
+
   // ── UI Building ─────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -423,6 +475,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                   IconButton(
                     onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const PrinterConfigScreen()));
+                    },
+                    icon: const Icon(Icons.print_rounded, color: Color(0xFFCE93D8)),
+                    tooltip: 'Impressora Bluetooth',
+                  ),
+                  IconButton(
+                    onPressed: () {
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const CostEntryScreen()));
                     },
                     icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
@@ -447,16 +506,33 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     border: Border.all(color: Colors.white24),
                   ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.location_on, color: Color(0xFFCE93D8), size: 16),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _currentCityLote == null ? 'Configurar Lote e Evento' : 'Lote: $_currentCityLote | Evento: $_currentEventName',
-                          style: const TextStyle(color: Colors.white, fontSize: 13),
-                        ),
+                      Row(
+                        children: [
+                          const Icon(Icons.event_note, color: Colors.white70, size: 16),
+                          const SizedBox(width: 8),
+                          Text(
+                            _currentCityLote == null ? 'Lote Não Configurado' : 'Lote: $_currentCityLote | Evento: $_currentEventName',
+                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                          ),
+                        ],
                       ),
-                      const Icon(Icons.edit, color: Colors.white54, size: 16),
+                      Row(
+                        children: [
+                          if (_currentCityLote != null)
+                            IconButton(
+                              onPressed: _printLote,
+                              icon: const Icon(Icons.print, color: Color(0xFF4FC3F7), size: 20),
+                              tooltip: 'Imprimir Fechamento de Lote',
+                            ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
+                            child: Text('${_sequenceCount - 1} Fichas Hoje', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      )
                     ],
                   ),
                 ),
@@ -731,13 +807,29 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                 ],
               ),
+              ),
             ),
             const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: _resetForm,
-              icon: const Icon(Icons.add, color: Colors.black),
-              label: const Text('Cadastrar Nova Ficha', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _printFicha,
+                    icon: const Icon(Icons.print, color: Colors.white),
+                    label: const Text('Imprimir Ficha', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _resetForm,
+                    icon: const Icon(Icons.add, color: Colors.black),
+                    label: const Text('Nova Ficha', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  ),
+                ),
+              ],
             )
           ],
         ),

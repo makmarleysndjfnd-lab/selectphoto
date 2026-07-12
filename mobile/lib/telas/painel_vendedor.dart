@@ -82,6 +82,8 @@ class _SellerDashboardState extends State<SellerDashboard>
   final _filterController = TextEditingController();
   String _searchQuery = '';
   bool _searched = false;
+  bool _isManager = true; // Flag para Vendedor Gerente
+  bool _ownCar = true; // Carro Próprio (25%) ou Empresa (20%)
   Map<String, dynamic>? _foundClient;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -300,6 +302,12 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (_isManager) ...[
+                      _buildDistribuicaoEquipeCard(),
+                      const SizedBox(height: 20),
+                    ],
+                    _buildResultadosCard(),
+                    const SizedBox(height: 20),
                     _buildSearchCard(),
                     const SizedBox(height: 28),
                     _buildClientList(),
@@ -396,6 +404,115 @@ class _SellerDashboardState extends State<SellerDashboard>
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildDistribuicaoEquipeCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFCE93D8).withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Distribuição de Equipe', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                child: const Text('GERENTE', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 10, fontWeight: FontWeight.bold)),
+              )
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text('Atribua os books da sua rota para os vendedores da sua equipe.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abrindo scanner de distribuição...')));
+              // Em produção, reutilizaria o MobileScanner para ler e atribuir ao vendedor
+            },
+            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+            label: const Text('Escanear e Repassar Book', style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0), minimumSize: const Size(double.infinity, 45)),
+          ),
+        ],
+      )
+    );
+  }
+
+  Widget _buildResultadosCard() {
+    // Cálculo de comissão mockado
+    double totalVendas = 4280.0;
+    double comissao = totalVendas * (_ownCar ? 0.25 : 0.20);
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Color(0xFF0D3B6E), Color(0xFF0D1B2A)]),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Painel de Resultados (Hoje)', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Suas Vendas (Total Fichas)', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text('R\$ ${totalVendas.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF66BB6A), fontSize: 20, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text('Sua Comissão', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Text('R\$ ${comissao.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF4FC3F7), fontSize: 20, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Veículo Utilizado:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('Empresa (20%)', style: TextStyle(fontSize: 12)),
+                    selected: !_ownCar,
+                    onSelected: (val) => setState(() => _ownCar = false),
+                    selectedColor: const Color(0xFF4FC3F7),
+                    labelStyle: TextStyle(color: !_ownCar ? Colors.black : Colors.white),
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('Próprio (25%)', style: TextStyle(fontSize: 12)),
+                    selected: _ownCar,
+                    onSelected: (val) => setState(() => _ownCar = true),
+                    selectedColor: const Color(0xFF4FC3F7),
+                    labelStyle: TextStyle(color: _ownCar ? Colors.black : Colors.white),
+                  ),
+                ],
+              )
+            ],
+          )
+        ],
+      )
     );
   }
 
