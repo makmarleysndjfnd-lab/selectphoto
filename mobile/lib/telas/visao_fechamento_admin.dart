@@ -346,6 +346,9 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
              const Divider(color: Colors.white24, height: 24),
              
              // List of debtors as requested by user
+             // REGRA DE NEGÓCIO: Dívida do vendedor é referente APENAS a vendas em Dinheiro vivo que ficaram em mãos. 
+             // Valores de PIX caem direto na conta da empresa e entram no fluxo assim como Cartão (Crédito/Débito), 
+             // não gerando repasse pendente do vendedor para a empresa.
              const Text('Dívida Acumulada (Repasses Pendentes)', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
              const SizedBox(height: 8),
              if (_selectedSellersMes.contains('Vendedor 1') || _selectedSellersMes.isEmpty)
