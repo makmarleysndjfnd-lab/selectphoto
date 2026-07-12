@@ -26,7 +26,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
              Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Estoque & Books', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                const Text('Rebolo', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 ElevatedButton.icon(
                   onPressed: () {
                      // refresh action
