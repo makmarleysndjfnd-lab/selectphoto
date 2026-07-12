@@ -46,6 +46,8 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             const SizedBox(height: 20),
             _buildResumoGeral(),
             const SizedBox(height: 20),
+            _buildTrocasPendentes(),
+            const SizedBox(height: 20),
             _buildListaLotes(),
             const SizedBox(height: 20),
             _buildRotasInteligentes(),
@@ -54,6 +56,66 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             const SizedBox(height: 40),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildTrocasPendentes() {
+    // Mock de solicitações pendentes
+    final trocas = [
+      {'remetente': 'João (Vendedor 1)', 'destinatario': 'Maria (Vendedora 2)', 'qtd': 3, 'id': 'TRC-01'},
+    ];
+
+    if (trocas.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+              SizedBox(width: 8),
+              Text('Trocas Pendentes de Fichas', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ...trocas.map((troca) {
+            return Card(
+              color: Colors.white.withOpacity(0.05),
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                title: Text('${troca['remetente']} \u2794 ${troca['destinatario']}', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                subtitle: Text('${troca['qtd']} Fichas', style: const TextStyle(color: Colors.white70)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.redAccent),
+                      tooltip: 'Recusar',
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Troca ${troca['id']} recusada.')));
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.check, color: Colors.greenAccent),
+                      tooltip: 'Aprovar',
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Troca ${troca['id']} aprovada.')));
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }

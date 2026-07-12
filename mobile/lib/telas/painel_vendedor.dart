@@ -83,6 +83,12 @@ class _SellerDashboardState extends State<SellerDashboard>
   String _searchQuery = '';
   bool _searched = false;
   bool _isManager = true; // Flag para Vendedor Gerente
+  
+  // Variáveis para Distribuição de Equipe e Trocas
+  String? _selectedSellerForTransfer;
+  final List<String> _teamSellers = ['João (Vendedor 1)', 'Maria (Vendedora 2)', 'Carlos (Vendedor 3)'];
+  final Set<String> _selectedClientIds = {};
+  
   Map<String, dynamic>? _foundClient;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -222,46 +228,120 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  void _showDevolverCapasDialog() {
-    final qtyController = TextEditingController();
+  void _showNotificacoesVendedorDialog() {
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1A2535),
-          title: const Text('Devolver Capas ao Admin', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          title: const Text('Notificações (Capas)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Informe a quantidade de capas para devolução em auditoria:', style: TextStyle(color: Colors.white70)),
-              const SizedBox(height: 16),
-              TextField(
-                controller: qtyController,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Qtd de Capas',
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
+              Card(
+                color: Colors.white.withOpacity(0.05),
+                child: ListTile(
+                  leading: const Icon(Icons.layers_rounded, color: Colors.orangeAccent),
+                  title: const Text('Carlos (Vendedor 3) \u2794 Você', style: TextStyle(color: Colors.white, fontSize: 14)),
+                  subtitle: const Text('Transferência de 5 capas', style: TextStyle(color: Colors.white70)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.redAccent),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transferência recusada.')));
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.check, color: Colors.greenAccent),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque de capas atualizado!')));
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              )
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${qtyController.text} capas devolvidas ao admin!')));
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
-              child: const Text('Confirmar Devolução', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
             ),
           ],
+        );
+      }
+    );
+  }
+
+  void _showDevolverCapasDialog() {
+    final qtyController = TextEditingController();
+    String? selectedRecipient;
+    final List<String> recipients = ['Admin', 'João (Vendedor 1)', 'Maria (Vendedora 2)', 'Carlos (Vendedor 3)'];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              title: const Text('Transferir Capas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Selecione o destinatário e a quantidade de capas (apenas repasse de estoque livre):', style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: selectedRecipient,
+                    hint: const Text('Destinatário', style: TextStyle(color: Colors.white54)),
+                    dropdownColor: const Color(0xFF1A1A2E),
+                    items: recipients.map((r) => DropdownMenuItem(value: r, child: Text(r, style: const TextStyle(color: Colors.white)))).toList(),
+                    onChanged: (val) {
+                      setStateDialog(() {
+                        selectedRecipient = val;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: qtyController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: 'Qtd de Capas',
+                      labelStyle: const TextStyle(color: Colors.white54),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  onPressed: selectedRecipient == null ? null : () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitação de transferência de ${qtyController.text} capas para $selectedRecipient enviada! (Aguardando aprovação)')));
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+                  child: const Text('Confirmar Transferência', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          }
         );
       },
     );
@@ -301,13 +381,13 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (_isManager) ...[
-                      _buildDistribuicaoEquipeCard(),
-                      const SizedBox(height: 20),
-                    ],
-                    _buildSearchCard(),
-                    const SizedBox(height: 28),
                     _buildClientList(),
+                    const SizedBox(height: 20),
+                    _buildSearchCard(),
+                    if (_isManager) ...[
+                      const SizedBox(height: 20),
+                      _buildDistribuicaoEquipeCard(),
+                    ],
                   ],
                 ),
               ),
@@ -315,6 +395,19 @@ class _SellerDashboardState extends State<SellerDashboard>
           ],
         ),
       ),
+      floatingActionButton: _selectedClientIds.isNotEmpty
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitando troca de ${_selectedClientIds.length} ficha(s)...')));
+                setState(() {
+                  _selectedClientIds.clear();
+                });
+              },
+              backgroundColor: const Color(0xFFCE93D8),
+              icon: const Icon(Icons.swap_horiz_rounded, color: Colors.white),
+              label: Text('Trocar ${_selectedClientIds.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            )
+          : null,
     );
   }
 
@@ -375,9 +468,17 @@ class _SellerDashboardState extends State<SellerDashboard>
                 tooltip: 'Checklist do Veículo',
               ),
               IconButton(
+                onPressed: _showNotificacoesVendedorDialog,
+                icon: const Badge(
+                  label: Text('1'),
+                  child: Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
+                ),
+                tooltip: 'Notificações (Capas)',
+              ),
+              IconButton(
                 onPressed: _showDevolverCapasDialog,
                 icon: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
-                tooltip: 'Devolver Capas',
+                tooltip: 'Transferir Capas',
               ),
               IconButton(
                 onPressed: () {
@@ -429,14 +530,42 @@ class _SellerDashboardState extends State<SellerDashboard>
           const SizedBox(height: 12),
           const Text('Atribua os books da sua rota para os vendedores da sua equipe.', style: TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _selectedSellerForTransfer,
+            hint: const Text('Selecione o vendedor', style: TextStyle(color: Colors.white54)),
+            dropdownColor: const Color(0xFF1A1A2E),
+            items: _teamSellers.map((seller) {
+              return DropdownMenuItem(
+                value: seller,
+                child: Text(seller, style: const TextStyle(color: Colors.white)),
+              );
+            }).toList(),
+            onChanged: (val) {
+              setState(() {
+                _selectedSellerForTransfer = val;
+              });
+            },
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFF1A2535),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFCE93D8))),
+            ),
+          ),
+          const SizedBox(height: 16),
           ElevatedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abrindo scanner de distribuição...')));
+            onPressed: _selectedSellerForTransfer == null ? null : () {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Abrindo scanner para transferir para $_selectedSellerForTransfer...')));
               // Em produção, reutilizaria o MobileScanner para ler e atribuir ao vendedor
             },
             icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
             label: const Text('Escanear e Repassar Book', style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0), minimumSize: const Size(double.infinity, 45)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF9C27B0), 
+              disabledBackgroundColor: Colors.grey.shade800,
+              minimumSize: const Size(double.infinity, 45)
+            ),
           ),
         ],
       )
@@ -676,15 +805,61 @@ class _SellerDashboardState extends State<SellerDashboard>
 
   Widget _buildClientCard(Map<String, dynamic> client) {
     final initials = client['name'].toString().substring(0, 1).toUpperCase();
+    final clientId = client['id'] as String;
+    final isSelected = _selectedClientIds.contains(clientId);
+
     return Card(
-      color: Colors.white.withOpacity(0.05),
+      color: isSelected ? const Color(0xFFCE93D8).withOpacity(0.1) : Colors.white.withOpacity(0.05),
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: isSelected ? const BorderSide(color: Color(0xFFCE93D8)) : BorderSide.none,
+      ),
       child: ListTile(
-        onTap: () => _openClientDetail(client),
-        leading: CircleAvatar(
-          backgroundColor: const Color(0xFF0288D1).withOpacity(0.2),
-          child: Text(initials, style: const TextStyle(color: Color(0xFF4FC3F7))),
+        onTap: () {
+          if (_selectedClientIds.isNotEmpty) {
+            setState(() {
+              if (isSelected) {
+                _selectedClientIds.remove(clientId);
+              } else {
+                _selectedClientIds.add(clientId);
+              }
+            });
+          } else {
+            _openClientDetail(client);
+          }
+        },
+        onLongPress: () {
+          setState(() {
+            if (isSelected) {
+              _selectedClientIds.remove(clientId);
+            } else {
+              _selectedClientIds.add(clientId);
+            }
+          });
+        },
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Checkbox(
+              value: isSelected,
+              onChanged: (val) {
+                setState(() {
+                  if (val == true) {
+                    _selectedClientIds.add(clientId);
+                  } else {
+                    _selectedClientIds.remove(clientId);
+                  }
+                });
+              },
+              activeColor: const Color(0xFFCE93D8),
+              checkColor: Colors.black,
+            ),
+            CircleAvatar(
+              backgroundColor: const Color(0xFF0288D1).withOpacity(0.2),
+              child: Text(initials, style: const TextStyle(color: Color(0xFF4FC3F7))),
+            ),
+          ],
         ),
         title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         subtitle: Text('Ficha ${client['sequenceNumber']}', style: TextStyle(color: Colors.white.withOpacity(0.7))),

@@ -397,6 +397,55 @@ class _AdminDashboardState extends State<AdminDashboard>
       },
     );
   }
+  void _showNotificacoesDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          title: const Text('Notificações e Transferências', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Card(
+                color: Colors.white.withOpacity(0.05),
+                child: ListTile(
+                  leading: const Icon(Icons.layers_rounded, color: Colors.orangeAccent),
+                  title: const Text('João (Vendedor 1) \u2794 Admin', style: TextStyle(color: Colors.white, fontSize: 14)),
+                  subtitle: const Text('Devolução de 10 capas', style: TextStyle(color: Colors.white70)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.redAccent),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolução recusada.')));
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.check, color: Colors.greenAccent),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque de capas atualizado!')));
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
+        );
+      }
+    );
+  }
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
@@ -464,6 +513,14 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 color: Color(0xFFCE93D8), fontSize: 12)),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    onPressed: _showNotificacoesDialog,
+                    icon: const Badge(
+                      label: Text('1'),
+                      child: Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
+                    ),
+                    tooltip: 'Notificações (Capas)',
                   ),
                   if (!isDesktop) // Hide logout button in header on desktop, since it's in the side menu
                     IconButton(
