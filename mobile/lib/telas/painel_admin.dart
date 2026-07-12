@@ -279,7 +279,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded, 'Fechamentos'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
-                      _sideMenuItem(2, Icons.inventory_2_rounded, 'Estoque'),
+                      _sideMenuItem(2, Icons.inventory_2_rounded, 'rebolo'),
                       _sideMenuItem(8, Icons.layers_rounded, 'Capas'),
                     ],
                   ),
@@ -441,7 +441,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
-    const tabs = ['Eventos IA', 'Books e Rotas', 'Estoque', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
+    const tabs = ['Eventos IA', 'Books e Rotas', 'rebolo', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
     const icons = [
       Icons.auto_awesome,
       Icons.menu_book_rounded,
