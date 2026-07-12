@@ -277,7 +277,46 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     );
   }
 
+  final Map<String, Map<String, double>> _mockMetricasVendedor = {
+    'Vendedor 1': {
+      'dinheiro': 1200.0,
+      'pix': 3450.0,
+      'credito': 2100.0,
+      'debito': 800.0,
+      'divida': 300.0,
+    },
+    'Vendedor 2': {
+      'dinheiro': 800.0,
+      'pix': 1200.0,
+      'credito': 900.0,
+      'debito': 400.0,
+      'divida': 150.0,
+    },
+  };
+
   Widget _buildFechamentoMesCard() {
+    double sumDinheiro = 0;
+    double sumPix = 0;
+    double sumCredito = 0;
+    double sumDebito = 0;
+    double sumDivida = 0;
+    
+    List<String> sellersToSum = _selectedSellersMes.isNotEmpty ? _selectedSellersMes : _sellers.map((s) => s['name']!).toList();
+
+    for (var s in sellersToSum) {
+      if (_mockMetricasVendedor.containsKey(s)) {
+        final data = _mockMetricasVendedor[s]!;
+        sumDinheiro += data['dinheiro']!;
+        sumPix += data['pix']!;
+        sumCredito += data['credito']!;
+        sumDebito += data['debito']!;
+        sumDivida += data['divida']!;
+      }
+    }
+    
+    double totalVendas = sumDinheiro + sumPix + sumCredito + sumDebito;
+    double comissaoTotal = totalVendas * 0.20; // Exemplo 20%
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -336,13 +375,13 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
              const SizedBox(height: 16),
              const Text('Resumo Financeiro Consolidado', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
              const SizedBox(height: 8),
-             _infoRow('Dinheiro (Cash)', 'R\$ 1.200,00'),
-             _infoRow('Pix', 'R\$ 3.450,00'),
-             _infoRow('Crédito', 'R\$ 2.100,00'),
-             _infoRow('Débito', 'R\$ 800,00'),
+             _infoRow('Dinheiro (Cash)', 'R\$ ${sumDinheiro.toStringAsFixed(2)}'),
+             _infoRow('Pix', 'R\$ ${sumPix.toStringAsFixed(2)}'),
+             _infoRow('Crédito', 'R\$ ${sumCredito.toStringAsFixed(2)}'),
+             _infoRow('Débito', 'R\$ ${sumDebito.toStringAsFixed(2)}'),
              const Divider(color: Colors.white24, height: 24),
-             _infoRow('Total de Vendas', 'R\$ 7.550,00'),
-             _infoRow('Comissão Total', 'R\$ 1.510,00'),
+             _infoRow('Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
+             _infoRow('Comissão Total', 'R\$ ${comissaoTotal.toStringAsFixed(2)}'),
              const Divider(color: Colors.white24, height: 24),
              
              // List of debtors as requested by user
@@ -351,12 +390,12 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
              // não gerando repasse pendente do vendedor para a empresa.
              const Text('Dívida Acumulada (Repasses Pendentes)', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
              const SizedBox(height: 8),
-             if (_selectedSellersMes.contains('Vendedor 1') || _selectedSellersMes.isEmpty)
-               _infoRow('  - Vendedor 1', 'R\$ 300,00', color: Colors.redAccent),
-             if (_selectedSellersMes.contains('Vendedor 2') || _selectedSellersMes.isEmpty)
-               _infoRow('  - Vendedor 2', 'R\$ 150,00', color: Colors.redAccent),
+             if (sellersToSum.contains('Vendedor 1'))
+               _infoRow('  - Vendedor 1', 'R\$ ${_mockMetricasVendedor['Vendedor 1']!['divida']!.toStringAsFixed(2)}', color: Colors.redAccent),
+             if (sellersToSum.contains('Vendedor 2'))
+               _infoRow('  - Vendedor 2', 'R\$ ${_mockMetricasVendedor['Vendedor 2']!['divida']!.toStringAsFixed(2)}', color: Colors.redAccent),
              const SizedBox(height: 8),
-             _infoRow('Total Pendente', 'R\$ 450,00', color: Colors.redAccent),
+             _infoRow('Total Pendente', 'R\$ ${sumDivida.toStringAsFixed(2)}', color: Colors.redAccent),
           ] else ...[
              const Text('Selecione ao menos um mês e um vendedor para ver o consolidado.', style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic)),
           ],

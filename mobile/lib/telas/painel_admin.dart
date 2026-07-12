@@ -1349,6 +1349,11 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             );
           }),
+          const SizedBox(height: 24),
+          _buildRotasInteligentes(),
+          const SizedBox(height: 20),
+          _buildTransferencia(),
+          const SizedBox(height: 20),
         ],
       ),
     );
