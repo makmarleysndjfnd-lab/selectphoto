@@ -60,6 +60,29 @@ class ApiService {
     }
   }
 
+  // Get users from the same company for stock transfer
+  Future<List<dynamic>> getCompanyUsers() async {
+    try {
+      final response = await _dio.get('/users/company');
+      return response.data;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  // Request stock transfer (covers or books)
+  Future<void> requestStockTransfer(String recipientId, String type, int quantity) async {
+    try {
+      await _dio.post('/stock/request-transfer', data: {
+        'recipientId': recipientId,
+        'itemType': type,
+        'quantity': quantity
+      });
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   // Sync Offline Clients
   Future<void> syncClients(List<Map<String, dynamic>> clientsData) async {
     try {
@@ -70,11 +93,23 @@ class ApiService {
   }
 
   // Sales
-  Future<void> registerSale(Map<String, dynamic> saleData) async {
+  Future<String> registerSale(Map<String, dynamic> saleData) async {
     try {
-      await _dio.post('/sales', data: saleData);
+      final response = await _dio.post('/sales', data: saleData);
+      return response.data['id'];
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao registrar venda');
+    }
+  }
+
+  Future<void> uploadSaleReceipt(String saleId, String filePath) async {
+    try {
+      final formData = FormData.fromMap({
+        'receipt': await MultipartFile.fromFile(filePath),
+      });
+      await _dio.post('/sales/$saleId/receipt', data: formData);
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload do comprovante');
     }
   }
 
@@ -260,6 +295,22 @@ class ApiService {
     }
   }
 
+  Future<void> editCost(String costId, Map<String, dynamic> data) async {
+    try {
+      await _dio.put('/costs/$costId', data: data);
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao editar custo');
+    }
+  }
+
+  Future<void> editSale(String saleId, Map<String, dynamic> data) async {
+    try {
+      await _dio.put('/sales/$saleId', data: data);
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao editar venda');
+    }
+  }
+
   Future<Map<String, dynamic>> getHealthDashboard() async {
     try {
       final response = await _dio.get('/finance/health');
@@ -366,6 +417,61 @@ class ApiService {
       return response.data as List<dynamic>;
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao buscar frota');
+    }
+  }
+
+  Future<String> uploadFile(String filePath) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath),
+      });
+      final response = await _dio.post('/upload', data: formData);
+      return response.data['url'];
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload do arquivo');
+    }
+  }
+
+  Future<void> submitChecklist(Map<String, dynamic> data) async {
+    try {
+      await _dio.post('/fleet/checklist', data: data);
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao enviar checklist da frota');
+    }
+  }
+
+  // ── Notificações (Notifications) ──────────────────────────────────────────
+
+  Future<List<dynamic>> getNotifications() async {
+    try {
+      final response = await _dio.get('/notifications');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar notificações');
+    }
+  }
+
+  Future<void> actionNotification(String id, String actionType) async {
+    try {
+      await _dio.post('/notifications/$id/action', data: {'actionType': actionType});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao processar notificação');
+    }
+  }
+
+  Future<void> markNotificationRead(String id) async {
+    try {
+      await _dio.patch('/notifications/$id/read');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao marcar notificação como lida');
+    }
+  }
+
+  Future<void> updateFcmToken(String token) async {
+    try {
+      await _dio.put('/users/me/fcm-token', data: {'token': token});
+    } catch (e) {
+      print("Failed to sync FCM token: $e");
     }
   }
 }

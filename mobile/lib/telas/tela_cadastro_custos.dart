@@ -1,8 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
-import '../servicos/ajudante_bd.dart';
+import 'package:provider/provider.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
+import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
+import '../servicos/ajudante_bd.dart';
+import 'tela_sincronizacao.dart' as tela_sincronizacao;
 
 class CostEntryScreen extends StatefulWidget {
   const CostEntryScreen({super.key});
@@ -69,25 +73,43 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
       'date': DateTime.now().toIso8601String(),
     });
 
-    await DbHelper.instance.insertSyncTask(
-      '/costs',
-      'POST',
-      {
-        'userId': 'mock_user_123', 
-        'teamId': 'mock_team_123', 
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      
+      String receiptUrl = '';
+      // Se a foto falhar no envio, não salvamos o arquivo local no payload de backup para evitar payload gigante,
+      // ou então teríamos que converter a foto em base64. O ideal seria base64, mas por simplicidade salvaremos sem o path.
+      if (_receiptPhoto != null) {
+        try {
+          receiptUrl = await apiService.uploadFile(_receiptPhoto!.path);
+        } catch (e) {
+          print('Erro no upload da foto: $e');
+        }
+      }
+      
+      final payload = {
         'amount': amount,
         'category': _category,
         'description': _descController.text,
         'paymentMethod': _paymentMethod,
-        'localFiles': _receiptPhoto != null ? [
-          {'key': 'receipt', 'path': _receiptPhoto!.path},
-        ] : []
-      }
-    );
+        'carId': _carId,
+        'receiptUrl': receiptUrl,
+      };
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Despesa registrada com sucesso!'), backgroundColor: Colors.green),
-    );
+      try {
+        await apiService.submitCost(payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Despesa registrada com sucesso!'), backgroundColor: Colors.green));
+      } catch (e) {
+        await syncService.addPendingRequest('SUBMIT_COST', payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
+      }
+
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro interno: $e'), backgroundColor: Colors.red));
+      return;
+    }
+
     Navigator.of(context).pop();
   }
 
@@ -99,6 +121,42 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
         backgroundColor: const Color(0xFF1A0030),
         title: const Text('Lançar Despesa', style: TextStyle(color: Colors.white, fontSize: 16)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+            },
+            icon: Consumer<SyncService>(
+              builder: (context, sync, child) {
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Icon(Icons.cloud_sync, color: Color(0xFFE1BEE7)),
+                    if (sync.pendingRequests.isNotEmpty)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                          child: Text(
+                            '${sync.pendingRequests.length}',
+                            style: const TextStyle(color: Colors.white, fontSize: 8),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              }
+            ),
+            tooltip: 'Backups Offline',
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),

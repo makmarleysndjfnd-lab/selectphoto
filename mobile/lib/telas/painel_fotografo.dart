@@ -5,7 +5,9 @@ import 'dart:convert';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
+import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import 'tela_checklist_frota.dart';
 import 'tela_cadastro_custos.dart';
 import 'tela_config_impressora.dart';
@@ -293,8 +295,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       final sequenceNumber = '$_currentCityLote-$seqString'; 
 
       final apiService = Provider.of<ApiService>(context, listen: false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
       
-      await apiService.syncClients([{
+      final payload = {
         'sequenceNumber': sequenceNumber,
         'event': _currentEventName,
         'name': _nameController.text,
@@ -317,15 +320,21 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         'clothesColor': _clothesColorController.text,
         'children': _children,
         'signatureBase64': base64Signature,
-      }]);
+      };
+
+      try {
+        await apiService.syncClients([payload]);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sincronizado com o servidor!'), backgroundColor: Colors.green));
+      } catch (e) {
+        await syncService.addPendingRequest('SYNC_CLIENTS', payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline! Não esqueça de sincronizar depois.'), backgroundColor: Colors.orange));
+      }
 
       setState(() {
         _generatedQrCodeData = sequenceNumber;
         _sequenceCount++; // Increment for next client
       });
       
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -465,6 +474,40 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                         Text('Captação em Campo', style: TextStyle(color: Color(0xFFE1BEE7), fontSize: 12)),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+                    },
+                    icon: Consumer<SyncService>(
+                      builder: (context, sync, child) {
+                        return Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            const Icon(Icons.cloud_sync, color: Color(0xFFE1BEE7)),
+                            if (sync.pendingRequests.isNotEmpty)
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.red,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                                  child: Text(
+                                    '${sync.pendingRequests.length}',
+                                    style: const TextStyle(color: Colors.white, fontSize: 8),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      }
+                    ),
+                    tooltip: 'Backups Offline',
                   ),
                   IconButton(
                     onPressed: () {

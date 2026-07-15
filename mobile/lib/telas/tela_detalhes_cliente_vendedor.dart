@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:signature/signature.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +8,10 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
+import 'package:provider/provider.dart';
+import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
+import 'tela_sincronizacao.dart' as tela_sincronizacao;
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
@@ -116,6 +121,40 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                onPressed: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+                },
+                icon: Consumer<SyncService>(
+                  builder: (context, sync, child) {
+                    return Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        const Icon(Icons.cloud_sync, color: Color(0xFF4FC3F7)),
+                        if (sync.pendingRequests.isNotEmpty)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                              constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                              child: Text(
+                                '${sync.pendingRequests.length}',
+                                style: const TextStyle(color: Colors.white, fontSize: 8),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  }
+                ),
+                tooltip: 'Backups Offline',
               ),
             ],
           ),
@@ -253,6 +292,25 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
             if (client['children'] != null && (client['children'] as List).isNotEmpty) ...[
               const SizedBox(height: 8),
               _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => "${c['name']} (${c['age']})").join(', ')}"),
+            ],
+            if (client['signatureUrl'] != null && client['signatureUrl'].toString().startsWith('data:image')) ...[
+              const SizedBox(height: 12),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 8),
+              const Text('Assinatura do Cliente (Ficha)', style: TextStyle(color: Colors.white54, fontSize: 10)),
+              const SizedBox(height: 4),
+              Container(
+                height: 80,
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Image.memory(
+                  base64Decode(client['signatureUrl'].toString().split(',')[1]),
+                  fit: BoxFit.contain,
+                ),
+              ),
             ]
           ]
         ],
@@ -415,22 +473,54 @@ class _SaleTabState extends State<_SaleTab> {
   File? _receiptPhoto;
   final ImagePicker _picker = ImagePicker();
 
+  String? _saleId;
+
   void _submit() async {
     final cleanAmount = _valorVendaController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
     final double valor = double.tryParse(cleanAmount) ?? 0.0;
     if (_valorVendaController.text.isEmpty) return;
     setState(() => _isLoading = true);
     
-    // In a real app, this would be an API call to POST /sales
-    // with body: { clientId, city, value, product, status, paymentStatus, fichaNumber, paymentMethod, hasCover }
-    await Future.delayed(const Duration(milliseconds: 700));
-    
-    if (!mounted) return;
-    setState(() {
-      _isLoading = false;
-      _saleFinalized = true;
-    });
-    widget.onSuccess('Venda registrada com sucesso!');
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      
+      final payload = {
+        'clientId': widget.clientId,
+        'city': widget.city,
+        'value': valor,
+        'product': _product,
+        'status': 'PRONTO',
+        'paymentStatus': 'PAID',
+        'fichaNumber': _numeroFichaController.text,
+        'paymentMethod': _paymentMethod,
+      };
+
+      String? finalSaleId;
+      try {
+        finalSaleId = await apiService.registerSale(payload);
+      } catch (e) {
+        await syncService.addPendingRequest('REGISTER_SALE', payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
+        // Se falhou, vamos deixar o saleId nulo ou "offline" e não forçar upload de foto do recibo online
+        finalSaleId = 'offline_${DateTime.now().millisecondsSinceEpoch}';
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _saleFinalized = true;
+        _saleId = finalSaleId;
+      });
+      widget.onSuccess('Venda registrada (ou no backup)!');
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro interno ao registrar venda: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   void _takeReceiptPhoto() async {
@@ -444,21 +534,31 @@ class _SaleTabState extends State<_SaleTab> {
   }
 
   void _sendReceipt() async {
-    if (_receiptPhoto == null) return;
+    if (_receiptPhoto == null || _saleId == null) return;
     setState(() => _isLoading = true);
     
-    // Mock API call to upload receipt
-    await Future.delayed(const Duration(seconds: 1));
-    
-    if (!mounted) return;
-    setState(() {
-      _isLoading = false;
-      _saleFinalized = false;
-      _receiptPhoto = null;
-    });
-    _valorVendaController.clear();
-    _numeroFichaController.clear();
-    widget.onSuccess('Comprovante anexado com sucesso!');
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      await apiService.uploadSaleReceipt(_saleId!, _receiptPhoto!.path);
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _saleFinalized = false;
+        _receiptPhoto = null;
+        _saleId = null;
+      });
+      _valorVendaController.clear();
+      _numeroFichaController.clear();
+      widget.onSuccess('Comprovante anexado com sucesso!');
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao anexar comprovante: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   @override
@@ -674,15 +774,43 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           behavior: SnackBarBehavior.floating));
       return;
     }
+    
+    final reasonToSubmit = _selectedReason!;
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
-    setState(() {
-      _isLoading = false;
-      _selectedReason = null;
-    });
-    _sigController.clear();
-    widget.onSuccess('Não-venda registrada: "$_selectedReason"');
+
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      
+      final payload = {
+        'clientId': widget.clientId,
+        'reason': reasonToSubmit,
+        'signatureBase64': 'fictitious_signature',
+      };
+
+      try {
+        await apiService.registerNonSale(payload);
+        widget.onSuccess('Não-venda registrada com sucesso!');
+      } catch (e) {
+        await syncService.addPendingRequest('REGISTER_NONSALE', payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
+        widget.onSuccess('Não-venda registrada (backup offline)!');
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _selectedReason = null;
+      });
+      _sigController.clear();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro interno ao registrar não-venda: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   @override
@@ -793,16 +921,45 @@ class _ScheduleTabState extends State<_ScheduleTab> {
       return;
     }
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
-    final dateStr = DateFormat('dd/MM/yyyy').format(_selectedDay!);
-    setState(() {
-      _isLoading = false;
-      _selectedDay = DateTime.now();
-      _selectedTime = null;
-    });
-    _obsController.clear();
-    widget.onSuccess('Agendamento salvo: $dateStr às $_selectedTime');
+    
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      
+      final dateIso = _selectedDay!.toIso8601String();
+      final timeToSubmit = _selectedTime!;
+      
+      final payload = {
+        'clientId': widget.client['id'],
+        'date': dateIso,
+        'time': timeToSubmit,
+        'observation': _obsController.text,
+      };
+
+      try {
+        await apiService.registerAppointment(payload);
+        widget.onSuccess('Agendamento salvo com sucesso!');
+      } catch (e) {
+        await syncService.addPendingRequest('REGISTER_APPOINTMENT', payload);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
+        widget.onSuccess('Agendamento salvo (backup offline)!');
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _selectedDay = DateTime.now();
+        _selectedTime = null;
+      });
+      _obsController.clear();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro interno ao registrar agendamento: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Widget _buildTimeSlot(String time) {
@@ -1031,23 +1188,48 @@ class _PhotosTab extends StatefulWidget {
 }
 
 class _PhotosTabState extends State<_PhotosTab> {
-  String? _fakeImageLabel;
+  File? _photoFile;
   bool _isUploading = false;
+  final ImagePicker _picker = ImagePicker();
 
-  void _fakeCapture() {
-    setState(() => _fakeImageLabel = 'foto_${widget.clientId}_mock.jpg');
+  void _capturePhoto() async {
+    final XFile? photo = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 60,
+    );
+    if (photo != null) {
+      setState(() => _photoFile = File(photo.path));
+    }
   }
 
   void _upload() async {
-    if (_fakeImageLabel == null) return;
+    if (_photoFile == null) return;
     setState(() => _isUploading = true);
-    await Future.delayed(const Duration(milliseconds: 900));
-    if (!mounted) return;
-    setState(() {
-      _isUploading = false;
-      _fakeImageLabel = null;
-    });
-    widget.onSuccess('book enviada! Será deletada automaticamente em 10 dias.');
+    
+    try {
+      final bytes = await _photoFile!.readAsBytes();
+      final base64String = base64Encode(bytes);
+      
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      await apiService.uploadPhoto({
+        'clientId': widget.clientId,
+        'photoBase64': base64String,
+      });
+
+      if (!mounted) return;
+      setState(() {
+        _isUploading = false;
+        _photoFile = null;
+      });
+      widget.onSuccess('Foto enviada! Será deletada automaticamente em 10 dias.');
+    } catch (e) {
+      setState(() => _isUploading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao enviar foto: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   @override
@@ -1087,14 +1269,14 @@ class _PhotosTabState extends State<_PhotosTab> {
                     border: Border.all(
                         color: const Color(0xFF4FC3F7).withOpacity(0.2)),
                   ),
-                  child: _fakeImageLabel != null
+                  child: _photoFile != null
                       ? Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             const Icon(Icons.image_rounded,
                                 color: Color(0xFF4FC3F7), size: 60),
                             const SizedBox(height: 12),
-                            Text(_fakeImageLabel!,
+                            Text(_photoFile!.path.split('/').last,
                                 style: const TextStyle(
                                     color: Color(0xFF90CAF9),
                                     fontSize: 13)),
@@ -1127,7 +1309,7 @@ class _PhotosTabState extends State<_PhotosTab> {
               child: Row(children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _isUploading ? null : _fakeCapture,
+                    onPressed: _isUploading ? null : _capturePhoto,
                     icon: const Icon(Icons.camera_alt_rounded,
                         color: Color(0xFF4FC3F7)),
                     label: const Text('Tirar book',
@@ -1145,7 +1327,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                 Expanded(
                   child: _confirmButton(
                     isLoading: _isUploading,
-                    onPressed: _fakeImageLabel != null ? _upload : null,
+                    onPressed: _photoFile != null ? _upload : null,
                     label: 'Enviar',
                     colors: const [Color(0xFF0288D1), Color(0xFF4FC3F7)],
                   ),

@@ -201,7 +201,7 @@ router.post('/request-transfer', authMiddleware, async (req: AuthRequest, res) =
         const admins = await prisma.user.findMany({
             where: { role: 'ADMIN', companyId }
         });
-        const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null && a.id !== recipientId) as string[];
+        const adminTokens = admins.filter(a => a.fcmToken != null && a.id !== recipientId).map(a => a.fcmToken as string);
 
         for (const admin of admins) {
             if (admin.id === recipientId) continue; // already notified above

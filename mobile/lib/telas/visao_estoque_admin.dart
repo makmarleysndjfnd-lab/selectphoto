@@ -8,13 +8,22 @@ class VisaoEstoqueAdmin extends StatefulWidget {
 }
 
 class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
+  int _capasSede = 500;
+  final List<Map<String, dynamic>> _vendedores = [
+    {'id': '1', 'nome': 'João (Vendedor 1)', 'qtd': 45},
+    {'id': '2', 'nome': 'Maria (Vendedora 2)', 'qtd': 30},
+    {'id': '3', 'nome': 'Carlos (Vendedor 3)', 'qtd': 15},
+  ];
+
+  int get _capasComVendedores => _vendedores.fold(0, (sum, v) => sum + (v['qtd'] as int));
+  int get _totalGeral => _capasSede + _capasComVendedores;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
       appBar: AppBar(
-        title: const Text('Books & Rotas', style: TextStyle(color: Colors.white)),
+        title: const Text('Capas', style: TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1A0030),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -26,7 +35,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
              Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Rebolo', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                const Text('Estoque de Capas', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 ElevatedButton.icon(
                   onPressed: () {
                      // refresh action
@@ -40,9 +49,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             const SizedBox(height: 20),
             _buildResumoGeral(),
             const SizedBox(height: 20),
-            _buildTrocasPendentes(),
-            const SizedBox(height: 20),
-            _buildListaLotes(),
+            _buildCapasVendedores(),
             const SizedBox(height: 40),
           ],
         ),
@@ -50,65 +57,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
     );
   }
 
-  Widget _buildTrocasPendentes() {
-    // Mock de solicitações pendentes
-    final trocas = [
-      {'remetente': 'João (Vendedor 1)', 'destinatario': 'Maria (Vendedora 2)', 'qtd': 3, 'id': 'TRC-01'},
-    ];
 
-    if (trocas.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
-              SizedBox(width: 8),
-              Text('Trocas Pendentes de Fichas', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ...trocas.map((troca) {
-            return Card(
-              color: Colors.white.withOpacity(0.05),
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                title: Text('${troca['remetente']} \u2794 ${troca['destinatario']}', style: const TextStyle(color: Colors.white, fontSize: 14)),
-                subtitle: Text('${troca['qtd']} Fichas', style: const TextStyle(color: Colors.white70)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.redAccent),
-                      tooltip: 'Recusar',
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Troca ${troca['id']} recusada.')));
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.check, color: Colors.greenAccent),
-                      tooltip: 'Aprovar',
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Troca ${troca['id']} aprovada.')));
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
 
   Widget _buildResumoGeral() {
     return Container(
@@ -126,9 +75,9 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _infoBox('Capas no Admin', '0', Colors.blueAccent),
-              _infoBox('Capas com Vendedores', '0', Colors.orangeAccent),
-              _infoBox('Total Geral', '0', Colors.greenAccent),
+              _infoBox('Capas na Sede', '$_capasSede', Colors.blueAccent),
+              _infoBox('Capas com Vendedores', '$_capasComVendedores', Colors.orangeAccent),
+              _infoBox('Total Geral', '$_totalGeral', Colors.greenAccent),
             ],
           )
         ],
@@ -146,7 +95,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
     );
   }
 
-  Widget _buildListaLotes() {
+  Widget _buildCapasVendedores() {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -160,47 +109,148 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Lotes de Entrada', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text('Capas com Vendedores', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
               ElevatedButton.icon(
-                onPressed: () {},
+                onPressed: () => _showDistribuirDialog(),
                 icon: const Icon(Icons.add),
-                label: const Text('Novo Lote'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                label: const Text('Distribuir'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
               )
             ],
           ),
           const SizedBox(height: 16),
-          // Exemplo de Lote colorizado: Verde <30, Amarelo 30-100, Vermelho > 400
-          _loteCard('Lote L2024-06 (32 dias)', '50 Capas', Colors.yellow.shade700),
-          const SizedBox(height: 8),
-          _loteCard('Lote L2024-05 (10 dias)', '100 Capas', Colors.green.shade600),
+          if (_vendedores.isEmpty)
+            const Text('Nenhuma capa distribuída no momento.', style: TextStyle(color: Colors.white54)),
+          ..._vendedores.map((v) {
+            return Card(
+              color: Colors.white.withOpacity(0.05),
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.person, color: Colors.white),
+                ),
+                title: Text(v['nome'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text('${v['qtd']} Capas', style: const TextStyle(color: Colors.orangeAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.white54, size: 20),
+                      onPressed: () => _showDistribuirDialog(vendedorExistente: v),
+                      tooltip: 'Editar Quantidade',
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                      onPressed: () => _removerVendedor(v),
+                      tooltip: 'Remover',
+                    ),
+                  ],
+                )
+              ),
+            );
+          }),
         ],
       )
     );
   }
 
-  Widget _loteCard(String title, String subtitle, Color color, {Widget? trailing}) {
-     return Container(
-       padding: const EdgeInsets.all(12),
-       decoration: BoxDecoration(
-         color: color.withOpacity(0.2),
-         borderRadius: BorderRadius.circular(12),
-         border: Border.all(color: color.withOpacity(0.5)),
-       ),
-       child: Row(
-         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-         children: [
-           Column(
-             crossAxisAlignment: CrossAxisAlignment.start,
-             children: [
-               Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
-               Text(subtitle, style: const TextStyle(color: Colors.white)),
-             ],
-           ),
-           if (trailing != null) trailing,
-         ],
-       ),
-     );
+  void _removerVendedor(Map<String, dynamic> v) {
+    setState(() {
+      _capasSede += v['qtd'] as int;
+      _vendedores.removeWhere((item) => item['id'] == v['id']);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vendedor removido e capas devolvidas à Sede.')));
   }
 
+  void _showDistribuirDialog({Map<String, dynamic>? vendedorExistente}) {
+    final bool isEdit = vendedorExistente != null;
+    final TextEditingController nomeCtrl = TextEditingController(text: isEdit ? vendedorExistente['nome'] : '');
+    final TextEditingController qtdCtrl = TextEditingController(text: isEdit ? vendedorExistente['qtd'].toString() : '');
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          title: Text(isEdit ? 'Editar Distribuição' : 'Nova Distribuição', style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nomeCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Nome do Vendedor',
+                  labelStyle: TextStyle(color: Colors.white54),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFCE93D8))),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: qtdCtrl,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Quantidade de Capas',
+                  labelStyle: TextStyle(color: Colors.white54),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFCE93D8))),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final nome = nomeCtrl.text.trim();
+                final qtd = int.tryParse(qtdCtrl.text.trim()) ?? 0;
+                
+                if (nome.isEmpty || qtd <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha os dados corretamente.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent));
+                  return;
+                }
+
+                setState(() {
+                  if (isEdit) {
+                    final int diferenca = qtd - (vendedorExistente['qtd'] as int);
+                    if (_capasSede - diferenca < 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque insuficiente na Sede.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent));
+                      return;
+                    }
+                    _capasSede -= diferenca;
+                    final index = _vendedores.indexWhere((v) => v['id'] == vendedorExistente['id']);
+                    if (index != -1) {
+                      _vendedores[index]['nome'] = nome;
+                      _vendedores[index]['qtd'] = qtd;
+                    }
+                  } else {
+                    if (_capasSede - qtd < 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque insuficiente na Sede.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent));
+                      return;
+                    }
+                    _capasSede -= qtd;
+                    _vendedores.add({
+                      'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                      'nome': nome,
+                      'qtd': qtd,
+                    });
+                  }
+                });
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Salvar', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        );
+      }
+    );
+  }
 }
+

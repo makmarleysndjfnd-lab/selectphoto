@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
+import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import 'visao_frota_admin.dart';
 import 'visao_fluxo_caixa_admin.dart';
 import 'tela_cadastro_custos.dart';
@@ -177,11 +179,58 @@ class _AdminDashboardState extends State<AdminDashboard>
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
-  // Mock Rotas Inteligentes
-  final List<Map<String, dynamic>> _rotas = [
-    {'city': 'Campinas', 'count': 42, 'lote': 'CAMPINAS01'},
-    {'city': 'São Paulo', 'count': 15, 'lote': 'SP01'},
+  // Mock Rotas Inteligentes -> Nova Estrutura
+  final List<Map<String, dynamic>> _rotasManuais = [
+    {
+      'id': 'r1',
+      'title': 'Campinas',
+      'books': [
+        {'id': 'b1', 'ficha': 'CF-EQP1-0003', 'lote': 'L2024-06', 'qr': 'QR-1234', 'cliente': 'Maria Silva'},
+        {'id': 'b2', 'ficha': 'CF-EQP2-0005', 'lote': 'L2024-06', 'qr': 'QR-1235', 'cliente': 'Carlos Mendes'},
+      ]
+    },
+    {
+      'id': 'r2',
+      'title': 'São Paulo',
+      'books': [
+        {'id': 'b3', 'ficha': 'CF-EQP1-0012', 'lote': 'L2024-06', 'qr': 'QR-1236', 'cliente': 'Ana Costa'},
+      ]
+    },
   ];
+
+  final List<Map<String, dynamic>> _booksNaoAtribuidos = [
+    {'id': 'b4', 'ficha': 'CF-EQP3-0002', 'lote': 'L2024-06', 'qr': 'QR-1237', 'cliente': 'Fernanda Neves'},
+  ];
+
+  final Map<String, List<Map<String, dynamic>>> _booksDistribuidos = {};
+
+  // Mock Rotas Rebolo
+  final List<Map<String, dynamic>> _rotasRebolo = [
+    {
+      'id': 'rr1',
+      'title': 'Campinas (Revisitas)',
+      'books': [
+        {'id': 'r1', 'ficha': 'CF-EQP1-0007', 'lote': 'L2024-06', 'qr': 'QR-8881', 'cliente': 'João Ferreira'},
+      ]
+    },
+  ];
+
+  final List<Map<String, dynamic>> _rebolosNaoAtribuidos = [
+    {'id': 'r2', 'ficha': 'CF-EQP1-0019', 'lote': 'L2024-06', 'qr': 'QR-8882', 'cliente': 'Pedro Santos'},
+    {'id': 'r3', 'ficha': 'CF-EQP2-0009', 'lote': 'L2024-06', 'qr': 'QR-8883', 'cliente': 'Beatriz Lima'},
+  ];
+
+  final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
+
+  List<String> get _todosVendedores {
+    List<String> list = [];
+    for (var team in _teamData) {
+      for (var seller in team['sellers'] as List) {
+        list.add(seller['name']);
+      }
+    }
+    return list;
+  }
 
   @override
   void initState() {
@@ -278,7 +327,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded, 'Fechamentos'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
-                      _sideMenuItem(1, Icons.menu_book_rounded, 'Books e Rotas'),
+                      _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'rebolo'),
                       _sideMenuItem(8, Icons.layers_rounded, 'Capas'),
                     ],
@@ -324,11 +373,6 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
           const Divider(color: Colors.white12, height: 1),
           ListTile(
-            leading: const Icon(Icons.save_alt_rounded, color: Colors.greenAccent),
-            title: const Text('Backup Local (Offline)', style: TextStyle(color: Colors.greenAccent)),
-            onTap: _backupLocalDatabase,
-          ),
-          ListTile(
             leading: const Icon(Icons.logout_rounded, color: Color(0xFFCE93D8)),
             title: const Text('Sair', style: TextStyle(color: Color(0xFFCE93D8))),
             onTap: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen())),
@@ -339,39 +383,102 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  Future<void> _backupLocalDatabase() async {
-    try {
-      final dbPath = await DbHelper.instance.getDbPath();
-      final dbFile = File(dbPath);
-      
-      if (!await dbFile.exists()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhum dado local encontrado para backup')));
-        return;
-      }
+  void _showNotificacoesDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              title: const Text('Notificações e Pendências', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: FutureBuilder<List<dynamic>>(
+                future: ApiService().getNotifications(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox(
+                      width: 100, height: 100,
+                      child: Center(child: CircularProgressIndicator(color: Colors.orangeAccent)),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return const Text('Erro ao carregar notificações.', style: TextStyle(color: Colors.redAccent));
+                  }
+                  
+                  final notifications = snapshot.data ?? [];
+                  if (notifications.isEmpty) {
+                    return const Text('Tudo limpo! Nenhuma pendência.', style: TextStyle(color: Colors.white70));
+                  }
 
-      // Requer permissão no Android
-      var status = await Permission.storage.request();
-      if (!status.isGranted) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permissão de armazenamento negada. Nao foi possível salvar o backup.')));
-        return;
-      }
+                  return SizedBox(
+                    width: double.maxFinite,
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: notifications.length,
+                      itemBuilder: (context, index) {
+                        final notif = notifications[index];
+                        final senderName = notif['sender'] != null ? notif['sender']['name'] : 'Sistema';
+                        
+                        IconData icon;
+                        switch (notif['type']) {
+                          case 'STOCK_TRANSFER_COVER': icon = Icons.layers_rounded; break;
+                          case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
+                          case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;
+                          case 'FLEET_URGENT': icon = Icons.warning_amber_rounded; break;
+                          default: icon = Icons.notifications_active_rounded;
+                        }
 
-      final Directory? downloadsDir = await getExternalStorageDirectory(); // Vai para Android/data/.../files. Para pasta public: /storage/emulated/0/Download
-      final String targetPath = '/storage/emulated/0/Download/selectphoto_backup_${DateTime.now().millisecondsSinceEpoch}.db';
-      
-      await dbFile.copy(targetPath);
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Backup salvo em Downloads!\n$targetPath', style: const TextStyle(color: Colors.white)), 
-        backgroundColor: Colors.green
-      ));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao salvar backup: $e')));
-    }
+                        return Card(
+                          color: Colors.white.withOpacity(0.05),
+                          child: ListTile(
+                            leading: Icon(icon, color: Colors.orangeAccent),
+                            title: Text('$senderName \u2794 Admin', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                            subtitle: Text(notif['message'] ?? 'Notificação', style: const TextStyle(color: Colors.white70)),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.close, color: Colors.redAccent),
+                                  onPressed: () async {
+                                    try {
+                                      await ApiService().actionNotification(notif['id'], 'REJECT');
+                                      setDialogState(() {}); // Refreshes FutureBuilder
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                    }
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.check, color: Colors.greenAccent),
+                                  onPressed: () async {
+                                    try {
+                                      await ApiService().actionNotification(notif['id'], 'ACCEPT');
+                                      setDialogState(() {});
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
   }
 
   Widget _sideMenuItem(int index, IconData icon, String label) {
@@ -389,59 +496,11 @@ class _AdminDashboardState extends State<AdminDashboard>
       },
     );
   }
-  void _showNotificacoesDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A2535),
-          title: const Text('Notificações e Transferências', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Card(
-                color: Colors.white.withOpacity(0.05),
-                child: ListTile(
-                  leading: const Icon(Icons.layers_rounded, color: Colors.orangeAccent),
-                  title: const Text('João (Vendedor 1) \u2794 Admin', style: TextStyle(color: Colors.white, fontSize: 14)),
-                  subtitle: const Text('Devolução de 10 capas', style: TextStyle(color: Colors.white70)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.redAccent),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolução recusada.')));
-                        },
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.check, color: Colors.greenAccent),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque de capas atualizado!')));
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
-            ),
-          ],
-        );
-      }
-    );
-  }
+  
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
-    const tabs = ['Eventos IA', 'Books e Rotas', 'rebolo', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
+    const tabs = ['Eventos IA', 'Books', 'rebolo', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
     const icons = [
       Icons.auto_awesome,
       Icons.menu_book_rounded,
@@ -507,6 +566,40 @@ class _AdminDashboardState extends State<AdminDashboard>
                     ),
                   ),
                   IconButton(
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+                    },
+                    icon: Consumer<SyncService>(
+                      builder: (context, sync, child) {
+                        return Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            const Icon(Icons.cloud_sync, color: Color(0xFFCE93D8)),
+                            if (sync.pendingRequests.isNotEmpty)
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.red,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                                  child: Text(
+                                    '${sync.pendingRequests.length}',
+                                    style: const TextStyle(color: Colors.white, fontSize: 8),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      }
+                    ),
+                    tooltip: 'Backups Offline',
+                  ),
+                  IconButton(
                     onPressed: _showNotificacoesDialog,
                     icon: const Badge(
                       label: Text('1'),
@@ -526,58 +619,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ],
               ),
             ),
-            // Sub-tabs (Only show on Mobile, on Desktop it's handled by SideMenu)
-            if (!isDesktop)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: List.generate(9, (i) {
-                      final selected = _navIndex == i;
-                      return GestureDetector(
-                        onTap: () => setState(() => _navIndex = i),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          margin: const EdgeInsets.only(right: 8),
-                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? Colors.white.withOpacity(0.15)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                                color: selected
-                                    ? Colors.white.withOpacity(0.3)
-                                    : Colors.transparent),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(icons[i],
-                                  color: selected
-                                      ? Colors.white
-                                      : const Color(0xFF90CAF9),
-                                  size: 16),
-                              const SizedBox(width: 6),
-                              Text(tabs[i],
-                                  style: TextStyle(
-                                      color: selected
-                                          ? Colors.white
-                                          : const Color(0xFF90CAF9),
-                                      fontSize: 12,
-                                      fontWeight: selected
-                                          ? FontWeight.bold
-                                          : FontWeight.normal)),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
-                ),
-              ),
+            // Removed sub-tabs as per user request to 'tirar a parte que fica rolando'
           ],
         ),
       ),
@@ -663,8 +705,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 20),
           _buildRotasInteligentes(),
           const SizedBox(height: 20),
-          _buildTransferencia(),
-          const SizedBox(height: 20),
+
         ],
       ),
     );
@@ -1352,8 +1393,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 24),
           _buildRotasInteligentes(),
           const SizedBox(height: 20),
-          _buildTransferencia(),
-          const SizedBox(height: 20),
+
         ],
       ),
     );
@@ -1429,6 +1469,9 @@ class _AdminDashboardState extends State<AdminDashboard>
 
           ..._stockByCity.map((cityData) =>
               _buildCityStockCard(cityData)),
+          const SizedBox(height: 24),
+          _buildRotasInteligentes(isRebolo: true),
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -1552,7 +1595,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       builder: (_) => _StockBottomSheet(city: city, fichas: fichas),
     );
   }
-  void _scanAndDistributeBooks() {
+  void _scanAndDistributeBooks({bool isRebolo = false}) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1574,7 +1617,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                       final code = barcodes.first.rawValue;
                       if (code != null) {
                         Navigator.pop(context);
-                        _assignBookToSellerDialog(code);
+                        _assignBookToSellerDialog(code, isRebolo);
                       }
                     }
                   },
@@ -1591,78 +1634,96 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  void _assignBookToSellerDialog(String qrCode) {
+  void _assignBookToSellerDialog(String qrCode, bool isRebolo) {
+    String? selectedSeller;
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1E1E2C),
-          title: const Text('Atribuir Book a Vendedor', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Ficha/Book: $qrCode', style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
-              const Text('Selecione o Vendedor ou Gerente:', style: TextStyle(color: Colors.white70)),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
-                child: DropdownButton<String>(
-                  items: const [
-                    DropdownMenuItem(value: 'v1', child: Text('João (Gerente)', style: TextStyle(color: Colors.white))),
-                    DropdownMenuItem(value: 'v2', child: Text('Maria', style: TextStyle(color: Colors.white))),
-                  ],
-                  onChanged: (v) {},
-                  dropdownColor: const Color(0xFF1E1E2C),
-                  isExpanded: true,
-                  underline: const SizedBox(),
-                  hint: const Text('Selecionar', style: TextStyle(color: Colors.white54)),
-                ),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E2C),
+              title: const Text('Atribuir via QR Code', style: TextStyle(color: Colors.white)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Ficha/Book: $qrCode', style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  const Text('Selecione o Vendedor:', style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+                    child: DropdownButton<String>(
+                      value: selectedSeller,
+                      items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
+                      onChanged: (v) { setDialogState(() => selectedSeller = v); },
+                      dropdownColor: const Color(0xFF1E1E2C),
+                      isExpanded: true,
+                      underline: const SizedBox(),
+                      hint: const Text('Selecionar', style: TextStyle(color: Colors.white54)),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Confirmar Atribuição'),
-            ),
-          ],
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                ElevatedButton(
+                  onPressed: selectedSeller == null ? null : () {
+                    Navigator.pop(context);
+                    _distribuirBookPorQR(qrCode, selectedSeller!, isRebolo);
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                  child: const Text('Confirmar', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          }
         );
       }
     );
   }
 
-  Widget _buildTransferencia() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Distribuição de Books (Saída)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: _scanAndDistributeBooks,
-            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-            label: const Text('Distribuir Books via QR Code', style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0), padding: const EdgeInsets.symmetric(vertical: 14)),
-          ),
-          const SizedBox(height: 16),
-          const Text('Aponte a câmera para os QR Codes dos books impressos para registrá-los no estoque do vendedor e na respectiva rota.', style: TextStyle(color: Colors.white70, fontSize: 13)),
-        ],
-      )
-    );
+  void _distribuirBookPorQR(String qr, String seller, bool isRebolo) {
+    setState(() {
+      Map<String, dynamic>? bookEncontrado;
+      
+      // Procura nas rotas
+      for (var rota in (isRebolo ? _rotasRebolo : _rotasManuais)) {
+        final list = rota['books'] as List;
+        int idx = list.indexWhere((b) => b['qr'] == qr);
+        if (idx != -1) {
+          bookEncontrado = list.removeAt(idx);
+          break;
+        }
+      }
+      
+      // Se não achou, procura nos não atribuídos
+      if (bookEncontrado == null) {
+        int idx = _booksNaoAtribuidos.indexWhere((b) => b['qr'] == qr);
+        if (idx != -1) {
+          bookEncontrado = _booksNaoAtribuidos.removeAt(idx);
+        }
+      }
+      
+      if (bookEncontrado != null) {
+        if (isRebolo) _rebolosDistribuidos.putIfAbsent(seller, () => []).add(bookEncontrado); else _booksDistribuidos.putIfAbsent(seller, () => []).add(bookEncontrado);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book não encontrado no estoque.'), backgroundColor: Colors.red));
+      }
+    });
+  }
+
+
+
+  void _printBatch(String seller, bool isRebolo) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Imprimindo lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
+  }
+
+  void _printItem(Map<String, dynamic> book, bool isRebolo) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imprimindo unidade: ${book['ficha']}...")));
   }
 
   Widget _loteCard(String title, String subtitle, Color color, {Widget? trailing}) {
@@ -1689,7 +1750,7 @@ class _AdminDashboardState extends State<AdminDashboard>
      );
   }
 
-  Widget _buildRotasInteligentes() {
+  Widget _buildRotasInteligentes({bool isRebolo = false}) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1700,32 +1761,427 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Rotas Inteligentes', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          const Text('Os books recém criados pelos fotógrafos são agrupados por cidade para facilitar a impressão e logística.', style: TextStyle(color: Colors.white54, fontSize: 12)),
-          const SizedBox(height: 16),
-          ..._rotas.map((r) => Padding(
-            padding: const EdgeInsets.only(bottom: 8.0),
-            child: _loteCard(
-              'Rota: ${r['city']} (Lote: ${r['lote']})', 
-              '${r['count']} Books Prontos', 
-              Colors.blue.shade400,
-              trailing: Row(
-                children: [
-                  IconButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Editando/Transferindo Rota...')));
-                    },
-                    icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
-                    tooltip: 'Editar / Transferir Rota',
-                  ),
-                ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(isRebolo ? 'Rotas de Rebolo (Revisita)' : 'Rotas Inteligentes (Manual)', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              ElevatedButton.icon(
+                onPressed: () => _showNovaRotaDialog(isRebolo),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Nova Rota'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
               ),
-            ),
-          )),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(isRebolo ? 'Organize os rebolos em rotas manuais para revisitas.' : 'Organize os books prontos em rotas manuais.', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          const SizedBox(height: 16),
+          
+          if ((isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos).isNotEmpty)
+            _buildNaoAtribuidosSection(isRebolo),
+            
+          const SizedBox(height: 8),
+          ...(isRebolo ? _rotasRebolo : _rotasManuais).map((rota) => _buildRotaCard(rota, isRebolo)),
+          
+          const SizedBox(height: 24),
+          const Divider(color: Colors.white24),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(isRebolo ? 'Malotes de Revisita (Saída)' : 'Malotes dos Vendedores (Saída)', style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              ElevatedButton.icon(
+                onPressed: () => _scanAndDistributeBooks(isRebolo: isRebolo),
+                icon: const Icon(Icons.qr_code_scanner, size: 16, color: Colors.white),
+                label: const Text('Escanear QR', style: TextStyle(color: Colors.white)),
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if ((isRebolo ? _rebolosDistribuidos : _booksDistribuidos).isEmpty)
+            Text(isRebolo ? 'Nenhum rebolo distribuído ainda.' : 'Nenhum book distribuído ainda.', style: const TextStyle(color: Colors.white54)),
+          ...(isRebolo ? _rebolosDistribuidos : _booksDistribuidos).entries.map((e) => _buildMaloteCard(e.key, e.value, isRebolo)),
         ],
       )
     );
+  }
+
+  Widget _buildNaoAtribuidosSection(bool isRebolo) {
+    final list = isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos;
+    final count = list.length;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.orangeAccent.withOpacity(0.05),
+      ),
+      child: ExpansionTile(
+        title: Text('${isRebolo ? "Rebolos" : "Books"} Não Atribuídos ($count)', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+        iconColor: Colors.orangeAccent,
+        collapsedIconColor: Colors.orangeAccent,
+        children: list.map((b) => _buildBookTile(b, null, isRebolo)).toList(),
+      ),
+    );
+  }
+
+  Widget _buildRotaCard(Map<String, dynamic> rota, bool isRebolo) {
+    final List books = rota['books'] as List;
+    return Card(
+      color: Colors.white.withOpacity(0.05),
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ExpansionTile(
+        title: Row(
+          children: [
+            const Icon(Icons.map_rounded, color: Colors.blueAccent, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('${rota['title']} (${books.length} Books)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+        iconColor: Colors.white,
+        collapsedIconColor: Colors.white70,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            color: Colors.black12,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  onPressed: () => _showRenomearRotaDialog(rota, isRebolo),
+                  icon: const Icon(Icons.edit, color: Colors.white70, size: 16),
+                  label: const Text('Renomear', style: TextStyle(color: Colors.white70)),
+                ),
+                TextButton.icon(
+                  onPressed: () => _atribuirRotaInteiraDialog(rota, isRebolo),
+                  icon: const Icon(Icons.local_shipping, color: Colors.greenAccent, size: 16),
+                  label: const Text('Atribuir Rota', style: TextStyle(color: Colors.greenAccent)),
+                ),
+                TextButton.icon(
+                  onPressed: () => _excluirRota(rota, isRebolo),
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 16),
+                  label: const Text('Excluir Rota', style: TextStyle(color: Colors.redAccent)),
+                ),
+              ],
+            ),
+          ),
+          ...books.map((b) => _buildBookTile(b, rota['id'], isRebolo)).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBookTile(Map<String, dynamic> book, String? rotaId, bool isRebolo) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      title: Text(book['cliente'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 8.0),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            _chip('Ficha: ${book['ficha']}'),
+            _chip('Lote: ${book['lote']}'),
+            _chip('QR: ${book['qr']}'),
+          ],
+        ),
+      ),
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert, color: Colors.white70),
+        color: const Color(0xFF1E1E2C),
+        onSelected: (val) {
+          if (val == 'atribuir_vendedor') {
+            _atribuirBookDialog(book, rotaId, isRebolo);
+          } else if (val == 'desatribuir') {
+            _moverBook(book, rotaId, null, isRebolo);
+          } else {
+            _moverBook(book, rotaId, val, isRebolo); // val is the new rotaId
+          }
+        },
+        itemBuilder: (context) {
+          List<PopupMenuEntry<String>> items = [];
+          
+          items.add(const PopupMenuItem(value: 'atribuir_vendedor', child: Text('Atribuir a Vendedor', style: TextStyle(color: Colors.greenAccent))));
+          items.add(const PopupMenuDivider());
+          
+          if (rotaId != null) {
+            items.add(const PopupMenuItem(value: 'desatribuir', child: Text('Mover para Não Atribuídos', style: TextStyle(color: Colors.orangeAccent))));
+          }
+          for (var r in (isRebolo ? _rotasRebolo : _rotasManuais)) {
+            if (r['id'] != rotaId) {
+              items.add(PopupMenuItem(value: r['id'], child: Text('Mover para ${r['title']}', style: const TextStyle(color: Colors.white))));
+            }
+          }
+          return items;
+        },
+      ),
+    );
+  }
+
+  Widget _chip(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
+      child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+    );
+  }
+
+  void _showNovaRotaDialog(bool isRebolo) {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2C),
+        title: const Text('Nova Rota', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(hintText: 'Nome da Rota', hintStyle: TextStyle(color: Colors.white54)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            onPressed: () {
+              if (ctrl.text.isNotEmpty) {
+                setState(() {
+                  (isRebolo ? _rotasRebolo : _rotasManuais).add({
+                    'id': 'r_${DateTime.now().millisecondsSinceEpoch}',
+                    'title': ctrl.text,
+                    'books': [],
+                  });
+                });
+                Navigator.pop(context);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            child: const Text('Criar', style: TextStyle(color: Colors.white)),
+          )
+        ],
+      )
+    );
+  }
+
+  void _showRenomearRotaDialog(Map<String, dynamic> rota, bool isRebolo) {
+    final ctrl = TextEditingController(text: rota['title']);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2C),
+        title: const Text('Renomear Rota', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          style: const TextStyle(color: Colors.white),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            onPressed: () {
+              if (ctrl.text.isNotEmpty) {
+                setState(() {
+                  rota['title'] = ctrl.text;
+                });
+                Navigator.pop(context);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            child: const Text('Salvar', style: TextStyle(color: Colors.white)),
+          )
+        ],
+      )
+    );
+  }
+
+  void _excluirRota(Map<String, dynamic> rota, bool isRebolo) {
+    setState(() {
+      if (isRebolo) {
+        _rebolosNaoAtribuidos.addAll(List.from(rota['books']));
+        _rotasRebolo.removeWhere((r) => r['id'] == rota['id']);
+      } else {
+        _booksNaoAtribuidos.addAll(List.from(rota['books']));
+        _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota excluída. ${isRebolo ? "Rebolos" : "Books"} movidos para Não Atribuídos.')));
+  }
+
+  Widget _buildMaloteCard(String seller, List<Map<String, dynamic>> books, bool isRebolo) {
+    return Card(
+      color: Colors.greenAccent.withOpacity(0.05),
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.greenAccent.withOpacity(0.3))),
+      child: ExpansionTile(
+        title: Row(
+          children: [
+            const Icon(Icons.person, color: Colors.greenAccent, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('${seller} (${books.length} ${isRebolo ? "Rebolos" : "Books"})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+            IconButton(
+              icon: const Icon(Icons.print, color: Colors.white70, size: 20),
+              tooltip: 'Imprimir Lote',
+              onPressed: () => _printBatch(seller, isRebolo),
+            ),
+          ],
+        ),
+        iconColor: Colors.white,
+        collapsedIconColor: Colors.white70,
+        children: books.map((b) => ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+          title: Text(b['cliente'] as String, style: const TextStyle(color: Colors.white, fontSize: 13)),
+          subtitle: Text('Ficha: ${b['ficha']} | Lote: ${b['lote']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.print, color: Colors.blueAccent, size: 18),
+                tooltip: 'Imprimir Ficha',
+                onPressed: () => _printItem(b, isRebolo),
+              ),
+              IconButton(
+                icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 18),
+                tooltip: 'Desatribuir',
+                onPressed: () {
+                  setState(() {
+                    books.remove(b);
+                    if (books.isEmpty) {
+                      if (isRebolo) {
+                        _rebolosDistribuidos.remove(seller);
+                      } else {
+                        _booksDistribuidos.remove(seller);
+                      }
+                    }
+                    if (isRebolo) {
+                      _rebolosNaoAtribuidos.add(b);
+                    } else {
+                      _booksNaoAtribuidos.add(b);
+                    }
+                  });
+                },
+              ),
+            ],
+          ),
+        )).toList(),
+      ),
+    );
+  }
+
+  void _atribuirRotaInteiraDialog(Map<String, dynamic> rota, bool isRebolo) {
+    String? selectedSeller;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          title: const Text('Atribuir Rota Inteira', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Rota: ${rota['title']} (${(rota['books'] as List).length} ${isRebolo ? "rebolos" : "books"})', style: const TextStyle(color: Colors.white70)),
+              const SizedBox(height: 16),
+              DropdownButton<String>(
+                value: selectedSeller,
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1E1E2C),
+                hint: const Text('Selecione o Vendedor', style: TextStyle(color: Colors.white54)),
+                items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
+                onChanged: (v) => setDialogState(() => selectedSeller = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+            ElevatedButton(
+              onPressed: selectedSeller == null ? null : () {
+                setState(() {
+                  _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
+                  _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
+                });
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota atribuída para $selectedSeller!'), backgroundColor: Colors.green));
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+              child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
+            )
+          ],
+        )
+      )
+    );
+  }
+
+  void _atribuirBookDialog(Map<String, dynamic> book, String? rotaId, bool isRebolo) {
+    String? selectedSeller;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          title: const Text('Atribuir Book Individual', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Ficha: ${book['ficha']} (${book['cliente']})', style: const TextStyle(color: Colors.white70)),
+              const SizedBox(height: 16),
+              DropdownButton<String>(
+                value: selectedSeller,
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1E1E2C),
+                hint: const Text('Selecione o Vendedor', style: TextStyle(color: Colors.white54)),
+                items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
+                onChanged: (v) => setDialogState(() => selectedSeller = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+            ElevatedButton(
+              onPressed: selectedSeller == null ? null : () {
+                setState(() {
+                  if (rotaId == null) {
+                    _booksNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
+                  } else {
+                    final rota = _rotasManuais.firstWhere((r) => r['id'] == rotaId);
+                    (rota['books'] as List).removeWhere((b) => b['id'] == book['id']);
+                  }
+                  _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
+                });
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Book atribuído para $selectedSeller!'), backgroundColor: Colors.green));
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+              child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
+            )
+          ],
+        )
+      )
+    );
+  }
+
+  void _moverBook(Map<String, dynamic> book, String? fromRotaId, String? toRotaId, bool isRebolo) {
+    setState(() {
+      // Remover de onde estava
+      if (fromRotaId == null) {
+        _booksNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
+      } else {
+        final rota = _rotasManuais.firstWhere((r) => r['id'] == fromRotaId);
+        (rota['books'] as List).removeWhere((b) => b['id'] == book['id']);
+      }
+      
+      // Adicionar para onde vai
+      if (toRotaId == null) {
+        _booksNaoAtribuidos.add(book);
+      } else {
+        final rota = _rotasManuais.firstWhere((r) => r['id'] == toRotaId);
+        (rota['books'] as List).add(book);
+      }
+    });
   }
 }
 

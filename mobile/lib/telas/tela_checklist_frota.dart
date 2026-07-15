@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../servicos/ajudante_bd.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../servicos/servico_api.dart';
 
 class FleetChecklistScreen extends StatefulWidget {
   final String carId;
@@ -63,29 +66,46 @@ class _FleetChecklistScreenState extends State<FleetChecklistScreen> {
       'date': DateTime.now().toIso8601String(),
     });
 
-    await DbHelper.instance.insertSyncTask(
-      '/fleet/checklist',
-      'POST',
-      {
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enviando fotos...')));
+
+      final frontUrl = await apiService.uploadFile(_frontPhoto!.path);
+      final backUrl = await apiService.uploadFile(_backPhoto!.path);
+      final leftUrl = await apiService.uploadFile(_leftPhoto!.path);
+      final rightUrl = await apiService.uploadFile(_rightPhoto!.path);
+      final dashUrl = await apiService.uploadFile(_dashboardPhoto!.path);
+
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('user_id') ?? ''; // fallback
+
+      await apiService.submitChecklist({
         'carId': widget.carId,
-        'driverId': 'mock_driver_123', // In a real app, from AuthProvider
+        'driverId': userId,
         'mileage': int.tryParse(_kmController.text) ?? 0,
         'fuelLevel': _fuelLevel,
         'damageReport': _damageController.text,
-        'localFiles': [
-          {'key': 'frontPhoto', 'path': _frontPhoto!.path},
-          {'key': 'backPhoto', 'path': _backPhoto!.path},
-          {'key': 'leftPhoto', 'path': _leftPhoto!.path},
-          {'key': 'rightPhoto', 'path': _rightPhoto!.path},
-          {'key': 'dashboardPhoto', 'path': _dashboardPhoto!.path},
-        ]
-      }
-    );
+        'frontPhotoUrl': frontUrl,
+        'backPhotoUrl': backUrl,
+        'leftPhotoUrl': leftUrl,
+        'rightPhotoUrl': rightUrl,
+        'dashboardPhotoUrl': dashUrl,
+      });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Checklist salvo! Sincronizando em background...'), backgroundColor: Colors.green),
-    );
-    Navigator.of(context).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Checklist salvo com sucesso!'), backgroundColor: Colors.green),
+        );
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Widget _buildPhotoTile(String label, String type, File? file) {

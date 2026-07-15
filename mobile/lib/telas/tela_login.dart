@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../servicos/servico_api.dart';
 import 'tela_inicial.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 // ── Mock credentials ──────────────────────────────────────────────────────────
 // vendedor@teste.com   / 123456  → SELLER
@@ -133,6 +134,16 @@ class _LoginScreenState extends State<LoginScreen>
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('jwt_token', token);
       await prefs.setString('user_role', role ?? '');
+      
+      try {
+        final fcmToken = await FirebaseMessaging.instance.getToken();
+        if (fcmToken != null) {
+          await apiService.updateFcmToken(fcmToken);
+        }
+      } catch (e) {
+        print("Error getting/sending FCM token: $e");
+      }
+      
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);

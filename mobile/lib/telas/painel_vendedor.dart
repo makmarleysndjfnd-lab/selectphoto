@@ -4,6 +4,7 @@ import 'tela_login.dart';
 import 'tela_checklist_frota.dart';
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../servicos/servico_api.dart';
 
 // ── Mock clients data ────────────────────────────────────────────────────────
 final List<Map<String, dynamic>> _mockClients = [
@@ -278,10 +279,37 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  void _showDevolverCapasDialog() {
+  void _showTransferStockDialog(String itemType) async {
     final qtyController = TextEditingController();
     String? selectedRecipient;
-    final List<String> recipients = ['Admin', 'João (Vendedor 1)', 'Maria (Vendedora 2)', 'Carlos (Vendedor 3)'];
+    List<dynamic> recipients = [];
+    bool isLoading = true;
+
+    // Fetch users immediately
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return const Center(child: CircularProgressIndicator(color: Colors.orangeAccent));
+      }
+    );
+
+    try {
+      final api = ApiService();
+      final users = await api.getCompanyUsers();
+      recipients = users;
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // close loading
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar usuários: $e')));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context); // close loading
+
+    final titleItem = itemType == 'COVER' ? 'Capas' : 'Books';
 
     showDialog(
       context: context,
@@ -290,17 +318,17 @@ class _SellerDashboardState extends State<SellerDashboard>
           builder: (context, setStateDialog) {
             return AlertDialog(
               backgroundColor: const Color(0xFF1A2535),
-              title: const Text('Transferir Capas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              title: Text('Transferir $titleItem', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Selecione o destinatário e a quantidade de capas (apenas repasse de estoque livre):', style: TextStyle(color: Colors.white70)),
+                  const Text('Selecione o destinatário e a quantidade para transferir:', style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
                     value: selectedRecipient,
                     hint: const Text('Destinatário', style: TextStyle(color: Colors.white54)),
                     dropdownColor: const Color(0xFF1A1A2E),
-                    items: recipients.map((r) => DropdownMenuItem(value: r, child: Text(r, style: const TextStyle(color: Colors.white)))).toList(),
+                    items: recipients.map((r) => DropdownMenuItem<String>(value: r['id'], child: Text(r['name'], style: const TextStyle(color: Colors.white)))).toList(),
                     onChanged: (val) {
                       setStateDialog(() {
                         selectedRecipient = val;
@@ -318,7 +346,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                     keyboardType: TextInputType.number,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      labelText: 'Qtd de Capas',
+                      labelText: 'Quantidade',
                       labelStyle: const TextStyle(color: Colors.white54),
                       filled: true,
                       fillColor: Colors.white.withOpacity(0.05),
@@ -332,12 +360,27 @@ class _SellerDashboardState extends State<SellerDashboard>
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
                 ElevatedButton(
-                  onPressed: selectedRecipient == null ? null : () {
+                  onPressed: selectedRecipient == null ? null : () async {
+                    final qty = int.tryParse(qtyController.text) ?? 0;
+                    if (qty <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Quantidade inválida.')));
+                      return;
+                    }
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitação de transferência de ${qtyController.text} capas para $selectedRecipient enviada! (Aguardando aprovação)')));
+                    
+                    try {
+                      await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitação de transferência enviada!')));
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                      }
+                    }
                   },
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
-                  child: const Text('Confirmar Transferência', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  child: const Text('Confirmar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -476,9 +519,14 @@ class _SellerDashboardState extends State<SellerDashboard>
                 tooltip: 'Notificações (Capas)',
               ),
               IconButton(
-                onPressed: _showDevolverCapasDialog,
+                onPressed: () => _showTransferStockDialog('COVER'),
                 icon: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
                 tooltip: 'Transferir Capas',
+              ),
+              IconButton(
+                onPressed: () => _showTransferStockDialog('BOOK'),
+                icon: const Icon(Icons.menu_book_rounded, color: Colors.lightGreenAccent),
+                tooltip: 'Transferir Books',
               ),
               IconButton(
                 onPressed: () {

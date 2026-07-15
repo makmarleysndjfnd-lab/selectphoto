@@ -187,6 +187,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   late TextEditingController _addressCtrl;
 
   String _role = 'SELLER';
+  String _salesType = 'BOOK';
   String? _teamId;
   String? _carId;
   bool _isTeamLeader = false;
@@ -212,6 +213,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     
     if (emp != null) {
       _role = emp['role'] ?? 'SELLER';
+      _salesType = emp['salesType'] ?? 'BOOK';
       _teamId = emp['teamId'];
       _isTeamLeader = emp['isTeamLeader'] ?? false;
       _usesOwnCar = emp['usesOwnCar'] ?? false;
@@ -243,6 +245,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
         'name': _nameCtrl.text,
         'password': _passwordCtrl.text, // Backend handles empty password logic for PUT
         'role': _role,
+        'salesType': _salesType,
         'cpf': _cpfCtrl.text,
         'rg': _rgCtrl.text,
         'phone': _phoneCtrl.text,
@@ -426,6 +429,20 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                           DropdownMenuItem(value: 'CONTACT', child: Text('Contato (Assistente)')),
                         ],
                         onChanged: (v) => setState(() => _role = v!),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: _salesType,
+                        dropdownColor: const Color(0xFF111122),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(labelText: 'Tipo de Venda', labelStyle: TextStyle(color: Colors.white54)),
+                        items: const [
+                          DropdownMenuItem(value: 'BOOK', child: Text('Book')),
+                          DropdownMenuItem(value: 'REBOLO', child: Text('Rebolo')),
+                        ],
+                        onChanged: (v) => setState(() => _salesType = v!),
                       ),
                     ),
                   ],

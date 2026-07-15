@@ -172,6 +172,72 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
     );
   }
 
+  Future<void> _editTransactionDialog(Map<String, dynamic> t) async {
+    final isOut = t['type'] == 'OUT';
+    final amountController = TextEditingController(text: t['amount'].toString());
+    final descController = TextEditingController(text: t['desc']);
+    final methodController = TextEditingController(text: t['method']);
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: Text('Editar ${isOut ? "Custo" : "Venda"}', style: const TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: descController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: 'Descrição', labelStyle: TextStyle(color: Colors.white54)),
+              ),
+              TextField(
+                controller: amountController,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Valor (R\$)', labelStyle: TextStyle(color: Colors.white54)),
+              ),
+              TextField(
+                controller: methodController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: 'Método (CASH, PIX...)', labelStyle: TextStyle(color: Colors.white54)),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              onPressed: () async {
+                try {
+                  final data = {
+                    'description': descController.text,
+                    'product': descController.text, // sales use product
+                    'amount': amountController.text, // costs use amount
+                    'value': amountController.text, // sales use value
+                    'paymentMethod': methodController.text,
+                  };
+                  if (isOut) {
+                    await _apiService.editCost(t['id'], data);
+                  } else {
+                    await _apiService.editSale(t['id'], data);
+                  }
+                  Navigator.pop(context);
+                  _fetchData();
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Atualizado com sucesso!', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e', style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+                }
+              },
+              child: const Text('Salvar', style: TextStyle(color: Colors.white)),
+            )
+          ],
+        );
+      }
+    );
+  }
+
   Widget _buildRecentTransactionsTable() {
     final recentSales = List<Map<String, dynamic>>.from(_overviewData['recentSales'] ?? []);
     final recentCosts = List<Map<String, dynamic>>.from(_overviewData['recentCosts'] ?? []);
@@ -209,6 +275,7 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
             DataColumn(label: Text('Responsável', style: TextStyle(color: Colors.white))),
             DataColumn(label: Text('Forma Pagto', style: TextStyle(color: Colors.white))),
             DataColumn(label: Text('Valor', style: TextStyle(color: Colors.white))),
+            DataColumn(label: Text('Ações', style: TextStyle(color: Colors.white))),
           ],
           rows: allTransactions.map((t) {
             final isIncome = t['type'] == 'IN';
@@ -226,6 +293,10 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
               DataCell(Text(t['user'].toString(), style: const TextStyle(color: Colors.white))),
               DataCell(Text(t['method'].toString(), style: const TextStyle(color: Colors.white))),
               DataCell(Text(_formatCurrency(double.parse(t['amount'].toString())), style: TextStyle(color: isOut ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold))),
+              DataCell(IconButton(
+                icon: const Icon(Icons.edit, color: Colors.white54, size: 20),
+                onPressed: () => _editTransactionDialog(t),
+              )),
             ]);
           }).toList(),
         ),
