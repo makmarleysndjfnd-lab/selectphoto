@@ -28,6 +28,7 @@ model Company {
   coverStockBatches    CoverStockBatch[]
   sellerCoverTransfers SellerCoverTransfer[]
   bookBatches          BookBatch[]
+  notifications        Notification[]
 }
 
 model Team {
@@ -80,6 +81,9 @@ model User {
   coverTransfersReceived  SellerCoverTransfer[] @relation("CoverTransfersReceived")
   coverBalance            SellerCoverBalance?
   dailyClosings           DailyClosing[]
+  fcmToken                String?
+  notificationsSent       Notification[]        @relation("NotificationsSent")
+  notificationsReceived   Notification[]        @relation("NotificationsReceived")
 }
 
 model Client {
@@ -350,4 +354,22 @@ model StateRadarCache {
   state     String   @unique
   data      Json
   updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  title       String
+  message     String
+  type        String   // STOCK_TRANSFER_COVER, STOCK_TRANSFER_BOOK, COST_APPROVAL, CLOSING_APPROVAL, FLEET_URGENT, SYSTEM
+  status      String   @default("UNREAD") // UNREAD, READ, RESOLVED
+  actionData  Json?    
+  createdAt   DateTime @default(now())
+  
+  senderId    String?  
+  recipientId String   
+  companyId   String?
+
+  sender      User?    @relation("NotificationsSent", fields: [senderId], references: [id])
+  recipient   User     @relation("NotificationsReceived", fields: [recipientId], references: [id])
+  company     Company? @relation(fields: [companyId], references: [id])
 }

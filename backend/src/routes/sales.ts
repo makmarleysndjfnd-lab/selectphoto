@@ -38,6 +38,37 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
   }
 });
 
+// Edit a Sale
+router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
+  try {
+    const id = req.params.id as string;
+    const { value, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
+    
+    // Check if it belongs to company
+    const existing = await prisma.sale.findUnique({ where: { id } });
+    if (!existing || existing.companyId !== req.user.companyId) {
+      return res.status(404).json({ error: 'Sale not found' });
+    }
+
+    const updated = await prisma.sale.update({
+      where: { id },
+      data: {
+        ...(value !== undefined && { value: parseFloat(value as string) }),
+        ...(product !== undefined && { product: product as string }),
+        ...(status !== undefined && { status: status as string }),
+        ...(paymentStatus !== undefined && { paymentStatus: paymentStatus as string }),
+        ...(fichaNumber !== undefined && { fichaNumber: fichaNumber as string }),
+        ...(paymentMethod !== undefined && { paymentMethod: paymentMethod as string }),
+      }
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating sale:', error);
+    res.status(500).json({ error: 'Failed to update sale' });
+  }
+});
+
 // Upload a receipt for a Sale
 router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res: any) => {
   try {

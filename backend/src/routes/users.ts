@@ -175,4 +175,22 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, 
   }
 });
 
+// Update FCM Token
+router.put('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { fcmToken: token }
+    });
+
+    res.json({ message: 'FCM Token updated' });
+  } catch (error) {
+    console.error('Error updating fcm token:', error);
+    res.status(500).json({ error: 'Failed to update fcm token' });
+  }
+});
+
 export default router;

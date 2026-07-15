@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
-
+import { sendPushNotification } from '../utils/firebaseConfig';
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -107,6 +107,51 @@ router.post('/transfer', authMiddleware, async (req: AuthRequest, res) => {
         });
 
         res.status(201).json(transfer);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Seller requests to return covers to Admin
+router.post('/return-cover', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const { quantity } = req.body;
+        const sellerId = req.user?.id;
+        const companyId = req.user?.companyId;
+
+        if (!sellerId) return res.status(401).json({ error: 'Unauthorized' });
+
+        const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+
+        const admins = await prisma.user.findMany({
+            where: { role: 'ADMIN', companyId }
+        });
+
+        const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null) as string[];
+
+        for (const admin of admins) {
+            await prisma.notification.create({
+                data: {
+                    title: 'Devolução de Capas',
+                    message: `${seller?.name || 'Vendedor'} deseja devolver ${quantity} capas.`,
+                    type: 'STOCK_RETURN_COVER',
+                    status: 'UNREAD',
+                    actionData: { quantity },
+                    senderId: sellerId,
+                    recipientId: admin.id,
+                    companyId
+                }
+            });
+        }
+
+        await sendPushNotification(
+          adminTokens,
+          'Devolução de Capas',
+          `${seller?.name || 'Vendedor'} deseja devolver ${quantity} capas.`,
+          { type: 'STOCK_RETURN_COVER', quantity }
+        );
+
+        res.status(201).json({ success: true, message: 'Return request sent' });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

@@ -35,6 +35,34 @@ router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+// Edit a Sale
+router.put('/:id', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { value, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
+        // Check if it belongs to company
+        const existing = await prisma.sale.findUnique({ where: { id } });
+        if (!existing || existing.companyId !== req.user.companyId) {
+            return res.status(404).json({ error: 'Sale not found' });
+        }
+        const updated = await prisma.sale.update({
+            where: { id },
+            data: {
+                ...(value !== undefined && { value: parseFloat(value) }),
+                ...(product !== undefined && { product: product }),
+                ...(status !== undefined && { status: status }),
+                ...(paymentStatus !== undefined && { paymentStatus: paymentStatus }),
+                ...(fichaNumber !== undefined && { fichaNumber: fichaNumber }),
+                ...(paymentMethod !== undefined && { paymentMethod: paymentMethod }),
+            }
+        });
+        res.json(updated);
+    }
+    catch (error) {
+        console.error('Error updating sale:', error);
+        res.status(500).json({ error: 'Failed to update sale' });
+    }
+});
 // Upload a receipt for a Sale
 router.post('/:id/receipt', authMiddleware_1.authenticateToken, upload_1.upload.single('receipt'), async (req, res) => {
     try {

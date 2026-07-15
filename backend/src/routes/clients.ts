@@ -19,18 +19,26 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
 
   for (const clientData of clients) {
     try {
-      const { children, appointments, ...basicClientData } = clientData;
+      const { children, appointments, signatureBase64, ...basicClientData } = clientData;
+      
+      let finalSignatureUrl = basicClientData.signatureUrl;
+      if (signatureBase64) {
+        // Store as a data URI in the database to keep it simple and compressed
+        finalSignatureUrl = `data:image/png;base64,${signatureBase64}`;
+      }
 
       // Upsert client to avoid duplicate on resync
       const client = await prisma.client.upsert({
         where: { sequenceNumber: basicClientData.sequenceNumber },
         update: {
           ...basicClientData,
+          signatureUrl: finalSignatureUrl,
           status: 'SYNCED',
           companyId,
         },
         create: {
           ...basicClientData,
+          signatureUrl: finalSignatureUrl,
           status: 'SYNCED',
           companyId,
           children: children ? {

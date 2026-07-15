@@ -6,9 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const genai_1 = require("@google/genai");
-const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const ibgeService_1 = require("../services/ibgeService");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
 // Initialize Gemini AI Client
@@ -24,31 +24,41 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
             res.status(400).json({ error: 'Cidade não fornecida' });
             return;
         }
-        if (!ai && !process.env.GROQ_API_KEY) {
+        if (!ai) {
             return res.status(503).json({
                 error: 'Chaves de IA não configuradas. Contate o suporte.'
             });
         }
         const currentDate = new Date();
         const targetDate = new Date();
-        targetDate.setDate(currentDate.getDate() + 15);
+        // Inicia a pesquisa a partir de hoje
+        targetDate.setDate(currentDate.getDate());
+        const maxDate = new Date();
+        maxDate.setDate(currentDate.getDate() + 380);
         const currentDateStr = currentDate.toISOString().split('T')[0];
         const targetDateStr = targetDate.toISOString().split('T')[0];
+        const maxDateStr = maxDate.toISOString().split('T')[0];
         const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
-    ATENÇÃO: Hoje é ${currentDateStr}. Você DEVE retornar APENAS eventos cuja data de início seja IGUAL OU SUPERIOR a ${targetDateStr} (ou seja, com pelo menos 15 dias de antecedência de hoje).
-    REGRA DE OURO (ANTI-ALUCINAÇÃO): É EXPRESSAMENTE PROIBIDO inventar eventos, datas ou dados. Se você não tiver 100% de certeza de que um grande evento vai ocorrer nesta cidade no futuro, deixe a lista "events" VAZIA: []. NÃO INVENTE NADA.
-    Se o evento já aconteceu neste ano ou você não sabe a data exata futura, NÃO coloque na lista de 'events'. Em vez disso, cite o nome dele no campo 'principaisFestasFixas' da cidade.
-    PRIORIZE MÁXIMA PARA BUSCA: Circos, Parques de Diversão, Pecuárias, Exposições (Expo), Agropecuárias, Festivais Culturais e Gastronômicos de médio a grande público.
-    Para o campo 'audience' (público), tente fornecer o número estimado (ex: '5000 pessoas'). Se não souber o número, use 'Médio público' ou 'Grande público'.
+    Hoje é dia ${currentDateStr}.
+    Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+    
+    Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
+    
+    REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se não houver clareza se o evento vai acontecer no futuro, retorne a lista "events" VAZIA (ex: "events": []).
+    FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
+    PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
+    Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
+    renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
+
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
+    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado (se não souber alguma informação, use "N/A" ao invés de "..."):
     {
       "cityInfo": {
-        "rendaDomiciliarPerCapitaMedia": "...",
-        "rendaPerCapita": "...",
-        "cityAge": "...",
-        "economicActivities": "...",
-        "principaisFestasFixas": "..."
+        "rendaDomiciliarPerCapitaMedia": "N/A",
+        "rendaPerCapita": "N/A",
+        "cityAge": "N/A",
+        "economicActivities": "N/A",
+        "principaisFestasFixas": "N/A"
       },
       "events": [
         {
@@ -57,11 +67,11 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
           "category": "AGRO",
           "score": "HIGH",
           "startDate": "YYYY-MM-DD",
-          "audience": "...",
-          "ticketPrice": "...",
-          "organizerContact": "...",
-          "socialMedia": "...",
-          "notes": "..."
+          "audience": "N/A",
+          "ticketPrice": "N/A",
+          "organizerContact": "N/A",
+          "socialMedia": "N/A",
+          "notes": "N/A"
         }
       ]
     }`;
@@ -73,34 +83,30 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: prompt,
-                config: { temperature: 0.1 }
+                config: {
+                    temperature: 0.1,
+                    tools: [{ googleSearch: {} }]
+                }
             });
             text = response.text || '';
-            aiSource = 'Gemini (Google)';
+            aiSource = 'Gemini (Google Search Grounding)';
         }
         catch (err) {
-            console.warn("[Gemini] Falhou ou não configurado. Acionando API de Fallback (Groq)...");
-            const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.1,
-                    response_format: { type: "json_object" }
-                })
-            });
-            if (!groqResponse.ok)
-                throw new Error('Groq failed');
-            const data = await groqResponse.json();
-            text = data.choices[0].message.content || '';
-            aiSource = 'Llama 3.3 (Groq)';
+            console.error("[Gemini Search] Falhou.", err);
+            if (err.status === 429 || (err.message && err.message.includes('429'))) {
+                throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
+            }
+            throw err;
         }
         const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        let result = JSON.parse(cleanJson);
+        let result;
+        try {
+            result = JSON.parse(cleanJson);
+        }
+        catch (parseError) {
+            console.warn("JSON Parse Failed, defaulting to empty result:", text);
+            result = { cityInfo: {}, events: [] };
+        }
         // Inject the AI source into the response
         if (result.cityInfo) {
             result.cityInfo.aiSource = aiSource;
@@ -109,6 +115,9 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
     }
     catch (error) {
         console.error('Erro na IA de Eventos:', error);
+        if (error.status === 429) {
+            return res.status(429).json({ error: error.message });
+        }
         return res.status(503).json({
             error: 'Servidor das IAs (Google/Groq) sobrecarregado ou chaves inválidas. Aguarde um pouco e tente novamente.'
         });
@@ -129,16 +138,15 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
         });
         const existingKeys = new Set(existingProspects.map(p => `${p.city.toLowerCase()}-${p.name.toLowerCase()}`));
         let resultData = null;
-        if (fs_1.default.existsSync(cachePath)) {
-            const stat = fs_1.default.statSync(cachePath);
-            const ageInDays = (new Date().getTime() - stat.mtime.getTime()) / (1000 * 3600 * 24);
-            if (ageInDays < 10) {
-                try {
-                    const rawData = fs_1.default.readFileSync(cachePath, 'utf8');
-                    resultData = JSON.parse(rawData);
-                }
-                catch (e) {
-                    resultData = null;
+        const forceRefresh = req.query.force === 'true';
+        if (!forceRefresh) {
+            const cached = await prisma.stateRadarCache.findUnique({
+                where: { state: stateUF }
+            });
+            if (cached) {
+                const ageInDays = (new Date().getTime() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
+                if (ageInDays < 10) {
+                    resultData = cached.data;
                 }
             }
         }
@@ -147,18 +155,95 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
                 res.status(503).json({ error: 'Chave de API do Gemini não configurada.' });
                 return;
             }
-            const prompt = `Gere 10 prospectos de cidades em ${stateUF} com eventos... (Resumido p/ script) Retorne JSON no formato {"events":[{"city":"","name":"","startDate":"","population":"","perCapitaIncome":"","gdp":"","score":"","category":"","notes":""}]}`;
+            const currentDate = new Date();
+            const targetDate = new Date();
+            // Inicia a pesquisa a partir de hoje
+            targetDate.setDate(currentDate.getDate());
+            const maxDate = new Date();
+            maxDate.setDate(currentDate.getDate() + 380);
+            const currentDateStr = currentDate.toISOString().split('T')[0];
+            const targetDateStr = targetDate.toISOString().split('T')[0];
+            const maxDateStr = maxDate.toISOString().split('T')[0];
+            const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure as principais cidades no estado "${stateUF}" que terão grandes eventos.
+      Hoje é dia ${currentDateStr}.
+      Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+      
+      Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
+      
+      REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se o evento já passou ou a data for antiga, NÃO o inclua. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
+      FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
+      PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
+      Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
+      
+      Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
+      Formato esperado (se não souber a informação, use "N/A" ao invés de "..."):
+      {
+        "events": [
+          {
+            "city": "Nome da Cidade",
+            "name": "Nome do Evento",
+            "startDate": "YYYY-MM-DD",
+            "population": "N/A",
+            "perCapitaIncome": "N/A",
+            "gdp": "N/A",
+            "score": "HIGH",
+            "category": "AGRO",
+            "audience": "N/A",
+            "organizerContact": "N/A",
+            "socialMedia": "N/A",
+            "notes": "N/A"
+          }
+        ]
+      }`;
             let text = '';
             try {
-                const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt, config: { temperature: 0.2 } });
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: prompt,
+                    config: {
+                        temperature: 0.1,
+                        tools: [{ googleSearch: {} }]
+                    }
+                });
                 text = response.text || '';
             }
             catch (err) {
-                text = '{"events":[]}'; // simplify fallback for space
+                console.error("[Gemini State-Radar] Falhou.", err);
+                if (err.status === 429 || (err.message && err.message.includes('429'))) {
+                    throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
+                }
+                text = '{"events":[]}';
             }
             const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-            resultData = JSON.parse(cleanJson);
-            fs_1.default.writeFileSync(cachePath, JSON.stringify(resultData), 'utf8');
+            try {
+                resultData = JSON.parse(cleanJson);
+                // Enrich data with IBGE
+                if (resultData && resultData.events && Array.isArray(resultData.events)) {
+                    for (let ev of resultData.events) {
+                        if (ev.city) {
+                            const ibgeData = await (0, ibgeService_1.enrichCityData)(stateUF, ev.city);
+                            ev.population = ibgeData.population;
+                            ev.gdp = ibgeData.gdp;
+                            ev.perCapitaIncome = ibgeData.perCapitaIncome;
+                        }
+                    }
+                }
+            }
+            catch (e) {
+                console.warn("[Gemini State-Radar] JSON Parse Failed, defaulting to empty:", cleanJson);
+                resultData = { events: [] };
+            }
+            // Sempre salvar o cache, mesmo que seja vazio, para não ficar travado no dado antigo
+            try {
+                await prisma.stateRadarCache.upsert({
+                    where: { state: stateUF },
+                    update: { data: resultData },
+                    create: { state: stateUF, data: resultData }
+                });
+            }
+            catch (e) {
+                console.error("Erro ao salvar cache no DB", e);
+            }
         }
         if (resultData && resultData.events) {
             resultData.events = resultData.events.filter((e) => !existingKeys.has(`${e.city.toLowerCase()}-${e.name.toLowerCase()}`));
@@ -166,6 +251,9 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
         res.json(resultData);
     }
     catch (error) {
+        if (error.status === 429) {
+            return res.status(429).json({ error: error.message });
+        }
         res.status(500).json({ error: 'Erro ao buscar dados.' });
     }
 });
