@@ -118,6 +118,7 @@ model Client {
   latitude        Float?
   longitude       Float?
   status          String        @default("PENDING")
+  releasedForRouting Boolean    @default(false)
   photographerId  String?
   teamId          String?
   companyId       String?

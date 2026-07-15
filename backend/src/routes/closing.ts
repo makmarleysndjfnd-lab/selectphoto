@@ -177,18 +177,73 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
     }
 });
 
+// Custom Metrics Overview (by Date Range and Sellers)
+router.get('/custom', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const sellerIdsStr = req.query.sellerIds as string;
+        const startDateParam = req.query.startDate as string;
+        const endDateParam = req.query.endDate as string;
+
+        let whereSale: any = {};
+        let whereNonSale: any = {};
+
+        if (sellerIdsStr) {
+            const sellerIds = sellerIdsStr.split(',');
+            whereSale.sellerId = { in: sellerIds };
+            whereNonSale.sellerId = { in: sellerIds };
+        }
+
+        if (startDateParam && endDateParam) {
+            const startDate = new Date(startDateParam);
+            const endDate = new Date(endDateParam);
+            startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(23, 59, 59, 999);
+            whereSale.date = { gte: startDate, lte: endDate };
+            whereNonSale.date = { gte: startDate, lte: endDate };
+        }
+
+        const sales = await prisma.sale.findMany({ where: whereSale });
+        const nonSales = await prisma.nonSale.findMany({ where: whereNonSale });
+
+        const totalSalesValue = sales.reduce((acc, curr) => acc + curr.value, 0);
+        const totalFichas = sales.length + nonSales.length;
+        const averageTicket = totalFichas > 0 ? (totalSalesValue / totalFichas) : 0;
+
+        res.json({
+            salesCount: sales.length,
+            nonSalesCount: nonSales.length,
+            totalFichas,
+            totalSalesValue,
+            averageTicket
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // City Closing
 router.get('/city/:city', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const { city } = req.params;
-        const sellerId = req.query.sellerId as string;
+        const sellerIdsStr = req.query.sellerIds as string;
+        const dateParam = req.query.date as string;
 
         let whereSale: any = { city };
         let whereNonSale: any = { client: { city } };
 
-        if (sellerId) {
-            whereSale.sellerId = sellerId;
-            whereNonSale.sellerId = sellerId;
+        if (sellerIdsStr) {
+            const sellerIds = sellerIdsStr.split(',');
+            whereSale.sellerId = { in: sellerIds };
+            whereNonSale.sellerId = { in: sellerIds };
+        }
+
+        if (dateParam) {
+            const startDate = new Date(dateParam);
+            const endDate = new Date(dateParam);
+            startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(23, 59, 59, 999);
+            whereSale.date = { gte: startDate, lte: endDate };
+            whereNonSale.date = { gte: startDate, lte: endDate };
         }
 
         const sales = await prisma.sale.findMany({ where: whereSale });

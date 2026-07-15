@@ -42,7 +42,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
           status: 'SYNCED',
           companyId,
           children: children ? {
-            create: children.map((c: any) => ({ name: c.name, age: c.age }))
+            create: children.map((c: any) => ({ name: c.name, age: typeof c.age === 'string' ? parseInt(c.age, 10) : c.age }))
           } : undefined,
           appointments: appointments ? {
             create: appointments.map((a: any) => ({
@@ -76,6 +76,31 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     res.json(clients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch clients' });
+  }
+});
+// Release city for routing (sets releasedForRouting = true)
+router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { city } = req.body;
+    if (!city) {
+      res.status(400).json({ error: 'City is required' });
+      return;
+    }
+
+    const updated = await prisma.client.updateMany({
+      where: {
+        companyId: req.user?.companyId,
+        city: city,
+        releasedForRouting: false
+      },
+      data: {
+        releasedForRouting: true
+      }
+    });
+
+    res.json({ message: 'Lotes liberados com sucesso!', count: updated.count });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to release city for routing' });
   }
 });
 
