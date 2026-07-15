@@ -159,6 +159,25 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
   }
 });
 
+// Get all users in the same company (accessible by any logged in user)
+router.get('/company', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { companyId: req.user?.companyId },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        email: true
+      },
+      orderBy: { name: 'asc' }
+    });
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch company users' });
+  }
+});
+
 // Delete user (Admin only)
 router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {

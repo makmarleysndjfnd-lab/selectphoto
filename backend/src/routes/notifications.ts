@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -142,6 +143,35 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
             });
           }
        }
+    }
+
+    // CREATE FEEDBACK NOTIFICATION FOR SENDER
+    if (notification.type === 'COST_APPROVAL' && notification.senderId) {
+      const sender = await prisma.user.findUnique({ where: { id: notification.senderId } });
+      const admin = await prisma.user.findUnique({ where: { id: req.user.id } });
+      const statusStr = actionType === 'ACCEPT' ? 'APROVADA' : 'REPROVADA';
+      const msg = `Sua despesa lançada foi ${statusStr} por ${admin?.name || 'Admin'}.`;
+
+      await prisma.notification.create({
+        data: {
+          title: 'Feedback de Despesa',
+          message: msg,
+          type: 'INFO',
+          status: 'UNREAD',
+          senderId: req.user.id,
+          recipientId: notification.senderId,
+          companyId: notification.companyId
+        }
+      });
+
+      if (sender?.fcmToken) {
+        await sendPushNotification(
+          [sender.fcmToken],
+          'Feedback de Despesa',
+          msg,
+          { type: 'INFO' }
+        );
+      }
     }
 
     const updatedNotification = await prisma.notification.update({
