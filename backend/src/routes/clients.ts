@@ -104,4 +104,21 @@ router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
+// Get clients by photographer
+router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const clients = await prisma.client.findMany({
+      where: { 
+        companyId: req.user?.companyId,
+        photographerId: req.user?.id
+      },
+      include: { children: true, appointments: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(clients);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch photographer clients' });
+  }
+});
+
 export default router;

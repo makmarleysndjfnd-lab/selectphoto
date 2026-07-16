@@ -4,6 +4,9 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
+import '../modelos/cliente.dart';
+import '../modelos/lote.dart';
+import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
@@ -658,6 +661,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     },
                     icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
                     tooltip: 'Lançar Despesa',
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ListaFichasFotografo()));
+                    },
+                    icon: const Icon(Icons.list_alt_rounded, color: Color(0xFFCE93D8)),
+                    tooltip: 'Ver Fichas Produzidas',
                   ),
                   IconButton(
                     onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen())),

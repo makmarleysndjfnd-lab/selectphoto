@@ -605,4 +605,24 @@ class ApiService {
       throw Exception(e.response?.data['error'] ?? 'Erro ao liberar lotes da cidade');
     }
   }
+  Future<void> createEditRequest({
+    required String clientId,
+    required Map<String, dynamic> proposedData,
+    String? reason,
+  }) async {
+    try {
+      final userResponse = await _dio.get('/users/me');
+      final photographerId = userResponse.data['id'];
+      
+      await _dio.post('/edit-requests', data: {
+        'clientId': clientId,
+        'photographerId': photographerId,
+        'proposedData': proposedData,
+        'reason': reason,
+      });
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao criar solicitação de edição');
+    }
+  }
+
 }
