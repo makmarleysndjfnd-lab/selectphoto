@@ -92,6 +92,17 @@ class ApiService {
     }
   }
 
+  // Get All Clients
+  Future<List<dynamic>> getAllClients() async {
+    try {
+      final response = await _dio.get('/clients');
+      return response.data;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+
   // Sales
   Future<String> registerSale(Map<String, dynamic> saleData) async {
     try {
@@ -137,6 +148,33 @@ class ApiService {
       await _dio.post('/sales/photos', data: photoData);
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload da book');
+    }
+  }
+
+  // ── Livros e Lotes (Book Batches) ───────────────────────────────────────
+
+  Future<void> createBookBatch(String name) async {
+    try {
+      await _dio.post('/books/batch', data: {'name': name});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao criar lote de books');
+    }
+  }
+
+  Future<void> updateBookBatchStatus(String id, String status) async {
+    try {
+      await _dio.put('/books/batch/$id', data: {'status': status});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar status do lote');
+    }
+  }
+
+  Future<List<dynamic>> getBookBatches() async {
+    try {
+      final response = await _dio.get('/books/batch');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar lotes de books');
     }
   }
 
@@ -275,6 +313,69 @@ class ApiService {
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fluxo de caixa');
+    }
+  }
+
+  Future<Map<String, dynamic>> getClosingData(String city, {List<String>? sellerIds, String? date}) async {
+    try {
+      final queryParams = <String, dynamic>{};
+      if (sellerIds != null && sellerIds.isNotEmpty) {
+        queryParams['sellerIds'] = sellerIds.join(',');
+      }
+      if (date != null && date.isNotEmpty) {
+        queryParams['date'] = date;
+      }
+      
+      final response = await _dio.get(
+        '/closing/city/$city',
+        queryParameters: queryParams.isNotEmpty ? queryParams : null,
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
+    }
+  }
+
+  Future<Map<String, dynamic>> getCustomMetrics({List<String>? sellerIds, String? startDate, String? endDate}) async {
+    try {
+      final queryParams = <String, dynamic>{};
+      if (sellerIds != null && sellerIds.isNotEmpty) {
+        queryParams['sellerIds'] = sellerIds.join(',');
+      }
+      if (startDate != null && startDate.isNotEmpty) {
+        queryParams['startDate'] = startDate;
+      }
+      if (endDate != null && endDate.isNotEmpty) {
+        queryParams['endDate'] = endDate;
+      }
+      
+      final response = await _dio.get(
+        '/closing/custom',
+        queryParameters: queryParams.isNotEmpty ? queryParams : null,
+      );
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final errorMsg = (data is Map) ? data['error'] : data?.toString();
+      throw Exception(errorMsg ?? 'Erro ao buscar métricas customizadas');
+    }
+  }
+
+  Future<Map<String, dynamic>> getSellerClosing(String sellerId) async {
+    try {
+      final response = await _dio.get('/closing/daily/$sellerId');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
+    }
+  }
+
+  Future<Map<String, dynamic>> getPhotographerClosing(String photographerId) async {
+    try {
+      final response = await _dio.get('/closing/photographer/$photographerId');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
     }
   }
 
@@ -472,6 +573,36 @@ class ApiService {
       await _dio.put('/users/me/fcm-token', data: {'token': token});
     } catch (e) {
       print("Failed to sync FCM token: $e");
+    }
+  }
+
+  Future<void> createNotification({
+    required String title,
+    required String message,
+    required String type,
+    String? priority,
+    String? targetRole,
+    String? targetUserId,
+  }) async {
+    try {
+      await _dio.post('/notifications', data: {
+        'title': title,
+        'message': message,
+        'type': type,
+        'priority': priority ?? 'NORMAL',
+        'targetRole': targetRole,
+        'targetUserId': targetUserId,
+      });
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao criar notificação');
+    }
+  }
+
+  Future<void> releaseCity(String city) async {
+    try {
+      await _dio.put('/clients/release-city', data: {'city': city});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar lotes da cidade');
     }
   }
 }

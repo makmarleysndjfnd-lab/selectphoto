@@ -8,10 +8,9 @@ import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
-import 'tela_checklist_frota.dart';
-import 'tela_cadastro_custos.dart';
-import 'tela_config_impressora.dart';
+
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'tela_cadastro_custos.dart';
 import 'tela_config_impressora.dart';
 
@@ -80,12 +79,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
+  List<String> _professionsCache = [];
+
   @override
   void initState() {
     super.initState();
     _animController = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
+    
+    _loadProfessions();
 
     // Check if Lote is configured immediately after frame renders
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -93,6 +96,22 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         _showLoteConfigDialog();
       }
     });
+  }
+
+  Future<void> _loadProfessions() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _professionsCache = prefs.getStringList('professions_cache') ?? [];
+    });
+  }
+
+  Future<void> _saveProfession(String prof) async {
+    if (prof.isEmpty) return;
+    if (!_professionsCache.contains(prof)) {
+      _professionsCache.add(prof);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('professions_cache', _professionsCache);
+    }
   }
 
   @override
@@ -239,6 +258,12 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     final TimeOfDay? picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.now(),
+      builder: (BuildContext context, Widget? child) {
+         return MediaQuery(
+           data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+           child: child!,
+         );
+      },
     );
     if (picked != null && picked != _visitTime) {
       setState(() {
@@ -255,10 +280,32 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       return;
     }
     
+    if (_selectedHouseColor == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A cor da casa é obrigatória.')));
+      return;
+    }
+    
+    if (_selectedGateColor == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A cor do portão é obrigatória.')));
+      return;
+    }
+    
+    if (_visitTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('O horário de visita é obrigatório.')));
+      return;
+    }
+    
+    if (_children.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('É obrigatório adicionar pelo menos uma criança.')));
+      return;
+    }
+
     if (_currentCityLote == null || _currentEventName == null) {
       _showLoteConfigDialog();
       return;
     }
+
+    await _saveProfession(_professionController.text.trim());
 
     bool? accepted = await showDialog<bool>(
       context: context,
@@ -316,7 +363,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         'gateColor': _selectedGateColor?.value.toString(),
         'gateObservation': _gateObservationController.text,
         'profession': _professionController.text,
-        'visitTime': _visitTime?.format(context),
+        'visitTime': _visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : null,
         'clothesColor': _clothesColorController.text,
         'children': _children,
         'signatureBase64': base64Signature,
@@ -376,12 +423,31 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     }
     
     bluetooth.printNewLine();
-    bluetooth.printCustom("LUMORA - FICHA", 2, 1);
+    bluetooth.printCustom("LUMORA - FICHA COMPLETA", 2, 1);
     bluetooth.printNewLine();
-    bluetooth.printCustom("Cliente: ${_nameController.text}", 0, 0);
-    bluetooth.printCustom("Evento: $_currentEventName", 0, 0);
-    bluetooth.printCustom("Lote: $_currentCityLote", 0, 0);
-    bluetooth.printCustom("Ficha: $_generatedQrCodeData", 1, 1);
+    bluetooth.printCustom("Evento: $_currentEventName", 1, 0);
+    bluetooth.printCustom("Lote/Cidade: $_currentCityLote", 1, 0);
+    bluetooth.printCustom("Ficha: $_generatedQrCodeData", 1, 0);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Nome: ${_nameController.text}", 0, 0);
+    bluetooth.printCustom("Telefone: ${_phoneController.text}", 0, 0);
+    bluetooth.printCustom("Profissao: ${_professionController.text}", 0, 0);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Endereco", 1, 0);
+    bluetooth.printCustom("${_streetController.text}, ${_numberController.text}", 0, 0);
+    bluetooth.printCustom("Bairro: ${_neighborhoodController.text}", 0, 0);
+    bluetooth.printCustom("Cep: ${_cepController.text}", 0, 0);
+    bluetooth.printCustom("Ref: ${_referenceController.text}", 0, 0);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Cor da Casa: ${_selectedHouseColor?.value}", 0, 0);
+    bluetooth.printCustom("Cor do Portao: ${_selectedGateColor?.value}", 0, 0);
+    bluetooth.printCustom("Horario Visita: ${_visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : ''}", 0, 0);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Criancas:", 1, 0);
+    for (var child in _children) {
+      bluetooth.printCustom("- ${child['name']} (${child['age']} anos)", 0, 0);
+    }
+    bluetooth.printCustom("Roupa: ${_clothesColorController.text}", 0, 0);
     bluetooth.printNewLine();
     bluetooth.printQRcode(_generatedQrCodeData!, 200, 200, 1);
     bluetooth.printNewLine();
@@ -413,6 +479,69 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo fechamento do lote...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
     }
+  }
+
+  void _showFechamentoDialog() {
+    if (_currentCityLote == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhum lote configurado para fechar!'), backgroundColor: Colors.red));
+      return;
+    }
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text('Finalizar Lote/Cidade', style: TextStyle(color: Colors.white)),
+          content: Text('Deseja realmente finalizar a produção do Lote $_currentCityLote? O admin será notificado na tela de liberação.', style: const TextStyle(color: Colors.white70)),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _printLote();
+                  },
+                  icon: const Icon(Icons.print, color: Colors.orangeAccent),
+                  label: const Text('Imprimir', style: TextStyle(color: Colors.orangeAccent)),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.orangeAccent)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () async {
+                    final cityToFinish = _currentCityLote!;
+                    Navigator.pop(context);
+                    
+                    try {
+                      await ApiService().createBookBatch(cityToFinish);
+                      if (mounted) {
+                        setState(() {
+                          _currentCityLote = null;
+                          _sequenceCount = 1;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao finalizar lote: $e'), backgroundColor: Colors.red));
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                  child: const Text('Finalizar', style: TextStyle(color: Colors.black)),
+                ),
+              ],
+            ),
+          ],
+        );
+      }
+    );
   }
 
   // ── UI Building ─────────────────────────────────────────────────────────────
@@ -511,10 +640,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                   IconButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const FleetChecklistScreen(carId: 'car_123', plate: 'ABC-1234')));
+                      _showFechamentoDialog();
                     },
-                    icon: const Icon(Icons.directions_car_rounded, color: Color(0xFFE1BEE7)),
-                    tooltip: 'Checklist do Veículo',
+                    icon: const Icon(Icons.done_all_rounded, color: Color(0xFFE1BEE7)),
+                    tooltip: 'Finalizar Fechamento do Evento',
                   ),
                   IconButton(
                     onPressed: () {
@@ -601,10 +730,67 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             // ── Dados Básicos
             _buildSectionTitle('Dados Básicos'),
             _buildTextField(_nameController, 'Nome do Responsável', Icons.person),
+            const Padding(
+              padding: EdgeInsets.only(top: 4, left: 4),
+              child: Text('Só preencha se for PAI, MÃE, AVÓ, AVÕ OU TUTOR LEGAL.', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
             const SizedBox(height: 12),
             _buildTextField(_phoneController, 'Telefone / WhatsApp', Icons.phone, keyboardType: TextInputType.phone),
             const SizedBox(height: 12),
-            _buildTextField(_professionController, 'Profissão (Opcional)', Icons.work),
+            RawAutocomplete<String>(
+              textEditingController: _professionController,
+              focusNode: FocusNode(),
+              optionsBuilder: (TextEditingValue textEditingValue) {
+                if (textEditingValue.text.isEmpty) return _professionsCache;
+                return _professionsCache.where((String option) => option.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+              },
+              onSelected: (String selection) {
+                _professionController.text = selection;
+              },
+              optionsViewBuilder: (BuildContext context, AutocompleteOnSelected<String> onSelected, Iterable<String> options) {
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 4.0,
+                    color: const Color(0xFF1A2535),
+                    child: SizedBox(
+                      height: 200.0,
+                      width: MediaQuery.of(context).size.width - 40,
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: options.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          final String option = options.elementAt(index);
+                          return GestureDetector(
+                            onTap: () => onSelected(option),
+                            child: ListTile(
+                              title: Text(option, style: const TextStyle(color: Colors.white)),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
+              fieldViewBuilder: (BuildContext context, TextEditingController textEditingController, FocusNode focusNode, VoidCallback onFieldSubmitted) {
+                return TextFormField(
+                  controller: textEditingController,
+                  focusNode: focusNode,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Profissão (Opcional)',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF1A2535),
+                    prefixIcon: const Icon(Icons.work, color: Colors.white54, size: 20),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFCE93D8), width: 1.5)),
+                  ),
+                  onFieldSubmitted: (String value) => onFieldSubmitted(),
+                );
+              },
+            ),
             
             const SizedBox(height: 24),
             
@@ -716,7 +902,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        _visitTime == null ? 'Melhor horário de visita' : 'Horário: ${_visitTime!.format(context)}',
+                        _visitTime == null ? 'Melhor horário de visita' : 'Horário: ${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}',
                         style: TextStyle(color: _visitTime == null ? Colors.white54 : Colors.white, fontSize: 16),
                       ),
                     ),
@@ -878,4 +1064,5 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       ),
     );
   }
+
 }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
 import 'tela_login.dart';
-import 'tela_checklist_frota.dart';
+
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../servicos/servico_api.dart';
@@ -95,6 +95,8 @@ class _SellerDashboardState extends State<SellerDashboard>
   late Animation<double> _fadeAnim;
   DateTime _selectedDate = DateTime.now();
 
+  int _unreadNotifs = 0;
+
   @override
   void initState() {
     super.initState();
@@ -103,6 +105,17 @@ class _SellerDashboardState extends State<SellerDashboard>
     _fadeAnim =
         CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
+    _fetchUnreadNotifications();
+  }
+
+  Future<void> _fetchUnreadNotifications() async {
+    try {
+      final api = ApiService();
+      final notifs = await api.getNotifications();
+      if (mounted) setState(() => _unreadNotifs = notifs.length);
+    } catch (e) {
+      debugPrint('Error fetching notifications: $e');
+    }
   }
 
   @override
@@ -233,49 +246,100 @@ class _SellerDashboardState extends State<SellerDashboard>
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A2535),
-          title: const Text('Notificações (Capas)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Card(
-                color: Colors.white.withOpacity(0.05),
-                child: ListTile(
-                  leading: const Icon(Icons.layers_rounded, color: Colors.orangeAccent),
-                  title: const Text('Carlos (Vendedor 3) \u2794 Você', style: TextStyle(color: Colors.white, fontSize: 14)),
-                  subtitle: const Text('Transferência de 5 capas', style: TextStyle(color: Colors.white70)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.redAccent),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transferência recusada.')));
-                        },
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.check, color: Colors.greenAccent),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque de capas atualizado!')));
-                        },
-                      ),
-                    ],
-                  ),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              title: const Text('Notificações e Pendências', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              content: FutureBuilder<List<dynamic>>(
+                future: ApiService().getNotifications(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const SizedBox(
+                      width: 100, height: 100,
+                      child: Center(child: CircularProgressIndicator(color: Colors.orangeAccent)),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return const Text('Erro ao carregar notificações.', style: TextStyle(color: Colors.redAccent));
+                  }
+                  
+                  final notifications = snapshot.data ?? [];
+                  if (notifications.isEmpty) {
+                    return const Text('Tudo limpo! Nenhuma pendência.', style: TextStyle(color: Colors.white70));
+                  }
+
+                  return SizedBox(
+                    width: double.maxFinite,
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: notifications.length,
+                      itemBuilder: (context, index) {
+                        final notif = notifications[index];
+                        final senderName = notif['sender'] != null ? notif['sender']['name'] : 'Sistema';
+                        
+                        IconData icon;
+                        switch (notif['type']) {
+                          case 'STOCK_TRANSFER_COVER': icon = Icons.layers_rounded; break;
+                          case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
+                          case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;
+                          case 'FLEET_URGENT': icon = Icons.warning_amber_rounded; break;
+                          default: icon = Icons.notifications_active_rounded;
+                        }
+
+                        return Card(
+                          color: Colors.white.withOpacity(0.05),
+                          child: ListTile(
+                            leading: Icon(icon, color: Colors.orangeAccent),
+                            title: Text('$senderName \u2794 Você', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                            subtitle: Text(notif['message'] ?? 'Notificação', style: const TextStyle(color: Colors.white70)),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.close, color: Colors.redAccent),
+                                  onPressed: () async {
+                                    try {
+                                      await ApiService().actionNotification(notif['id'], 'REJECT');
+                                      setDialogState(() {}); // Refreshes FutureBuilder
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                    }
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.check, color: Colors.greenAccent),
+                                  onPressed: () async {
+                                    try {
+                                      await ApiService().actionNotification(notif['id'], 'ACCEPT');
+                                      setDialogState(() {});
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _fetchUnreadNotifications();
+                  },
+                  child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
                 ),
-              )
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
-            ),
-          ],
+              ],
+            );
+          }
         );
-      }
+      },
     );
   }
 
@@ -501,22 +565,18 @@ class _SellerDashboardState extends State<SellerDashboard>
                   ],
                 ),
               ),
+
               IconButton(
                 onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => const FleetChecklistScreen(carId: 'car_123', plate: 'ABC-1234'),
-                  ));
+                  _showNotificacoesVendedorDialog();
                 },
-                icon: const Icon(Icons.directions_car_rounded, color: Color(0xFF4FC3F7)),
-                tooltip: 'Checklist do Veículo',
-              ),
-              IconButton(
-                onPressed: _showNotificacoesVendedorDialog,
-                icon: const Badge(
-                  label: Text('1'),
-                  child: Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
-                ),
-                tooltip: 'Notificações (Capas)',
+                icon: _unreadNotifs > 0 
+                  ? Badge(
+                      label: Text(_unreadNotifs.toString()),
+                      child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
+                    )
+                  : const Icon(Icons.notifications_none_rounded, color: Colors.white54),
+                tooltip: 'Notificações',
               ),
               IconButton(
                 onPressed: () => _showTransferStockDialog('COVER'),

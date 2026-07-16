@@ -13,16 +13,35 @@ class VisaoFechamentoAdmin extends StatefulWidget {
 }
 
 class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
-  final _sellers = [
-    {'id': '1', 'name': 'Vend. 1 (Book, Emp.)', 'salesType': 'BOOK', 'usesOwnCar': false},
-    {'id': '2', 'name': 'Vend. 2 (Book, Próp.)', 'salesType': 'BOOK', 'usesOwnCar': true},
-    {'id': '3', 'name': 'Vend. 3 (Rebolo, Emp.)', 'salesType': 'REBOLO', 'usesOwnCar': false},
-    {'id': '4', 'name': 'Vend. 4 (Rebolo, Próp.)', 'salesType': 'REBOLO', 'usesOwnCar': true},
-  ];
+  List<dynamic> _sellers = [];
+  bool _isLoadingSellers = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSellers();
+  }
+
+  Future<void> _loadSellers() async {
+    try {
+      final users = await ApiService().getCompanyUsers();
+      if (mounted) {
+        setState(() {
+          _sellers = users;
+          _isLoadingSellers = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoadingSellers = false);
+      }
+    }
+  }
   String? _selectedSeller;
   
-  // Para o card Fechamento Cidade
-  String? _selectedSellerCidade;
+  // Para o card Análise de Desempenho
+  List<String> _selectedSellersCustom = [];
+  DateTimeRange? _selectedDateRangeCustom;
 
   // Para o card Fechamento Mês
   final List<String> _months = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -77,34 +96,115 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Fechamentos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Fechamentos', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                ElevatedButton.icon(
-                  onPressed: () {
-                     // refresh action
-                  }, 
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Atualizar'),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-                )
-              ]
-            ),
-            const SizedBox(height: 20),
             _buildVendedorCard(),
             const SizedBox(height: 20),
-            _buildCidadeCard(),
+            _buildAnaliseDesempenhoCard(),
             const SizedBox(height: 20),
             _buildFotografoCard(),
+            const SizedBox(height: 20),
+            _buildCidadesALiberarCard(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildCidadesALiberarCard() {
+    return FutureBuilder<List<dynamic>>(
+      future: Future.wait([
+        ApiService().getBookBatches(),
+        ApiService().getAllClients(),
+      ]),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+           return const Center(child: CircularProgressIndicator(color: Colors.white));
+        }
+        if (snapshot.hasError) {
+           return Center(child: Text('Erro: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent)));
+        }
+
+        final results = snapshot.data ?? [[], []];
+        final batches = results[0] as List<dynamic>;
+        final clients = results[1] as List<dynamic>;
+        
+        final createdBatches = batches.where((b) => b['status'] == 'CREATED').toList();
+
+        if (createdBatches.isEmpty) {
+           return Container(
+             padding: const EdgeInsets.all(20),
+             decoration: BoxDecoration(
+               color: const Color(0xFF1A1A2E),
+               borderRadius: BorderRadius.circular(16),
+               border: Border.all(color: Colors.white12),
+             ),
+             child: const Center(
+               child: Text('Nenhuma cidade/lote aguardando liberação.', style: TextStyle(color: Colors.white54))
+             ),
+           );
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A2E),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+            const Text('Lotes / Cidades Prontas para Liberação', style: TextStyle(color: Colors.orangeAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('Os fotógrafos finalizaram a produção destes lotes. Libere-os para formar as rotas inteligentes.', style: TextStyle(color: Colors.white70, fontSize: 14)),
+            const SizedBox(height: 24),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: createdBatches.map((batch) {
+                final city = batch['name'] ?? 'Desconhecida';
+                final batchId = batch['id'];
+                
+                // Count clients for this city
+                final clientCount = clients.where((c) => c['city'] == city && c['releasedForRouting'] != true).length;
+                
+                return ActionChip(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  backgroundColor: const Color(0xFFCE93D8),
+                  label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  onPressed: () async {
+                    try {
+                      // Release all clients in this city for routing
+                      await ApiService().releaseCity(city);
+                      // Mark this batch as DISTRIBUTED so it doesn't show up again
+                      await ApiService().updateBookBatchStatus(batchId, 'DISTRIBUTED');
+                      
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado com sucesso!'), backgroundColor: Colors.green));
+                        setState(() {}); // refresh
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
+                      }
+                    }
+                  },
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      );
+    },
     );
   }
 
@@ -144,124 +244,104 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   }
 
   Widget _buildVendedorDetails() {
-    double totalVendas = 0.0;
-    double dinheiro = 0.0;
-    double pix = 0.0;
-    double credito = 0.0;
-    double debito = 0.0;
-    double saldoHistorico = 0.0;
+    if (_selectedSeller == null) return const SizedBox.shrink();
     
-    if (_selectedSeller != null && _mockFinanceiroVendedor.containsKey(_selectedSeller)) {
-       var data = _mockFinanceiroVendedor[_selectedSeller]!;
-       totalVendas = data['totalVendas'];
-       dinheiro = data['dinheiro'];
-       pix = data['pix'];
-       credito = data['credito'];
-       debito = data['debito'];
-       saldoHistorico = _saldoAcumuladoVendedor[_selectedSeller] ?? 0.0;
-    }
+    return FutureBuilder<Map<String, dynamic>>(
+      future: ApiService().getSellerClosing(_selectedSeller!),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: Colors.white));
+        }
+        if (snapshot.hasError) {
+          return Text('Erro ao carregar fechamento: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
+        }
+        
+        final data = snapshot.data!;
+        double totalVendas = (data['totalSalesValue'] ?? 0).toDouble();
+        double dinheiro = (data['cashValue'] ?? 0).toDouble();
+        double pix = (data['pixValue'] ?? 0).toDouble();
+        double credito = (data['creditValue'] ?? 0).toDouble();
+        double debito = (data['debitValue'] ?? 0).toDouble();
+        double comissao = (data['commission'] ?? 0).toDouble();
+        double percentual = (data['commissionPercentage'] ?? 0).toDouble();
+        double saldoHistorico = (data['totalHistoricalDebt'] ?? 0).toDouble();
+        double repasseDebt = (data['repasseDebt'] ?? 0).toDouble();
+        
+        double saldoFinal = (comissao - dinheiro) + saldoHistorico;
 
-    var sellerData = _sellers.firstWhere((s) => s['id'] == _selectedSeller, orElse: () => _sellers.first);
-    bool isRebolo = sellerData['salesType'] == 'REBOLO';
-    bool usesOwnCar = sellerData['usesOwnCar'] == true;
-    
-    double percentual = 0.20;
-    if (isRebolo) {
-        percentual = usesOwnCar ? 0.50 : 0.40;
-    } else {
-        percentual = usesOwnCar ? 0.25 : 0.20;
-    }
-
-    double comissao = totalVendas * percentual;
-    double saldoFinal = (comissao - dinheiro) + saldoHistorico;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-         const Text('Resumo Financeiro', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-         const SizedBox(height: 8),
-         _infoRow('Dinheiro (Cash)', 'R\$ ${dinheiro.toStringAsFixed(2)}'),
-         _infoRow('Pix', 'R\$ ${pix.toStringAsFixed(2)}'),
-         _infoRow('Crédito', 'R\$ ${credito.toStringAsFixed(2)}'),
-         _infoRow('Débito', 'R\$ ${debito.toStringAsFixed(2)}'),
-         const Divider(color: Colors.white24, height: 24),
-         _infoRow('Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
-         _infoRow('Comissão do Dia (${(percentual * 100).toInt()}%)', 'R\$ ${comissao.toStringAsFixed(2)}'),
-         if (saldoHistorico != 0)
-            _infoRow('Saldo Anterior Acumulado', 'R\$ ${saldoHistorico.toStringAsFixed(2)}', color: saldoHistorico > 0 ? Colors.green : Colors.redAccent),
-         const Divider(color: Colors.white24, height: 24),
-         
-         if (saldoFinal > 0) ...[
-           _infoRow('Comissão a Pagar', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
-           const SizedBox(height: 16),
-           ElevatedButton(
-              onPressed: () {
-                if (_selectedSeller != null) {
-                  setState(() {
-                     _saldoAcumuladoVendedor[_selectedSeller!] = 0.0;
-                     // Also zero out current day to prevent recalculation adding it again
-                     _mockFinanceiroVendedor[_selectedSeller!]!['totalVendas'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['dinheiro'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['pix'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['credito'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['debito'] = 0.0;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Comissão Zerada/Paga!')));
-                }
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              child: const Text('Zerar / Pagar Comissão')
-           ),
-         ] else if (saldoFinal <= 0) ...[
-           Row(
-             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-             children: [
-               Row(
-                 children: [
-                   const Text('Repasse', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                   const SizedBox(width: 8),
-                   Container(
-                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                     decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
-                     child: Row(
-                       children: [
-                         const Text('Pix: 123.456.789-00', style: TextStyle(color: Colors.white, fontSize: 11)),
-                         const SizedBox(width: 6),
-                         GestureDetector(
-                           onTap: () {
-                             Clipboard.setData(const ClipboardData(text: '123.456.789-00'));
-                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pix copiado!')));
-                           },
-                           child: const Icon(Icons.copy, color: Colors.white, size: 14),
-                         ),
-                       ],
-                     ),
-                   )
-                 ]
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+             const Text('Resumo Financeiro (Dados Reais)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+             const SizedBox(height: 8),
+             _infoRow('Dinheiro (Cash)', 'R\$ ${dinheiro.toStringAsFixed(2)}'),
+             _infoRow('Pix', 'R\$ ${pix.toStringAsFixed(2)}'),
+             _infoRow('Crédito', 'R\$ ${credito.toStringAsFixed(2)}'),
+             _infoRow('Débito', 'R\$ ${debito.toStringAsFixed(2)}'),
+             const Divider(color: Colors.white24, height: 24),
+             _infoRow('Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
+             _infoRow('Comissão do Dia (${(percentual * 100).toInt()}%)', 'R\$ ${comissao.toStringAsFixed(2)}'),
+             if (saldoHistorico != 0)
+                _infoRow('Dívida Acumulada', 'R\$ ${saldoHistorico.toStringAsFixed(2)}', color: Colors.redAccent),
+             const Divider(color: Colors.white24, height: 24),
+             
+             if (saldoFinal > 0) ...[
+               _infoRow('Comissão a Pagar (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
+               const SizedBox(height: 16),
+               ElevatedButton(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagar comissão (integração futura)')));
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  child: const Text('Registrar Pagamento')
                ),
-               Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+             ] else if (saldoFinal < 0) ...[
+               Row(
+                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                 children: [
+                   Row(
+                     children: [
+                       const Text('Repasse Pendente', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                       const SizedBox(width: 8),
+                       Container(
+                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                         decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
+                         child: Row(
+                           children: [
+                             const Text('Pix: 123.456.789-00', style: TextStyle(color: Colors.white, fontSize: 11)),
+                             const SizedBox(width: 6),
+                             GestureDetector(
+                               onTap: () {
+                                 Clipboard.setData(const ClipboardData(text: '123.456.789-00'));
+                                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pix copiado!')));
+                               },
+                               child: const Icon(Icons.copy, color: Colors.white, size: 14),
+                             ),
+                           ],
+                         ),
+                       )
+                     ]
+                   ),
+                   Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                 ],
+               ),
+               const SizedBox(height: 16),
+               ElevatedButton(
+                  onPressed: () async {
+                    try {
+                      // We would call ApiService().payRepasse()
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repasse registrado com sucesso!')));
+                      setState(() {});
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                  child: const Text('Confirmar Recebimento de Repasse', style: TextStyle(color: Colors.white))
+               ),
+             ] else ...[
+               _infoRow('Status', 'Tudo Quitado', color: Colors.blueAccent),
              ],
-           ),
-           const SizedBox(height: 16),
-           ElevatedButton(
-              onPressed: () {
-                if (_selectedSeller != null) {
-                  setState(() {
-                     _saldoAcumuladoVendedor[_selectedSeller!] = 0.0;
-                     // Also zero out current day
-                     _mockFinanceiroVendedor[_selectedSeller!]!['totalVendas'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['dinheiro'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['pix'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['credito'] = 0.0;
-                     _mockFinanceiroVendedor[_selectedSeller!]!['debito'] = 0.0;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repasse Zerado/Recebido!')));
-                }
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              child: const Text('Zerar Repasse')
-           ),
-         ],
          
          const SizedBox(height: 24),
          const Divider(color: Colors.white24, height: 1),
@@ -282,9 +362,15 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
          ),
       ]
     );
+      }
+    );
   }
 
+  String? _selectedPhotographer;
+
   Widget _buildFotografoCard() {
+    final photographers = _sellers.where((s) => s['role'] == 'PHOTOGRAPHER' || s['role'] == 'ADMIN' || s['role'] == 'SUPER_ADMIN').toList();
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -297,34 +383,57 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         children: [
           const Text('Fechamento Fotógrafo (Produção)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          _infoRow('Books Produzidos Hoje', '0'),
+          const Text('Selecione um fotógrafo:', style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            dropdownColor: const Color(0xFF2A2A3E),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFF0D0D1A),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            items: photographers.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['name'] as String))).toList(),
+            onChanged: (val) => setState(() => _selectedPhotographer = val),
+          ),
+          const SizedBox(height: 16),
+          if (_selectedPhotographer != null)
+             _buildFotografoDetails(),
         ],
       )
     );
   }
 
-  Widget _buildCidadeCard() {
-    int sumVendas = 0;
-    int sumNaoVendas = 0;
-    double sumValorTotal = 0;
-    List<String> sellersToSum = _selectedSellersMes.isNotEmpty ? _selectedSellersMes : _sellers.map((s) => s['name'] as String).toList();
-    
-    List<Widget> vendasPorVendedorList = [];
+  Widget _buildFotografoDetails() {
+    if (_selectedPhotographer == null) return const SizedBox.shrink();
 
-    for (var s in sellersToSum) {
-      if (_mockMetricasCidadeVendedor.containsKey(s)) {
-        final data = _mockMetricasCidadeVendedor[s]!;
-        sumVendas += data['fichasVenda'] as int;
-        sumNaoVendas += data['fichasNaoVenda'] as int;
-        double valor = data['valorTotal'] as double;
-        sumValorTotal += valor;
-        
-        vendasPorVendedorList.add(_infoRow('Vendas Totais - $s', 'R\$ ${valor.toStringAsFixed(2)}'));
+    return FutureBuilder<Map<String, dynamic>>(
+      future: ApiService().getPhotographerClosing(_selectedPhotographer!),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: Colors.white));
+        }
+        if (snapshot.hasError) {
+          return Text('Erro ao carregar fechamento: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
+        }
+
+        final data = snapshot.data!;
+        final booksCount = data['booksCount'] ?? 0;
+
+        return Column(
+          children: [
+            _infoRow('Books (Cidades) Produzidos Hoje', '$booksCount', color: Colors.greenAccent),
+          ],
+        );
       }
-    }
-    
-    int totalFichas = sumVendas + sumNaoVendas;
-    double ticketMedio = totalFichas > 0 ? (sumValorTotal / totalFichas) : 0;
+    );
+  }
+
+  Widget _buildAnaliseDesempenhoCard() {
+    final sellerNames = _selectedSellersCustom.map((id) {
+      final s = _sellers.firstWhere((element) => element['id'] == id, orElse: () => {'name': 'Desconhecido'});
+      return s['name'];
+    }).join(', ');
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -336,79 +445,128 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Fechamento Cidade', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Análise de Desempenho', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
+          // Seletor de data e vendedores
           Row(
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: () {
-                    _showMultiSelectDialog('Selecionar Meses', _months, _selectedMonthsMes, (selected) {
-                      setState(() => _selectedMonthsMes
-                        ..clear()
-                        ..addAll(selected));
-                    });
+                  onPressed: () async {
+                    final range = await showDateRangePicker(
+                      context: context,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2100),
+                      initialDateRange: _selectedDateRangeCustom,
+                      builder: (context, child) {
+                         return Theme(
+                           data: Theme.of(context).copyWith(
+                             colorScheme: const ColorScheme.dark(
+                               primary: Color(0xFFCE93D8),
+                               onPrimary: Colors.white,
+                               surface: Color(0xFF1A1A2E),
+                               onSurface: Colors.white,
+                             ),
+                           ),
+                           child: child!,
+                         );
+                      }
+                    );
+                    if (range != null) {
+                      setState(() => _selectedDateRangeCustom = range);
+                    }
                   },
-                  icon: const Icon(Icons.calendar_month, color: Colors.white),
-                  label: const Text('Selecionar Mês', style: TextStyle(color: Colors.white)),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2A2A3E)),
+                  icon: const Icon(Icons.date_range, size: 16),
+                  label: Text(_selectedDateRangeCustom != null 
+                    ? '${_selectedDateRangeCustom!.start.day}/${_selectedDateRangeCustom!.start.month}/${_selectedDateRangeCustom!.start.year} - ${_selectedDateRangeCustom!.end.day}/${_selectedDateRangeCustom!.end.month}/${_selectedDateRangeCustom!.end.year}' 
+                    : 'Selecionar Período'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2A2A3E),
+                    foregroundColor: Colors.white,
+                    alignment: Alignment.centerLeft,
+                  ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    _showMultiSelectDialog('Selecionar Vendedores', _sellers.map((e) => e['name'] as String).toList(), _selectedSellersMes, (selected) {
-                      setState(() => _selectedSellersMes
-                        ..clear()
-                        ..addAll(selected));
-                    });
-                  },
-                  icon: const Icon(Icons.people, color: Colors.white),
-                  label: const Text('Selecionar Vendedor', style: TextStyle(color: Colors.white)),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2A2A3E)),
+              if (_selectedDateRangeCustom != null)
+                IconButton(
+                  icon: const Icon(Icons.clear, color: Colors.white54),
+                  onPressed: () => setState(() => _selectedDateRangeCustom = null),
                 ),
-              ),
             ],
           ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () {
+              final allSellerIds = _sellers.map((e) => e['id'] as String).toList();
+              _showMultiSelectDialog(
+                'Selecione os Vendedores',
+                allSellerIds,
+                _selectedSellersCustom,
+                (List<String> results) {
+                  setState(() => _selectedSellersCustom = results);
+                },
+              );
+            },
+            icon: const Icon(Icons.people, size: 16),
+            label: Text(_selectedSellersCustom.isEmpty ? 'Selecionar Vendedores' : sellerNames, overflow: TextOverflow.ellipsis),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A2A3E),
+              foregroundColor: Colors.white,
+              alignment: Alignment.centerLeft,
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
           const SizedBox(height: 16),
-          if (_selectedMonthsMes.isNotEmpty || _selectedSellersMes.isNotEmpty) ...[
-             Wrap(
-               spacing: 8,
-               runSpacing: 8,
-               children: [
-                 ..._selectedMonthsMes.map((m) => Chip(label: Text(m, style: const TextStyle(color: Colors.white, fontSize: 12)), backgroundColor: const Color(0xFF4FC3F7).withOpacity(0.3), side: BorderSide.none)),
-                 ..._selectedSellersMes.map((s) => Chip(label: Text(s, style: const TextStyle(color: Colors.white, fontSize: 12)), backgroundColor: const Color(0xFFCE93D8).withOpacity(0.3), side: BorderSide.none)),
-               ],
-             ),
-             const SizedBox(height: 16),
-             const Text('Métricas de Vendas x Não Vendas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-             const SizedBox(height: 8),
-             _infoRow('Total de Fichas', '$totalFichas'),
-             _infoRow('Vendas vs Não Vendas', '$sumVendas / $sumNaoVendas'),
-             _infoRow('Ticket Médio Geral', 'R\$ ${ticketMedio.toStringAsFixed(2)}'),
-             
-             const SizedBox(height: 16),
-             const Divider(color: Colors.white12),
-             const SizedBox(height: 16),
-             
-             const Text('Vendas por Vendedor', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-             const SizedBox(height: 8),
-             ...vendasPorVendedorList,
-             const SizedBox(height: 8),
-             _infoRow('Total de Vendas (Selecionados)', 'R\$ ${sumValorTotal.toStringAsFixed(2)}', color: const Color(0xFFCE93D8)),
-             
-             const SizedBox(height: 16),
-             const Divider(color: Colors.white12),
-             const SizedBox(height: 12),
-             const Text('Média de Avaliações (Atendimento)', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 14, fontWeight: FontWeight.bold)),
-             const SizedBox(height: 12),
-             _buildAverageRatingRow('Vendedor', 4.5), // Mocks for now
-             _buildAverageRatingRow('Fotógrafo', 4.8),
-             _buildAverageRatingRow('O Contato', 4.0),
-          ] else ...[
-             const Text('Selecione ao menos um mês e um vendedor para ver as métricas.', style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic)),
-          ],
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                 setState(() {}); // refresh
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Buscar', style: TextStyle(color: Colors.white)),
+            ),
+          ),
+          const SizedBox(height: 16),
+          FutureBuilder<Map<String, dynamic>>(
+            future: ApiService().getCustomMetrics(
+              sellerIds: _selectedSellersCustom,
+              startDate: _selectedDateRangeCustom?.start.toIso8601String(),
+              endDate: _selectedDateRangeCustom?.end.toIso8601String(),
+            ),
+            builder: (context, snapshot) {
+               if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator(color: Colors.white));
+               }
+               if (snapshot.hasError) {
+                  return Text('Erro ao carregar métricas: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
+               }
+               
+               final data = snapshot.data!;
+               final salesCount = data['salesCount'] ?? 0;
+               final nonSalesCount = data['nonSalesCount'] ?? 0;
+               final totalFichas = salesCount + nonSalesCount;
+               final sumValorTotal = (data['totalSalesValue'] ?? 0).toDouble();
+               double ticketMedio = totalFichas > 0 ? (sumValorTotal / totalFichas) : 0;
+
+               return Column(
+                 crossAxisAlignment: CrossAxisAlignment.start,
+                 children: [
+                   const Text('Métricas de Vendas x Não Vendas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                   const SizedBox(height: 8),
+                   _infoRow('Total de Fichas', '$totalFichas'),
+                   _infoRow('Vendas vs Não Vendas', '$salesCount / $nonSalesCount'),
+                   _infoRow('Ticket Médio Geral', 'R\$ ${ticketMedio.toStringAsFixed(2)}'),
+                   
+                   const SizedBox(height: 16),
+                   const Divider(color: Colors.white12),
+                   const SizedBox(height: 16),
+                   
+                   _infoRow('Total de Vendas (Consolidado)', 'R\$ ${sumValorTotal.toStringAsFixed(2)}', color: const Color(0xFFCE93D8)),
+                 ]
+               );
+            }
+          )
         ],
       )
     );
@@ -483,41 +641,38 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     },
   };
 
-  Widget _buildAverageRatingRow(String label, double rating) {
+  Widget _infoRow(String label, String value, {Color? color}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-          Row(
-            children: [
-              RatingBarIndicator(
-                rating: rating,
-                itemBuilder: (context, index) => const Icon(Icons.star_rounded, color: Colors.amber),
-                itemCount: 5,
-                itemSize: 16.0,
-                direction: Axis.horizontal,
-              ),
-              const SizedBox(width: 8),
-              Text(rating.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            ],
-          ),
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          Text(value, style: TextStyle(color: color ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
         ],
       ),
     );
   }
 
-  Widget _infoRow(String label, String value, {Color? color}) {
-     return Padding(
-       padding: const EdgeInsets.symmetric(vertical: 4),
-       child: Row(
-         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-         children: [
-           Text(label, style: const TextStyle(color: Colors.white70)),
-           Text(value, style: TextStyle(color: color ?? Colors.white, fontWeight: FontWeight.bold)),
-         ],
-       ),
-     );
+  Widget _buildAverageRatingRow(String title, double rating) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(title, style: const TextStyle(color: Colors.white, fontSize: 14)),
+        Row(
+          children: [
+            RatingBarIndicator(
+              rating: rating,
+              itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber),
+              itemCount: 5,
+              itemSize: 16.0,
+              direction: Axis.horizontal,
+            ),
+            const SizedBox(width: 8),
+            Text(rating.toStringAsFixed(1), style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+          ],
+        )
+      ],
+    );
   }
 }

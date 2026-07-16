@@ -29,6 +29,7 @@ model Company {
   sellerCoverTransfers SellerCoverTransfer[]
   bookBatches          BookBatch[]
   notifications        Notification[]
+  clientEditRequests   ClientEditRequest[]
 }
 
 model Team {
@@ -84,6 +85,7 @@ model User {
   fcmToken                String?
   notificationsSent       Notification[]        @relation("NotificationsSent")
   notificationsReceived   Notification[]        @relation("NotificationsReceived")
+  clientEditRequests      ClientEditRequest[]
 }
 
 model Client {
@@ -132,6 +134,7 @@ model Client {
   nonSales        NonSale[]
   sales           Sale[]
   sellerPhotos    SellerPhoto[]
+  editRequests    ClientEditRequest[]
 }
 
 model Child {
@@ -373,4 +376,20 @@ model Notification {
   sender      User?    @relation("NotificationsSent", fields: [senderId], references: [id])
   recipient   User     @relation("NotificationsReceived", fields: [recipientId], references: [id])
   company     Company? @relation(fields: [companyId], references: [id])
+}
+
+model ClientEditRequest {
+  id             String   @id @default(uuid())
+  clientId       String
+  photographerId String?
+  companyId      String?
+  proposedData   Json
+  reason         String?
+  status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  photographer   User?    @relation(fields: [photographerId], references: [id])
+  company        Company? @relation(fields: [companyId], references: [id])
 }

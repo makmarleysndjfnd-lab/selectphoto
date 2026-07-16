@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../servicos/servico_api.dart';
 
 class CashFlowAdminView extends StatefulWidget {
@@ -14,6 +15,8 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
   
   Map<String, dynamic> _overviewData = {};
   List<dynamic> _pendingCosts = [];
+  Map<String, dynamic> _kpis = {};
+  Map<String, dynamic> _charts = {};
 
   @override
   void initState() {
@@ -26,15 +29,18 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
     try {
       final overview = await _apiService.getFinanceOverview();
       final pending = await _apiService.getPendingCosts();
+      final health = await _apiService.getHealthDashboard();
       
       setState(() {
         _overviewData = overview;
         _pendingCosts = pending;
+        _kpis = health['kpis'] ?? {};
+        _charts = health['charts'] ?? {};
       });
     } catch (e) {
-      print('Erro ao buscar dados financeiros: $e');
+      print('Erro ao buscar dados financeiros/saúde: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar fluxo: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar dados: $e'), backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) {
@@ -130,6 +136,12 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
           ),
           const SizedBox(height: 16),
           _buildFutureTransactionsTable(),
+          
+          const SizedBox(height: 40),
+          
+          // Gráficos de Saúde Financeira
+          if (_charts.isNotEmpty) _buildChartsSection(),
+          
         ],
       ),
     );
@@ -399,6 +411,174 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
               ),
             ],
           )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChartsSection() {
+    final costsByCategory = Map<String, dynamic>.from(_charts['costsByCategory'] ?? {});
+    final costsByCar = Map<String, dynamic>.from(_charts['costsByCar'] ?? {});
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Análise Gráfica de Custos',
+          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth > 800) {
+              return Row(
+                children: [
+                  Expanded(child: _buildPieChart('Custos por Categoria', costsByCategory)),
+                  const SizedBox(width: 20),
+                  Expanded(child: _buildBarChart('Custos por Veículo', costsByCar)),
+                ],
+              );
+            } else {
+              return Column(
+                children: [
+                  _buildPieChart('Custos por Categoria', costsByCategory),
+                  const SizedBox(height: 20),
+                  _buildBarChart('Custos por Veículo', costsByCar),
+                ],
+              );
+            }
+          },
+        )
+      ],
+    );
+  }
+
+  Widget _buildPieChart(String title, Map<String, dynamic> data) {
+    if (data.isEmpty) {
+      return _emptyChartContainer(title);
+    }
+
+    int i = 0;
+    final colors = [Colors.blue, Colors.red, Colors.green, Colors.amber, Colors.purple, Colors.orange, Colors.teal, Colors.pink];
+    
+    final pieSections = data.entries.map((e) {
+      final color = colors[i % colors.length];
+      i++;
+      return PieChartSectionData(
+        color: color,
+        value: (e.value as num).toDouble(),
+        title: '${e.key}\n${_formatCurrency((e.value as num).toDouble())}',
+        radius: 60,
+        titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+      );
+    }).toList();
+
+    return Container(
+      height: 350,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 24),
+          Expanded(
+            child: PieChart(
+              PieChartData(
+                sectionsSpace: 2,
+                centerSpaceRadius: 40,
+                sections: pieSections,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBarChart(String title, Map<String, dynamic> data) {
+    if (data.isEmpty) {
+      return _emptyChartContainer(title);
+    }
+
+    int i = 0;
+    final barGroups = data.entries.map((e) {
+      final group = BarChartGroupData(
+        x: i,
+        barRods: [
+          BarChartRodData(
+            toY: (e.value as num).toDouble(),
+            color: Colors.blueAccent,
+            width: 16,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ],
+      );
+      i++;
+      return group;
+    }).toList();
+
+    return Container(
+      height: 350,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 24),
+          Expanded(
+            child: BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceAround,
+                titlesData: FlTitlesData(
+                  show: true,
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (double value, TitleMeta meta) {
+                        final index = value.toInt();
+                        if (index >= 0 && index < data.keys.length) {
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Text(data.keys.elementAt(index), style: const TextStyle(color: Colors.white70, fontSize: 10)),
+                          );
+                        }
+                        return const Text('');
+                      },
+                    ),
+                  ),
+                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                borderData: FlBorderData(show: false),
+                gridData: const FlGridData(show: false),
+                barGroups: barGroups,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyChartContainer(String title) {
+    return Container(
+      height: 350,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const Expanded(child: Center(child: Text('Sem dados suficientes.', style: TextStyle(color: Colors.white54)))),
         ],
       ),
     );

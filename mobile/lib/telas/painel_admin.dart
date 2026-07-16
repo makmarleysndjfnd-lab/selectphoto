@@ -7,7 +7,6 @@ import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import 'visao_frota_admin.dart';
 import 'visao_fluxo_caixa_admin.dart';
 import 'tela_cadastro_custos.dart';
-import 'painel_saude.dart';
 import 'tela_gerenciamento_funcionarios.dart';
 import 'visao_prospectos_ia.dart';
 import 'visao_fechamento_admin.dart';
@@ -180,27 +179,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   late Animation<double> _fadeAnim;
 
   // Mock Rotas Inteligentes -> Nova Estrutura
-  final List<Map<String, dynamic>> _rotasManuais = [
-    {
-      'id': 'r1',
-      'title': 'Campinas',
-      'books': [
-        {'id': 'b1', 'ficha': 'CF-EQP1-0003', 'lote': 'L2024-06', 'qr': 'QR-1234', 'cliente': 'Maria Silva'},
-        {'id': 'b2', 'ficha': 'CF-EQP2-0005', 'lote': 'L2024-06', 'qr': 'QR-1235', 'cliente': 'Carlos Mendes'},
-      ]
-    },
-    {
-      'id': 'r2',
-      'title': 'São Paulo',
-      'books': [
-        {'id': 'b3', 'ficha': 'CF-EQP1-0012', 'lote': 'L2024-06', 'qr': 'QR-1236', 'cliente': 'Ana Costa'},
-      ]
-    },
-  ];
-
-  final List<Map<String, dynamic>> _booksNaoAtribuidos = [
-    {'id': 'b4', 'ficha': 'CF-EQP3-0002', 'lote': 'L2024-06', 'qr': 'QR-1237', 'cliente': 'Fernanda Neves'},
-  ];
+  List<Map<String, dynamic>> _rotasManuais = [];
+  List<Map<String, dynamic>> _booksNaoAtribuidos = [];
+  Set<String> _pendingReleaseCities = {};
 
   final Map<String, List<Map<String, dynamic>>> _booksDistribuidos = {};
 
@@ -232,6 +213,70 @@ class _AdminDashboardState extends State<AdminDashboard>
     return list;
   }
 
+  int _unreadNotifs = 0;
+
+  Future<void> _loadClients() async {
+    try {
+      final api = ApiService();
+      final clients = await api.getAllClients();
+      
+      final Map<String, List<Map<String, dynamic>>> cityGroups = {};
+      final List<Map<String, dynamic>> unassigned = [];
+      final Set<String> unreleased = {};
+      
+      for (var client in clients) {
+        final b = {
+          'id': client['id'], 
+          'ficha': client['sequenceNumber'] ?? 'S/N', 
+          'lote': 'N/A', 
+          'qr': client['sequenceNumber'] ?? 'S/N', 
+          'cliente': client['name'] ?? 'Cliente'
+        };
+        
+        final city = client['city'];
+        final isReleased = client['releasedForRouting'] == true;
+
+        if (city == null || city.toString().trim().isEmpty) {
+          if (isReleased) {
+            unassigned.add(b);
+          }
+        } else {
+          if (!isReleased) {
+            unreleased.add(city);
+            continue; // do not add to routing yet
+          }
+          if (!cityGroups.containsKey(city)) {
+            cityGroups[city] = [];
+          }
+          cityGroups[city]!.add(b);
+        }
+      }
+      
+      final List<Map<String, dynamic>> routes = [];
+      for (var entry in cityGroups.entries) {
+        if (entry.value.length >= 5) {
+          routes.add({
+            'id': 'r_${entry.key}',
+            'title': entry.key,
+            'books': entry.value,
+          });
+        } else {
+          unassigned.addAll(entry.value);
+        }
+      }
+      
+      if (mounted) {
+        setState(() {
+          _booksNaoAtribuidos = unassigned;
+          _rotasManuais = routes;
+          _pendingReleaseCities = unreleased;
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro ao carregar clientes: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -241,6 +286,18 @@ class _AdminDashboardState extends State<AdminDashboard>
         CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
     _loadUpcomingEvents();
+    _fetchUnreadNotifications();
+    _loadClients();
+  }
+
+  Future<void> _fetchUnreadNotifications() async {
+    try {
+      final api = ApiService();
+      final notifs = await api.getNotifications();
+      if (mounted) setState(() => _unreadNotifs = notifs.length);
+    } catch (e) {
+      debugPrint('Error fetching notifications: $e');
+    }
   }
 
   Future<void> _loadUpcomingEvents() async {
@@ -343,8 +400,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                     iconColor: const Color(0xFF90CAF9),
                     collapsedIconColor: const Color(0xFF90CAF9),
                     children: [
-                      _sideMenuItem(4, Icons.attach_money_rounded, 'Custos e Caixa'),
-                      _sideMenuItem(6, Icons.bar_chart_rounded, 'Métricas e Saúde'),
+                      _sideMenuItem(4, Icons.attach_money_rounded, 'Financeiro e Saúde'),
                       ListTile(
                         leading: const Icon(Icons.money_off, color: Color(0xFFE57373)),
                         title: const Text('Despesas', style: TextStyle(color: Color(0xFFE57373))),
@@ -470,7 +526,10 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _fetchUnreadNotifications();
+                  },
                   child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
                 ),
               ],
@@ -600,12 +659,16 @@ class _AdminDashboardState extends State<AdminDashboard>
                     tooltip: 'Backups Offline',
                   ),
                   IconButton(
-                    onPressed: _showNotificacoesDialog,
-                    icon: const Badge(
-                      label: Text('1'),
-                      child: Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
-                    ),
-                    tooltip: 'Notificações (Capas)',
+                    onPressed: () {
+                      _showNotificacoesDialog();
+                    },
+                    icon: _unreadNotifs > 0 
+                      ? Badge(
+                          label: Text(_unreadNotifs.toString()),
+                          child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
+                        )
+                      : const Icon(Icons.notifications_none_rounded, color: Colors.white54),
+                    tooltip: 'Notificações',
                   ),
                   if (!isDesktop) // Hide logout button in header on desktop, since it's in the side menu
                     IconButton(
@@ -640,8 +703,6 @@ class _AdminDashboardState extends State<AdminDashboard>
         return const CashFlowAdminView();
       case 5:
         return const EmployeeManagementScreen();
-      case 6:
-        return const HealthDashboardView();
       case 7:
         return const VisaoFechamentoAdmin();
       case 8:
@@ -1764,7 +1825,9 @@ class _AdminDashboardState extends State<AdminDashboard>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(isRebolo ? 'Rotas de Rebolo (Revisita)' : 'Rotas Inteligentes (Manual)', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              Expanded(
+                child: Text(isRebolo ? 'Rotas de Rebolo (Revisita)' : 'Rotas Inteligentes (Manual)', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
               ElevatedButton.icon(
                 onPressed: () => _showNovaRotaDialog(isRebolo),
                 icon: const Icon(Icons.add, size: 16),
@@ -1776,6 +1839,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 8),
           Text(isRebolo ? 'Organize os rebolos em rotas manuais para revisitas.' : 'Organize os books prontos em rotas manuais.', style: const TextStyle(color: Colors.white54, fontSize: 12)),
           const SizedBox(height: 16),
+          
           
           if ((isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos).isNotEmpty)
             _buildNaoAtribuidosSection(isRebolo),
@@ -1789,7 +1853,9 @@ class _AdminDashboardState extends State<AdminDashboard>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(isRebolo ? 'Malotes de Revisita (Saída)' : 'Malotes dos Vendedores (Saída)', style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              Expanded(
+                child: Text(isRebolo ? 'Malotes de Revisita (Saída)' : 'Malotes dos Vendedores (Saída)', style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
               ElevatedButton.icon(
                 onPressed: () => _scanAndDistributeBooks(isRebolo: isRebolo),
                 icon: const Icon(Icons.qr_code_scanner, size: 16, color: Colors.white),
@@ -1806,6 +1872,8 @@ class _AdminDashboardState extends State<AdminDashboard>
       )
     );
   }
+
+
 
   Widget _buildNaoAtribuidosSection(bool isRebolo) {
     final list = isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos;

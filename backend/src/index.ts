@@ -34,6 +34,7 @@ import closingRoutes from './routes/closing';
 import stockRoutes from './routes/stock';
 import booksRoutes from './routes/books';
 import notificationsRoutes from './routes/notifications';
+import editRequestsRoutes from './routes/editRequests';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);
@@ -51,6 +52,7 @@ app.use('/api/closing', closingRoutes);
 app.use('/api/stock', stockRoutes);
 app.use('/api/books', booksRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/edit-requests', editRequestsRoutes);
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

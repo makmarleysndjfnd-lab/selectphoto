@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "41583077140",
+    "project_id": "selectphoto-cc022",
+    "storage_bucket": "selectphoto-cc022.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:41583077140:android:d59a8de2d31ef7ca454401",
+        "android_client_info": {
+          "package_name": "com.example.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkEF_ASbjC_IT9CYNSgS6A8MszD7SqJqo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
