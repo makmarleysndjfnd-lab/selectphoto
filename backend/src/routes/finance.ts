@@ -187,4 +187,58 @@ router.get('/health', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
+// Edit a cost
+router.put('/costs/:id', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, category, description, paymentMethod, status } = req.body;
+    
+    const existing = await prisma.cost.findUnique({ where: { id } });
+    if (!existing || existing.companyId !== req.user?.companyId) {
+      return res.status(404).json({ error: 'Cost not found' });
+    }
+
+    const updated = await prisma.cost.update({
+      where: { id },
+      data: {
+        amount: amount !== undefined ? Number(amount) : undefined,
+        category,
+        description,
+        paymentMethod,
+        status
+      }
+    });
+    res.json(updated);
+  } catch (error) {
+    console.error('Error editing cost:', error);
+    res.status(500).json({ error: 'Failed to edit cost' });
+  }
+});
+
+// Edit a sale (limited fields for finance view)
+router.put('/sales/:id', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const { value, paymentMethod, paymentStatus } = req.body;
+    
+    const existing = await prisma.sale.findUnique({ where: { id } });
+    if (!existing || existing.companyId !== req.user?.companyId) {
+      return res.status(404).json({ error: 'Sale not found' });
+    }
+
+    const updated = await prisma.sale.update({
+      where: { id },
+      data: {
+        value: value !== undefined ? Number(value) : undefined,
+        paymentMethod,
+        paymentStatus
+      }
+    });
+    res.json(updated);
+  } catch (error) {
+    console.error('Error editing sale:', error);
+    res.status(500).json({ error: 'Failed to edit sale' });
+  }
+});
+
 export default router;

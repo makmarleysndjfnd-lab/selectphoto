@@ -21,7 +21,34 @@ router.post('/', async (req, res) => {
         reason,
         status: 'PENDING',
       },
+      include: { client: true, photographer: true }
     });
+
+    // Notify admins
+    const admins = await prisma.user.findMany({
+      where: { 
+        companyId: companyId || undefined,
+        role: { in: ['ADMIN', 'SUPERADMIN'] }
+      }
+    });
+
+    const requesterName = editRequest.photographer?.name || 'Vendedor/Fotógrafo';
+    const clientName = editRequest.client?.name || 'Cliente';
+
+    for (const admin of admins) {
+      await prisma.notification.create({
+        data: {
+          title: 'Nova Solicitação de Edição',
+          message: `${requesterName} solicitou edição para ${clientName}. Motivo: ${reason || 'N/A'}.`,
+          type: 'EDIT_REQUEST_APPROVAL',
+          status: 'UNREAD',
+          recipientId: admin.id,
+          senderId: photographerId,
+          companyId: companyId,
+          actionData: { editRequestId: editRequest.id, proposedData }
+        }
+      });
+    }
 
     res.json(editRequest);
   } catch (error) {

@@ -10,6 +10,7 @@ class VisaoEstoqueAdmin extends StatefulWidget {
 
 class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
   List<dynamic> _clients = [];
+  List<dynamic> _editRequests = [];
   bool _isLoading = true;
 
   @override
@@ -21,10 +22,14 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
   Future<void> _loadClients() async {
     try {
       final api = ApiService();
-      final clients = await api.getAllClients();
+      final responses = await Future.wait([
+        api.getAllClients(),
+        api.getPendingEditRequests()
+      ]);
       if (mounted) {
         setState(() {
-          _clients = clients;
+          _clients = responses[0] as List<dynamic>;
+          _editRequests = responses[1] as List<dynamic>;
           _isLoading = false;
         });
       }
@@ -72,11 +77,111 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                 const SizedBox(height: 20),
                 _buildResumoGeral(),
                 const SizedBox(height: 20),
+                if (_editRequests.isNotEmpty) _buildEditRequestsCard(),
+                if (_editRequests.isNotEmpty) const SizedBox(height: 20),
                 _buildListaBooks(),
                 const SizedBox(height: 40),
               ],
             ),
           ),
+    );
+  }
+
+  Future<void> _aprovarSolicitacao(String id) async {
+    try {
+      await ApiService().approveEditRequest(id);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solicitação aprovada.'), backgroundColor: Colors.green));
+      _loadClients();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  Future<void> _rejeitarSolicitacao(String id) async {
+    try {
+      await ApiService().rejectEditRequest(id);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solicitação rejeitada.'), backgroundColor: Colors.orange));
+      _loadClients();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+    }
+  }
+
+  Widget _buildEditRequestsCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E2C),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+              const SizedBox(width: 8),
+              Text('${_editRequests.length} Solicitações de Edição Pendentes', style: const TextStyle(color: Colors.orangeAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ..._editRequests.map((req) {
+            final client = req['client'] ?? {};
+            final proposedData = req['proposedData'] ?? {};
+            final photographer = req['photographer'] ?? {};
+            return Card(
+              color: const Color(0xFF2A2A3C),
+              margin: const EdgeInsets.only(bottom: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Ficha: ${client['sequenceNumber'] ?? 'S/N'} - Fotógrafo: ${photographer['name'] ?? 'Desconhecido'}', style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text('Motivo: ${req['reason'] ?? 'Não informado'}', style: const TextStyle(color: Colors.white, fontStyle: FontStyle.italic)),
+                    const SizedBox(height: 8),
+                    _buildComparativo('Valor R\$', client['price']?.toString(), proposedData['price']?.toString()),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => _rejeitarSolicitacao(req['id']),
+                          icon: const Icon(Icons.close, color: Colors.redAccent, size: 16),
+                          label: const Text('Rejeitar', style: TextStyle(color: Colors.redAccent)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: () => _aprovarSolicitacao(req['id']),
+                          icon: const Icon(Icons.check, color: Colors.black, size: 16),
+                          label: const Text('Aprovar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComparativo(String label, String? atual, String? proposto) {
+    if (proposto == null || proposto.isEmpty || atual == proposto) return const SizedBox.shrink();
+    return Row(
+      children: [
+        Text('$label Atual: ', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        Text(atual ?? 'Vazio', style: const TextStyle(color: Colors.white38, decoration: TextDecoration.lineThrough, fontSize: 12)),
+        const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Icon(Icons.arrow_forward_rounded, color: Colors.white24, size: 14)),
+        Text('Novo: ', style: const TextStyle(color: Colors.greenAccent, fontSize: 12)),
+        Text(proposto, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+      ],
     );
   }
 

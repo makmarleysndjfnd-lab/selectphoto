@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'tela_configuracoes.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
 import 'tela_login.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -83,7 +86,7 @@ class _SellerDashboardState extends State<SellerDashboard>
   final _filterController = TextEditingController();
   String _searchQuery = '';
   bool _searched = false;
-  bool _isManager = true; // Flag para Vendedor Gerente
+  bool _isManager = false; // Flag para Vendedor Gerente (Carregada via SharedPreferences)
   
   // Variáveis para Distribuição de Equipe e Trocas
   String? _selectedSellerForTransfer;
@@ -106,6 +109,17 @@ class _SellerDashboardState extends State<SellerDashboard>
         CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
     _fetchUnreadNotifications();
+    _checkManagerRole();
+  }
+
+  Future<void> _checkManagerRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    final role = prefs.getString('user_role');
+    if (role == 'SELLER_MANAGER' && mounted) {
+      setState(() {
+        _isManager = true;
+      });
+    }
   }
 
   Future<void> _fetchUnreadNotifications() async {
@@ -598,13 +612,15 @@ class _SellerDashboardState extends State<SellerDashboard>
                 tooltip: 'Lançar Despesa',
               ),
               IconButton(
-                onPressed: () => Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                      builder: (_) => const LoginScreen()),
-                ),
-                icon: const Icon(Icons.logout_rounded,
-                    color: Color(0xFF90CAF9)),
-                tooltip: 'Sair',
+                icon: const Icon(Icons.settings, color: Colors.white70),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SettingsScreen(isFotografo: false),
+                    ),
+                  );
+                },
               ),
             ],
           ),

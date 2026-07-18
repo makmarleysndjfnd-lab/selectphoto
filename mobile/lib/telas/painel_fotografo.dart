@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'tela_configuracoes.dart';
 import 'package:signature/signature.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
-import '../modelos/cliente.dart';
-import '../modelos/lote.dart';
+
 import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
@@ -497,49 +498,34 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           backgroundColor: const Color(0xFF1A1A2E),
           title: const Text('Finalizar Lote/Cidade', style: TextStyle(color: Colors.white)),
           content: Text('Deseja realmente finalizar a produção do Lote $_currentCityLote? O admin será notificado na tela de liberação.', style: const TextStyle(color: Colors.white70)),
-          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actionsAlignment: MainAxisAlignment.end,
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _printLote();
-                  },
-                  icon: const Icon(Icons.print, color: Colors.orangeAccent),
-                  label: const Text('Imprimir', style: TextStyle(color: Colors.orangeAccent)),
-                  style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.orangeAccent)),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () async {
-                    final cityToFinish = _currentCityLote!;
-                    Navigator.pop(context);
-                    
-                    try {
-                      await ApiService().createBookBatch(cityToFinish);
-                      if (mounted) {
-                        setState(() {
-                          _currentCityLote = null;
-                          _sequenceCount = 1;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao finalizar lote: $e'), backgroundColor: Colors.red));
-                      }
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-                  child: const Text('Finalizar', style: TextStyle(color: Colors.black)),
-                ),
-              ],
+            ElevatedButton(
+              onPressed: () async {
+                final cityToFinish = _currentCityLote!;
+                Navigator.pop(context);
+                
+                try {
+                  await ApiService().createBookBatch(cityToFinish);
+                  if (mounted) {
+                    setState(() {
+                      _currentCityLote = null;
+                      _sequenceCount = 1;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao finalizar lote: $e'), backgroundColor: Colors.red));
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Finalizar', style: TextStyle(color: Colors.black)),
             ),
           ],
         );
@@ -609,40 +595,6 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                   IconButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
-                    },
-                    icon: Consumer<SyncService>(
-                      builder: (context, sync, child) {
-                        return Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(Icons.cloud_sync, color: Color(0xFFE1BEE7)),
-                            if (sync.pendingRequests.isNotEmpty)
-                              Positioned(
-                                right: 0,
-                                top: 0,
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.red,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                                  child: Text(
-                                    '${sync.pendingRequests.length}',
-                                    style: const TextStyle(color: Colors.white, fontSize: 8),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        );
-                      }
-                    ),
-                    tooltip: 'Backups Offline',
-                  ),
-                  IconButton(
-                    onPressed: () {
                       _showFechamentoDialog();
                     },
                     icon: const Icon(Icons.done_all_rounded, color: Color(0xFFE1BEE7)),
@@ -650,17 +602,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                   IconButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const PrinterConfigScreen()));
+                      _printLote();
                     },
-                    icon: const Icon(Icons.print_rounded, color: Color(0xFFCE93D8)),
-                    tooltip: 'Impressora Bluetooth',
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const CostEntryScreen()));
-                    },
-                    icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
-                    tooltip: 'Lançar Despesa',
+                    icon: const Icon(Icons.print, color: Colors.orangeAccent),
+                    tooltip: 'Imprimir Lote Atual',
                   ),
                   IconButton(
                     onPressed: () {
@@ -670,9 +615,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     tooltip: 'Ver Fichas Produzidas',
                   ),
                   IconButton(
-                    onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen())),
-                    icon: const Icon(Icons.logout_rounded, color: Color(0xFFE1BEE7)),
-                    tooltip: 'Sair',
+                    icon: const Icon(Icons.settings, color: Colors.white70),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const SettingsScreen(isFotografo: true),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),

@@ -101,19 +101,25 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         title: const Text('Fechamentos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildVendedorCard(),
-            const SizedBox(height: 20),
-            _buildAnaliseDesempenhoCard(),
-            const SizedBox(height: 20),
-            _buildFotografoCard(),
-            const SizedBox(height: 20),
-            _buildCidadesALiberarCard(),
-          ],
+      body: RefreshIndicator(
+        onRefresh: () async {
+          setState(() {});
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildVendedorCard(),
+              const SizedBox(height: 20),
+              _buildAnaliseDesempenhoCard(),
+              const SizedBox(height: 20),
+              _buildFotografoCard(),
+              const SizedBox(height: 20),
+              _buildCidadesALiberarCard(),
+            ],
+          ),
         ),
       ),
     );
@@ -173,31 +179,48 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               children: createdBatches.map((batch) {
                 final city = batch['name'] ?? 'Desconhecida';
                 final batchId = batch['id'];
+                // Find clients for this city
+                final cityClients = clients.where((c) => c['city'] == city && c['releasedForRouting'] != true).toList();
+                final clientCount = cityClients.length;
+                final sequenceNumbers = cityClients.map((c) => c['sequenceNumber'] ?? 'S/N').join(', ');
                 
-                // Count clients for this city
-                final clientCount = clients.where((c) => c['city'] == city && c['releasedForRouting'] != true).length;
-                
-                return ActionChip(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  backgroundColor: const Color(0xFFCE93D8),
-                  label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                  onPressed: () async {
-                    try {
-                      // Release all clients in this city for routing
-                      await ApiService().releaseCity(city);
-                      // Mark this batch as DISTRIBUTED so it doesn't show up again
-                      await ApiService().updateBookBatchStatus(batchId, 'DISTRIBUTED');
-                      
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado com sucesso!'), backgroundColor: Colors.green));
-                        setState(() {}); // refresh
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
-                      }
-                    }
-                  },
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ActionChip(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      backgroundColor: const Color(0xFFCE93D8),
+                      label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      onPressed: () async {
+                        try {
+                          // Release all clients in this city for routing
+                          await ApiService().releaseCity(city);
+                          // Mark this batch as DISTRIBUTED so it doesn't show up again
+                          await ApiService().updateBookBatchStatus(batchId, 'DISTRIBUTED');
+                          
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado com sucesso!'), backgroundColor: Colors.green));
+                            setState(() {}); // refresh
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
+                          }
+                        }
+                      },
+                    ),
+                    if (clientCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                        child: Text(
+                          'Fichas: $sequenceNumbers',
+                          style: const TextStyle(color: Colors.white54, fontSize: 11),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
                 );
               }).toList(),
             ),
@@ -289,8 +312,14 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                _infoRow('Comissão a Pagar (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
                const SizedBox(height: 16),
                ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagar comissão (integração futura)')));
+                  onPressed: () async {
+                    try {
+                      await ApiService().payRepasse(_selectedSeller!, saldoFinal, commissionToLog: comissao);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagamento registrado com sucesso!')));
+                      setState(() {});
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                    }
                   },
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                   child: const Text('Registrar Pagamento')
@@ -329,7 +358,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                ElevatedButton(
                   onPressed: () async {
                     try {
-                      // We would call ApiService().payRepasse()
+                      await ApiService().payRepasse(_selectedSeller!, saldoFinal.abs(), commissionToLog: comissao);
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repasse registrado com sucesso!')));
                       setState(() {});
                     } catch (e) {

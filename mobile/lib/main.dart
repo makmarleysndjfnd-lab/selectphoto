@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'servicos/servico_api.dart';
 import 'servicos/servico_sincronizacao.dart';
+import 'provedores/provedor_configuracoes.dart';
 import 'telas/tela_login.dart';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -39,7 +40,14 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
-        Provider<ApiService>(create: (_) => ApiService()),
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+        ProxyProvider<SettingsProvider, ApiService>(
+          update: (context, settings, previous) {
+            final apiService = previous ?? ApiService();
+            apiService.updateBaseUrl(settings.serverUrl);
+            return apiService;
+          },
+        ),
         ChangeNotifierProxyProvider<ApiService, SyncService>(
           create: (context) => SyncService(context.read<ApiService>()),
           update: (context, apiService, previous) => previous ?? SyncService(apiService),
@@ -55,18 +63,22 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Central Fotográfica',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0288D1),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        fontFamily: 'Roboto',
-      ),
-      home: const LoginScreen(),
+    return Consumer<SettingsProvider>(
+      builder: (context, settings, child) {
+        return MaterialApp(
+          title: 'Central Fotográfica',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF0288D1),
+              brightness: settings.isDarkMode ? Brightness.dark : Brightness.light,
+            ),
+            useMaterial3: true,
+            fontFamily: 'Roboto',
+          ),
+          home: const LoginScreen(),
+        );
+      },
     );
   }
 }

@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'tela_configuracoes.dart';
+import 'package:http/http.dart' as http;
+import 'package:fl_chart/fl_chart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
@@ -11,6 +15,8 @@ import 'tela_gerenciamento_funcionarios.dart';
 import 'visao_prospectos_ia.dart';
 import 'visao_fechamento_admin.dart';
 import 'visao_estoque_admin.dart';
+import '../utils/pdf_generator.dart';
+
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -79,38 +85,6 @@ final _teamData = [
   },
 ];
 
-// ── Mock: books por equipe ────────────────────────────────────────────────────
-final _photoEvents = [
-  {
-    'team': 'Equipe 1 — SP',
-    'code': 'EQP1',
-    'color': const Color(0xFFAB47BC),
-    'events': [
-      {'event': 'Formatura Colégio Alpha', 'city': 'São Paulo', 'photos': 312},
-      {'event': 'Aniversário 15 Anos Club', 'city': 'Santo André', 'photos': 185},
-      {'event': 'Casamento Silva & Costa', 'city': 'São Paulo', 'photos': 428},
-    ],
-  },
-  {
-    'team': 'Equipe 2 — Campinas',
-    'code': 'EQP2',
-    'color': const Color(0xFF7E57C2),
-    'events': [
-      {'event': 'Formatura Escola Beta', 'city': 'Campinas', 'photos': 276},
-      {'event': 'Evento Corporativo TechCo', 'city': 'Campinas', 'photos': 143},
-      {'event': 'Aniversário Família Rocha', 'city': 'Limeira', 'photos': 97},
-    ],
-  },
-  {
-    'team': 'Equipe 3 — Ribeirão',
-    'code': 'EQP3',
-    'color': const Color(0xFF5C6BC0),
-    'events': [
-      {'event': 'Formatura Colégio Gamma', 'city': 'Ribeirão Preto', 'photos': 341},
-      {'event': 'Casamento Nunes & Lima', 'city': 'Franca', 'photos': 512},
-    ],
-  },
-];
 
 // ── Mock: Estoque não-vendas ──────────────────────────────────────────────────
 final _stockByCity = [
@@ -184,22 +158,11 @@ class _AdminDashboardState extends State<AdminDashboard>
   Set<String> _pendingReleaseCities = {};
 
   final Map<String, List<Map<String, dynamic>>> _booksDistribuidos = {};
+  
+  List<Map<String, dynamic>> _realPhotoEvents = [];
 
-  // Mock Rotas Rebolo
-  final List<Map<String, dynamic>> _rotasRebolo = [
-    {
-      'id': 'rr1',
-      'title': 'Campinas (Revisitas)',
-      'books': [
-        {'id': 'r1', 'ficha': 'CF-EQP1-0007', 'lote': 'L2024-06', 'qr': 'QR-8881', 'cliente': 'João Ferreira'},
-      ]
-    },
-  ];
-
-  final List<Map<String, dynamic>> _rebolosNaoAtribuidos = [
-    {'id': 'r2', 'ficha': 'CF-EQP1-0019', 'lote': 'L2024-06', 'qr': 'QR-8882', 'cliente': 'Pedro Santos'},
-    {'id': 'r3', 'ficha': 'CF-EQP2-0009', 'lote': 'L2024-06', 'qr': 'QR-8883', 'cliente': 'Beatriz Lima'},
-  ];
+  List<Map<String, dynamic>> _rotasRebolo = [];
+  List<Map<String, dynamic>> _rebolosNaoAtribuidos = [];
 
   final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
 
@@ -218,20 +181,47 @@ class _AdminDashboardState extends State<AdminDashboard>
   Future<void> _loadClients() async {
     try {
       final api = ApiService();
+      
+      // Fetch rebolos first
+      final rebolos = await api.getRebolos();
+      final Set<String> reboloIds = rebolos.map((r) => r['id'].toString()).toSet();
+      
       final clients = await api.getAllClients();
       
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
       final List<Map<String, dynamic>> unassigned = [];
       final Set<String> unreleased = {};
       
+      // Map photographerId -> List of books
+      final Map<String, List<Map<String, dynamic>>> photographerBooks = {};
+      final Map<String, List<Map<String, dynamic>>> distributedBooks = {};
+
       for (var client in clients) {
+        if (reboloIds.contains(client['id'].toString())) continue;
+
         final b = {
           'id': client['id'], 
           'ficha': client['sequenceNumber'] ?? 'S/N', 
           'lote': 'N/A', 
           'qr': client['sequenceNumber'] ?? 'S/N', 
-          'cliente': client['name'] ?? 'Cliente'
+          'cliente': client['name'] ?? 'Cliente',
+          'city': client['city'],
+          'photographerId': client['photographerId'],
+          'rawClientData': client,
         };
+
+        final assignedSeller = client['assignedSeller']?['name'];
+        if (assignedSeller != null) {
+          if (!distributedBooks.containsKey(assignedSeller)) {
+            distributedBooks[assignedSeller] = [];
+          }
+          distributedBooks[assignedSeller]!.add(b);
+        } else {
+          final pId = client['photographer']?['name'] ?? 'Equipe Desconhecida';
+        if (!photographerBooks.containsKey(pId)) {
+          photographerBooks[pId] = [];
+        }
+        photographerBooks[pId]!.add(b);
         
         final city = client['city'];
         final isReleased = client['releasedForRouting'] == true;
@@ -250,6 +240,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           }
           cityGroups[city]!.add(b);
         }
+        }
       }
       
       final List<Map<String, dynamic>> routes = [];
@@ -265,11 +256,98 @@ class _AdminDashboardState extends State<AdminDashboard>
         }
       }
       
+      final List<Map<String, dynamic>> realEvents = [];
+      int colorIndex = 0;
+      final colors = [const Color(0xFFAB47BC), const Color(0xFF7E57C2), const Color(0xFF5C6BC0), const Color(0xFF4FC3F7)];
+      
+      for (var entry in photographerBooks.entries) {
+        final teamColor = colors[colorIndex % colors.length];
+        
+        // Group books by event/city for this photographer
+        final Map<String, int> eventCounts = {};
+        for (var b in entry.value) {
+          final city = b['city'] ?? 'Sem Cidade';
+          eventCounts[city] = (eventCounts[city] ?? 0) + 1;
+        }
+        
+        final List<Map<String, dynamic>> events = [];
+        for (var ev in eventCounts.entries) {
+          events.add({
+            'event': 'Produção em ${ev.key}',
+            'city': ev.key,
+            'photos': ev.value,
+          });
+        }
+        
+        realEvents.add({
+          'team': entry.key,
+          'code': entry.key.substring(0, entry.key.length > 3 ? 3 : entry.key.length).toUpperCase(),
+          'color': teamColor,
+          'events': events,
+        });
+        
+        colorIndex++;
+      }
+
+      final List<Map<String, dynamic>> rebolosUnassigned = [];
+      final Map<String, List<Map<String, dynamic>>> rebolosCityGroups = {};
+      final Map<String, List<Map<String, dynamic>>> rebolosDistributed = {};
+
+      for (var client in rebolos) {
+        final b = {
+          'id': client['id'], 
+          'ficha': client['sequenceNumber'] ?? 'S/N', 
+          'lote': 'N/A', 
+          'qr': client['sequenceNumber'] ?? 'S/N', 
+          'cliente': client['name'] ?? 'Cliente',
+          'city': client['city'],
+          'photographerId': client['photographerId'],
+          'rawClientData': client,
+        };
+
+        final assignedSeller = client['assignedSeller']?['name'];
+        if (assignedSeller != null) {
+          if (!rebolosDistributed.containsKey(assignedSeller)) {
+            rebolosDistributed[assignedSeller] = [];
+          }
+          rebolosDistributed[assignedSeller]!.add(b);
+        } else {
+          final city = client['city'];
+          if (city == null || city.toString().trim().isEmpty) {
+            rebolosUnassigned.add(b);
+          } else {
+            if (!rebolosCityGroups.containsKey(city)) {
+              rebolosCityGroups[city] = [];
+            }
+            rebolosCityGroups[city]!.add(b);
+          }
+        }
+      }
+
+      final List<Map<String, dynamic>> rRoutes = [];
+      for (var entry in rebolosCityGroups.entries) {
+        rRoutes.add({
+          'id': 'rr_${entry.key}',
+          'title': '${entry.key} (Revisitas)',
+          'books': entry.value,
+        });
+      }
+
       if (mounted) {
         setState(() {
           _booksNaoAtribuidos = unassigned;
           _rotasManuais = routes;
           _pendingReleaseCities = unreleased;
+          _realPhotoEvents = realEvents;
+          
+          _booksDistribuidos.clear();
+          _booksDistribuidos.addAll(distributedBooks);
+          
+          _rebolosDistribuidos.clear();
+          _rebolosDistribuidos.addAll(rebolosDistributed);
+          
+          _rotasRebolo = rRoutes;
+          _rebolosNaoAtribuidos = rebolosUnassigned;
         });
       }
     } catch (e) {
@@ -1239,7 +1317,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildPhotosTab() {
     int totalGeral = 0;
-    for (final team in _photoEvents) {
+    for (final team in _realPhotoEvents) {
       for (final e in team['events'] as List) {
         totalGeral += e['photos'] as int;
       }
@@ -1284,7 +1362,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                             color: Colors.white,
                             fontSize: 24,
                             fontWeight: FontWeight.bold)),
-                    Text('${_photoEvents.length} equipes ativas',
+                    Text('${_realPhotoEvents.length} equipes ativas',
                         style: const TextStyle(
                             color: Color(0xFFCE93D8), fontSize: 12)),
                   ],
@@ -1295,7 +1373,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 20),
 
           // Cards por equipe
-          ..._photoEvents.map((team) {
+          ..._realPhotoEvents.map((team) {
             final color = team['color'] as Color;
             final events = team['events'] as List;
             final teamTotal = events.fold<int>(
@@ -1746,45 +1824,53 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  void _distribuirBookPorQR(String qr, String seller, bool isRebolo) {
-    setState(() {
-      Map<String, dynamic>? bookEncontrado;
-      
-      // Procura nas rotas
-      for (var rota in (isRebolo ? _rotasRebolo : _rotasManuais)) {
-        final list = rota['books'] as List;
-        int idx = list.indexWhere((b) => b['qr'] == qr);
-        if (idx != -1) {
-          bookEncontrado = list.removeAt(idx);
-          break;
+  Future<void> _distribuirBookPorQR(String qr, String seller, bool isRebolo) async {
+    String? sellerId;
+    for (var team in _teamData) {
+      if (team['sellers'] != null) {
+        for (var s in team['sellers'] as List) {
+          if (s['name'] == seller) {
+            sellerId = s['id'];
+            break;
+          }
         }
       }
-      
-      // Se não achou, procura nos não atribuídos
-      if (bookEncontrado == null) {
-        int idx = _booksNaoAtribuidos.indexWhere((b) => b['qr'] == qr);
-        if (idx != -1) {
-          bookEncontrado = _booksNaoAtribuidos.removeAt(idx);
-        }
-      }
-      
-      if (bookEncontrado != null) {
-        if (isRebolo) _rebolosDistribuidos.putIfAbsent(seller, () => []).add(bookEncontrado); else _booksDistribuidos.putIfAbsent(seller, () => []).add(bookEncontrado);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book não encontrado no estoque.'), backgroundColor: Colors.red));
-      }
-    });
+    }
+    
+    if (sellerId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vendedor não encontrado no sistema.'), backgroundColor: Colors.red));
+      return;
+    }
+    
+    try {
+      await ApiService().assignSeller(qr, sellerId);
+      await _loadClients(); // Atualiza a tela com o novo status
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao atribuir: $e'), backgroundColor: Colors.red));
+    }
   }
 
 
 
-  void _printBatch(String seller, bool isRebolo) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Imprimindo lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
+  void _printBatch(String seller, bool isRebolo) async {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Preparando lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
+    final books = isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
+    if (books != null && books.isNotEmpty) {
+      final clients = books.map((b) => b['rawClientData'] as Map<String, dynamic>).where((c) => c != null).toList();
+      if (clients.isNotEmpty) {
+        await PdfGenerator.printBatch(clients, seller);
+      }
+    }
   }
 
-  void _printItem(Map<String, dynamic> book, bool isRebolo) {
+  void _printItem(Map<String, dynamic> book, bool isRebolo) async {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imprimindo unidade: ${book['ficha']}...")));
+    if (book['rawClientData'] != null) {
+      await PdfGenerator.printFicha(book['rawClientData']);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Dados do cliente incompletos para impressão.")));
+    }
   }
 
   Widget _loteCard(String title, String subtitle, Color color, {Widget? trailing}) {
@@ -2168,8 +2254,13 @@ class _AdminDashboardState extends State<AdminDashboard>
             ElevatedButton(
               onPressed: selectedSeller == null ? null : () {
                 setState(() {
-                  _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
-                  _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
+                  if (isRebolo) {
+                    _rebolosDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
+                    _rotasRebolo.removeWhere((r) => r['id'] == rota['id']);
+                  } else {
+                    _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
+                    _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
+                  }
                 });
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota atribuída para $selectedSeller!'), backgroundColor: Colors.green));
@@ -2213,15 +2304,25 @@ class _AdminDashboardState extends State<AdminDashboard>
               onPressed: selectedSeller == null ? null : () {
                 setState(() {
                   if (rotaId == null) {
-                    _booksNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
+                    if (isRebolo) {
+                      _rebolosNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
+                    } else {
+                      _booksNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
+                    }
                   } else {
-                    final rota = _rotasManuais.firstWhere((r) => r['id'] == rotaId);
+                    final rota = isRebolo 
+                      ? _rotasRebolo.firstWhere((r) => r['id'] == rotaId)
+                      : _rotasManuais.firstWhere((r) => r['id'] == rotaId);
                     (rota['books'] as List).removeWhere((b) => b['id'] == book['id']);
                   }
-                  _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
+                  if (isRebolo) {
+                    _rebolosDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
+                  } else {
+                    _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
+                  }
                 });
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Book atribuído para $selectedSeller!'), backgroundColor: Colors.green));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${isRebolo ? "Rebolo" : "Book"} atribuído para $selectedSeller!'), backgroundColor: Colors.green));
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
               child: const Text('Atribuir', style: TextStyle(color: Colors.black)),

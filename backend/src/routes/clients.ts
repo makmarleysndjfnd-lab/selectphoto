@@ -71,7 +71,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const clients = await prisma.client.findMany({
       where: { companyId: req.user?.companyId },
-      include: { children: true, appointments: true }
+      include: { children: true, appointments: true, assignedSeller: true }
     });
     res.json(clients);
   } catch (error) {
@@ -101,6 +101,41 @@ router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Res
     res.json({ message: 'Lotes liberados com sucesso!', count: updated.count });
   } catch (error) {
     res.status(500).json({ error: 'Failed to release city for routing' });
+  }
+});
+
+// Get rebolos (clients with nonSales but no sales)
+router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const clients = await prisma.client.findMany({
+      where: { 
+        companyId: req.user?.companyId,
+        nonSales: { some: {} },
+        sales: { none: {} }
+      },
+      include: { children: true, appointments: true, nonSales: true, photographer: true, assignedSeller: true }
+    });
+    res.json(clients);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch rebolos' });
+  }
+});
+
+// Assign seller to a client/book
+router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { sequenceNumber, sellerId } = req.body;
+    if (!sequenceNumber || !sellerId) {
+      res.status(400).json({ error: 'Faltam sequenceNumber ou sellerId' });
+      return;
+    }
+    const client = await prisma.client.update({
+      where: { sequenceNumber },
+      data: { assignedSellerId: sellerId }
+    });
+    res.json({ success: true, client });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao atribuir vendedor' });
   }
 });
 

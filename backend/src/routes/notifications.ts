@@ -132,17 +132,43 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
             });
           }
           break;
-        // Outros casos (STOCK_TRANSFER_BOOK, etc)
+        case 'EDIT_REQUEST_APPROVAL':
+          if (actionData && actionData.editRequestId) {
+            const editRequest = await prisma.clientEditRequest.findUnique({
+              where: { id: actionData.editRequestId }
+            });
+            if (editRequest && editRequest.status === 'PENDING') {
+              const proposedData = editRequest.proposedData as any;
+              await prisma.client.update({
+                where: { id: editRequest.clientId },
+                data: { ...proposedData }
+              });
+              await prisma.clientEditRequest.update({
+                where: { id: actionData.editRequestId },
+                data: { status: 'APPROVED' }
+              });
+            }
+          }
+          break;
       }
     } else if (actionType === 'REJECT') {
-       if (notification.type === 'COST_APPROVAL') {
-          if (actionData && actionData.costId) {
-            await prisma.cost.update({
-              where: { id: actionData.costId },
-              data: { status: 'REJECTED' }
-            });
-          }
-       }
+      if (notification.type === 'COST_APPROVAL' && actionData && actionData.costId) {
+        await prisma.cost.update({
+          where: { id: actionData.costId },
+          data: { status: 'REJECTED' }
+        });
+      }
+      if (notification.type === 'EDIT_REQUEST_APPROVAL' && actionData && actionData.editRequestId) {
+        const editRequest = await prisma.clientEditRequest.findUnique({
+          where: { id: actionData.editRequestId }
+        });
+        if (editRequest && editRequest.status === 'PENDING') {
+          await prisma.clientEditRequest.update({
+            where: { id: actionData.editRequestId },
+            data: { status: 'REJECTED' }
+          });
+        }
+      }
     }
 
     // CREATE FEEDBACK NOTIFICATION FOR SENDER

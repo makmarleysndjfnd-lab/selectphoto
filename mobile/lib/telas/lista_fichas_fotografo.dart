@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
 import 'package:intl/intl.dart';
+import '../utils/pdf_generator.dart';
 import 'solicitar_correcao_ficha.dart';
 
 class ListaFichasFotografo extends StatefulWidget {
@@ -46,6 +47,18 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
         backgroundColor: const Color(0xFF2A0D2E),
         title: const Text('Fichas Produzidas', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print, color: Colors.orangeAccent),
+            tooltip: 'Imprimir Lote em PDF',
+            onPressed: () async {
+              if (_fichas.isEmpty) return;
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF do lote...')));
+              final clients = _fichas.map((f) => f as Map<String, dynamic>).toList();
+              await PdfGenerator.printBatch(clients, 'Fotografo');
+            },
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
@@ -85,17 +98,30 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 ),
                             ],
                           ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.edit_note, color: Color(0xFFCE93D8)),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => SolicitarCorrecaoFicha(ficha: ficha),
-                                ),
-                              ).then((_) => _carregarFichas());
-                            },
-                            tooltip: 'Solicitar Correção',
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.print, color: Colors.blueAccent),
+                                tooltip: 'Imprimir Ficha',
+                                onPressed: () async {
+                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF...')));
+                                  await PdfGenerator.printFicha(ficha);
+                                },
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.edit_note, color: Color(0xFFCE93D8)),
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => SolicitarCorrecaoFicha(ficha: ficha),
+                                    ),
+                                  ).then((_) => _carregarFichas());
+                                },
+                                tooltip: 'Solicitar Correção',
+                              ),
+                            ],
                           ),
                         ),
                       );

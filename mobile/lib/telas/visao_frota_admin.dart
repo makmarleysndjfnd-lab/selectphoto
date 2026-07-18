@@ -1,4 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:dio/dio.dart';
+import '../servicos/servico_api.dart';
 
 class FleetAdminView extends StatefulWidget {
   const FleetAdminView({super.key});
@@ -8,48 +12,56 @@ class FleetAdminView extends StatefulWidget {
 }
 
 class _FleetAdminViewState extends State<FleetAdminView> {
-  // Mock data representing backend response
-  final List<Map<String, dynamic>> _cars = [
-    {
-      'id': '1',
-      'plate': 'ABC-1234',
-      'model': 'Fiat Uno 2021',
-      'status': 'AVAILABLE',
-      'currentUserId': null,
-      'currentUser': null,
-      'nextOilChangeKm': 50000,
-      'pendingMaintenance': '',
-      'warrantyParts': 'Motor até 2026',
-      'lastMileage': 41000, // From latest checklist
-    },
-    {
-      'id': '2',
-      'plate': 'XYZ-9876',
-      'model': 'Chevrolet Onix 2022',
-      'status': 'IN_USE',
-      'currentUserId': 'user_1',
-      'currentUser': {'name': 'Carlos Lima', 'team': {'prefix': 'EQP1'}},
-      'nextOilChangeKm': 35000,
-      'pendingMaintenance': '',
-      'warrantyParts': '',
-      'lastMileage': 34500, // Close to oil change!
-    },
-    {
-      'id': '3',
-      'plate': 'DEF-5678',
-      'model': 'VW Gol 2020',
-      'status': 'MAINTENANCE',
-      'currentUserId': null,
-      'currentUser': null,
-      'nextOilChangeKm': 60000,
-      'pendingMaintenance': 'Troca de pastilha de freio pendente',
-      'warrantyParts': 'Câmbio',
-      'lastMileage': 60500, // Expired oil change!
-    },
-  ];
+  final ApiService _apiService = ApiService();
+  bool _isLoading = true;
+  List<dynamic> _cars = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCars();
+  }
+
+  Future<void> _fetchCars() async {
+    setState(() => _isLoading = true);
+    try {
+      final cars = await _apiService.getCars();
+      setState(() {
+        _cars = cars;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar frota: $e'), backgroundColor: Colors.red));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _deleteCar(String id) async {
+    setState(() => _isLoading = true);
+    try {
+      await _apiService.deleteCar(id);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Veículo excluído com sucesso!'), backgroundColor: Colors.green));
+      _fetchCars();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao excluir: $e'), backgroundColor: Colors.red));
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showCarFormDialog([Map<String, dynamic>? car]) {
+    showDialog(
+      context: context,
+      builder: (context) => _CarFormDialog(
+        car: car,
+        onSaved: _fetchCars,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) return const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)));
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -67,7 +79,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
                 ),
               ),
               ElevatedButton.icon(
-                onPressed: () {},
+                onPressed: () => _showCarFormDialog(),
                 icon: const Icon(Icons.add, color: Colors.white),
                 label: const Text('Novo Veículo', style: TextStyle(color: Colors.white)),
                 style: ElevatedButton.styleFrom(
@@ -88,7 +100,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
     );
   }
 
-  Widget _buildCarCard(Map<String, dynamic> car) {
+  Widget _buildCarCard(dynamic car) {
     // Determine Status Colors
     final isMaintenancePending = car['pendingMaintenance'].toString().isNotEmpty;
     final int nextOil = car['nextOilChangeKm'] as int;
@@ -214,6 +226,206 @@ class _FleetAdminViewState extends State<FleetAdminView> {
         const SizedBox(width: 6),
         Text(text, style: TextStyle(color: color == const Color(0xFF546E7A) ? Colors.white70 : color, fontSize: 13)),
       ],
+    );
+  }
+}
+
+class _CarFormDialog extends StatefulWidget {
+  final Map<String, dynamic>? car;
+  final VoidCallback onSaved;
+
+  const _CarFormDialog({this.car, required this.onSaved});
+
+  @override
+  State<_CarFormDialog> createState() => _CarFormDialogState();
+}
+
+class _CarFormDialogState extends State<_CarFormDialog> {
+  final ApiService _apiService = ApiService();
+  final _formKey = GlobalKey<FormState>();
+
+  late TextEditingController _plateCtrl;
+  late TextEditingController _modelCtrl;
+  late TextEditingController _trackerLinkCtrl;
+  late TextEditingController _warrantyCtrl;
+  late TextEditingController _nextOilCtrl;
+  late TextEditingController _checklistCtrl;
+
+  File? _photo;
+  final ImagePicker _picker = ImagePicker();
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.car;
+    _plateCtrl = TextEditingController(text: c?['plate'] ?? '');
+    _modelCtrl = TextEditingController(text: c?['model'] ?? '');
+    _trackerLinkCtrl = TextEditingController(text: c?['trackerLink'] ?? '');
+    _warrantyCtrl = TextEditingController(text: c?['warrantyParts'] ?? '');
+    _nextOilCtrl = TextEditingController(text: (c?['nextOilChangeKm'] ?? 0).toString());
+    _checklistCtrl = TextEditingController(text: c?['initialChecklist'] ?? '');
+  }
+
+  Future<void> _pickImage() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _photo = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
+
+    try {
+      final formData = FormData.fromMap({
+        'plate': _plateCtrl.text,
+        'model': _modelCtrl.text,
+        'trackerLink': _trackerLinkCtrl.text,
+        'warrantyParts': _warrantyCtrl.text,
+        'nextOilChangeKm': _nextOilCtrl.text,
+        'initialChecklist': _checklistCtrl.text,
+      });
+
+      if (_photo != null) {
+        formData.files.add(MapEntry('photo', await MultipartFile.fromFile(_photo!.path)));
+      }
+
+      if (widget.car == null) {
+        await _apiService.createCar(formData);
+      } else {
+        await _apiService.updateCar(widget.car!['id'], {
+            'plate': _plateCtrl.text,
+            'model': _modelCtrl.text,
+            'trackerLink': _trackerLinkCtrl.text,
+            'warrantyParts': _warrantyCtrl.text,
+            'nextOilChangeKm': int.tryParse(_nextOilCtrl.text) ?? 0,
+            'initialChecklist': _checklistCtrl.text,
+        }); // updateCar uses Map currently or we can adapt to FormData. Let's just use JSON since edit photo isn't requested explicitly yet.
+      }
+
+      Navigator.of(context).pop();
+      widget.onSaved();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo com sucesso!'), backgroundColor: Colors.green));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+    } finally {
+      setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        width: 500,
+        padding: const EdgeInsets.all(24),
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.car == null ? 'Novo Veículo' : 'Editar Veículo', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 20),
+                
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (widget.car == null)
+                    Column(
+                      children: [
+                        GestureDetector(
+                          onTap: _pickImage,
+                          child: Container(
+                            width: 100, height: 100,
+                            decoration: BoxDecoration(
+                              color: Colors.white12,
+                              borderRadius: BorderRadius.circular(8),
+                              image: _photo != null ? DecorationImage(image: FileImage(_photo!), fit: BoxFit.cover) : null,
+                            ),
+                            child: _photo == null ? const Icon(Icons.directions_car, color: Colors.white54, size: 40) : null,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('Foto do Veículo', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      ],
+                    ),
+                    if (widget.car == null) const SizedBox(width: 24),
+                    
+                    Expanded(
+                      child: Column(
+                        children: [
+                          TextFormField(
+                            controller: _plateCtrl,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Placa', labelStyle: TextStyle(color: Colors.white54)),
+                            validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                          ),
+                          TextFormField(
+                            controller: _modelCtrl,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Modelo', labelStyle: TextStyle(color: Colors.white54)),
+                            validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                          ),
+                          TextFormField(
+                            controller: _nextOilCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Próxima Troca de Óleo (km)', labelStyle: TextStyle(color: Colors.white54)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                
+                TextFormField(
+                  controller: _trackerLinkCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Link do Rastreador', labelStyle: TextStyle(color: Colors.white54)),
+                ),
+                TextFormField(
+                  controller: _warrantyCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Peças na Garantia', labelStyle: TextStyle(color: Colors.white54)),
+                ),
+                TextFormField(
+                  controller: _checklistCtrl,
+                  maxLines: 2,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Checklist / Observações Iniciais', labelStyle: TextStyle(color: Colors.white54)),
+                ),
+                
+                const SizedBox(height: 32),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                    ),
+                    const SizedBox(width: 16),
+                    ElevatedButton(
+                      onPressed: _isSaving ? null : _save,
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+                      child: _isSaving 
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                )
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

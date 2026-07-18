@@ -35,7 +35,7 @@ class _HomeScreenState extends State<HomeScreen>
             transitionDuration: const Duration(milliseconds: 400),
           ),
         );
-      } else if (widget.role == 'SELLER') {
+      } else if (widget.role == 'SELLER' || widget.role == 'SELLER_MANAGER') {
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             pageBuilder: (_, __, ___) => const SellerDashboard(),

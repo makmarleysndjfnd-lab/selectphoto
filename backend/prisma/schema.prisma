@@ -72,6 +72,7 @@ model User {
   currentCars             Car[]                 @relation("CarCurrentUser")
   carChecklists           CarChecklist[]
   clients                 Client[]
+  assignedClients         Client[]              @relation("AssignedSeller")
   costs                   Cost[]
   nonSales                NonSale[]
   sales                   Sale[]
@@ -125,10 +126,13 @@ model Client {
   teamId          String?
   companyId       String?
   signatureUrl    String?
+  assignedSellerId String?
+
   company         Company?      @relation(fields: [companyId], references: [id])
   appointments    Appointment[]
   children        Child[]
   photographer    User?         @relation(fields: [photographerId], references: [id])
+  assignedSeller  User?         @relation("AssignedSeller", fields: [assignedSellerId], references: [id])
   team            Team?         @relation(fields: [teamId], references: [id])
   evaluation      Evaluation?
   nonSales        NonSale[]
@@ -231,6 +235,8 @@ model Car {
   nextOilChangeKm    Int            @default(0)
   pendingMaintenance String?
   warrantyParts      String?
+  photoUrl           String?
+  initialChecklist   String?
   company            Company?       @relation(fields: [companyId], references: [id])
   currentUser        User?          @relation("CarCurrentUser", fields: [currentUserId], references: [id])
   checklists         CarChecklist[]
@@ -239,6 +245,7 @@ model Car {
 
 model CarChecklist {
   id                String   @id @default(uuid())
+  type              String   @default("CHECKOUT") // CHECKOUT (Saída) or CHECKIN (Entrada)
   mileage           Int
   date              DateTime @default(now())
   carId             String
@@ -250,6 +257,9 @@ model CarChecklist {
   fuelLevel         String
   leftPhotoUrl      String?
   rightPhotoUrl     String?
+  enginePhotoUrl    String?
+  trunkPhotoUrl     String?
+  signatureUrl      String?
   car               Car      @relation(fields: [carId], references: [id])
   driver            User     @relation(fields: [driverId], references: [id])
 }

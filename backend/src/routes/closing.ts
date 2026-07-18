@@ -119,7 +119,7 @@ router.post('/daily', authMiddleware, async (req: AuthRequest, res) => {
 // Pay/Clear repasse
 router.post('/pay-repasse', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const { sellerId, amount } = req.body;
+        const { sellerId, amount, commissionToLog } = req.body;
         // Negative repasseDebt represents a payment reducing the total debt
         const closing = await prisma.dailyClosing.create({
             data: {
@@ -133,6 +133,22 @@ router.post('/pay-repasse', authMiddleware, async (req: AuthRequest, res) => {
                 repasseDebt: -parseFloat(amount) // Deducts from total debt
             }
         });
+
+        if (commissionToLog && parseFloat(commissionToLog) > 0) {
+            const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+            await prisma.cost.create({
+                data: {
+                    companyId: seller?.companyId || 'c1',
+                    userId: sellerId,
+                    amount: parseFloat(commissionToLog),
+                    category: 'COMMISSION',
+                    description: `Comissão fechamento de ${seller?.name}`,
+                    date: new Date(),
+                    paymentMethod: 'PIX',
+                    status: 'APPROVED'
+                }
+            });
+        }
 
         res.status(201).json(closing);
     } catch (error: any) {
