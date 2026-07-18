@@ -190,7 +190,7 @@ router.get('/health', authenticateToken, async (req: AuthRequest, res) => {
 // Edit a cost
 router.put('/costs/:id', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { amount, category, description, paymentMethod, status } = req.body;
     
     const existing = await prisma.cost.findUnique({ where: { id } });
@@ -218,7 +218,7 @@ router.put('/costs/:id', authenticateToken, async (req: AuthRequest, res) => {
 // Edit a sale (limited fields for finance view)
 router.put('/sales/:id', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { value, paymentMethod, paymentStatus } = req.body;
     
     const existing = await prisma.sale.findUnique({ where: { id } });
