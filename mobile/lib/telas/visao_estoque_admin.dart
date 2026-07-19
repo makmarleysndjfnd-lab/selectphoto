@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 
 class VisaoEstoqueAdmin extends StatefulWidget {
   const VisaoEstoqueAdmin({super.key});
@@ -54,14 +53,6 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
         title: const Text('Books Produzidos', style: TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1A0030),
         iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          _showReceiveReturnDialog();
-        },
-        backgroundColor: const Color(0xFFCE93D8),
-        icon: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white),
-        label: const Text('Receber Devolução', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
       body: _isLoading 
         ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
@@ -261,30 +252,20 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                 ),
                 title: Text('$name', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text('Ficha: $seq | Cidade: $city', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.print, color: Colors.blueAccent),
-                      onPressed: () => _printUnidadeBluetooth(c),
-                      tooltip: 'Imprimir Ticket',
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: isReleased ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        isReleased ? 'Liberado' : 'Aguardando',
-                        style: TextStyle(
-                          color: isReleased ? Colors.greenAccent : Colors.orangeAccent,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold
-                        )
-                      ),
-                    ),
-                  ],
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isReleased ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    isReleased ? 'Liberado' : 'Aguardando',
+                    style: TextStyle(
+                      color: isReleased ? Colors.greenAccent : Colors.orangeAccent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold
+                    )
+                  ),
                 ),
               ),
             );
@@ -293,91 +274,5 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
       )
     );
   }
-
-  void _showReceiveReturnDialog() {
-    final _codeCtrl = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text('Receber Devolução de Book', style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('O book será re-cadastrado no estoque para Rebolo.', style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _codeCtrl,
-              style: const TextStyle(color: Colors.white),
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Código da Ficha',
-                labelStyle: TextStyle(color: Colors.white54),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
-            onPressed: () async {
-              final code = _codeCtrl.text.trim();
-              if (code.isEmpty) return;
-              Navigator.pop(ctx);
-              try {
-                await ApiService().receiveReturnedBook(code);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolução registrada. Book no estoque!'), backgroundColor: Colors.green));
-                  _loadClients();
-                }
-              } catch(e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                }
-              }
-            },
-            child: const Text('Confirmar'),
-          )
-        ],
-      )
-    );
-  }
-
-  void _printUnidadeBluetooth(Map<String, dynamic> ficha) async {
-    final bluetooth = BlueThermalPrinter.instance;
-    bool? isConnected = await bluetooth.isConnected;
-    if (isConnected != true) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
-      return;
-    }
-
-    final seq = ficha['sequenceNumber'] ?? 'S/N';
-    final city = ficha['city'] ?? 'Sem Cidade';
-    final eventName = ficha['eventName'] ?? 'Evento Desconhecido';
-    
-    bluetooth.printNewLine();
-    bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
-    bluetooth.printNewLine();
-    bluetooth.printCustom("Ficha: $seq", 2, 1);
-    bluetooth.printCustom("Evento: $eventName", 1, 1);
-    bluetooth.printCustom("Cidade: $city", 1, 1);
-    bluetooth.printNewLine();
-    bluetooth.printCustom("Nome: ${ficha['childName'] ?? '-'}", 1, 0);
-    bluetooth.printCustom("Idade: ${ficha['childAge'] ?? '-'}", 1, 0);
-    bluetooth.printCustom("Pai/Mae: ${ficha['parentName'] ?? '-'}", 1, 0);
-    bluetooth.printCustom("Tel: ${ficha['phone'] ?? '-'}", 1, 0);
-    bluetooth.printNewLine();
-    bluetooth.printCustom("_________________________________", 0, 1);
-    bluetooth.printCustom("Obrigado!", 1, 1);
-    bluetooth.printNewLine();
-    bluetooth.printNewLine();
-    bluetooth.printNewLine();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo ticket...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
-    }
-  }
 }
-
 

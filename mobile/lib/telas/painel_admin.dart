@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:provider/provider.dart';
 import 'tela_configuracoes.dart';
 import 'package:http/http.dart' as http;
@@ -163,6 +164,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   List<Map<String, dynamic>> _rotasRebolo = [];
   List<Map<String, dynamic>> _rebolosNaoAtribuidos = [];
+  List<Map<String, dynamic>> _pendingReleaseBatches = [];
 
   final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
 
@@ -187,6 +189,8 @@ class _AdminDashboardState extends State<AdminDashboard>
       final Set<String> reboloIds = rebolos.map((r) => r['id'].toString()).toSet();
       
       final clients = await api.getAllClients();
+      final pendingBatches = await api.getPendingBookBatches();
+      if(mounted) setState(() => _pendingReleaseBatches = pendingBatches);
       
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
       final List<Map<String, dynamic>> unassigned = [];
@@ -618,7 +622,88 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  Widget _sideMenuItem(int index, IconData icon, String label) {
+  
+  void _printUnidadeBluetooth(Map<String, dynamic> ficha) async {
+    final bluetooth = BlueThermalPrinter.instance;
+    bool? isConnected = await bluetooth.isConnected;
+    if (isConnected != true) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      return;
+    }
+
+    final seq = ficha['ficha'] ?? 'S/N';
+    final city = ficha['city'] ?? 'Sem Cidade';
+    final eventName = ficha['cliente'] ?? 'Evento Desconhecido';
+    
+    bluetooth.printNewLine();
+    bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Ficha: $seq", 2, 1);
+    bluetooth.printCustom("Evento: $eventName", 1, 1);
+    bluetooth.printCustom("Cidade: $city", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("_________________________________", 0, 1);
+    bluetooth.printCustom("Obrigado!", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo ticket...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+    }
+  }
+
+  void _showReceiveReturnDialog() {
+    final _codeCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Receber Devolução de Book', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('O book será re-cadastrado no estoque para Rebolo.', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _codeCtrl,
+              style: const TextStyle(color: Colors.white),
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'Código da Ficha',
+                labelStyle: TextStyle(color: Colors.white54),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            onPressed: () async {
+              final code = _codeCtrl.text.trim();
+              if (code.isEmpty) return;
+              Navigator.pop(ctx);
+              try {
+                await ApiService().receiveReturnedBook(code);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolução registrada. Book no estoque!'), backgroundColor: Colors.green));
+                  _loadClients();
+                }
+              } catch(e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: ' + e.toString()), backgroundColor: Colors.red));
+                }
+              }
+            },
+            child: const Text('Confirmar'),
+          )
+        ],
+      )
+    );
+  }
+
+    Widget _sideMenuItem(int index, IconData icon, String label) {
     final selected = _navIndex == index;
     return ListTile(
       leading: Icon(icon, color: selected ? const Color(0xFFCE93D8) : const Color(0xFF546E7A)),
@@ -1328,7 +1413,52 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Resumo geral
+          
+            if (_pendingReleaseBatches.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orangeAccent),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.hourglass_top_rounded, color: Colors.orangeAccent, size: 24),
+                        const SizedBox(width: 8),
+                        const Text('Lotes Aguardando Liberação', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ..._pendingReleaseBatches.map((batch) {
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Lote Fotógrafo: ' + (batch['photographer'] ? batch['photographer']['name'] : 'N/A'), style: const TextStyle(color: Colors.white)),
+                        subtitle: Text('Status: ' + batch['status'] + ' | Fechado', style: const TextStyle(color: Colors.white70)),
+                        trailing: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                          onPressed: () async {
+                            try {
+                              await ApiService().releaseBatchToStock(batch['id']);
+                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote liberado para estoque!'), backgroundColor: Colors.green));
+                              _loadClients();
+                            } catch(e) {
+                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: ' + e.toString()), backgroundColor: Colors.red));
+                            }
+                          },
+                          child: const Text('Liberar para Estoque'),
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+
+            // Resumo geral
           Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
