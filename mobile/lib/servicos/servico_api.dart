@@ -195,7 +195,7 @@ class ApiService {
   // Non-Sales
   Future<void> registerNonSale(Map<String, dynamic> nonSaleData) async {
     try {
-      await _dio.post('/non-sales', data: nonSaleData);
+      await _dio.post('/sales/non-sale', data: nonSaleData);
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao registrar não-venda');
     }
@@ -221,11 +221,11 @@ class ApiService {
 
   // ── Livros e Lotes (Book Batches) ───────────────────────────────────────
 
-  Future<void> createBookBatch(String name) async {
+  Future<void> createBookBatch(String eventName) async {
     try {
-      await _dio.post('/books/batch', data: {'name': name});
+      await _dio.post('/books/close-event', data: {'eventName': eventName});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao criar lote de books');
+      throw Exception(e.response?.data['error'] ?? 'Erro ao fechar lote de evento');
     }
   }
 
@@ -759,4 +759,28 @@ class ApiService {
     }
   }
 
+  Future<List<dynamic>> searchBooks(String query) async {
+    try {
+      final response = await _dio.get('/books/search', queryParameters: {'q': query});
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar livros');
+    }
+  }
+
+  Future<void> releaseBatchToStock(String id) async {
+    try {
+      await _dio.put('/books/batch/$id/release');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar lote para estoque');
+    }
+  }
+
+  Future<void> receiveReturnedBook(String sequenceNumber) async {
+    try {
+      await _dio.post('/books/receive-return', data: {'sequenceNumber': sequenceNumber});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao receber devolução');
+    }
+  }
 }

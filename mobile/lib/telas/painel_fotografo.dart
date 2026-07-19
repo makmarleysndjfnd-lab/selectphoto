@@ -486,8 +486,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   }
 
   void _showFechamentoDialog() {
-    if (_currentCityLote == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhum lote configurado para fechar!'), backgroundColor: Colors.red));
+    if (_currentEventName == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhum lote/evento configurado para fechar!'), backgroundColor: Colors.red));
       return;
     }
     
@@ -496,8 +496,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       builder: (context) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Finalizar Lote/Cidade', style: TextStyle(color: Colors.white)),
-          content: Text('Deseja realmente finalizar a produção do Lote $_currentCityLote? O admin será notificado na tela de liberação.', style: const TextStyle(color: Colors.white70)),
+          title: const Text('Finalizar Lote/Evento', style: TextStyle(color: Colors.white)),
+          content: Text('Deseja realmente finalizar a produção do Evento $_currentEventName (Lote: $_currentCityLote)? O admin será notificado na tela de liberação.', style: const TextStyle(color: Colors.white70)),
           actionsAlignment: MainAxisAlignment.end,
           actions: [
             TextButton(
@@ -506,14 +506,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             ),
             ElevatedButton(
               onPressed: () async {
-                final cityToFinish = _currentCityLote!;
+                final eventToFinish = _currentEventName!;
                 Navigator.pop(context);
                 
                 try {
-                  await ApiService().createBookBatch(cityToFinish);
+                  await ApiService().createBookBatch(eventToFinish);
                   if (mounted) {
                     setState(() {
                       _currentCityLote = null;
+                      _currentEventName = null;
                       _sequenceCount = 1;
                     });
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
@@ -525,7 +526,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 }
               },
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Finalizar', style: TextStyle(color: Colors.black)),
+              child: const Text('Finalizar Lote', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         );

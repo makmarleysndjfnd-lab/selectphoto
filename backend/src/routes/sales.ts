@@ -123,6 +123,12 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
       },
     });
 
+    // Update client bookStatus
+    await prisma.client.update({
+      where: { id: clientId },
+      data: { bookStatus: 'AWAITING_RETURN' },
+    });
+
     res.status(201).json(nonSale);
   } catch (error) {
     console.error('Create non-sale error:', error);

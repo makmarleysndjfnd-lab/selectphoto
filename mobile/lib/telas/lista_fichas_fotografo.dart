@@ -3,6 +3,7 @@ import '../servicos/servico_api.dart';
 import 'package:intl/intl.dart';
 import '../utils/pdf_generator.dart';
 import 'solicitar_correcao_ficha.dart';
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 
 class ListaFichasFotografo extends StatefulWidget {
   const ListaFichasFotografo({super.key});
@@ -110,6 +111,11 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 },
                               ),
                               IconButton(
+                                icon: const Icon(Icons.receipt_long, color: Colors.orangeAccent),
+                                tooltip: 'Imprimir Ticket (Bluetooth)',
+                                onPressed: () => _printUnidadeBluetooth(ficha),
+                              ),
+                              IconButton(
                                 icon: const Icon(Icons.edit_note, color: Color(0xFFCE93D8)),
                                 onPressed: () {
                                   Navigator.push(
@@ -130,4 +136,40 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                 ),
     );
   }
+
+  void _printUnidadeBluetooth(Map<String, dynamic> ficha) async {
+    final bluetooth = BlueThermalPrinter.instance;
+    bool? isConnected = await bluetooth.isConnected;
+    if (isConnected != true) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      return;
+    }
+
+    final seq = ficha['sequenceNumber'] ?? 'S/N';
+    final city = ficha['city'] ?? 'Sem Cidade';
+    final eventName = ficha['eventName'] ?? 'Evento Desconhecido';
+    
+    bluetooth.printNewLine();
+    bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Ficha: $seq", 2, 1);
+    bluetooth.printCustom("Evento: $eventName", 1, 1);
+    bluetooth.printCustom("Cidade: $city", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("Nome: ${ficha['childName'] ?? '-'}", 1, 0);
+    bluetooth.printCustom("Idade: ${ficha['childAge'] ?? '-'}", 1, 0);
+    bluetooth.printCustom("Pai/Mae: ${ficha['parentName'] ?? '-'}", 1, 0);
+    bluetooth.printCustom("Tel: ${ficha['phone'] ?? '-'}", 1, 0);
+    bluetooth.printNewLine();
+    bluetooth.printCustom("_________________________________", 0, 1);
+    bluetooth.printCustom("Obrigado!", 1, 1);
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+    bluetooth.printNewLine();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo ticket...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+    }
+  }
 }
+

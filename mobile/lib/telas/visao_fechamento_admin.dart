@@ -143,7 +143,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         final batches = results[0] as List<dynamic>;
         final clients = results[1] as List<dynamic>;
         
-        final createdBatches = batches.where((b) => b['status'] == 'CREATED').toList();
+        final createdBatches = batches.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
 
         if (createdBatches.isEmpty) {
            return Container(
@@ -179,8 +179,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               children: createdBatches.map((batch) {
                 final city = batch['name'] ?? 'Desconhecida';
                 final batchId = batch['id'];
-                // Find clients for this city
-                final cityClients = clients.where((c) => c['city'] == city && c['releasedForRouting'] != true).toList();
+                // Find clients for this city (now matching by batchId)
+                final cityClients = clients.where((c) => c['batchId'] == batchId).toList();
                 final clientCount = cityClients.length;
                 final sequenceNumbers = cityClients.map((c) => c['sequenceNumber'] ?? 'S/N').join(', ');
                 
@@ -194,13 +194,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                       label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                       onPressed: () async {
                         try {
-                          // Release all clients in this city for routing
-                          await ApiService().releaseCity(city);
-                          // Mark this batch as DISTRIBUTED so it doesn't show up again
-                          await ApiService().updateBookBatchStatus(batchId, 'DISTRIBUTED');
+                          // Liberar lote para estoque
+                          await ApiService().releaseBatchToStock(batchId);
                           
                           if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado com sucesso!'), backgroundColor: Colors.green));
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado para estoque!'), backgroundColor: Colors.green));
                             setState(() {}); // refresh
                           }
                         } catch (e) {

@@ -146,7 +146,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     });
   }
 
-  void _searchClient() {
+  void _searchClient() async {
     final code = _codeController.text.trim().toUpperCase();
     if (code.isEmpty) return;
 
@@ -155,13 +155,52 @@ class _SellerDashboardState extends State<SellerDashboard>
       orElse: () => {},
     );
 
-    setState(() {
-      _searched = true;
-      _foundClient = found.isEmpty ? null : found;
-    });
-
     if (found.isNotEmpty) {
+      setState(() {
+        _searched = true;
+        _foundClient = found;
+      });
       _openClientDetail(found);
+      return;
+    }
+
+    // Busca global (Estoque/Outros Vendedores)
+    try {
+      final results = await ApiService().searchBooks(code);
+      if (results.isNotEmpty) {
+        final book = results.first;
+        String locationStr = '';
+        if (book['bookStatus'] == 'IN_STOCK' || book['bookStatus'] == 'IN_STOCK_REBOLO') {
+          locationStr = 'Disponível no Estoque';
+        } else if (book['assignedSeller'] != null) {
+          locationStr = 'Com vendedor(a): ${book['assignedSeller']['name']}';
+        } else {
+          locationStr = 'Status: ${book['bookStatus']}';
+        }
+        
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              title: const Text('Localização do Book', style: TextStyle(color: Colors.white)),
+              content: Text('Ficha: ${book['sequenceNumber']}\nNome: ${book['name']}\n\n$locationStr', style: const TextStyle(color: Colors.white70)),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Fechar', style: TextStyle(color: Color(0xFF4FC3F7))))
+              ],
+            )
+          );
+        }
+      } else {
+        setState(() {
+          _searched = true;
+          _foundClient = null;
+        });
+      }
+    } catch(e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro na busca: $e')));
+      }
     }
   }
 

@@ -30,13 +30,30 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // Create a new car
-router.post('/', authenticateToken, upload.single('photo'), async (req: AuthRequest, res) => {
+router.post('/', authenticateToken, upload.fields([
+  { name: 'photo', maxCount: 1 },
+  { name: 'frontPhoto', maxCount: 1 },
+  { name: 'backPhoto', maxCount: 1 },
+  { name: 'leftPhoto', maxCount: 1 },
+  { name: 'rightPhoto', maxCount: 1 },
+  { name: 'dashboardPhoto', maxCount: 1 },
+  { name: 'enginePhoto', maxCount: 1 },
+  { name: 'trunkPhoto', maxCount: 1 }
+]), async (req: AuthRequest, res) => {
   try {
     const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist } = req.body;
-    let photoUrl = null;
-    if (req.file) {
-      photoUrl = (req.file as any).location;
-    }
+    
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    const getPhotoUrl = (field: string) => files?.[field]?.[0] ? (files[field][0] as any).location : null;
+
+    const photoUrl = getPhotoUrl('photo');
+    const frontPhotoUrl = getPhotoUrl('frontPhoto');
+    const backPhotoUrl = getPhotoUrl('backPhoto');
+    const leftPhotoUrl = getPhotoUrl('leftPhoto');
+    const rightPhotoUrl = getPhotoUrl('rightPhoto');
+    const dashboardPhotoUrl = getPhotoUrl('dashboardPhoto');
+    const enginePhotoUrl = getPhotoUrl('enginePhoto');
+    const trunkPhotoUrl = getPhotoUrl('trunkPhoto');
 
     const newCar = await prisma.car.create({
       data: {
@@ -47,6 +64,13 @@ router.post('/', authenticateToken, upload.single('photo'), async (req: AuthRequ
         warrantyParts,
         initialChecklist,
         photoUrl,
+        frontPhotoUrl,
+        backPhotoUrl,
+        leftPhotoUrl,
+        rightPhotoUrl,
+        dashboardPhotoUrl,
+        enginePhotoUrl,
+        trunkPhotoUrl,
         nextOilChangeKm: nextOilChangeKm ? parseInt(nextOilChangeKm, 10) : 0,
         status: 'AVAILABLE',
         companyId: req.user?.companyId
@@ -59,15 +83,42 @@ router.post('/', authenticateToken, upload.single('photo'), async (req: AuthRequ
 });
 
 // Update a car (Admin)
-router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
+router.put('/:id', authenticateToken, upload.fields([
+  { name: 'photo', maxCount: 1 },
+  { name: 'frontPhoto', maxCount: 1 },
+  { name: 'backPhoto', maxCount: 1 },
+  { name: 'leftPhoto', maxCount: 1 },
+  { name: 'rightPhoto', maxCount: 1 },
+  { name: 'dashboardPhoto', maxCount: 1 },
+  { name: 'enginePhoto', maxCount: 1 },
+  { name: 'trunkPhoto', maxCount: 1 }
+]), async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const data = req.body;
+    const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist } = req.body;
     
     const existing = await prisma.car.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
       return res.status(404).json({ error: 'Car not found' });
     }
+
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    const getPhotoUrl = (field: string) => files?.[field]?.[0] ? (files[field][0] as any).location : undefined;
+
+    const data: any = {
+      plate,
+      model,
+      trackerLink,
+      pendingMaintenance,
+      warrantyParts,
+      initialChecklist,
+      nextOilChangeKm: nextOilChangeKm ? parseInt(nextOilChangeKm, 10) : undefined,
+    };
+
+    ['photo', 'frontPhoto', 'backPhoto', 'leftPhoto', 'rightPhoto', 'dashboardPhoto', 'enginePhoto', 'trunkPhoto'].forEach(f => {
+      const url = getPhotoUrl(f);
+      if (url) data[`${f}Url`] = url;
+    });
 
     const updated = await prisma.car.update({
       where: { id: id as string },
@@ -107,7 +158,7 @@ router.post('/checklist', authenticateToken, upload.fields([
 ]), async (req: AuthRequest, res) => {
   try {
     const { 
-      carId, driverId, type, damageReport
+      carId, driverId, type, damageReport, reuseInitialPhotos
     } = req.body;
 
     const mileage = parseInt(req.body.mileage || '0', 10);
@@ -136,13 +187,13 @@ router.post('/checklist', authenticateToken, upload.fields([
         mileage,
         fuelLevel,
         damageReport,
-        frontPhotoUrl: getPhotoUrl('frontPhoto'),
-        backPhotoUrl: getPhotoUrl('backPhoto'),
-        leftPhotoUrl: getPhotoUrl('leftPhoto'),
-        rightPhotoUrl: getPhotoUrl('rightPhoto'),
-        dashboardPhotoUrl: getPhotoUrl('dashboardPhoto'),
-        enginePhotoUrl: getPhotoUrl('enginePhoto'),
-        trunkPhotoUrl: getPhotoUrl('trunkPhoto'),
+        frontPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.frontPhotoUrl : getPhotoUrl('frontPhoto'),
+        backPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.backPhotoUrl : getPhotoUrl('backPhoto'),
+        leftPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.leftPhotoUrl : getPhotoUrl('leftPhoto'),
+        rightPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.rightPhotoUrl : getPhotoUrl('rightPhoto'),
+        dashboardPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.dashboardPhotoUrl : getPhotoUrl('dashboardPhoto'),
+        enginePhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.enginePhotoUrl : getPhotoUrl('enginePhoto'),
+        trunkPhotoUrl: (reuseInitialPhotos === 'true' || reuseInitialPhotos === true) ? existing.trunkPhotoUrl : getPhotoUrl('trunkPhoto'),
         signatureUrl: getPhotoUrl('signature'),
       }
     });

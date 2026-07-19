@@ -121,6 +121,8 @@ model Client {
   latitude        Float?
   longitude       Float?
   status          String        @default("PENDING")
+  bookStatus      String        @default("CREATED") // CREATED, AWAITING_RELEASE, IN_STOCK, DISTRIBUTED, SOLD, AWAITING_RETURN, IN_STOCK_REBOLO, DISTRIBUTED_REBOLO, REBOLO_SOLD, DISCARDED
+  batchId         String?
   releasedForRouting Boolean    @default(false)
   photographerId  String?
   teamId          String?
@@ -129,6 +131,7 @@ model Client {
   assignedSellerId String?
 
   company         Company?      @relation(fields: [companyId], references: [id])
+  batch           BookBatch?    @relation(fields: [batchId], references: [id])
   appointments    Appointment[]
   children        Child[]
   photographer    User?         @relation(fields: [photographerId], references: [id])
@@ -237,6 +240,13 @@ model Car {
   warrantyParts      String?
   photoUrl           String?
   initialChecklist   String?
+  frontPhotoUrl      String?
+  backPhotoUrl       String?
+  leftPhotoUrl       String?
+  rightPhotoUrl      String?
+  dashboardPhotoUrl  String?
+  enginePhotoUrl     String?
+  trunkPhotoUrl      String?
   company            Company?       @relation(fields: [companyId], references: [id])
   currentUser        User?          @relation("CarCurrentUser", fields: [currentUserId], references: [id])
   checklists         CarChecklist[]
@@ -361,6 +371,7 @@ model BookBatch {
   status         String   @default("CREATED") // CREATED, DISTRIBUTED
   photographer   User     @relation("PhotographerBookBatches", fields: [photographerId], references: [id])
   company        Company? @relation(fields: [companyId], references: [id])
+  clients        Client[]
 }
 
 model StateRadarCache {
