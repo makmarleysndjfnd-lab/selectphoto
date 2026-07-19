@@ -150,20 +150,58 @@ class _FleetAdminViewState extends State<FleetAdminView> {
                 car['plate'],
                 style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(statusIcon, color: statusColor, size: 14),
-                    const SizedBox(width: 4),
-                    Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
-                  ],
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(statusIcon, color: statusColor, size: 14),
+                        const SizedBox(width: 4),
+                        Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.edit, color: Colors.blueAccent, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => _showCarFormDialog(car),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          title: const Text('Excluir Veículo', style: TextStyle(color: Colors.white)),
+                          content: const Text('Tem certeza que deseja excluir este veículo?', style: TextStyle(color: Colors.white70)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _deleteCar(car['id']);
+                              },
+                              child: const Text('Excluir', style: TextStyle(color: Colors.redAccent)),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
             ],
           ),
@@ -251,7 +289,16 @@ class _CarFormDialogState extends State<_CarFormDialog> {
   late TextEditingController _nextOilCtrl;
   late TextEditingController _checklistCtrl;
 
+
   File? _photo;
+  File? _frontPhoto;
+  File? _backPhoto;
+  File? _leftPhoto;
+  File? _rightPhoto;
+  File? _dashboardPhoto;
+  File? _enginePhoto;
+  File? _trunkPhoto;
+
   final ImagePicker _picker = ImagePicker();
   bool _isSaving = false;
 
@@ -267,16 +314,23 @@ class _CarFormDialogState extends State<_CarFormDialog> {
     _checklistCtrl = TextEditingController(text: c?['initialChecklist'] ?? '');
   }
 
-  Future<void> _pickImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+Future<void> _pickImage(String type) async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (pickedFile != null) {
       setState(() {
-        _photo = File(pickedFile.path);
+        if (type == 'photo') _photo = File(pickedFile.path);
+        else if (type == 'frontPhoto') _frontPhoto = File(pickedFile.path);
+        else if (type == 'backPhoto') _backPhoto = File(pickedFile.path);
+        else if (type == 'leftPhoto') _leftPhoto = File(pickedFile.path);
+        else if (type == 'rightPhoto') _rightPhoto = File(pickedFile.path);
+        else if (type == 'dashboardPhoto') _dashboardPhoto = File(pickedFile.path);
+        else if (type == 'enginePhoto') _enginePhoto = File(pickedFile.path);
+        else if (type == 'trunkPhoto') _trunkPhoto = File(pickedFile.path);
       });
     }
   }
 
-  Future<void> _save() async {
+Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isSaving = true);
 
@@ -290,30 +344,40 @@ class _CarFormDialogState extends State<_CarFormDialog> {
         'initialChecklist': _checklistCtrl.text,
       });
 
-      if (_photo != null) {
-        formData.files.add(MapEntry('photo', await MultipartFile.fromFile(_photo!.path)));
+      Future<void> addFile(String name, File? file) async {
+        if (file != null) {
+          formData.files.add(MapEntry(name, await MultipartFile.fromFile(file.path)));
+        }
       }
+
+      await addFile('photo', _photo);
+      await addFile('frontPhoto', _frontPhoto);
+      await addFile('backPhoto', _backPhoto);
+      await addFile('leftPhoto', _leftPhoto);
+      await addFile('rightPhoto', _rightPhoto);
+      await addFile('dashboardPhoto', _dashboardPhoto);
+      await addFile('enginePhoto', _enginePhoto);
+      await addFile('trunkPhoto', _trunkPhoto);
 
       if (widget.car == null) {
         await _apiService.createCar(formData);
       } else {
-        await _apiService.updateCar(widget.car!['id'], {
-            'plate': _plateCtrl.text,
-            'model': _modelCtrl.text,
-            'trackerLink': _trackerLinkCtrl.text,
-            'warrantyParts': _warrantyCtrl.text,
-            'nextOilChangeKm': int.tryParse(_nextOilCtrl.text) ?? 0,
-            'initialChecklist': _checklistCtrl.text,
-        }); // updateCar uses Map currently or we can adapt to FormData. Let's just use JSON since edit photo isn't requested explicitly yet.
+        await _apiService.updateCar(widget.car!['id'], formData);
       }
 
-      Navigator.of(context).pop();
-      widget.onSaved();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo com sucesso!'), backgroundColor: Colors.green));
+      if (mounted) {
+        Navigator.of(context).pop();
+        widget.onSaved();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo com sucesso!'), backgroundColor: Colors.green));
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      }
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 
@@ -338,27 +402,6 @@ class _CarFormDialogState extends State<_CarFormDialog> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.car == null)
-                    Column(
-                      children: [
-                        GestureDetector(
-                          onTap: _pickImage,
-                          child: Container(
-                            width: 100, height: 100,
-                            decoration: BoxDecoration(
-                              color: Colors.white12,
-                              borderRadius: BorderRadius.circular(8),
-                              image: _photo != null ? DecorationImage(image: FileImage(_photo!), fit: BoxFit.cover) : null,
-                            ),
-                            child: _photo == null ? const Icon(Icons.directions_car, color: Colors.white54, size: 40) : null,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text('Foto do Veículo', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                      ],
-                    ),
-                    if (widget.car == null) const SizedBox(width: 24),
-                    
                     Expanded(
                       child: Column(
                         children: [
@@ -396,15 +439,31 @@ class _CarFormDialogState extends State<_CarFormDialog> {
                   style: const TextStyle(color: Colors.white),
                   decoration: const InputDecoration(labelText: 'Peças na Garantia', labelStyle: TextStyle(color: Colors.white54)),
                 ),
-                TextFormField(
-                  controller: _checklistCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Checklist / Observações Iniciais', labelStyle: TextStyle(color: Colors.white54)),
-                ),
-                
-                const SizedBox(height: 32),
-                Row(
+                  TextFormField(
+                    controller: _checklistCtrl,
+                    maxLines: 2,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(labelText: 'Checklist / Observações Iniciais', labelStyle: TextStyle(color: Colors.white54)),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text('Checklist de Fotos', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      _buildPhotoButton('Foto Principal', 'photo', _photo, widget.car?['photoUrl']),
+                      _buildPhotoButton('Frente', 'frontPhoto', _frontPhoto, widget.car?['frontPhotoUrl']),
+                      _buildPhotoButton('Traseira', 'backPhoto', _backPhoto, widget.car?['backPhotoUrl']),
+                      _buildPhotoButton('Lateral Esquerda', 'leftPhoto', _leftPhoto, widget.car?['leftPhotoUrl']),
+                      _buildPhotoButton('Lateral Direita', 'rightPhoto', _rightPhoto, widget.car?['rightPhotoUrl']),
+                      _buildPhotoButton('Painel', 'dashboardPhoto', _dashboardPhoto, widget.car?['dashboardPhotoUrl']),
+                      _buildPhotoButton('Motor', 'enginePhoto', _enginePhoto, widget.car?['enginePhotoUrl']),
+                      _buildPhotoButton('Porta-malas', 'trunkPhoto', _trunkPhoto, widget.car?['trunkPhotoUrl']),
+                    ],
+                  ),
+                  const SizedBox(height: 32),
+                  Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
@@ -425,6 +484,34 @@ class _CarFormDialogState extends State<_CarFormDialog> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoButton(String label, String type, File? localFile, String? remoteUrl) {
+    ImageProvider? image;
+    if (localFile != null) {
+      image = FileImage(localFile);
+    } else if (remoteUrl != null && remoteUrl.isNotEmpty) {
+      image = NetworkImage('http://192.168.1.6:3000$remoteUrl');
+    }
+
+    return GestureDetector(
+      onTap: () => _pickImage(type),
+      child: Column(
+        children: [
+          Container(
+            width: 80, height: 80,
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(8),
+              image: image != null ? DecorationImage(image: image, fit: BoxFit.cover) : null,
+            ),
+            child: image == null ? const Icon(Icons.camera_alt, color: Colors.white54, size: 30) : null,
+          ),
+          const SizedBox(height: 4),
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+        ],
       ),
     );
   }

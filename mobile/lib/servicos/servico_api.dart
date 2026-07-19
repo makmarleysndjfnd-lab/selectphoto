@@ -256,7 +256,7 @@ class ApiService {
     }
   }
 
-  Future<void> updateCar(String id, Map<String, dynamic> data) async {
+  Future<void> updateCar(String id, dynamic data) async {
     try {
       await _dio.put('/fleet/$id', data: data);
     } on DioException catch (e) {

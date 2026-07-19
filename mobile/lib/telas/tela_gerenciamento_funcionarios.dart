@@ -730,6 +730,7 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
   String? _selectedCarId;
   String? _selectedDriverId;
   String _fuelLevel = 'EMPTY';
+  bool _reuseInitialPhotos = false;
   final _mileageCtrl = TextEditingController();
   final _damageCtrl = TextEditingController();
   
@@ -786,6 +787,7 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
         'mileage': _mileageCtrl.text,
         'fuelLevel': _fuelLevel,
         'damageReport': _damageCtrl.text,
+        'reuseInitialPhotos': _reuseInitialPhotos.toString(),
       });
 
       // Add photos
@@ -942,18 +944,45 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
               maxLines: 3,
               decoration: InputDecoration(labelText: 'Observações / Avarias', filled: true, fillColor: const Color(0xFF1A1A2E), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
             ),
+            const SizedBox(height: 16),
+            
+            SwitchListTile(
+              title: const Text('Reutilizar fotos do cadastro inicial', style: TextStyle(color: Colors.white)),
+              value: _reuseInitialPhotos,
+              activeColor: const Color(0xFFCE93D8),
+              onChanged: (val) {
+                setState(() {
+                  _reuseInitialPhotos = val;
+                  if (val) {
+                    final selectedCar = widget.cars.firstWhere((c) => c['id'] == _selectedCarId, orElse: () => null);
+                    if (selectedCar != null && selectedCar['initialChecklist'] != null) {
+                      _damageCtrl.text = selectedCar['initialChecklist'];
+                    }
+                  }
+                });
+              },
+            ),
+            const SizedBox(height: 8),
+            
+            if (!_reuseInitialPhotos)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Fotos do Veículo (Comprimidas)', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  _buildPhotoButton('Frente', 'frontPhoto'),
+                  _buildPhotoButton('Traseira', 'backPhoto'),
+                  _buildPhotoButton('Lateral Esquerda', 'leftPhoto'),
+                  _buildPhotoButton('Lateral Direita', 'rightPhoto'),
+                  _buildPhotoButton('Painel/Interior', 'dashboardPhoto'),
+                  _buildPhotoButton('Motor', 'enginePhoto'),
+                  _buildPhotoButton('Porta-malas', 'trunkPhoto'),
+                ],
+              ),
+            
             const SizedBox(height: 24),
             
-            const Text('Fotos do Veículo (Comprimidas)', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            
-            _buildPhotoButton('Frente', 'frontPhoto'),
-            _buildPhotoButton('Traseira', 'backPhoto'),
-            _buildPhotoButton('Lateral Esquerda', 'leftPhoto'),
-            _buildPhotoButton('Lateral Direita', 'rightPhoto'),
-            _buildPhotoButton('Painel/Interior', 'dashboardPhoto'),
-            _buildPhotoButton('Motor', 'enginePhoto'),
-            _buildPhotoButton('Porta-malas', 'trunkPhoto'),
+
             
             const SizedBox(height: 24),
             const Text('Assinatura do Funcionário', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
