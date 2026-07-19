@@ -237,6 +237,11 @@ class ApiService {
     }
   }
 
+  Future<List<dynamic>> getPendingBookBatches() async {
+    final all = await getBookBatches();
+    return all.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
+  }
+
   Future<List<dynamic>> getBookBatches() async {
     try {
       final response = await _dio.get('/books/batch');
