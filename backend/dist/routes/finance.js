@@ -175,4 +175,54 @@ router.get('/health', authMiddleware_1.authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch health data' });
     }
 });
+// Edit a cost
+router.put('/costs/:id', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { amount, category, description, paymentMethod, status } = req.body;
+        const existing = await prisma.cost.findUnique({ where: { id } });
+        if (!existing || existing.companyId !== req.user?.companyId) {
+            return res.status(404).json({ error: 'Cost not found' });
+        }
+        const updated = await prisma.cost.update({
+            where: { id },
+            data: {
+                amount: amount !== undefined ? Number(amount) : undefined,
+                category,
+                description,
+                paymentMethod,
+                status
+            }
+        });
+        res.json(updated);
+    }
+    catch (error) {
+        console.error('Error editing cost:', error);
+        res.status(500).json({ error: 'Failed to edit cost' });
+    }
+});
+// Edit a sale (limited fields for finance view)
+router.put('/sales/:id', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { value, paymentMethod, paymentStatus } = req.body;
+        const existing = await prisma.sale.findUnique({ where: { id } });
+        if (!existing || existing.companyId !== req.user?.companyId) {
+            return res.status(404).json({ error: 'Sale not found' });
+        }
+        const updated = await prisma.sale.update({
+            where: { id },
+            data: {
+                value: value !== undefined ? Number(value) : undefined,
+                paymentMethod,
+                paymentStatus
+            }
+        });
+        res.json(updated);
+    }
+    catch (error) {
+        console.error('Error editing sale:', error);
+        res.status(500).json({ error: 'Failed to edit sale' });
+    }
+});
 exports.default = router;

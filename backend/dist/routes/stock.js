@@ -137,4 +137,63 @@ router.post('/return-cover', authMiddleware_1.authenticateToken, async (req, res
         res.status(500).json({ error: error.message });
     }
 });
+// User (Seller/Photographer) requests covers/books from another user or Admin
+router.post('/request-transfer', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { recipientId, quantity, itemType } = req.body; // itemType: 'COVER' or 'BOOK'
+        const senderId = req.user?.id;
+        const companyId = req.user?.companyId;
+        if (!senderId || !recipientId)
+            return res.status(400).json({ error: 'Missing parameters' });
+        const sender = await prisma.user.findUnique({ where: { id: senderId } });
+        const recipient = await prisma.user.findUnique({ where: { id: recipientId } });
+        if (!sender || !recipient)
+            return res.status(404).json({ error: 'User not found' });
+        const notifType = itemType === 'BOOK' ? 'STOCK_TRANSFER_BOOK' : 'STOCK_TRANSFER_COVER';
+        const itemName = itemType === 'BOOK' ? 'Books' : 'Capas';
+        // Notify the recipient (they must accept to give the items)
+        await prisma.notification.create({
+            data: {
+                title: `Solicitação de ${itemName}`,
+                message: `${sender.name} está solicitando ${quantity} ${itemName}.`,
+                type: notifType,
+                status: 'UNREAD',
+                actionData: { quantity, itemType },
+                senderId: senderId,
+                recipientId: recipientId,
+                companyId
+            }
+        });
+        if (recipient.fcmToken) {
+            await (0, firebaseConfig_1.sendPushNotification)([recipient.fcmToken], `Solicitação de ${itemName}`, `${sender.name} está solicitando ${quantity} ${itemName}.`, { type: notifType, quantity });
+        }
+        // Notify Admin as well (just for visibility/INFO)
+        const admins = await prisma.user.findMany({
+            where: { role: 'ADMIN', companyId }
+        });
+        const adminTokens = admins.filter(a => a.fcmToken != null && a.id !== recipientId).map(a => a.fcmToken);
+        for (const admin of admins) {
+            if (admin.id === recipientId)
+                continue; // already notified above
+            await prisma.notification.create({
+                data: {
+                    title: `Nova Solicitação de ${itemName}`,
+                    message: `${sender.name} solicitou ${quantity} ${itemName} para ${recipient.name}.`,
+                    type: 'INFO',
+                    status: 'UNREAD',
+                    senderId: senderId,
+                    recipientId: admin.id,
+                    companyId
+                }
+            });
+        }
+        if (adminTokens.length > 0) {
+            await (0, firebaseConfig_1.sendPushNotification)(adminTokens, `Nova Solicitação de ${itemName}`, `${sender.name} solicitou ${quantity} ${itemName} para ${recipient.name}.`, { type: 'INFO' });
+        }
+        res.status(201).json({ success: true, message: 'Transfer request sent' });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 exports.default = router;

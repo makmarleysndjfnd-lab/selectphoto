@@ -109,7 +109,7 @@ router.post('/daily', authMiddleware_1.authenticateToken, async (req, res) => {
 // Pay/Clear repasse
 router.post('/pay-repasse', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { sellerId, amount } = req.body;
+        const { sellerId, amount, commissionToLog } = req.body;
         // Negative repasseDebt represents a payment reducing the total debt
         const closing = await prisma.dailyClosing.create({
             data: {
@@ -123,6 +123,21 @@ router.post('/pay-repasse', authMiddleware_1.authenticateToken, async (req, res)
                 repasseDebt: -parseFloat(amount) // Deducts from total debt
             }
         });
+        if (commissionToLog && parseFloat(commissionToLog) > 0) {
+            const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+            await prisma.cost.create({
+                data: {
+                    companyId: seller?.companyId || 'c1',
+                    userId: sellerId,
+                    amount: parseFloat(commissionToLog),
+                    category: 'COMMISSION',
+                    description: `Comissão fechamento de ${seller?.name}`,
+                    date: new Date(),
+                    paymentMethod: 'PIX',
+                    status: 'APPROVED'
+                }
+            });
+        }
         res.status(201).json(closing);
     }
     catch (error) {
@@ -161,16 +176,64 @@ router.get('/photographer/:photographerId', authMiddleware_1.authenticateToken, 
         res.status(500).json({ error: error.message });
     }
 });
+// Custom Metrics Overview (by Date Range and Sellers)
+router.get('/custom', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const sellerIdsStr = req.query.sellerIds;
+        const startDateParam = req.query.startDate;
+        const endDateParam = req.query.endDate;
+        let whereSale = {};
+        let whereNonSale = {};
+        if (sellerIdsStr) {
+            const sellerIds = sellerIdsStr.split(',');
+            whereSale.sellerId = { in: sellerIds };
+            whereNonSale.sellerId = { in: sellerIds };
+        }
+        if (startDateParam && endDateParam) {
+            const startDate = new Date(startDateParam);
+            const endDate = new Date(endDateParam);
+            startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(23, 59, 59, 999);
+            whereSale.date = { gte: startDate, lte: endDate };
+            whereNonSale.date = { gte: startDate, lte: endDate };
+        }
+        const sales = await prisma.sale.findMany({ where: whereSale });
+        const nonSales = await prisma.nonSale.findMany({ where: whereNonSale });
+        const totalSalesValue = sales.reduce((acc, curr) => acc + curr.value, 0);
+        const totalFichas = sales.length + nonSales.length;
+        const averageTicket = totalFichas > 0 ? (totalSalesValue / totalFichas) : 0;
+        res.json({
+            salesCount: sales.length,
+            nonSalesCount: nonSales.length,
+            totalFichas,
+            totalSalesValue,
+            averageTicket
+        });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 // City Closing
 router.get('/city/:city', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const { city } = req.params;
-        const sellerId = req.query.sellerId;
+        const sellerIdsStr = req.query.sellerIds;
+        const dateParam = req.query.date;
         let whereSale = { city };
         let whereNonSale = { client: { city } };
-        if (sellerId) {
-            whereSale.sellerId = sellerId;
-            whereNonSale.sellerId = sellerId;
+        if (sellerIdsStr) {
+            const sellerIds = sellerIdsStr.split(',');
+            whereSale.sellerId = { in: sellerIds };
+            whereNonSale.sellerId = { in: sellerIds };
+        }
+        if (dateParam) {
+            const startDate = new Date(dateParam);
+            const endDate = new Date(dateParam);
+            startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(23, 59, 59, 999);
+            whereSale.date = { gte: startDate, lte: endDate };
+            whereNonSale.date = { gte: startDate, lte: endDate };
         }
         const sales = await prisma.sale.findMany({ where: whereSale });
         const nonSales = await prisma.nonSale.findMany({ where: whereNonSale });

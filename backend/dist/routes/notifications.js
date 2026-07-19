@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const authMiddleware_1 = require("../middleware/authMiddleware");
+const firebaseConfig_1 = require("../utils/firebaseConfig");
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
 // Lista as notificações do usuário logado
@@ -124,17 +125,64 @@ router.post('/:id/action', authMiddleware_1.authenticateToken, async (req, res) 
                         });
                     }
                     break;
-                // Outros casos (STOCK_TRANSFER_BOOK, etc)
+                case 'EDIT_REQUEST_APPROVAL':
+                    if (actionData && actionData.editRequestId) {
+                        const editRequest = await prisma.clientEditRequest.findUnique({
+                            where: { id: actionData.editRequestId }
+                        });
+                        if (editRequest && editRequest.status === 'PENDING') {
+                            const proposedData = editRequest.proposedData;
+                            await prisma.client.update({
+                                where: { id: editRequest.clientId },
+                                data: { ...proposedData }
+                            });
+                            await prisma.clientEditRequest.update({
+                                where: { id: actionData.editRequestId },
+                                data: { status: 'APPROVED' }
+                            });
+                        }
+                    }
+                    break;
             }
         }
         else if (actionType === 'REJECT') {
-            if (notification.type === 'COST_APPROVAL') {
-                if (actionData && actionData.costId) {
-                    await prisma.cost.update({
-                        where: { id: actionData.costId },
+            if (notification.type === 'COST_APPROVAL' && actionData && actionData.costId) {
+                await prisma.cost.update({
+                    where: { id: actionData.costId },
+                    data: { status: 'REJECTED' }
+                });
+            }
+            if (notification.type === 'EDIT_REQUEST_APPROVAL' && actionData && actionData.editRequestId) {
+                const editRequest = await prisma.clientEditRequest.findUnique({
+                    where: { id: actionData.editRequestId }
+                });
+                if (editRequest && editRequest.status === 'PENDING') {
+                    await prisma.clientEditRequest.update({
+                        where: { id: actionData.editRequestId },
                         data: { status: 'REJECTED' }
                     });
                 }
+            }
+        }
+        // CREATE FEEDBACK NOTIFICATION FOR SENDER
+        if (notification.type === 'COST_APPROVAL' && notification.senderId) {
+            const sender = await prisma.user.findUnique({ where: { id: notification.senderId } });
+            const admin = await prisma.user.findUnique({ where: { id: req.user.id } });
+            const statusStr = actionType === 'ACCEPT' ? 'APROVADA' : 'REPROVADA';
+            const msg = `Sua despesa lançada foi ${statusStr} por ${admin?.name || 'Admin'}.`;
+            await prisma.notification.create({
+                data: {
+                    title: 'Feedback de Despesa',
+                    message: msg,
+                    type: 'INFO',
+                    status: 'UNREAD',
+                    senderId: req.user.id,
+                    recipientId: notification.senderId,
+                    companyId: notification.companyId
+                }
+            });
+            if (sender?.fcmToken) {
+                await (0, firebaseConfig_1.sendPushNotification)([sender.fcmToken], 'Feedback de Despesa', msg, { type: 'INFO' });
             }
         }
         const updatedNotification = await prisma.notification.update({

@@ -108,6 +108,11 @@ router.post('/non-sale', authMiddleware_1.authenticateToken, async (req, res) =>
                 companyId: req.user?.companyId
             },
         });
+        // Update client bookStatus
+        await prisma.client.update({
+            where: { id: clientId },
+            data: { bookStatus: 'AWAITING_RETURN' },
+        });
         res.status(201).json(nonSale);
     }
     catch (error) {

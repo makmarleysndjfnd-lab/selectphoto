@@ -34,6 +34,7 @@ const closing_1 = __importDefault(require("./routes/closing"));
 const stock_1 = __importDefault(require("./routes/stock"));
 const books_1 = __importDefault(require("./routes/books"));
 const notifications_1 = __importDefault(require("./routes/notifications"));
+const editRequests_1 = __importDefault(require("./routes/editRequests"));
 app.use('/api/auth', auth_1.default);
 app.use('/api/teams', teams_1.default);
 app.use('/api/users', users_1.default);
@@ -50,6 +51,7 @@ app.use('/api/closing', closing_1.default);
 app.use('/api/stock', stock_1.default);
 app.use('/api/books', books_1.default);
 app.use('/api/notifications', notifications_1.default);
+app.use('/api/edit-requests', editRequests_1.default);
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });

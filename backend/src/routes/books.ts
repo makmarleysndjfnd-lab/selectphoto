@@ -65,7 +65,7 @@ router.put('/batch/:id/release', authMiddleware, async (req: AuthRequest, res) =
         });
 
         await prisma.client.updateMany({
-            where: { batchId: id, companyId },
+            where: { batchId: id as string, companyId },
             data: { bookStatus: 'IN_STOCK' }
         });
 

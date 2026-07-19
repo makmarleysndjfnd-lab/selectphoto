@@ -144,6 +144,25 @@ router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireA
         res.status(500).json({ error: 'Failed to update user' });
     }
 });
+// Get all users in the same company (accessible by any logged in user)
+router.get('/company', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({
+            where: { companyId: req.user?.companyId },
+            select: {
+                id: true,
+                name: true,
+                role: true,
+                email: true
+            },
+            orderBy: { name: 'asc' }
+        });
+        res.json(users);
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch company users' });
+    }
+});
 // Delete user (Admin only)
 router.delete('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmin, async (req, res) => {
     try {

@@ -32,28 +32,28 @@ router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
                 companyId: req.user.companyId
             }
         });
-        if (req.user.role !== 'ADMIN') {
-            const admins = await prisma.user.findMany({
-                where: { role: 'ADMIN', companyId: req.user.companyId }
+        const admins = await prisma.user.findMany({
+            where: { role: 'ADMIN', companyId: req.user.companyId }
+        });
+        const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+        const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null);
+        for (const admin of admins) {
+            // Don't send notification to the same admin who launched it (unless they are the only one)
+            // Actually, let's send it to all admins including the creator so they see it in the panel!
+            await prisma.notification.create({
+                data: {
+                    title: 'Aprovação de Custo',
+                    message: `${user?.name || 'Funcionário'} solicitou aprovação para ${category} (R$ ${amount}).`,
+                    type: 'COST_APPROVAL',
+                    status: 'UNREAD',
+                    actionData: { costId: cost.id },
+                    senderId: req.user.id,
+                    recipientId: admin.id,
+                    companyId: req.user.companyId
+                }
             });
-            const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-            const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null);
-            for (const admin of admins) {
-                await prisma.notification.create({
-                    data: {
-                        title: 'Aprovação de Custo',
-                        message: `${user?.name || 'Funcionário'} solicitou aprovação para ${category} (R$ ${amount}).`,
-                        type: 'COST_APPROVAL',
-                        status: 'UNREAD',
-                        actionData: { costId: cost.id },
-                        senderId: req.user.id,
-                        recipientId: admin.id,
-                        companyId: req.user.companyId
-                    }
-                });
-            }
-            await (0, firebaseConfig_1.sendPushNotification)(adminTokens, 'Novo Custo para Aprovar', `${user?.name || 'Funcionário'} lançou R$ ${amount} de ${category}.`, { type: 'COST_APPROVAL', costId: cost.id });
         }
+        await (0, firebaseConfig_1.sendPushNotification)(adminTokens, 'Novo Custo para Aprovar', `${user?.name || 'Funcionário'} lançou R$ ${amount} de ${category}.`, { type: 'COST_APPROVAL', costId: cost.id });
         res.status(201).json(cost);
     }
     catch (error) {
