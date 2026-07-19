@@ -102,9 +102,9 @@ class _FleetAdminViewState extends State<FleetAdminView> {
 
   Widget _buildCarCard(dynamic car) {
     // Determine Status Colors
-    final isMaintenancePending = car['pendingMaintenance'].toString().isNotEmpty;
-    final int nextOil = car['nextOilChangeKm'] as int;
-    final int currentKm = car['lastMileage'] as int;
+    final isMaintenancePending = car['pendingMaintenance'] != null && car['pendingMaintenance'].toString().isNotEmpty && car['pendingMaintenance'].toString() != 'null';
+    final int nextOil = (car['nextOilChangeKm'] as num?)?.toInt() ?? 0;
+    final int currentKm = (car['lastMileage'] as num?)?.toInt() ?? 0;
     
     // Logic for color statuses
     // GREEN: OK
@@ -176,7 +176,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
           _infoRow(Icons.speed_rounded, 'KM Atual: $currentKm km'),
           const SizedBox(height: 4),
           _infoRow(Icons.oil_barrel_rounded, 'Troca Óleo: $nextOil km'),
-          if (car['warrantyParts'].toString().isNotEmpty) ...[
+          if (car['warrantyParts'] != null && car['warrantyParts'].toString().isNotEmpty && car['warrantyParts'].toString() != 'null') ...[
             const SizedBox(height: 4),
             _infoRow(Icons.verified_rounded, 'Garantia: ${car['warrantyParts']}', color: Colors.blueAccent),
           ],
