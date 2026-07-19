@@ -190,7 +190,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       
       final clients = await api.getAllClients();
       final pendingBatches = await api.getPendingBookBatches();
-      if(mounted) setState(() => _pendingReleaseBatches = pendingBatches);
+      if(mounted) setState(() => _pendingReleaseBatches = List<Map<String, dynamic>>.from(pendingBatches));
       
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
       final List<Map<String, dynamic>> unassigned = [];
