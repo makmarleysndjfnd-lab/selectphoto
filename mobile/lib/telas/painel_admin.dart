@@ -1727,8 +1727,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ABA 3 — ESTOQUE NÃO-VENDAS
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildStockTab() {
-    final totalFichas =
-        _stockByCity.fold<int>(0, (s, c) => s + (c['total'] as int));
+    final totalFichas = _rotasRebolo.fold<int>(0, (s, r) => s + (r['books'] as List).length) +
+        _rebolosNaoAtribuidos.length +
+        _rebolosDistribuidos.values.fold<int>(0, (s, list) => s + list.length);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -1769,7 +1770,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                             color: Colors.white,
                             fontSize: 24,
                             fontWeight: FontWeight.bold)),
-                    Text('${_stockByCity.length} cidades',
+                    Text('${_rotasRebolo.length} cidades',
                         style: const TextStyle(
                             color: Color(0xFFEF9A9A), fontSize: 12)),
                   ],
@@ -1789,10 +1790,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                   color: Colors.white,
                   fontSize: 15,
                   fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-
-          ..._stockByCity.map((cityData) =>
-              _buildCityStockCard(cityData)),
           const SizedBox(height: 24),
           _buildRotasInteligentes(isRebolo: true),
           const SizedBox(height: 20),
