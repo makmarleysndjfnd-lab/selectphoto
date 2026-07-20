@@ -88,51 +88,7 @@ final _teamData = [
 
 
 // ── Mock: Estoque não-vendas ──────────────────────────────────────────────────
-final _stockByCity = [
-  {
-    'city': 'São Paulo',
-    'total': 23,
-    'fichas': [
-      {'seq': 'CF-EQP1-0003', 'lote': 'L2024-06', 'client': 'Maria Silva',     'reason': 'Sem interesse'},
-      {'seq': 'CF-EQP1-0007', 'lote': 'L2024-06', 'client': 'João Ferreira',   'reason': 'Sem condições'},
-      {'seq': 'CF-EQP1-0012', 'lote': 'L2024-06', 'client': 'Ana Costa',       'reason': 'Book trocado'},
-      {'seq': 'CF-EQP1-0019', 'lote': 'L2024-06', 'client': 'Pedro Santos',    'reason': 'Dados incorretos'},
-      {'seq': 'CF-EQP1-0021', 'lote': 'L2024-06', 'client': 'Lucia Barbosa',   'reason': 'Sem qualidade'},
-    ],
-  },
-  {
-    'city': 'Campinas',
-    'total': 17,
-    'fichas': [
-      {'seq': 'CF-EQP2-0005', 'lote': 'L2024-06', 'client': 'Carlos Mendes',   'reason': 'Sem interesse'},
-      {'seq': 'CF-EQP2-0009', 'lote': 'L2024-06', 'client': 'Beatriz Lima',    'reason': 'Sem condições'},
-      {'seq': 'CF-EQP2-0014', 'lote': 'L2024-06', 'client': 'Roberto Alves',   'reason': 'Book trocado'},
-    ],
-  },
-  {
-    'city': 'Ribeirão Preto',
-    'total': 11,
-    'fichas': [
-      {'seq': 'CF-EQP3-0002', 'lote': 'L2024-06', 'client': 'Fernanda Neves',  'reason': 'Sem interesse'},
-      {'seq': 'CF-EQP3-0008', 'lote': 'L2024-06', 'client': 'Marcos Souza',    'reason': 'Dados incorretos'},
-    ],
-  },
-  {
-    'city': 'Santo André',
-    'total': 8,
-    'fichas': [
-      {'seq': 'CF-EQP1-0031', 'lote': 'L2024-05', 'client': 'Cláudia Reis',    'reason': 'Sem qualidade'},
-      {'seq': 'CF-EQP1-0035', 'lote': 'L2024-05', 'client': 'Diego Carvalho',  'reason': 'Sem interesse'},
-    ],
-  },
-  {
-    'city': 'Sorocaba',
-    'total': 5,
-    'fichas': [
-      {'seq': 'CF-EQP1-0044', 'lote': 'L2024-05', 'client': 'Tiago Martins',   'reason': 'Sem condições'},
-    ],
-  },
-];
+
 
 // ── AdminDashboard ────────────────────────────────────────────────────────────
 class AdminDashboard extends StatefulWidget {
