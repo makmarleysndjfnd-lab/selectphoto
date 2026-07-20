@@ -190,6 +190,8 @@ class _AdminDashboardState extends State<AdminDashboard>
       final Set<String> reboloIds = rebolos.map((r) => r['id'].toString()).toSet();
       
       final clients = await api.getAllClients();
+      if(mounted) setState(() => _allClients = List<Map<String, dynamic>>.from(clients));
+
       final pendingBatches = await api.getPendingBookBatches();
       if(mounted) setState(() => _pendingReleaseBatches = List<Map<String, dynamic>>.from(pendingBatches));
       
@@ -2084,9 +2086,6 @@ class _AdminDashboardState extends State<AdminDashboard>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Preparando lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
     final books = isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
     if (books != null && books.isNotEmpty) {
-      final rawClients = await api.getAllClients();
-      if(mounted) setState(() => _allClients = List<Map<String, dynamic>>.from(rawClients));
-
       final clients = books.map((b) => b['rawClientData'] as Map<String, dynamic>).where((c) => c != null).toList();
       if (clients.isNotEmpty) {
         await PdfGenerator.printBatch(clients, seller);
