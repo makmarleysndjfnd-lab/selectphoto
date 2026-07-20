@@ -237,6 +237,23 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getCoverStockInfo() async {
+    try {
+      final response = await _dio.get('/stock/info');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar informacoes de capas');
+    }
+  }
+
+  Future<void> transferCovers(String sellerId, int quantity) async {
+    try {
+      await _dio.post('/stock/transfer', data: {'recipientId': sellerId, 'quantity': quantity});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao transferir capas');
+    }
+  }
+
   Future<List<dynamic>> getPendingBookBatches() async {
     final all = await getBookBatches();
     return all.where((b) => b['status'] == 'AWAITING_RELEASE').toList();

@@ -149,6 +149,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   // métricas
   int _selectedMonth = 5;
   int _selectedTeam = 0;
+  List<Map<String, dynamic>> _allClients = [];
   List<dynamic> _upcomingEvents = [];
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -1400,6 +1401,102 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   // ABA 2 — books POR EQUIPE
   // ══════════════════════════════════════════════════════════════════════════
+  
+  int get _totalBooksProduced => _allClients.length;
+  int get _booksAguardando => _allClients.where((c) => c['releasedForRouting'] != true).length;
+  int get _booksLiberados => _allClients.where((c) => c['releasedForRouting'] == true).length;
+
+  Widget _buildResumoGeralProducao() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Resumo de Produção (Geral)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _infoBoxProducao('Total Produzido', '$_totalBooksProduced', Colors.blueAccent),
+              _infoBoxProducao('Aguardando Rota', '$_booksAguardando', Colors.orangeAccent),
+              _infoBoxProducao('Liberado p/ Rota', '$_booksLiberados', Colors.greenAccent),
+            ],
+          )
+        ],
+      )
+    );
+  }
+
+  Widget _infoBoxProducao(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(value, style: TextStyle(color: color, fontSize: 28, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      ],
+    );
+  }
+
+  Widget _buildListaTodosBooks() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Todos os Books Produzidos', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          if (_allClients.isEmpty)
+            const Text('Nenhum book foi produzido ainda.', style: TextStyle(color: Colors.white54)),
+          ..._allClients.map((c) {
+            final name = c['name'] ?? 'Sem Nome';
+            final city = c['city'] ?? 'Sem Cidade';
+            final seq = c['sequenceNumber'] ?? 'S/N';
+            final isReleased = c['releasedForRouting'] == true;
+
+            return Card(
+              color: Colors.white.withOpacity(0.05),
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.menu_book, color: Colors.white),
+                ),
+                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text('Ficha: $seq | Cidade: $city', style: const TextStyle(color: Colors.white70)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: isReleased ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    isReleased ? 'Liberado' : 'Aguardando',
+                    style: TextStyle(
+                      color: isReleased ? Colors.greenAccent : Colors.orangeAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPhotosTab() {
     int totalGeral = 0;
     for (final team in _realPhotoEvents) {
@@ -1987,6 +2084,9 @@ class _AdminDashboardState extends State<AdminDashboard>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Preparando lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
     final books = isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
     if (books != null && books.isNotEmpty) {
+      final rawClients = await api.getAllClients();
+      if(mounted) setState(() => _allClients = List<Map<String, dynamic>>.from(rawClients));
+
       final clients = books.map((b) => b['rawClientData'] as Map<String, dynamic>).where((c) => c != null).toList();
       if (clients.isNotEmpty) {
         await PdfGenerator.printBatch(clients, seller);
