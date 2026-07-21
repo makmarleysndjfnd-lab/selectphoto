@@ -114,10 +114,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               _buildVendedorCard(),
               const SizedBox(height: 20),
               _buildAnaliseDesempenhoCard(),
-              const SizedBox(height: 20),
-              _buildFotografoCard(),
-              const SizedBox(height: 20),
-              _buildCidadesALiberarCard(),
+                const SizedBox(height: 20),
+                _buildCidadesALiberarCard(),
             ],
           ),
         ),
@@ -393,68 +391,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     );
   }
 
-  String? _selectedPhotographer;
-
-  Widget _buildFotografoCard() {
-    final photographers = _sellers.where((s) => s['role'] == 'PHOTOGRAPHER' || s['role'] == 'ADMIN' || s['role'] == 'SUPER_ADMIN').toList();
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Fechamento Fotógrafo (Produção)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          const Text('Selecione um fotógrafo:', style: TextStyle(color: Colors.white70)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            dropdownColor: const Color(0xFF2A2A3E),
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: const Color(0xFF0D0D1A),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            items: photographers.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['name'] as String))).toList(),
-            onChanged: (val) => setState(() => _selectedPhotographer = val),
-          ),
-          const SizedBox(height: 16),
-          if (_selectedPhotographer != null)
-             _buildFotografoDetails(),
-        ],
-      )
-    );
-  }
-
-  Widget _buildFotografoDetails() {
-    if (_selectedPhotographer == null) return const SizedBox.shrink();
-
-    return FutureBuilder<Map<String, dynamic>>(
-      future: ApiService().getPhotographerClosing(_selectedPhotographer!),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.white));
-        }
-        if (snapshot.hasError) {
-          return Text('Erro ao carregar fechamento: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
-        }
-
-        final data = snapshot.data!;
-        final booksCount = data['booksCount'] ?? 0;
-
-        return Column(
-          children: [
-            _infoRow('Books (Cidades) Produzidos Hoje', '$booksCount', color: Colors.greenAccent),
-          ],
-        );
-      }
-    );
-  }
+  
 
   Widget _buildAnaliseDesempenhoCard() {
     final sellerNames = _selectedSellersCustom.map((id) {
