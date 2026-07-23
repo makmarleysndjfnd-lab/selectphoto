@@ -13,7 +13,6 @@ import 'visao_frota_admin.dart';
 import 'visao_fluxo_caixa_admin.dart';
 import 'tela_cadastro_custos.dart';
 import 'tela_gerenciamento_funcionarios.dart';
-import 'tela_gerenciamento_equipes.dart';
 import 'visao_prospectos_ia.dart';
 import 'visao_fechamento_admin.dart';
 import 'visao_estoque_admin.dart';
@@ -463,12 +462,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(5, Icons.people_alt_rounded, 'Funcionários'),
                       _sideMenuItem(3, Icons.directions_car_rounded, 'Frota'),
-                                            ListTile(
-                          leading: const Icon(Icons.group_work_rounded, color: Color(0xFFCE93D8)),
-                          title: const Text('Equipes', style: TextStyle(color: Color(0xFFCE93D8))),
-                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const TelaGerenciamentoEquipes())),
-                        ),
-],
+                                            ],
                   ),
                 ),
               ],

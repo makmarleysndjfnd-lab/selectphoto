@@ -615,9 +615,10 @@ class ApiService {
     }
   }
 
-  Future<void> createTeam(Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> createTeam(Map<String, dynamic> data) async {
     try {
-      await _dio.post('/teams', data: data);
+      final res = await _dio.post('/teams', data: data);
+      return res.data;
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao criar equipe');
     }

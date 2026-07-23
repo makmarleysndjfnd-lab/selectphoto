@@ -68,16 +68,6 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
     );
   }
 
-  void _showTeamsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => _TeamsManagementDialog(
-        teams: _teams,
-        onSaved: _fetchData,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -101,20 +91,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
               Tab(text: 'Checklist de Chaves', icon: Icon(Icons.car_rental)),
             ],
           ),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: ElevatedButton.icon(
-                onPressed: _showTeamsDialog,
-                icon: const Icon(Icons.groups, color: Colors.white),
-                label: const Text('Gerenciar Equipes', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF3A0068),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                ),
-              ),
-            ),
-          ],
+          actions: [],
         ),
         floatingActionButton: Builder(
           builder: (context) {
@@ -228,6 +205,47 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   final ImagePicker _picker = ImagePicker();
   
   bool _isSaving = false;
+
+  Future<void> _createTeamInline() async {
+    final nameCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Nova Equipe', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: nameCtrl,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(labelText: 'Nome da Equipe', labelStyle: TextStyle(color: Colors.white54)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
+              try {
+                final api = ApiService();
+                final newTeam = await api.createTeam({'name': nameCtrl.text.trim(), 'type': 'PRODUCTION'});
+                setState(() {
+                  widget.teams.add(newTeam);
+                  _teamId = newTeam['id'];
+                });
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Equipe criada!')));
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            child: const Text('Criar e Selecionar', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -593,156 +611,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TeamsManagementDialog extends StatefulWidget {
-  final List<dynamic> teams;
-  final VoidCallback onSaved;
-
-  const _TeamsManagementDialog({required this.teams, required this.onSaved});
-
-  @override
-  State<_TeamsManagementDialog> createState() => _TeamsManagementDialogState();
-}
-
-class _TeamsManagementDialogState extends State<_TeamsManagementDialog> {
-  final ApiService _apiService = ApiService();
-  bool _isLoading = false;
-
-  Future<void> _createTeam() async {
-    final nameCtrl = TextEditingController();
-    final prefixCtrl = TextEditingController();
-    String type = 'SALES';
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setStateDialog) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Nova Equipe', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Nome da Equipe', labelStyle: TextStyle(color: Colors.white54)),
-              ),
-              TextField(
-                controller: prefixCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Prefixo (Ex: EQV1)', labelStyle: TextStyle(color: Colors.white54)),
-              ),
-              const SizedBox(height: 12),
-              DropdownButton<String>(
-                value: type,
-                dropdownColor: const Color(0xFF1A1A2E),
-                style: const TextStyle(color: Colors.white),
-                isExpanded: true,
-                items: const [
-                  DropdownMenuItem(value: 'SALES', child: Text('Equipe de Vendas')),
-                  DropdownMenuItem(value: 'PHOTOGRAPHY', child: Text('Equipe de Fotografia')),
-                ],
-                onChanged: (v) => setStateDialog(() => type = v!),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (nameCtrl.text.isEmpty || prefixCtrl.text.isEmpty) return;
-                Navigator.pop(ctx);
-                setState(() => _isLoading = true);
-                try {
-                  await _apiService.createTeam({
-                    'name': nameCtrl.text,
-                    'prefix': prefixCtrl.text,
-                    'type': type,
-                  });
-                  widget.onSaved();
-                  Navigator.pop(context); // Close the teams dialog to force refresh
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                  setState(() => _isLoading = false);
-                }
-              },
-              child: const Text('Salvar'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _deleteTeam(String id) async {
-    setState(() => _isLoading = true);
-    try {
-      await _apiService.deleteTeam(id);
-      widget.onSaved();
-      Navigator.pop(context); // Close dialog
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao deletar: $e')));
-      setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        width: 500,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Gerenciar Equipes', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(context)),
-              ],
-            ),
-            const Divider(color: Colors.white24),
-            const SizedBox(height: 12),
-            if (_isLoading) const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8))),
-            if (!_isLoading) ...[
-              widget.teams.isEmpty
-                  ? const Text('Nenhuma equipe cadastrada.', style: TextStyle(color: Colors.white54))
-                  : ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: widget.teams.length,
-                      itemBuilder: (ctx, i) {
-                        final t = widget.teams[i];
-                        return ListTile(
-                          title: Text(t['name'], style: const TextStyle(color: Colors.white)),
-                          subtitle: Text('Prefixo: ${t['prefix']} | Tipo: ${t['type'] == "SALES" ? "Vendas" : "Fotografia"}', style: const TextStyle(color: Colors.white54)),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.redAccent),
-                            onPressed: () => _deleteTeam(t['id']),
-                          ),
-                        );
-                      },
-                    ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: _createTeam,
-                icon: const Icon(Icons.add, color: Colors.black),
-                label: const Text('Nova Equipe', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              ),
-            ]
-          ],
         ),
       ),
     );
