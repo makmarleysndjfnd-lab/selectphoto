@@ -87,7 +87,7 @@ class _PrinterConfigScreenState extends State<PrinterConfigScreen> {
     bool? isConnected = await bluetooth.isConnected;
     if (isConnected == true) {
       bluetooth.printNewLine();
-      bluetooth.printCustom("TESTE DE IMPRESSAO - HIPER PHOTOS", 2, 1);
+      bluetooth.printCustom("TESTE DE IMPRESSAO - LUMORA", 2, 1);
       bluetooth.printNewLine();
       bluetooth.printCustom("Parabens, sua impressora", 0, 1);
       bluetooth.printCustom("esta configurada!", 0, 1);

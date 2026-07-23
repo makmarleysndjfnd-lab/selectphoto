@@ -427,7 +427,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     }
     
     bluetooth.printNewLine();
-    bluetooth.printCustom("HIPER PHOTOS - FICHA COMPLETA", 2, 1);
+    bluetooth.printCustom("LUMORA - FICHA COMPLETA", 2, 1);
     bluetooth.printNewLine();
     bluetooth.printCustom("Evento: $_currentEventName", 1, 0);
     bluetooth.printCustom("Lote/Cidade: $_currentCityLote", 1, 0);
@@ -468,7 +468,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     }
     
     bluetooth.printNewLine();
-    bluetooth.printCustom("HIPER PHOTOS - FECHAMENTO DE LOTE", 2, 1);
+    bluetooth.printCustom("LUMORA - FECHAMENTO DE LOTE", 2, 1);
     bluetooth.printNewLine();
     bluetooth.printCustom("Evento: $_currentEventName", 1, 1);
     bluetooth.printCustom("Lote/Cidade: $_currentCityLote", 1, 1);

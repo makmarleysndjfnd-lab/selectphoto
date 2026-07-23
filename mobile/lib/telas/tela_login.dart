@@ -231,7 +231,7 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                       const SizedBox(height: 28),
                       const Text(
-                        'Hiper Photos',
+                        'Lumora System',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,

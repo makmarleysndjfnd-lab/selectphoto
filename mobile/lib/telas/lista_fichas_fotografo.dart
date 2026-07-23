@@ -150,7 +150,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     final eventName = ficha['eventName'] ?? 'Evento Desconhecido';
     
     bluetooth.printNewLine();
-    bluetooth.printCustom("HIPER PHOTOS - FICHA UNICA", 2, 1);
+    bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
     bluetooth.printNewLine();
     bluetooth.printCustom("Ficha: $seq", 2, 1);
     bluetooth.printCustom("Evento: $eventName", 1, 1);
