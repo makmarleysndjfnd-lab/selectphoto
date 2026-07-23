@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -12,7 +10,7 @@ class PdfGenerator {
     try {
       String url = urlStr;
       if (url.startsWith('/')) {
-          url = 'http://192.168.1.6:3000' + url;
+          url = 'http://192.168.1.6:3000$url';
       }
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
@@ -114,14 +112,14 @@ class PdfGenerator {
     
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
-      name: 'Lote_${batchName}.pdf'
+      name: 'Lote_$batchName.pdf'
     );
   }
   static pw.Widget _buildSectionTitle(String title) {
     return pw.Container(
       margin: const pw.EdgeInsets.only(bottom: 8, top: 8),
       padding: const pw.EdgeInsets.all(4),
-      decoration: pw.BoxDecoration(color: PdfColors.grey300),
+      decoration: const pw.BoxDecoration(color: PdfColors.grey300),
       child: pw.Text(title, style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
     );
   }

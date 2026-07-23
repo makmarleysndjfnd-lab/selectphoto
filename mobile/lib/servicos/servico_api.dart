@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:flutter/foundation.dart';
 
 class ApiService {
   late Dio _dio;

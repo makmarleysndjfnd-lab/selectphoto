@@ -1,10 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:provider/provider.dart';
-import 'tela_configuracoes.dart';
-import 'package:http/http.dart' as http;
-import 'package:fl_chart/fl_chart.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
@@ -18,10 +14,6 @@ import 'visao_fechamento_admin.dart';
 import 'visao_estoque_admin.dart';
 import '../utils/pdf_generator.dart';
 
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import '../servicos/ajudante_bd.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
@@ -623,7 +615,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   void _showReceiveReturnDialog() {
-    final _codeCtrl = TextEditingController();
+    final codeCtrl = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -635,7 +627,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             const Text('O book será re-cadastrado no estoque para Rebolo.', style: TextStyle(color: Colors.white70)),
             const SizedBox(height: 16),
             TextField(
-              controller: _codeCtrl,
+              controller: codeCtrl,
               style: const TextStyle(color: Colors.white),
               textCapitalization: TextCapitalization.characters,
               decoration: const InputDecoration(
@@ -650,7 +642,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
           ElevatedButton(
             onPressed: () async {
-              final code = _codeCtrl.text.trim();
+              final code = codeCtrl.text.trim();
               if (code.isEmpty) return;
               Navigator.pop(ctx);
               try {
@@ -661,7 +653,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 }
               } catch(e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: ' + e.toString()), backgroundColor: Colors.red));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
                 }
               }
             },
@@ -1562,11 +1554,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    const Row(
                       children: [
-                        const Icon(Icons.hourglass_top_rounded, color: Colors.orangeAccent, size: 24),
-                        const SizedBox(width: 8),
-                        const Text('Lotes Aguardando Liberação', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                        Icon(Icons.hourglass_top_rounded, color: Colors.orangeAccent, size: 24),
+                        SizedBox(width: 8),
+                        Text('Lotes Aguardando Liberação', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -1574,7 +1566,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                       return ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text('Lote Fotógrafo: ' + (batch['photographer'] ? batch['photographer']['name'] : 'N/A'), style: const TextStyle(color: Colors.white)),
-                        subtitle: Text('Status: ' + batch['status'] + ' | Fechado', style: const TextStyle(color: Colors.white70)),
+                        subtitle: Text('${'Status: ' + batch['status']} | Fechado', style: const TextStyle(color: Colors.white70)),
                         trailing: ElevatedButton(
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                           onPressed: () async {
@@ -1583,13 +1575,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                               if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote liberado para estoque!'), backgroundColor: Colors.green));
                               _loadClients();
                             } catch(e) {
-                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: ' + e.toString()), backgroundColor: Colors.red));
+                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
                             }
                           },
                           child: const Text('Liberar para Estoque'),
                         ),
                       );
-                    }).toList(),
+                    }),
                   ],
                 ),
               ),
@@ -2286,7 +2278,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               ],
             ),
           ),
-          ...books.map((b) => _buildBookTile(b, rota['id'], isRebolo)).toList(),
+          ...books.map((b) => _buildBookTile(b, rota['id'], isRebolo)),
         ],
       ),
     );
@@ -2437,7 +2429,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             const Icon(Icons.person, color: Colors.greenAccent, size: 20),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('${seller} (${books.length} ${isRebolo ? "Rebolos" : "Books"})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text('$seller (${books.length} ${isRebolo ? "Rebolos" : "Books"})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
             IconButton(
               icon: const Icon(Icons.print, color: Colors.white70, size: 20),

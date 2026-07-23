@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'tela_configuracoes.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
-import 'tela_login.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'tela_cadastro_custos.dart';
@@ -96,7 +94,7 @@ class _SellerDashboardState extends State<SellerDashboard>
   Map<String, dynamic>? _foundClient;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
-  DateTime _selectedDate = DateTime.now();
+  final DateTime _selectedDate = DateTime.now();
 
   int _unreadNotifs = 0;
 
@@ -236,8 +234,8 @@ class _SellerDashboardState extends State<SellerDashboard>
     showDialog(
       context: context,
       builder: (context) {
-        String _selectedSeller = 'João Vendedor';
-        final List<String> _sellers = ['João Vendedor', 'Maria Vendedora', 'Carlos Vendedor'];
+        String selectedSeller = 'João Vendedor';
+        final List<String> sellers = ['João Vendedor', 'Maria Vendedora', 'Carlos Vendedor'];
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
@@ -255,7 +253,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                   const Text('Vendedor Responsável:', style: TextStyle(color: Colors.white70, fontSize: 12)),
                   const SizedBox(height: 4),
                   DropdownButtonFormField<String>(
-                    value: _selectedSeller,
+                    value: selectedSeller,
                     dropdownColor: const Color(0xFF1A2535),
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
@@ -264,9 +262,9 @@ class _SellerDashboardState extends State<SellerDashboard>
                       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                     ),
-                    items: _sellers.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                    items: sellers.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                     onChanged: (val) {
-                      if (val != null) setState(() => _selectedSeller = val);
+                      if (val != null) setState(() => selectedSeller = val);
                     },
                   ),
                   const SizedBox(height: 16),
@@ -282,7 +280,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                 ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fechamento enviado ao admin por $_selectedSeller.')));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fechamento enviado ao admin por $selectedSeller.')));
                   },
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
                   child: const Text('Confirmar Fechamento'),
@@ -488,7 +486,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                     try {
                       await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
                       if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitação de transferência enviada!')));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solicitação de transferência enviada!')));
                       }
                     } catch (e) {
                       if (mounted) {

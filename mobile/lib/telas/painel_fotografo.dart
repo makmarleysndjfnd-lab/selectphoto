@@ -4,19 +4,14 @@ import 'tela_configuracoes.dart';
 import 'package:signature/signature.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
-import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 
 import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
-import 'tela_login.dart';
-import 'tela_sincronizacao.dart' as tela_sincronizacao;
 
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'tela_cadastro_custos.dart';
-import 'tela_config_impressora.dart';
 
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [

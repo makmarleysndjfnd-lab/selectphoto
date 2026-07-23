@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/services.dart';
 
 class VisaoFechamentoAdmin extends StatefulWidget {

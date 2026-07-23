@@ -292,11 +292,11 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
                       alignment: Alignment.center,
-                      child: Column(
+                      child: const Column(
                         children: [
-                          const CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 3),
-                          const SizedBox(height: 24),
-                          const Text(
+                          CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 3),
+                          SizedBox(height: 24),
+                          Text(
                             'Estamos fazendo aquele pente fino para você ter os melhores eventos à disposição... Aguarde!',
                             textAlign: TextAlign.center,
                             style: TextStyle(

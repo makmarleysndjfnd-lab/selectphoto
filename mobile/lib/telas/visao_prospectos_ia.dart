@@ -179,12 +179,12 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
             controller: _tabController,
             children: _states.map((state) {
               if (_isLoading[state] == true) {
-                return Center(
+                return const Center(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 40),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
+                      children: [
                         CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 3),
                         SizedBox(height: 24),
                         Text(

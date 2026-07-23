@@ -318,8 +318,9 @@ Future<void> _pickImage(String type) async {
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (pickedFile != null) {
       setState(() {
-        if (type == 'photo') _photo = File(pickedFile.path);
-        else if (type == 'frontPhoto') _frontPhoto = File(pickedFile.path);
+        if (type == 'photo') {
+          _photo = File(pickedFile.path);
+        } else if (type == 'frontPhoto') _frontPhoto = File(pickedFile.path);
         else if (type == 'backPhoto') _backPhoto = File(pickedFile.path);
         else if (type == 'leftPhoto') _leftPhoto = File(pickedFile.path);
         else if (type == 'rightPhoto') _rightPhoto = File(pickedFile.path);

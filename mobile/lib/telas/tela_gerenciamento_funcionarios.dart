@@ -91,7 +91,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
               Tab(text: 'Checklist de Chaves', icon: Icon(Icons.car_rental)),
             ],
           ),
-          actions: [],
+          actions: const [],
         ),
         floatingActionButton: Builder(
           builder: (context) {
