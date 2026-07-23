@@ -223,7 +223,7 @@ class _LoginScreenState extends State<LoginScreen>
                           ),
                           child: ClipOval(
                             child: Image.asset(
-                              'assets/images/logo.png',
+                              'assets/images/logo_hiper.png',
                               fit: BoxFit.cover,
                             ),
                           ),
@@ -231,7 +231,7 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                       const SizedBox(height: 28),
                       const Text(
-                        'Lumora',
+                        'Hiper Photos',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,

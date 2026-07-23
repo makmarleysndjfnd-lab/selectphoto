@@ -595,7 +595,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     final eventName = ficha['cliente'] ?? 'Evento Desconhecido';
     
     bluetooth.printNewLine();
-    bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
+    bluetooth.printCustom("HIPER PHOTOS - FICHA UNICA", 2, 1);
     bluetooth.printNewLine();
     bluetooth.printCustom("Ficha: $seq", 2, 1);
     bluetooth.printCustom("Evento: $eventName", 1, 1);
