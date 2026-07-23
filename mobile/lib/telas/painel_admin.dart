@@ -406,7 +406,17 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         children: [
           const SizedBox(height: 40),
-          const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFFCE93D8), size: 48),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.asset(
+              'assets/images/logo_hiper.png',
+              width: 56,
+              height: 56,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) =>
+                  const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFFCE93D8), size: 48),
+            ),
+          ),
           const SizedBox(height: 16),
           const Text('Central Fotográfica', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           const Text('Admin Web', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 14)),
@@ -715,10 +725,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                       onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                     ),
                   Container(
-                    padding: const EdgeInsets.all(10),
+                    width: 42,
+                    height: 42,
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                          colors: [Color(0xFFCE93D8), Color(0xFF9C27B0)]),
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
