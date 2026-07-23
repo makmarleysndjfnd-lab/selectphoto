@@ -48,11 +48,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   final List<String> _selectedMonthsMes = [];
   final List<String> _selectedSellersMes = [];
   
-  final List<String> _mockReceipts = [
-    'https://images.unsplash.com/photo-1621501103258-3e135c7c2e35?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=200&q=80',
-    'https://images.unsplash.com/photo-1589829085413-56de8ae18c73?auto=format&fit=crop&w=200&q=80'
-  ];
+  final List<String> _mockReceipts = [];
 
   final Map<String, Map<String, dynamic>> _mockFinanceiroVendedor = {
     '1': {
