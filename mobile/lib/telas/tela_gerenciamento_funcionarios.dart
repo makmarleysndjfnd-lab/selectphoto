@@ -271,21 +271,32 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     setState(() => _isSaving = true);
 
     try {
-      final formData = FormData.fromMap({
-        'name': _nameCtrl.text,
-        'password': _passwordCtrl.text, // Backend handles empty password logic for PUT
-        'role': _role,
-        'salesType': _salesType,
-        'cpf': _cpfCtrl.text,
-        'rg': _rgCtrl.text,
-        'phone': _phoneCtrl.text,
-        'emergencyPhone': _emergencyCtrl.text,
-        'address': _addressCtrl.text,
-        'teamId': _teamId ?? '',
-        'carId': _carId ?? '',
-        'isTeamLeader': _isTeamLeader.toString(),
-        'usesOwnCar': _usesOwnCar.toString(),
-      });
+      String finalSalesType = _salesType;
+        String finalTeamId = _teamId ?? '';
+        bool finalIsTeamLeader = _isTeamLeader;
+        
+        if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
+          finalSalesType = '';
+        } else {
+          finalTeamId = '';
+          finalIsTeamLeader = false;
+        }
+
+        final formData = FormData.fromMap({
+          'name': _nameCtrl.text,
+          'password': _passwordCtrl.text,
+          'role': _role,
+          'salesType': finalSalesType,
+          'cpf': _cpfCtrl.text,
+          'rg': _rgCtrl.text,
+          'phone': _phoneCtrl.text,
+          'emergencyPhone': _emergencyCtrl.text,
+          'address': _addressCtrl.text,
+          'teamId': finalTeamId,
+          'carId': _carId ?? '',
+          'isTeamLeader': finalIsTeamLeader.toString(),
+          'usesOwnCar': _usesOwnCar.toString(),
+        });
 
       if (_profilePhoto != null) {
         formData.files.add(MapEntry('profilePhoto', await MultipartFile.fromFile(_profilePhoto!.path)));
@@ -463,6 +474,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                       ),
                     ),
                     const SizedBox(width: 16),
+                    if (_role != 'PHOTOGRAPHER' && _role != 'CONTACT')
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         value: _salesType,
@@ -476,10 +488,13 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                         onChanged: (v) => setState(() => _salesType = v!),
                       ),
                     ),
+                    if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
+                      const Expanded(child: SizedBox()),
                   ],
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
+                if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
+                  DropdownButtonFormField<String>(
                   value: _teamId,
                   dropdownColor: const Color(0xFF1A1A2E),
                   style: const TextStyle(color: Colors.white),
@@ -497,7 +512,8 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   onChanged: (v) => setState(() => _teamId = v),
                 ),
                 const SizedBox(height: 12),
-                CheckboxListTile(
+                if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
+                  CheckboxListTile(
                   title: const Text('Chefe de Equipe?', style: TextStyle(color: Colors.white)),
                   value: _isTeamLeader,
                   onChanged: (v) => setState(() => _isTeamLeader = v ?? false),
@@ -507,7 +523,8 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
+                if (!_usesOwnCar)
+                  DropdownButtonFormField<String>(
                   value: _carId,
                   dropdownColor: const Color(0xFF1A1A2E),
                   style: const TextStyle(color: Colors.white),
@@ -525,14 +542,34 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   onChanged: (v) => setState(() => _carId = v),
                 ),
                 const SizedBox(height: 12),
-                CheckboxListTile(
-                  title: const Text('Usa carro próprio?', style: TextStyle(color: Colors.white)),
-                  value: _usesOwnCar,
-                  activeColor: const Color(0xFFCE93D8),
-                  checkColor: Colors.black,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  onChanged: (v) => setState(() => _usesOwnCar = v!),
+                
+                const Text('Usa carro próprio?', style: TextStyle(color: Colors.white)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: RadioListTile<bool>(
+                        title: const Text('Sim', style: TextStyle(color: Colors.white)),
+                        value: true,
+                        groupValue: _usesOwnCar,
+                        activeColor: const Color(0xFFCE93D8),
+                        onChanged: (v) {
+                          setState(() {
+                            _usesOwnCar = v!;
+                            _carId = null; // reset if they use own car
+                          });
+                        },
+                      ),
+                    ),
+                    Expanded(
+                      child: RadioListTile<bool>(
+                        title: const Text('Não', style: TextStyle(color: Colors.white)),
+                        value: false,
+                        groupValue: _usesOwnCar,
+                        activeColor: const Color(0xFFCE93D8),
+                        onChanged: (v) => setState(() => _usesOwnCar = v!),
+                      ),
+                    ),
+                  ],
                 ),
                 
                 const SizedBox(height: 32),
