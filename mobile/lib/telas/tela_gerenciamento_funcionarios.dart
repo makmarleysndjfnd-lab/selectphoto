@@ -87,7 +87,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
             labelColor: Color(0xFFCE93D8),
             unselectedLabelColor: Colors.white54,
             tabs: [
-              Tab(text: 'Equipe e Funcionários', icon: Icon(Icons.people)),
+              Tab(text: 'Funcionários', icon: Icon(Icons.people)),
               Tab(text: 'Checklist de Chaves', icon: Icon(Icons.car_rental)),
             ],
           ),
