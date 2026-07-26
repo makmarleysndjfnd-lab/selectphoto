@@ -907,40 +907,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                   ),
                   IconButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
-                    },
-                    icon: Consumer<SyncService>(
-                      builder: (context, sync, child) {
-                        return Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(Icons.cloud_sync, color: Color(0xFFCE93D8)),
-                            if (sync.pendingRequests.isNotEmpty)
-                              Positioned(
-                                right: 0,
-                                top: 0,
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.red,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                                  child: Text(
-                                    '${sync.pendingRequests.length}',
-                                    style: const TextStyle(color: Colors.white, fontSize: 8),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        );
-                      }
-                    ),
-                    tooltip: 'Backups Offline',
-                  ),
-                  IconButton(
-                    onPressed: () {
                       _showNotificacoesDialog();
                     },
                     icon: _unreadNotifs > 0 
@@ -951,15 +917,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                       : const Icon(Icons.notifications_none_rounded, color: Colors.white54),
                     tooltip: 'Notificações',
                   ),
-                  if (!isDesktop) // Hide logout button in header on desktop, since it's in the side menu
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(
-                              builder: (_) => const LoginScreen())),
-                      icon: const Icon(Icons.logout_rounded,
-                          color: Color(0xFFCE93D8)),
-                      tooltip: 'Sair',
-                    ),
+                  IconButton(
+                    onPressed: () {
+                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
+                    },
+                    icon: const Icon(Icons.settings, color: Color(0xFFCE93D8)),
+                    tooltip: 'Configurações',
+                  ),
                 ],
               ),
             ),
