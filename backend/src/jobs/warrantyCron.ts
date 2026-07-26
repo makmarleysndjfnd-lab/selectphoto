@@ -12,7 +12,6 @@ export const checkWarranties = async () => {
     // Fetch all active cars that have some text in warrantyParts
     const cars = await prisma.car.findMany({
       where: {
-        warrantyParts: { not: null },
         status: { not: 'INACTIVE' }
       },
       include: {
@@ -85,6 +84,59 @@ export const checkWarranties = async () => {
           }
           
           console.log(`[CRON] Notificação gerada para carro ${car.plate} (vence em ${diffDays} dias).`);
+        }
+        }
+      }
+      
+      // -- KM CHECK FOR OIL CHANGE --
+      if (car.nextOilChangeKm && car.nextOilChangeKm > 0) {
+        const diffKm = car.nextOilChangeKm - car.currentKm;
+        
+        if (diffKm <= 1000) {
+          const isOverdue = diffKm <= 0;
+          const statusText = isOverdue ? 'VENCIDA (ou atingida)' : `faltam ${diffKm} km`;
+          const title = `Troca de Óleo: ${car.plate}`;
+          const message = `A troca de óleo do veículo ${car.plate} (${car.model}) está ${statusText}. Alvo: ${car.nextOilChangeKm} km.`;
+          
+          // Check if we already sent a notification for this specific target KM and status recently
+          // We can just check the last notification for this car with this title and message
+          const lastNotification = await prisma.notification.findFirst({
+            where: {
+              title,
+              message,
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          
+          if (!lastNotification) {
+            const recipients = [...admins];
+            if (car.currentUser && !recipients.some(a => a.id === car.currentUser!.id)) {
+              recipients.push(car.currentUser);
+            }
+            
+            for (const recipient of recipients) {
+              await prisma.notification.create({
+                data: {
+                  title,
+                  message,
+                  type: 'INFO',
+                  status: 'UNREAD',
+                  recipientId: recipient.id,
+                  companyId: recipient.companyId
+                }
+              });
+
+              if (recipient.fcmToken) {
+                await sendPushNotification(
+                  [recipient.fcmToken],
+                  title,
+                  message,
+                  { type: 'INFO', carId: car.id }
+                );
+              }
+            }
+            console.log(`[CRON] Notificação de Óleo gerada para carro ${car.plate} (Diff: ${diffKm} km).`);
+          }
         }
       }
     }
