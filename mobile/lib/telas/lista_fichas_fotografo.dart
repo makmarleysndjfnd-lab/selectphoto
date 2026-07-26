@@ -83,7 +83,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(
                           title: Text(
-                            ficha['mainContact'] ?? 'Sem Nome',
+                            ficha['name'] ?? ficha['mainContact'] ?? 'Sem Nome',
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                           ),
                           subtitle: Column(

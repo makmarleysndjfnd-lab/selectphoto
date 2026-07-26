@@ -44,14 +44,6 @@ class PdfGenerator {
           _buildRow('Profissão:', client['profession'] ?? 'N/A'),
           
           pw.SizedBox(height: 16),
-          _buildSectionTitle('INFORMAÇÕES DA VENDA'),
-          _buildRow('Plano Escolhido:', client['selectedPlan'] ?? 'N/A'),
-          _buildRow('Valor Negociado:', 'R\$ ${client['negotiatedValue'] ?? '0.00'}'),
-          _buildRow('Forma de Pagamento:', client['paymentMethod'] ?? 'N/A'),
-          if (client['installments'] != null) _buildRow('Parcelas:', client['installments'].toString()),
-          _buildRow('Data de Vencimento:', client['dueDate'] != null ? client['dueDate'].toString().split('T')[0] : 'N/A'),
-          
-          pw.SizedBox(height: 16),
           _buildSectionTitle('DADOS DA CRIANÇA'),
           _buildRow('Nome da Criança:', client['childName'] ?? 'N/A'),
           _buildRow('Idade da Criança:', client['childAge']?.toString() ?? 'N/A'),
