@@ -35,6 +35,7 @@ import stockRoutes from './routes/stock';
 import booksRoutes from './routes/books';
 import notificationsRoutes from './routes/notifications';
 import editRequestsRoutes from './routes/editRequests';
+import { initWarrantyCron } from './jobs/warrantyCron';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);
@@ -53,6 +54,8 @@ app.use('/api/stock', stockRoutes);
 app.use('/api/books', booksRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/edit-requests', editRequestsRoutes);
+
+initWarrantyCron();
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

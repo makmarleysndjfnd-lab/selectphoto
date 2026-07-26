@@ -213,7 +213,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
           const SizedBox(height: 16),
           _infoRow(Icons.speed_rounded, 'KM Atual: $currentKm km'),
           const SizedBox(height: 4),
-          _infoRow(Icons.oil_barrel_rounded, 'Troca Óleo: $nextOil km'),
+          _infoRow(Icons.oil_barrel_rounded, 'Próxima Troca de Óleo: $nextOil km'),
           if (car['warrantyParts'] != null && car['warrantyParts'].toString().isNotEmpty && car['warrantyParts'].toString() != 'null') ...[
             const SizedBox(height: 4),
             _infoRow(Icons.verified_rounded, 'Garantia: ${car['warrantyParts']}', color: Colors.blueAccent),
