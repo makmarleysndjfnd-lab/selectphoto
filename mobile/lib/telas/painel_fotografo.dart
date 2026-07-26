@@ -336,9 +336,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       final signatureBytes = await _signatureController.toPngBytes();
       final base64Signature = base64Encode(signatureBytes!);
       
-      // Auto Generate Sequence
       final seqString = _sequenceCount.toString().padLeft(4, '0');
-      final sequenceNumber = '$_currentCityLote-$seqString'; 
+      
+      final prefs = await SharedPreferences.getInstance();
+      final photographerCode = prefs.getString('photographer_code') ?? '0000';
+      final eventAbbrev = _abbreviateEvent(_currentEventName!);
+      
+      final sequenceNumber = '$photographerCode-$eventAbbrev-$_currentCityLote-$seqString'; 
 
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
@@ -452,6 +456,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     bluetooth.printNewLine();
     bluetooth.printNewLine();
     bluetooth.printNewLine();
+  }
+
+  String _abbreviateEvent(String eventName) {
+    final words = eventName.trim().split(RegExp(r'\s+'));
+    if (words.length > 1) {
+      final abbrev = words.map((w) => w[0]).join('');
+      return abbrev.length > 5 ? abbrev.substring(0, 5).toUpperCase() : abbrev.toUpperCase();
+    }
+    final single = eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    return single.length > 5 ? single.substring(0, 5).toUpperCase() : single.toUpperCase();
   }
 
   void _printLote() async {

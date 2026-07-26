@@ -295,9 +295,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
         
         if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
           finalSalesType = '';
-        } else {
-          finalTeamId = '';
-          finalIsTeamLeader = false;
         }
 
         final formData = FormData.fromMap({
@@ -511,7 +508,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
                   DropdownButtonFormField<String>(
                   value: _teamId,
                   dropdownColor: const Color(0xFF1A1A2E),
@@ -530,7 +526,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   onChanged: (v) => setState(() => _teamId = v),
                 ),
                 const SizedBox(height: 12),
-                if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
                   CheckboxListTile(
                   title: const Text('Chefe de Equipe?', style: TextStyle(color: Colors.white)),
                   value: _isTeamLeader,
@@ -555,7 +550,9 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   ),
                   items: [
                     const DropdownMenuItem(value: null, child: Text('Nenhum Veículo')),
-                    ...widget.cars.map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['plate']} - ${c['model']}'))),
+                    ...widget.cars
+                      .where((c) => c['status'] == 'AVAILABLE' || c['id'] == _carId)
+                      .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['plate']} - ${c['model']}'))),
                   ],
                   onChanged: (v) => setState(() => _carId = v),
                 ),
@@ -773,7 +770,7 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
                     value: 'CHECKOUT',
                     groupValue: _type,
                     activeColor: const Color(0xFFCE93D8),
-                    onChanged: (val) => setState(() => _type = val!),
+                    onChanged: (val) => setState(() { _type = val!; _selectedCarId = null; }),
                   ),
                 ),
                 Expanded(
@@ -782,7 +779,7 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
                     value: 'CHECKIN',
                     groupValue: _type,
                     activeColor: const Color(0xFFCE93D8),
-                    onChanged: (val) => setState(() => _type = val!),
+                    onChanged: (val) => setState(() { _type = val!; _selectedCarId = null; }),
                   ),
                 ),
               ],
@@ -794,7 +791,10 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
               style: const TextStyle(color: Colors.white),
               dropdownColor: const Color(0xFF2A2A3E),
               value: _selectedCarId,
-              items: widget.cars.map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['model']} - ${c['plate']}'))).toList(),
+              items: widget.cars.where((c) {
+                if (_type == 'CHECKOUT') return c['status'] == 'AVAILABLE';
+                return c['status'] == 'IN_USE';
+              }).map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['model']} - ${c['plate']}'))).toList(),
               onChanged: (val) => setState(() => _selectedCarId = val),
               validator: (val) => val == null ? 'Obrigatório' : null,
             ),

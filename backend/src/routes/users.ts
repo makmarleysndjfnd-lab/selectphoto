@@ -55,6 +55,20 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
 
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    let photographerCode = null;
+    if (role === 'PHOTOGRAPHER') {
+      const lastPhotographer = await prisma.user.findFirst({
+        where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
+        orderBy: { photographerCode: 'desc' }
+      });
+      if (lastPhotographer && lastPhotographer.photographerCode) {
+        const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
+        photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
+      } else {
+        photographerCode = '0001';
+      }
+    }
+    
     const newUser = await prisma.user.create({
       data: { 
         name, 
@@ -70,6 +84,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
         usesOwnCar: usesOwnCar === 'true',
         profilePhotoUrl,
         criminalRecordUrl,
+        photographerCode,
         companyId: req.user?.companyId
       }
     });
@@ -77,7 +92,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
     if (carId && carId !== 'null' && carId !== '') {
       await prisma.car.update({
         where: { id: carId },
-        data: { currentUserId: newUser.id }
+        data: { currentUserId: newUser.id, status: 'IN_USE' }
       });
     }
     
@@ -141,13 +156,13 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
       // Clear previous car assignments for this user
       await prisma.car.updateMany({
         where: { currentUserId: id as string },
-        data: { currentUserId: null }
+        data: { currentUserId: null, status: 'AVAILABLE' }
       });
       // Assign new car if valid
       if (carId && carId !== 'null' && carId !== '') {
         await prisma.car.update({
           where: { id: carId },
-          data: { currentUserId: id as string }
+          data: { currentUserId: id as string, status: 'IN_USE' }
         });
       }
     }

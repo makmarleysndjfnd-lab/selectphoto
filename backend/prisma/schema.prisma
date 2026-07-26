@@ -67,6 +67,8 @@ model User {
   profilePhotoUrl         String?
   rg                      String?
   usesOwnCar              Boolean               @default(false)
+  photographerCode        String?
+  salesType               String?
   company                 Company?              @relation(fields: [companyId], references: [id])
   appointments            Appointment[]
   currentCars             Car[]                 @relation("CarCurrentUser")
@@ -235,6 +237,7 @@ model Car {
   createdAt          DateTime       @default(now())
   currentUserId      String?
   companyId          String?
+  currentKm          Int            @default(0)
   nextOilChangeKm    Int            @default(0)
   pendingMaintenance String?
   warrantyParts      String?

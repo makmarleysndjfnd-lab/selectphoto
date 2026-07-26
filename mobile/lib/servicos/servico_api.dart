@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   late Dio _dio;
-  String _baseUrl = 'https://selectphoto-k1ac.onrender.com/api';
+  String _baseUrl = 'http://192.168.0.129:3000/api';
   String? _token;
   bool _isInit = false;
 

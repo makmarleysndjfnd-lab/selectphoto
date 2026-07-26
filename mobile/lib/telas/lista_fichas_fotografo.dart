@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../utils/pdf_generator.dart';
 import 'solicitar_correcao_ficha.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
+import 'tela_detalhes_cliente_vendedor.dart' as import_tela_detalhes;
 
 class ListaFichasFotografo extends StatefulWidget {
   const ListaFichasFotografo({super.key});
@@ -55,7 +56,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
             onPressed: () async {
               if (_fichas.isEmpty) return;
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF do lote...')));
-              final clients = _fichas.map((f) => f as Map<String, dynamic>).toList();
+              final clients = _fichas.map((f) => Map<String, dynamic>.from(f as Map)).toList();
               await PdfGenerator.printBatch(clients, 'Fotografo');
             },
           ),
@@ -99,6 +100,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 ),
                             ],
                           ),
+
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -107,13 +109,13 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 tooltip: 'Imprimir Ficha',
                                 onPressed: () async {
                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF...')));
-                                  await PdfGenerator.printFicha(ficha);
+                                  await PdfGenerator.printFicha(Map<String, dynamic>.from(ficha as Map));
                                 },
                               ),
                               IconButton(
                                 icon: const Icon(Icons.receipt_long, color: Colors.orangeAccent),
                                 tooltip: 'Imprimir Ticket (Bluetooth)',
-                                onPressed: () => _printUnidadeBluetooth(ficha),
+                                onPressed: () => _printUnidadeBluetooth(Map<String, dynamic>.from(ficha as Map)),
                               ),
                               IconButton(
                                 icon: const Icon(Icons.edit_note, color: Color(0xFFCE93D8)),
@@ -129,6 +131,14 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                               ),
                             ],
                           ),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => import_tela_detalhes.SellerClientDetailScreen(clientData: Map<String, dynamic>.from(ficha as Map)),
+                              ),
+                            );
+                          },
                         ),
                       );
                     },

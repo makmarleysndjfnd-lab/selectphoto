@@ -104,7 +104,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
     // Determine Status Colors
     final isMaintenancePending = car['pendingMaintenance'] != null && car['pendingMaintenance'].toString().isNotEmpty && car['pendingMaintenance'].toString() != 'null';
     final int nextOil = (car['nextOilChangeKm'] as num?)?.toInt() ?? 0;
-    final int currentKm = (car['lastMileage'] as num?)?.toInt() ?? 0;
+    final int currentKm = (car['currentKm'] as num?)?.toInt() ?? 0;
     
     // Logic for color statuses
     // GREEN: OK
@@ -287,6 +287,7 @@ class _CarFormDialogState extends State<_CarFormDialog> {
   late TextEditingController _trackerLinkCtrl;
   late TextEditingController _warrantyCtrl;
   late TextEditingController _nextOilCtrl;
+  late TextEditingController _currentKmCtrl;
   late TextEditingController _checklistCtrl;
 
 
@@ -310,6 +311,7 @@ class _CarFormDialogState extends State<_CarFormDialog> {
     _modelCtrl = TextEditingController(text: c?['model'] ?? '');
     _trackerLinkCtrl = TextEditingController(text: c?['trackerLink'] ?? '');
     _warrantyCtrl = TextEditingController(text: c?['warrantyParts'] ?? '');
+    _currentKmCtrl = TextEditingController(text: (c?['currentKm'] ?? 0).toString());
     _nextOilCtrl = TextEditingController(text: (c?['nextOilChangeKm'] ?? 0).toString());
     _checklistCtrl = TextEditingController(text: c?['initialChecklist'] ?? '');
   }
@@ -341,6 +343,7 @@ Future<void> _save() async {
         'model': _modelCtrl.text,
         'trackerLink': _trackerLinkCtrl.text,
         'warrantyParts': _warrantyCtrl.text,
+        'currentKm': _currentKmCtrl.text,
         'nextOilChangeKm': _nextOilCtrl.text,
         'initialChecklist': _checklistCtrl.text,
       });
@@ -417,6 +420,12 @@ Future<void> _save() async {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(labelText: 'Modelo', labelStyle: TextStyle(color: Colors.white54)),
                             validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                          ),
+                          TextFormField(
+                            controller: _currentKmCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Quilometragem Atual', labelStyle: TextStyle(color: Colors.white54)),
                           ),
                           TextFormField(
                             controller: _nextOilCtrl,

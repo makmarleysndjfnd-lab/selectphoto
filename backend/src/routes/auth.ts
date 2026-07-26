@@ -45,6 +45,7 @@ router.post('/login', async (req: Request, res: Response) => {
         role: user.role,
         teamId: user.teamId,
         companyId: user.companyId,
+        photographerCode: user.photographerCode,
       }
     });
   } catch (error) {
