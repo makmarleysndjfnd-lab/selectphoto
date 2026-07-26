@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticateToken, checkRole } from '../middleware/auth';
+import { authenticateToken, requireAdmin } from '../middleware/authMiddleware';
 import { generateBackupJson, restoreBackupJson } from '../services/backupService';
 import { getLatestOnlineBackupDate } from '../services/backupOnlineService';
 import multer from 'multer';
@@ -8,7 +8,7 @@ const uploadMem = multer({ storage: multer.memoryStorage() });
 const router = Router();
 
 // Apenas administradores podem gerar o backup
-router.get('/download', authenticateToken, checkRole(['ADMIN']), async (req, res) => {
+router.get('/download', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const backupJsonString = await generateBackupJson();
     const dateStr = new Date().toISOString().split('T')[0];
@@ -24,7 +24,7 @@ router.get('/download', authenticateToken, checkRole(['ADMIN']), async (req, res
   }
 });
 
-router.post('/restore', authenticateToken, checkRole(['ADMIN']), uploadMem.single('file'), async (req, res) => {
+router.post('/restore', authenticateToken, requireAdmin, uploadMem.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Nenhum arquivo enviado.' });
