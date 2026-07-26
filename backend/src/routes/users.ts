@@ -57,15 +57,19 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
     
     let photographerCode = null;
     if (role === 'PHOTOGRAPHER') {
-      const lastPhotographer = await prisma.user.findFirst({
-        where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
-        orderBy: { photographerCode: 'desc' }
-      });
-      if (lastPhotographer && lastPhotographer.photographerCode) {
-        const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
-        photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
+      if (providedPhotographerCode && providedPhotographerCode.trim() !== '') {
+        photographerCode = providedPhotographerCode.trim();
       } else {
-        photographerCode = '0001';
+        const lastPhotographer = await prisma.user.findFirst({
+          where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
+          orderBy: { photographerCode: 'desc' }
+        });
+        if (lastPhotographer && lastPhotographer.photographerCode) {
+          const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
+          photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
+        } else {
+          photographerCode = '0001';
+        }
       }
     }
     
@@ -80,7 +84,6 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
         phone: phone || null,
         emergencyPhone: emergencyPhone || null,
         address: address || null,
-        isTeamLeader: isTeamLeader === 'true',
         usesOwnCar: usesOwnCar === 'true',
         profilePhotoUrl,
         criminalRecordUrl,
@@ -107,7 +110,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
 router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
+    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
 
     // Fetch existing to get old URLs
     const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
@@ -137,11 +140,14 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
       phone: phone || null,
       emergencyPhone: emergencyPhone || null,
       address: address || null,
-      isTeamLeader: isTeamLeader === 'true',
       usesOwnCar: usesOwnCar === 'true',
       profilePhotoUrl,
       criminalRecordUrl
     };
+    
+    if (role === 'PHOTOGRAPHER' && photographerCode !== undefined) {
+      updateData.photographerCode = photographerCode.trim() !== '' ? photographerCode.trim() : null;
+    }
 
     if (password && password.trim() !== '') {
       updateData.password = await bcrypt.hash(password, 10);

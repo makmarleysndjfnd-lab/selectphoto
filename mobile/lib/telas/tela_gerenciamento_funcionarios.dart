@@ -125,7 +125,6 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                     itemBuilder: (context, index) {
                       final emp = _employees[index];
                       final String role = emp['role'] == 'SELLER' ? 'Vendedor' : (emp['role'] == 'PHOTOGRAPHER' ? 'Fotógrafo' : (emp['role'] == 'SELLER_MANAGER' ? 'Vendedor Gerente' : 'Contato'));
-                      final bool isLeader = emp['isTeamLeader'] == true;
                       
                       return Card(
                         color: const Color(0xFF1A1A2E),
@@ -139,7 +138,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                             child: emp['profilePhotoUrl'] == null ? const Icon(Icons.person, color: Colors.white54) : null,
                           ),
                           title: Text(emp['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          subtitle: Text('$role ${isLeader ? '(Líder/Gerente)' : ''} | Equipe: ${emp['team']?['name'] ?? 'Nenhuma'}', style: const TextStyle(color: Colors.white70)),
+                          subtitle: Text('$role | Equipe: ${emp['team']?['name'] ?? 'Nenhuma'}${emp['photographerCode'] != null ? ' | Cód: ${emp['photographerCode']}' : ''}', style: const TextStyle(color: Colors.white70)),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -192,12 +191,12 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   late TextEditingController _phoneCtrl;
   late TextEditingController _emergencyCtrl;
   late TextEditingController _addressCtrl;
+  late TextEditingController _photographerCodeCtrl;
 
   String _role = 'SELLER';
   String _salesType = 'BOOK';
   String? _teamId;
   String? _carId;
-  bool _isTeamLeader = false;
   bool _usesOwnCar = false;
   
   File? _profilePhoto;
@@ -258,12 +257,12 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     _phoneCtrl = TextEditingController(text: emp?['phone'] ?? '');
     _emergencyCtrl = TextEditingController(text: emp?['emergencyPhone'] ?? '');
     _addressCtrl = TextEditingController(text: emp?['address'] ?? '');
+    _photographerCodeCtrl = TextEditingController(text: emp?['photographerCode'] ?? '');
     
     if (emp != null) {
       _role = emp['role'] ?? 'SELLER';
       _salesType = emp['salesType'] ?? 'BOOK';
       _teamId = emp['teamId'];
-      _isTeamLeader = emp['isTeamLeader'] ?? false;
       _usesOwnCar = emp['usesOwnCar'] ?? false;
       if (emp['currentCars'] != null && (emp['currentCars'] as List).isNotEmpty) {
         _carId = emp['currentCars'][0]['id'];
@@ -291,7 +290,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     try {
       String finalSalesType = _salesType;
         String finalTeamId = _teamId ?? '';
-        bool finalIsTeamLeader = _isTeamLeader;
         
         if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
           finalSalesType = '';
@@ -309,8 +307,8 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
           'address': _addressCtrl.text,
           'teamId': finalTeamId,
           'carId': _carId ?? '',
-          'isTeamLeader': finalIsTeamLeader.toString(),
           'usesOwnCar': _usesOwnCar.toString(),
+          'photographerCode': _photographerCodeCtrl.text,
         });
 
       if (_profilePhoto != null) {
@@ -526,16 +524,15 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   onChanged: (v) => setState(() => _teamId = v),
                 ),
                 const SizedBox(height: 12),
-                  CheckboxListTile(
-                  title: const Text('Chefe de Equipe?', style: TextStyle(color: Colors.white)),
-                  value: _isTeamLeader,
-                  onChanged: (v) => setState(() => _isTeamLeader = v ?? false),
-                  activeColor: const Color(0xFFCE93D8),
-                  checkColor: Colors.black,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                ),
-                const SizedBox(height: 12),
+                if (_role == 'PHOTOGRAPHER') ...[
+                  TextFormField(
+                    controller: _photographerCodeCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(labelText: 'Código do Fotógrafo (ex: 0001)', labelStyle: TextStyle(color: Colors.white54)),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (!_usesOwnCar)
                   DropdownButtonFormField<String>(
                   value: _carId,
