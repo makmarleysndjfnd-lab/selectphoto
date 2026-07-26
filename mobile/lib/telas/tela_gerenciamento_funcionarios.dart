@@ -506,24 +506,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                  value: _teamId,
-                  dropdownColor: const Color(0xFF1A1A2E),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Equipe (Opcional)',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF0D0D1A),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                  ),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('Nenhuma Equipe')),
-                    ...widget.teams.map((t) => DropdownMenuItem(value: t['id'] as String, child: Text('${t['name']} (${t['type']})'))),
-                  ],
-                  onChanged: (v) => setState(() => _teamId = v),
-                ),
-                const SizedBox(height: 12),
+
                 if (_role == 'PHOTOGRAPHER') ...[
                   TextFormField(
                     controller: _photographerCodeCtrl,
