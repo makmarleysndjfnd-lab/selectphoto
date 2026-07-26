@@ -99,6 +99,12 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
               where: { id: actionData.costId },
               data: { status: 'APPROVED' }
             });
+            if (actionData.nextOilChangeKm && actionData.carId) {
+              await prisma.car.update({
+                where: { id: actionData.carId },
+                data: { nextOilChangeKm: Number(actionData.nextOilChangeKm) }
+              });
+            }
           }
           break;
         case 'STOCK_TRANSFER_COVER':

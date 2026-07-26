@@ -1,6 +1,8 @@
 import cron from 'node-cron';
 import { PrismaClient } from '@prisma/client';
 import { sendPushNotification } from '../utils/firebaseConfig';
+import { s3 } from '../middleware/upload';
+import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 const prisma = new PrismaClient();
 
@@ -272,6 +274,50 @@ export const checkOverdueKmRequests = async () => {
   }
 };
 
+export const cleanOldCostPhotos = async () => {
+  try {
+    console.log('[CRON] Iniciando limpeza de comprovantes antigos...');
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const oldCosts = await prisma.cost.findMany({
+      where: {
+        createdAt: { lt: ninetyDaysAgo },
+        receiptUrl: { not: null, equals: { not: '' } }
+      }
+    });
+
+    for (const cost of oldCosts) {
+      if (!cost.receiptUrl) continue;
+      
+      try {
+        const urlObj = new URL(cost.receiptUrl);
+        // Usually backblaze URLs are like https://<endpoint>/<bucket>/<key> or https://<bucket>.<endpoint>/<key>
+        // But since we use s3 client, key is just the file name. Let's extract the last path segment:
+        const key = urlObj.pathname.split('/').pop();
+        
+        if (key) {
+          const command = new DeleteObjectCommand({
+            Bucket: process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app',
+            Key: key
+          });
+          await s3.send(command);
+          console.log(`[CRON] Deletado do S3: ${key}`);
+          
+          await prisma.cost.update({
+            where: { id: cost.id },
+            data: { receiptUrl: null }
+          });
+        }
+      } catch (err) {
+        console.error(`[CRON] Falha ao deletar foto do custo ${cost.id}:`, err);
+      }
+    }
+  } catch (error) {
+    console.error('[CRON] Erro ao limpar comprovantes antigos:', error);
+  }
+};
+
 // Start the cron job
 export const initWarrantyCron = () => {
   // Check warranties and overdue KMs every day at 08:00 AM
@@ -290,4 +336,12 @@ export const initWarrantyCron = () => {
     timezone: "America/Sao_Paulo"
   });
   console.log('⏳ Cron job semanal (KM) agendado para Segunda-feira às 20:00 (BRT).');
+  
+  // Clean old receipts every Sunday at 02:00 AM
+  cron.schedule('0 2 * * 0', () => {
+    cleanOldCostPhotos();
+  }, {
+    timezone: "America/Sao_Paulo"
+  });
+  console.log('⏳ Cron job de limpeza de comprovantes agendado para Domingo às 02:00 AM (BRT).');
 };

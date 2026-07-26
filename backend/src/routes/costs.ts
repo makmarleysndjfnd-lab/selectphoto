@@ -15,7 +15,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       carId,
       description, 
       paymentMethod, 
-      receiptUrl 
+      receiptUrl,
+      nextOilChangeKm
     } = req.body;
     
     // Validate carId format (UUID) - if it's mock, ignore it
@@ -49,13 +50,20 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     for (const admin of admins) {
       // Don't send notification to the same admin who launched it (unless they are the only one)
       // Actually, let's send it to all admins including the creator so they see it in the panel!
+      
+      const actionData: any = { costId: cost.id };
+      if (nextOilChangeKm) {
+        actionData.nextOilChangeKm = Number(nextOilChangeKm);
+        actionData.carId = validCarId;
+      }
+
       await prisma.notification.create({
         data: {
           title: 'Aprovação de Custo',
           message: `${user?.name || 'Funcionário'} solicitou aprovação para ${category} (R$ ${amount}).`,
           type: 'COST_APPROVAL',
           status: 'UNREAD',
-          actionData: { costId: cost.id },
+          actionData: actionData,
           senderId: req.user.id,
           recipientId: admin.id,
           companyId: req.user.companyId

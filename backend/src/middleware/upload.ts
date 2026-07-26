@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 
 // Configuração do cliente S3 para o Backblaze B2
-const s3 = new S3Client({
+export const s3 = new S3Client({
   endpoint: process.env.B2_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
   region: 'us-east-005', // A região é extraída do endpoint (ex: us-east-005)
   credentials: {

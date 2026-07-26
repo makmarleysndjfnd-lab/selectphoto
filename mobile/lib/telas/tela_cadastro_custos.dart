@@ -18,6 +18,7 @@ class CostEntryScreen extends StatefulWidget {
 class _CostEntryScreenState extends State<CostEntryScreen> {
   final _amountController = TextEditingController();
   final _descController = TextEditingController();
+  final _nextOilChangeKmController = TextEditingController();
   String _category = 'Produção';
   String? _carId;
   String _paymentMethod = 'Dinheiro';
@@ -31,6 +32,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
     'Operacional',
     'Alimentação',
     'Combustível',
+    'Manutenção/Óleo',
     'Hotel',
     'Conserto Carro',
     'Outros'
@@ -95,6 +97,8 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
         'paymentMethod': _paymentMethod,
         'carId': _carId,
         'receiptUrl': receiptUrl,
+        if (_category == 'Manutenção/Óleo' && _nextOilChangeKmController.text.isNotEmpty)
+          'nextOilChangeKm': _nextOilChangeKmController.text,
       };
 
       try {
@@ -228,6 +232,23 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 });
               },
             ),
+            
+            if (_category == 'Manutenção/Óleo') ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _nextOilChangeKmController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'KM da Próxima Troca de Óleo',
+                  labelStyle: const TextStyle(color: Colors.white54),
+                  filled: true,
+                  fillColor: const Color(0xFF1A1A2E),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  prefixIcon: const Icon(Icons.speed, color: Colors.white54),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
 
 
