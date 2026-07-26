@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../servicos/servico_api.dart';
+import '../utils/km_request_dialog.dart';
 
 // ── Mock clients data ────────────────────────────────────────────────────────
 final List<Map<String, dynamic>> _mockClients = [
@@ -108,6 +109,9 @@ class _SellerDashboardState extends State<SellerDashboard>
     _animController.forward();
     _fetchUnreadNotifications();
     _checkManagerRole();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      KmRequestHelper.checkKmRequests(context);
+    });
   }
 
   Future<void> _checkManagerRole() async {
@@ -335,6 +339,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                           case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
                           case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;
                           case 'FLEET_URGENT': icon = Icons.warning_amber_rounded; break;
+                          case 'KM_REQUEST': icon = Icons.speed_rounded; break;
                           default: icon = Icons.notifications_active_rounded;
                         }
 
@@ -347,28 +352,38 @@ class _SellerDashboardState extends State<SellerDashboard>
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                IconButton(
-                                  icon: const Icon(Icons.close, color: Colors.redAccent),
-                                  onPressed: () async {
-                                    try {
-                                      await ApiService().actionNotification(notif['id'], 'REJECT');
-                                      setDialogState(() {}); // Refreshes FutureBuilder
-                                    } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                                    }
-                                  },
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.check, color: Colors.greenAccent),
-                                  onPressed: () async {
-                                    try {
-                                      await ApiService().actionNotification(notif['id'], 'ACCEPT');
-                                      setDialogState(() {});
-                                    } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                                    }
-                                  },
-                                ),
+                                if (notif['type'] == 'KM_REQUEST')
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, color: Colors.blueAccent),
+                                    onPressed: () {
+                                      Navigator.pop(context); // Close notifications dialog
+                                      KmRequestHelper.checkKmRequests(context);
+                                    },
+                                  )
+                                else ...[
+                                  IconButton(
+                                    icon: const Icon(Icons.close, color: Colors.redAccent),
+                                    onPressed: () async {
+                                      try {
+                                        await ApiService().actionNotification(notif['id'], 'REJECT');
+                                        setDialogState(() {}); // Refreshes FutureBuilder
+                                      } catch (e) {
+                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                      }
+                                    },
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.check, color: Colors.greenAccent),
+                                    onPressed: () async {
+                                      try {
+                                        await ApiService().actionNotification(notif['id'], 'ACCEPT');
+                                        setDialogState(() {});
+                                      } catch (e) {
+                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                      }
+                                    },
+                                  ),
+                                ],
                               ],
                             ),
                           ),

@@ -142,13 +142,152 @@ export const checkWarranties = async () => {
   }
 };
 
+// Solicita o preenchimento do KM toda segunda-feira às 20h
+export const requestWeeklyKm = async () => {
+  try {
+    console.log('[CRON] Iniciando solicitação semanal de KM...');
+    
+    // Find all users who have an assigned car and usesOwnCar = false
+    const cars = await prisma.car.findMany({
+      where: {
+        status: { not: 'INACTIVE' },
+        currentUserId: { not: null }
+      },
+      include: {
+        currentUser: true
+      }
+    });
+
+    for (const car of cars) {
+      if (car.currentUser && car.currentUser.usesOwnCar === false) {
+        const title = `Atualização de Quilometragem`;
+        const message = `Por favor, informe a quilometragem atual do veículo ${car.plate}.`;
+        
+        // Avoid creating a new one if there's already a pending KM_REQUEST
+        const pendingReq = await prisma.notification.findFirst({
+          where: {
+            recipientId: car.currentUser.id,
+            type: 'KM_REQUEST',
+            status: { not: 'RESOLVED' }
+          }
+        });
+
+        if (!pendingReq) {
+          await prisma.notification.create({
+            data: {
+              title,
+              message,
+              type: 'KM_REQUEST',
+              status: 'UNREAD',
+              recipientId: car.currentUser.id,
+              companyId: car.companyId,
+              actionData: { carId: car.id }
+            }
+          });
+
+          if (car.currentUser.fcmToken) {
+            await sendPushNotification(
+              [car.currentUser.fcmToken],
+              title,
+              message,
+              { type: 'KM_REQUEST', carId: car.id }
+            );
+          }
+          console.log(`[CRON] KM_REQUEST criado para usuário ${car.currentUser.name} (Carro: ${car.plate}).`);
+        }
+      }
+    }
+    console.log('[CRON] Solicitação semanal de KM finalizada.');
+  } catch (error) {
+    console.error('[CRON] Erro na solicitação semanal de KM:', error);
+  }
+};
+
+// Verifica se há pedidos de KM atrasados (mais de 2 dias)
+export const checkOverdueKmRequests = async () => {
+  try {
+    console.log('[CRON] Verificando atrasos na resposta do KM...');
+    
+    const twoDaysAgo = new Date();
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+
+    const pendingRequests = await prisma.notification.findMany({
+      where: {
+        type: 'KM_REQUEST',
+        status: { not: 'RESOLVED' },
+        createdAt: { lt: twoDaysAgo }
+      },
+      include: {
+        recipient: true
+      }
+    });
+
+    if (pendingRequests.length > 0) {
+      const admins = await prisma.user.findMany({
+        where: { role: 'ADMIN' }
+      });
+
+      for (const req of pendingRequests) {
+        const title = `Atraso no KM: ${req.recipient.name}`;
+        const message = `O funcionário ${req.recipient.name} está há mais de 2 dias sem preencher o KM. O aplicativo dele foi bloqueado.`;
+        
+        // Ensure we don't spam the admins every day for the same overdue request
+        // Create an info notification for admins
+        const adminAlertKey = `OVERDUE_KM_${req.id}`;
+        
+        for (const admin of admins) {
+          const alreadyAlerted = await prisma.notification.findFirst({
+            where: {
+              title,
+              recipientId: admin.id,
+              createdAt: { gt: twoDaysAgo } // Only alert once every 2 days per pending request
+            }
+          });
+          
+          if (!alreadyAlerted) {
+            await prisma.notification.create({
+              data: {
+                title,
+                message,
+                type: 'INFO',
+                status: 'UNREAD',
+                recipientId: admin.id,
+                companyId: admin.companyId
+              }
+            });
+            if (admin.fcmToken) {
+              await sendPushNotification(
+                [admin.fcmToken],
+                title,
+                message,
+                { type: 'INFO' }
+              );
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[CRON] Erro ao verificar atrasos de KM:', error);
+  }
+};
+
 // Start the cron job
-// Run every day at 08:00 AM
 export const initWarrantyCron = () => {
+  // Check warranties and overdue KMs every day at 08:00 AM
   cron.schedule('0 8 * * *', () => {
     checkWarranties();
+    checkOverdueKmRequests();
   }, {
     timezone: "America/Sao_Paulo"
   });
-  console.log('⏳ Cron job de garantia agendado para 08:00 AM (BRT).');
+  console.log('⏳ Cron job diário agendado para 08:00 AM (BRT).');
+
+  // Request weekly KM every Monday at 20:00
+  cron.schedule('0 20 * * 1', () => {
+    requestWeeklyKm();
+  }, {
+    timezone: "America/Sao_Paulo"
+  });
+  console.log('⏳ Cron job semanal (KM) agendado para Segunda-feira às 20:00 (BRT).');
 };

@@ -674,9 +674,13 @@ class ApiService {
     }
   }
 
-  Future<void> actionNotification(String id, String actionType) async {
+  Future<void> actionNotification(String id, String actionType, {Map<String, dynamic>? extraData}) async {
     try {
-      await _dio.post('/notifications/$id/action', data: {'actionType': actionType});
+      final data = <String, dynamic>{'actionType': actionType};
+      if (extraData != null) {
+        data.addAll(extraData);
+      }
+      await _dio.post('/notifications/$id/action', data: data);
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao processar notificação');
     }

@@ -13,6 +13,8 @@ import '../servicos/servico_sincronizacao.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/km_request_dialog.dart';
+
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [
   Colors.white,
@@ -94,6 +96,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       if (_currentCityLote == null || _currentEventName == null) {
         _showLoteConfigDialog();
       }
+      KmRequestHelper.checkKmRequests(context);
     });
   }
 

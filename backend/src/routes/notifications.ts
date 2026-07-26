@@ -68,7 +68,30 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
 
     const actionData = notification.actionData as any;
 
-    if (actionType === 'ACCEPT') {
+    if (actionType === 'UPDATE_KM') {
+      if (notification.type === 'KM_REQUEST' && actionData && actionData.carId) {
+        const { km } = req.body;
+        if (typeof km !== 'number') {
+          return res.status(400).json({ error: 'O valor do KM é obrigatório e deve ser numérico' });
+        }
+        
+        const car = await prisma.car.findUnique({ where: { id: actionData.carId } });
+        if (!car) {
+          return res.status(404).json({ error: 'Carro não encontrado' });
+        }
+        
+        if (km < car.currentKm) {
+          return res.status(400).json({ error: `KM inválido: o valor (${km}) não pode ser menor que o registrado atualmente (${car.currentKm}).`, code: 'KM_LOWER' });
+        }
+        
+        await prisma.car.update({
+          where: { id: car.id },
+          data: { currentKm: km }
+        });
+      } else {
+        return res.status(400).json({ error: 'Invalid notification type for UPDATE_KM' });
+      }
+    } else if (actionType === 'ACCEPT') {
       switch (notification.type) {
         case 'COST_APPROVAL':
           if (actionData && actionData.costId) {
