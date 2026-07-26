@@ -36,7 +36,7 @@ router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: R
 // Create user (Admin only)
 router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
   try {
-    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
     
     if (!cpf) return res.status(400).json({ error: 'CPF is required' });
     
