@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
+import 'tela_configuracoes.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import 'visao_frota_admin.dart';
 import 'visao_fluxo_caixa_admin.dart';
@@ -513,113 +514,125 @@ class _AdminDashboardState extends State<AdminDashboard>
             ),
           ),
           const Divider(color: Colors.white12, height: 1),
-          ListTile(
-            leading: const Icon(Icons.cloud_download_rounded, color: Colors.blueAccent),
-            title: const Text('Baixar Backup (JSON)', style: TextStyle(color: Colors.blueAccent)),
-            onTap: () async {
-              try {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Baixando backup, aguarde...')));
-                final jsonString = await ApiService().downloadBackup();
-                final dateStr = DateTime.now().toIso8601String().split('T')[0];
-                
-                await Share.share(jsonString, subject: 'backup_selectphoto_$dateStr.json');
-              } catch (e) {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao baixar: $e'), backgroundColor: Colors.red));
-              }
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.restore_page_rounded, color: Colors.orangeAccent),
-            title: const Text('Restaurar Backup', style: TextStyle(color: Colors.orangeAccent)),
-            onTap: () async {
-              // 1. Alert about data loss
-              final bool? confirmed = await showDialog<bool>(
-                context: context,
-                builder: (context) {
-                  return AlertDialog(
-                    backgroundColor: const Color(0xFF1A2535),
-                    title: const Text('Atenção: Ação Irreversível!', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                    content: const Text('Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelo conteúdo do arquivo.\n\nTem certeza que deseja continuar?', style: TextStyle(color: Colors.white)),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('CONFIRMO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  );
-                },
-              );
-              
-              if (confirmed != true) return;
-
-              // 2. Pick JSON File
-              FilePickerResult? result = await FilePicker.pickFiles(
-                type: FileType.custom,
-                allowedExtensions: ['json'],
-              );
-
-              if (result != null && result.files.single.path != null) {
-                final filePath = result.files.single.path!;
-                
-                try {
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restaurando backup, isso pode demorar...')));
-                  await ApiService().restoreBackup(filePath);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado com Sucesso!'), backgroundColor: Colors.green));
-                    _loadClients();
-                    _loadUpcomingEvents();
-                    _fetchUnreadNotifications();
-                  }
-                } catch (e) {
-                  if (e.toString().contains('CONFLICT')) {
-                    // Tratar conflito de data
-                    if (!mounted) return;
-                    final bool? force = await showDialog<bool>(
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              title: const Text('CONFIGURAÇÕES', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+              iconColor: const Color(0xFF90CAF9),
+              collapsedIconColor: const Color(0xFF90CAF9),
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.settings, color: Colors.white70),
+                  title: const Text('Configurações do Vendedor', style: TextStyle(color: Colors.white70)),
+                  onTap: () {
+                    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.cloud_download_rounded, color: Colors.blueAccent),
+                  title: const Text('Baixar Backup (JSON)', style: TextStyle(color: Colors.blueAccent)),
+                  onTap: () async {
+                    try {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Baixando backup, aguarde...')));
+                      final jsonString = await ApiService().downloadBackup();
+                      final dateStr = DateTime.now().toIso8601String().split('T')[0];
+                      
+                      await Share.share(jsonString, subject: 'backup_selectphoto_$dateStr.json');
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao baixar: $e'), backgroundColor: Colors.red));
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.restore_page_rounded, color: Colors.orangeAccent),
+                  title: const Text('Restaurar Backup', style: TextStyle(color: Colors.orangeAccent)),
+                  onTap: () async {
+                    // 1. Alert about data loss
+                    final bool? confirmed = await showDialog<bool>(
                       context: context,
                       builder: (context) {
                         return AlertDialog(
                           backgroundColor: const Color(0xFF1A2535),
-                          title: const Text('Backup Antigo Detectado', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-                          content: const Text('O backup online atual é mais RECENTE do que este arquivo que você está tentando restaurar.\n\nDeseja forçar a restauração mesmo assim?', style: TextStyle(color: Colors.white)),
+                          title: const Text('Atenção: Ação Irreversível!', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                          content: const Text('Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelo conteúdo do arquivo.\n\nTem certeza que deseja continuar?', style: TextStyle(color: Colors.white)),
                           actions: [
                             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
                               onPressed: () => Navigator.pop(context, true),
-                              child: const Text('FORÇAR RESTAURAÇÃO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              child: const Text('CONFIRMO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                             ),
                           ],
                         );
                       },
                     );
                     
-                    if (force == true) {
+                    if (confirmed != true) return;
+
+                    // 2. Pick JSON File
+                    FilePickerResult? result = await FilePicker.pickFiles(
+                      type: FileType.custom,
+                      allowedExtensions: ['json'],
+                    );
+
+                    if (result != null && result.files.single.path != null) {
+                      final filePath = result.files.single.path!;
+                      
                       try {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Forçando restauração...')));
-                        await ApiService().restoreBackup(filePath, force: true);
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restaurando backup, isso pode demorar...')));
+                        await ApiService().restoreBackup(filePath);
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado (Forçado)!'), backgroundColor: Colors.green));
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado com Sucesso!'), backgroundColor: Colors.green));
                           _loadClients();
                           _loadUpcomingEvents();
                           _fetchUnreadNotifications();
                         }
-                      } catch (e2) {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e2'), backgroundColor: Colors.red));
+                      } catch (e) {
+                        if (e.toString().contains('CONFLICT')) {
+                          // Tratar conflito de data
+                          if (!mounted) return;
+                          final bool? force = await showDialog<bool>(
+                            context: context,
+                            builder: (context) {
+                              return AlertDialog(
+                                backgroundColor: const Color(0xFF1A2535),
+                                title: const Text('Backup Antigo Detectado', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                                content: const Text('O backup online atual é mais RECENTE do que este arquivo que você está tentando restaurar.\n\nDeseja forçar a restauração mesmo assim?', style: TextStyle(color: Colors.white)),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                                    onPressed: () => Navigator.pop(context, true),
+                                    child: const Text('FORÇAR RESTAURAÇÃO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                          
+                          if (force == true) {
+                            try {
+                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Forçando restauração...')));
+                              await ApiService().restoreBackup(filePath, force: true);
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado (Forçado)!'), backgroundColor: Colors.green));
+                                _loadClients();
+                                _loadUpcomingEvents();
+                                _fetchUnreadNotifications();
+                              }
+                            } catch (e2) {
+                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e2'), backgroundColor: Colors.red));
+                            }
+                          }
+                        } else {
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+                        }
                       }
                     }
-                  } else {
-                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                  }
-                }
-              }
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.logout_rounded, color: Color(0xFFCE93D8)),
-            title: const Text('Sair', style: TextStyle(color: Color(0xFFCE93D8))),
-            onTap: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen())),
+                  },
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 20),
         ],
