@@ -134,6 +134,9 @@ class _LoginScreenState extends State<LoginScreen>
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('jwt_token', token);
       await prefs.setString('user_role', role ?? '');
+      if (user['photographerCode'] != null) {
+        await prefs.setString('photographer_code', user['photographerCode']);
+      }
       
       try {
         final fcmToken = await FirebaseMessaging.instance.getToken();
@@ -208,24 +211,11 @@ class _LoginScreenState extends State<LoginScreen>
                       // Logo
                       Center(
                         child: Container(
-                          width: 140,
+                          width: 200,
                           height: 140,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.transparent,
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFF0288D1).withOpacity(0.5),
-                                blurRadius: 40,
-                                spreadRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: ClipOval(
-                            child: Image.asset(
-                              'assets/images/logo_hiper.png',
-                              fit: BoxFit.cover,
-                            ),
+                          child: Image.asset(
+                            'assets/images/logo_hiper.jpeg',
+                            fit: BoxFit.contain,
                           ),
                         ),
                       ),

@@ -97,7 +97,7 @@ flutter:
 flutter_icons:
   android: true
   ios: true
-  image_path: "assets/images/logo_hiper.png"
+  image_path: "assets/images/logo_hiper.jpeg"
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

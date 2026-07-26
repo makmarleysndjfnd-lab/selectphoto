@@ -41,7 +41,7 @@ router.post('/', authenticateToken, upload.fields([
   { name: 'trunkPhoto', maxCount: 1 }
 ]), async (req: AuthRequest, res) => {
   try {
-    const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist } = req.body;
+    const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist, currentKm } = req.body;
     
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
     const getPhotoUrl = (field: string) => files?.[field]?.[0] ? (files[field][0] as any).location : null;
@@ -71,7 +71,8 @@ router.post('/', authenticateToken, upload.fields([
         dashboardPhotoUrl,
         enginePhotoUrl,
         trunkPhotoUrl,
-        nextOilChangeKm: nextOilChangeKm ? parseInt(nextOilChangeKm, 10) : 0,
+        currentKm: (currentKm !== undefined && currentKm !== '') ? parseInt(currentKm.toString().replace(/\D/g, ''), 10) : 0,
+        nextOilChangeKm: (nextOilChangeKm !== undefined && nextOilChangeKm !== '') ? parseInt(nextOilChangeKm.toString().replace(/\D/g, ''), 10) : 0,
         status: 'AVAILABLE',
         companyId: req.user?.companyId
       }
@@ -95,7 +96,7 @@ router.put('/:id', authenticateToken, upload.fields([
 ]), async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist } = req.body;
+    const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist, currentKm } = req.body;
     
     const existing = await prisma.car.findUnique({ where: { id: id as string } });
     if (!existing || existing.companyId !== req.user?.companyId) {
@@ -112,7 +113,8 @@ router.put('/:id', authenticateToken, upload.fields([
       pendingMaintenance,
       warrantyParts,
       initialChecklist,
-      nextOilChangeKm: nextOilChangeKm ? parseInt(nextOilChangeKm, 10) : undefined,
+      currentKm: (currentKm !== undefined && currentKm !== '') ? parseInt(currentKm.toString().replace(/\D/g, ''), 10) : existing.currentKm,
+      nextOilChangeKm: (nextOilChangeKm !== undefined && nextOilChangeKm !== '') ? parseInt(nextOilChangeKm.toString().replace(/\D/g, ''), 10) : existing.nextOilChangeKm,
     };
 
     ['photo', 'frontPhoto', 'backPhoto', 'leftPhoto', 'rightPhoto', 'dashboardPhoto', 'enginePhoto', 'trunkPhoto'].forEach(f => {
@@ -203,7 +205,8 @@ router.post('/checklist', authenticateToken, upload.fields([
       where: { id: carId },
       data: {
         status: checklistType === 'CHECKOUT' ? 'IN_USE' : 'AVAILABLE',
-        currentUserId: checklistType === 'CHECKOUT' ? driverId : null
+        currentUserId: checklistType === 'CHECKOUT' ? driverId : null,
+        currentKm: mileage > 0 ? mileage : undefined
       }
     });
 

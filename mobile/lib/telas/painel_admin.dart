@@ -401,10 +401,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Image.asset(
-              'assets/images/logo_hiper.png',
-              width: 56,
-              height: 56,
-              fit: BoxFit.cover,
+              'assets/images/logo_hiper.jpeg',
+              width: 180,
+              height: 100,
+              fit: BoxFit.contain,
               errorBuilder: (context, error, stackTrace) =>
                   const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFFCE93D8), size: 48),
             ),
