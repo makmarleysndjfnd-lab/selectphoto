@@ -28,67 +28,64 @@ export const checkWarranties = async () => {
     });
 
     for (const car of cars) {
-      if (!car.warrantyParts) continue;
-      
-      const warrantyText = car.warrantyParts.toLowerCase();
-      // Look for "proxima troca " or "próxima troca " followed by DD/MM/YYYY
-      const regex = /pr[oó]xima troca (\d{2})\/(\d{2})\/(\d{4})/g;
-      
-      let match;
-      while ((match = regex.exec(warrantyText)) !== null) {
-        const day = parseInt(match[1], 10);
-        const month = parseInt(match[2], 10) - 1; // 0-indexed
-        const year = parseInt(match[3], 10);
+      // -- 1. WARRANTY TEXT CHECK --
+      if (car.warrantyParts) {
+        const warrantyText = car.warrantyParts.toLowerCase();
+        // Look for "proxima troca " or "próxima troca " followed by DD/MM/YYYY
+        const regex = /pr[oó]xima troca (\d{2})\/(\d{2})\/(\d{4})/g;
         
-        const targetDate = new Date(year, month, day);
-        targetDate.setHours(0, 0, 0, 0);
-        
-        const diffTime = targetDate.getTime() - today.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        if (diffDays === 7 || diffDays === 0) {
-          const statusText = diffDays === 0 ? 'HOJE' : 'em 7 dias';
-          const title = `Aviso de Manutenção: ${car.plate}`;
-          const message = `A manutenção/troca do veículo ${car.plate} (${car.model}) vence ${statusText} (${match[1]}/${match[2]}/${match[3]}).`;
+        let match;
+        while ((match = regex.exec(warrantyText)) !== null) {
+          const day = parseInt(match[1], 10);
+          const month = parseInt(match[2], 10) - 1; // 0-indexed
+          const year = parseInt(match[3], 10);
           
-          const recipients = [...admins];
-          if (car.currentUser) {
-            // Add the current user to the recipients if they are not already an admin
-            if (!recipients.some(a => a.id === car.currentUser!.id)) {
-              recipients.push(car.currentUser);
-            }
-          }
+          const targetDate = new Date(year, month, day);
+          targetDate.setHours(0, 0, 0, 0);
+          
+          const diffTime = targetDate.getTime() - today.getTime();
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-          for (const recipient of recipients) {
-            // Create in-app notification
-            await prisma.notification.create({
-              data: {
-                title,
-                message,
-                type: 'INFO', // Use INFO for simple visual feedback
-                status: 'UNREAD',
-                recipientId: recipient.id,
-                companyId: recipient.companyId
+          if (diffDays === 7 || diffDays === 0) {
+            const statusText = diffDays === 0 ? 'HOJE' : 'em 7 dias';
+            const title = `Aviso de Manutenção: ${car.plate}`;
+            const message = `A manutenção/troca do veículo ${car.plate} (${car.model}) vence ${statusText} (${match[1]}/${match[2]}/${match[3]}).`;
+            
+            const recipients = [...admins];
+            if (car.currentUser) {
+              if (!recipients.some(a => a.id === car.currentUser!.id)) {
+                recipients.push(car.currentUser);
               }
-            });
-
-            // Send Push Notification if they have a token
-            if (recipient.fcmToken) {
-              await sendPushNotification(
-                [recipient.fcmToken],
-                title,
-                message,
-                { type: 'INFO', carId: car.id }
-              );
             }
+
+            for (const recipient of recipients) {
+              await prisma.notification.create({
+                data: {
+                  title,
+                  message,
+                  type: 'INFO',
+                  status: 'UNREAD',
+                  recipientId: recipient.id,
+                  companyId: recipient.companyId
+                }
+              });
+
+              if (recipient.fcmToken) {
+                await sendPushNotification(
+                  [recipient.fcmToken],
+                  title,
+                  message,
+                  { type: 'INFO', carId: car.id }
+                );
+              }
+            }
+            
+            console.log(`[CRON] Notificação gerada para carro ${car.plate} (vence em ${diffDays} dias).`);
           }
-          
-          console.log(`[CRON] Notificação gerada para carro ${car.plate} (vence em ${diffDays} dias).`);
-        }
         }
       }
       
-      // -- KM CHECK FOR OIL CHANGE --
+      // -- 2. KM CHECK FOR OIL CHANGE --
       if (car.nextOilChangeKm && car.nextOilChangeKm > 0) {
         const diffKm = car.nextOilChangeKm - car.currentKm;
         
@@ -98,8 +95,6 @@ export const checkWarranties = async () => {
           const title = `Troca de Óleo: ${car.plate}`;
           const message = `A troca de óleo do veículo ${car.plate} (${car.model}) está ${statusText}. Alvo: ${car.nextOilChangeKm} km.`;
           
-          // Check if we already sent a notification for this specific target KM and status recently
-          // We can just check the last notification for this car with this title and message
           const lastNotification = await prisma.notification.findFirst({
             where: {
               title,
