@@ -17,6 +17,8 @@ import '../utils/pdf_generator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _chartGreen = Color(0xFF43A047);
@@ -323,6 +325,41 @@ class _AdminDashboardState extends State<AdminDashboard>
     _loadUpcomingEvents();
     _fetchUnreadNotifications();
     _loadClients();
+    _checkAutomaticBackup();
+  }
+
+  Future<void> _checkAutomaticBackup() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastBackupStr = prefs.getString('last_auto_backup_date');
+      DateTime? lastBackup;
+      if (lastBackupStr != null) {
+        lastBackup = DateTime.tryParse(lastBackupStr);
+      }
+
+      final now = DateTime.now();
+      // Se não tem backup ou passou de 30 dias
+      if (lastBackup == null || now.difference(lastBackup).inDays >= 30) {
+        final jsonString = await ApiService().downloadBackup();
+        
+        final directory = await getApplicationDocumentsDirectory();
+        final file = File('${directory.path}/backup_automatico_selectphoto.json');
+        
+        await file.writeAsString(jsonString);
+        await prefs.setString('last_auto_backup_date', now.toIso8601String());
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Backup automático de 30 dias salvo no dispositivo.'),
+              backgroundColor: Colors.green,
+            )
+          );
+        }
+      }
+    } catch (e) {
+      print('Erro no backup automático: $e');
+    }
   }
 
   Future<void> _fetchUnreadNotifications() async {
