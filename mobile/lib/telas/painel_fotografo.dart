@@ -42,6 +42,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   String? _currentCityLote;
   String? _currentEventName;
   int _sequenceCount = 1;
+  int _fichasHojeCount = 0;
 
   // Form State
   final _formKey = GlobalKey<FormState>();
@@ -90,6 +91,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     _animController.forward();
     
     _loadProfessions();
+    _loadFichasHojeCount();
 
     // Check if Lote is configured immediately after frame renders
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -98,6 +100,21 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       }
       KmRequestHelper.checkKmRequests(context);
     });
+  }
+
+  Future<void> _loadFichasHojeCount() async {
+    try {
+      final fichas = await ApiService().getClientsByPhotographer();
+      final hojeStr = DateTime.now().toIso8601String().split('T')[0];
+      int count = 0;
+      for (var f in fichas) {
+        final fDate = f['createdAt']?.toString().split('T')[0] ?? '';
+        if (fDate == hojeStr) count++;
+      }
+      if (mounted) setState(() => _fichasHojeCount = count);
+    } catch (e) {
+      // Ignora erro e mantem 0
+    }
   }
 
   Future<void> _loadProfessions() async {
@@ -386,6 +403,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       setState(() {
         _generatedQrCodeData = sequenceNumber;
         _sequenceCount++; // Increment for next client
+        _fichasHojeCount++; // Atualiza UI de Hoje
       });
       
     } finally {
@@ -675,7 +693,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                            child: Text('${_sequenceCount - 1} Fichas Hoje', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                            child: Text('$_fichasHojeCount Fichas Hoje', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
                           ),
                         ],
                       )
