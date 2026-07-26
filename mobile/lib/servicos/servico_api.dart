@@ -808,12 +808,13 @@ class ApiService {
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao receber devolução');
     }
+  }
   Future<String> downloadBackup() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token');
       
-      final res = await dio.get('/backup/download', options: Options(
+      final res = await _dio.get('/backup/download', options: Options(
         headers: {'Authorization': 'Bearer $token'},
         responseType: ResponseType.plain, // To get the raw JSON string
       ));
@@ -837,7 +838,7 @@ class ApiService {
         'file': await MultipartFile.fromFile(filePath, filename: 'backup.json'),
       });
       
-      final res = await dio.post(
+      final res = await _dio.post(
         '/backup/restore',
         queryParameters: {'force': force},
         data: formData,

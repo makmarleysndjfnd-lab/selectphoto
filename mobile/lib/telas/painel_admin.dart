@@ -17,6 +17,8 @@ import '../utils/pdf_generator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
@@ -329,6 +331,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _checkAutomaticBackup() async {
+    if (kIsWeb) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       final lastBackupStr = prefs.getString('last_auto_backup_date');
@@ -552,7 +555,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               if (confirmed != true) return;
 
               // 2. Pick JSON File
-              FilePickerResult? result = await FilePicker.platform.pickFiles(
+              FilePickerResult? result = await FilePicker.pickFiles(
                 type: FileType.custom,
                 allowedExtensions: ['json'],
               );
@@ -565,8 +568,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                   await ApiService().restoreBackup(filePath);
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado com Sucesso!'), backgroundColor: Colors.green));
-                    // Recarregar os dados do painel
-                    _carregarDados();
+                    _loadClients();
+                    _loadUpcomingEvents();
+                    _fetchUnreadNotifications();
                   }
                 } catch (e) {
                   if (e.toString().contains('CONFLICT')) {
@@ -597,7 +601,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                         await ApiService().restoreBackup(filePath, force: true);
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado (Forçado)!'), backgroundColor: Colors.green));
-                          _carregarDados();
+                          _loadClients();
+                          _loadUpcomingEvents();
+                          _fetchUnreadNotifications();
                         }
                       } catch (e2) {
                         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e2'), backgroundColor: Colors.red));
