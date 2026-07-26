@@ -808,5 +808,24 @@ class ApiService {
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao receber devolução');
     }
+  Future<String> downloadBackup() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token');
+      
+      final res = await dio.get('/backup/download', options: Options(
+        headers: {'Authorization': 'Bearer $token'},
+        responseType: ResponseType.plain, // To get the raw JSON string
+      ));
+      
+      if (res.statusCode == 200) {
+        return res.data.toString();
+      } else {
+        throw Exception('Failed to download backup');
+      }
+    } catch (e) {
+      print('Error downloading backup: $e');
+      throw Exception('Network error');
+    }
   }
 }

@@ -34,8 +34,10 @@ import closingRoutes from './routes/closing';
 import stockRoutes from './routes/stock';
 import booksRoutes from './routes/books';
 import notificationsRoutes from './routes/notifications';
+import backupRouter from './routes/backup';
 import editRequestsRoutes from './routes/editRequests';
 import { initWarrantyCron } from './jobs/warrantyCron';
+import { initBackupCron } from './jobs/backupCron';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);
@@ -53,9 +55,11 @@ app.use('/api/closing', closingRoutes);
 app.use('/api/stock', stockRoutes);
 app.use('/api/books', booksRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/backup', backupRouter);
 app.use('/api/edit-requests', editRequestsRoutes);
 
 initWarrantyCron();
+initBackupCron();
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

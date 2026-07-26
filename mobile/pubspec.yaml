@@ -67,6 +67,7 @@ dependencies:
   firebase_messaging: ^16.2.0
 
   http: any
+  share_plus: ^12.0.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

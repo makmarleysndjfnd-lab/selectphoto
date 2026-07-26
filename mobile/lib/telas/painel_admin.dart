@@ -15,6 +15,7 @@ import 'visao_estoque_admin.dart';
 import '../utils/pdf_generator.dart';
 
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:share_plus/share_plus.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _chartGreen = Color(0xFF43A047);
@@ -471,6 +472,21 @@ class _AdminDashboardState extends State<AdminDashboard>
             ),
           ),
           const Divider(color: Colors.white12, height: 1),
+          ListTile(
+            leading: const Icon(Icons.cloud_download_rounded, color: Colors.blueAccent),
+            title: const Text('Baixar Backup (JSON)', style: TextStyle(color: Colors.blueAccent)),
+            onTap: () async {
+              try {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Baixando backup, aguarde...')));
+                final jsonString = await ApiService().downloadBackup();
+                final dateStr = DateTime.now().toIso8601String().split('T')[0];
+                
+                await Share.share(jsonString, subject: 'backup_selectphoto_$dateStr.json');
+              } catch (e) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao baixar: $e'), backgroundColor: Colors.red));
+              }
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.logout_rounded, color: Color(0xFFCE93D8)),
             title: const Text('Sair', style: TextStyle(color: Color(0xFFCE93D8))),
