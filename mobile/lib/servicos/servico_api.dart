@@ -828,4 +828,34 @@ class ApiService {
       throw Exception('Network error');
     }
   }
+  Future<void> restoreBackup(String filePath, {bool force = false}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token');
+      
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath, filename: 'backup.json'),
+      });
+      
+      final res = await dio.post(
+        '/backup/restore',
+        queryParameters: {'force': force},
+        data: formData,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      
+      if (res.statusCode != 200) {
+        throw Exception('Failed to restore backup');
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) {
+        // Specifically throw to handle conflict
+        throw Exception('CONFLICT: ${e.response?.data['error']}');
+      }
+      throw Exception('Network error');
+    } catch (e) {
+      print('Error restoring backup: $e');
+      throw Exception('Error restoring backup');
+    }
+  }
 }
