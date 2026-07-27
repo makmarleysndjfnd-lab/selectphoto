@@ -77,8 +77,10 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                       onChanged: (val) {},
                     ),
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
                     children: [
                       ChoiceChip(
                         label: const Text('Enviar (Admin -> Vend)'),
@@ -100,7 +102,6 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
                   ChoiceChip(
                     label: const Text('Descartar Defeituosas'),
                     selected: transferType == 2,
