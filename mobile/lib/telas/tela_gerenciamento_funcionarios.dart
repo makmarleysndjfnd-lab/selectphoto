@@ -126,6 +126,13 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                       final emp = _employees[index];
                       final String role = emp['role'] == 'SELLER' ? 'Vendedor' : (emp['role'] == 'PHOTOGRAPHER' ? 'Fotógrafo' : (emp['role'] == 'SELLER_MANAGER' ? 'Vendedor Gerente' : 'Contato'));
                       
+                      String carInfo = 'Nenhum';
+                      if (emp['usesOwnCar'] == true) {
+                        carInfo = 'Próprio';
+                      } else if (emp['currentCars'] != null && (emp['currentCars'] as List).isNotEmpty) {
+                        carInfo = 'Empresa (${emp['currentCars'][0]['model']})';
+                      }
+
                       return Card(
                         color: const Color(0xFF1A1A2E),
                         margin: const EdgeInsets.only(bottom: 12),
@@ -138,7 +145,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                             child: emp['profilePhotoUrl'] == null ? const Icon(Icons.person, color: Colors.white54) : null,
                           ),
                           title: Text(emp['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          subtitle: Text('$role | Equipe: ${emp['team']?['name'] ?? 'Nenhuma'}${emp['photographerCode'] != null ? ' | Cód: ${emp['photographerCode']}' : ''}', style: const TextStyle(color: Colors.white70)),
+                          subtitle: Text('$role | Carro: $carInfo${emp['photographerCode'] != null ? ' | Cód: ${emp['photographerCode']}' : ''}', style: const TextStyle(color: Colors.white70)),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
