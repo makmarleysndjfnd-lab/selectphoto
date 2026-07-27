@@ -110,8 +110,6 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
         case 'STOCK_TRANSFER_COVER':
           if (actionData && actionData.quantity && notification.senderId) {
             const quantity = Number(actionData.quantity);
-            // Decrease Admin balance implicitly (or we don't track admin cover balance globally)
-            // Just update SellerCoverBalance
             const sellerBalance = await prisma.sellerCoverBalance.findUnique({
               where: { sellerId: notification.senderId }
             });
@@ -126,7 +124,6 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
               });
             }
             
-            // Record transfer history
             await prisma.sellerCoverTransfer.create({
                data: {
                  sellerId: notification.senderId,
@@ -135,6 +132,78 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
                  companyId: notification.companyId
                }
             });
+          }
+          break;
+        case 'COVER_TRANSFER_REQUEST':
+          if (actionData && actionData.transferId && actionData.senderId && actionData.recipientId && actionData.quantity) {
+            // First mark this notification as resolved
+            await prisma.notification.update({
+              where: { id: notification.id },
+              data: { status: 'RESOLVED' }
+            });
+
+            // Check if the other party also accepted (has it been resolved?)
+            const otherRole = actionData.role === 'ADMIN' ? 'RECIPIENT' : 'ADMIN';
+            
+            // Note: Since there could be multiple admins, any admin accepting is enough for the ADMIN role.
+            // But if there are multiple admin notifications, we just check if AT LEAST ONE admin has RESOLVED it, 
+            // OR if this is the admin, we check if the RECIPIENT has RESOLVED it.
+            const otherNotifications = await prisma.notification.findMany({
+              where: {
+                 type: 'COVER_TRANSFER_REQUEST',
+                 actionData: {
+                   path: ['transferId'],
+                   equals: actionData.transferId
+                 },
+                 status: 'RESOLVED',
+                 id: { not: notification.id } // exclude current one
+              }
+            });
+
+            // We need to see if the other role has accepted. 
+            // The actionData in JSON contains the role.
+            let otherAccepted = false;
+            for (const notif of otherNotifications) {
+                const data = notif.actionData as any;
+                if (data && data.role === otherRole) {
+                    otherAccepted = true;
+                    break;
+                }
+            }
+
+            if (otherAccepted) {
+               // Execute transfer
+               const quantity = Number(actionData.quantity);
+               
+               // Decrement sender
+               await prisma.sellerCoverBalance.update({
+                  where: { sellerId: actionData.senderId },
+                  data: { balance: { decrement: quantity } }
+               });
+
+               // Increment recipient
+               await prisma.sellerCoverBalance.upsert({
+                  where: { sellerId: actionData.recipientId },
+                  update: { balance: { increment: quantity } },
+                  create: { sellerId: actionData.recipientId, balance: quantity }
+               });
+               
+               // Mark all related notifications as resolved so we don't duplicate
+               await prisma.notification.updateMany({
+                  where: {
+                     type: 'COVER_TRANSFER_REQUEST',
+                     actionData: {
+                       path: ['transferId'],
+                       equals: actionData.transferId
+                     },
+                     status: 'UNREAD'
+                  },
+                  data: { status: 'RESOLVED' }
+               });
+            } else {
+               // Just return early since we already marked this one as resolved
+               return res.json({ success: true, message: 'Aceite registrado. Aguardando a outra parte.' });
+            }
           }
           break;
         case 'STOCK_RETURN_COVER':

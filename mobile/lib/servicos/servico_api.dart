@@ -247,9 +247,33 @@ class ApiService {
 
   Future<void> transferCovers(String sellerId, int quantity) async {
     try {
-      await _dio.post('/stock/transfer', data: {'recipientId': sellerId, 'quantity': quantity});
+      await _dio.post('/stock/transfer', data: {'sellerId': sellerId, 'quantity': quantity});
     } on DioException catch (e) {
       throw Exception(e.response?.data['error'] ?? 'Erro ao transferir capas');
+    }
+  }
+
+  Future<void> addAdminCoverStock(int quantity) async {
+    try {
+      await _dio.post('/stock/batch', data: {'quantity': quantity});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar estoque geral');
+    }
+  }
+
+  Future<void> transferBetweenSellers(String recipientId, int quantity) async {
+    try {
+      await _dio.post('/stock/transfer-between-sellers', data: {'recipientId': recipientId, 'quantity': quantity});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao solicitar transferência');
+    }
+  }
+
+  Future<void> returnDefectiveCovers(String sellerId, int quantity) async {
+    try {
+      await _dio.post('/stock/defective', data: {'sellerId': sellerId, 'quantity': quantity});
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao devolver capas defeituosas');
     }
   }
 

@@ -558,6 +558,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                         
                         IconData icon;
                         switch (notif['type']) {
+                          case 'COVER_TRANSFER_REQUEST':
                           case 'STOCK_TRANSFER_COVER': icon = Icons.layers_rounded; break;
                           case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
                           case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;

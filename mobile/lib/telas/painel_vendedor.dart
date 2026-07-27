@@ -335,6 +335,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                         
                         IconData icon;
                         switch (notif['type']) {
+                          case 'COVER_TRANSFER_REQUEST':
                           case 'STOCK_TRANSFER_COVER': icon = Icons.layers_rounded; break;
                           case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
                           case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;
@@ -499,7 +500,11 @@ class _SellerDashboardState extends State<SellerDashboard>
                     Navigator.pop(context);
                     
                     try {
-                      await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
+                      if (itemType == 'COVER') {
+                        await ApiService().transferBetweenSellers(selectedRecipient!, qty);
+                      } else {
+                        await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
+                      }
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solicitação de transferência enviada!')));
                       }
