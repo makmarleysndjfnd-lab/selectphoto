@@ -61,7 +61,29 @@ router.post('/:id/action', authMiddleware_1.authenticateToken, async (req, res) 
             return res.status(400).json({ error: 'Notification already resolved' });
         }
         const actionData = notification.actionData;
-        if (actionType === 'ACCEPT') {
+        if (actionType === 'UPDATE_KM') {
+            if (notification.type === 'KM_REQUEST' && actionData && actionData.carId) {
+                const { km } = req.body;
+                if (typeof km !== 'number') {
+                    return res.status(400).json({ error: 'O valor do KM é obrigatório e deve ser numérico' });
+                }
+                const car = await prisma.car.findUnique({ where: { id: actionData.carId } });
+                if (!car) {
+                    return res.status(404).json({ error: 'Carro não encontrado' });
+                }
+                if (km < car.currentKm) {
+                    return res.status(400).json({ error: `KM inválido: o valor (${km}) não pode ser menor que o registrado atualmente (${car.currentKm}).`, code: 'KM_LOWER' });
+                }
+                await prisma.car.update({
+                    where: { id: car.id },
+                    data: { currentKm: km }
+                });
+            }
+            else {
+                return res.status(400).json({ error: 'Invalid notification type for UPDATE_KM' });
+            }
+        }
+        else if (actionType === 'ACCEPT') {
             switch (notification.type) {
                 case 'COST_APPROVAL':
                     if (actionData && actionData.costId) {
@@ -69,13 +91,17 @@ router.post('/:id/action', authMiddleware_1.authenticateToken, async (req, res) 
                             where: { id: actionData.costId },
                             data: { status: 'APPROVED' }
                         });
+                        if (actionData.nextOilChangeKm && actionData.carId) {
+                            await prisma.car.update({
+                                where: { id: actionData.carId },
+                                data: { nextOilChangeKm: Number(actionData.nextOilChangeKm) }
+                            });
+                        }
                     }
                     break;
                 case 'STOCK_TRANSFER_COVER':
                     if (actionData && actionData.quantity && notification.senderId) {
                         const quantity = Number(actionData.quantity);
-                        // Decrease Admin balance implicitly (or we don't track admin cover balance globally)
-                        // Just update SellerCoverBalance
                         const sellerBalance = await prisma.sellerCoverBalance.findUnique({
                             where: { sellerId: notification.senderId }
                         });
@@ -90,7 +116,6 @@ router.post('/:id/action', authMiddleware_1.authenticateToken, async (req, res) 
                                 data: { sellerId: notification.senderId, balance: quantity }
                             });
                         }
-                        // Record transfer history
                         await prisma.sellerCoverTransfer.create({
                             data: {
                                 sellerId: notification.senderId,
@@ -99,6 +124,72 @@ router.post('/:id/action', authMiddleware_1.authenticateToken, async (req, res) 
                                 companyId: notification.companyId
                             }
                         });
+                    }
+                    break;
+                case 'COVER_TRANSFER_REQUEST':
+                    if (actionData && actionData.transferId && actionData.senderId && actionData.recipientId && actionData.quantity) {
+                        // First mark this notification as resolved
+                        await prisma.notification.update({
+                            where: { id: notification.id },
+                            data: { status: 'RESOLVED' }
+                        });
+                        // Check if the other party also accepted (has it been resolved?)
+                        const otherRole = actionData.role === 'ADMIN' ? 'RECIPIENT' : 'ADMIN';
+                        // Note: Since there could be multiple admins, any admin accepting is enough for the ADMIN role.
+                        // But if there are multiple admin notifications, we just check if AT LEAST ONE admin has RESOLVED it, 
+                        // OR if this is the admin, we check if the RECIPIENT has RESOLVED it.
+                        const otherNotifications = await prisma.notification.findMany({
+                            where: {
+                                type: 'COVER_TRANSFER_REQUEST',
+                                actionData: {
+                                    path: ['transferId'],
+                                    equals: actionData.transferId
+                                },
+                                status: 'RESOLVED',
+                                id: { not: notification.id } // exclude current one
+                            }
+                        });
+                        // We need to see if the other role has accepted. 
+                        // The actionData in JSON contains the role.
+                        let otherAccepted = false;
+                        for (const notif of otherNotifications) {
+                            const data = notif.actionData;
+                            if (data && data.role === otherRole) {
+                                otherAccepted = true;
+                                break;
+                            }
+                        }
+                        if (otherAccepted) {
+                            // Execute transfer
+                            const quantity = Number(actionData.quantity);
+                            // Decrement sender
+                            await prisma.sellerCoverBalance.update({
+                                where: { sellerId: actionData.senderId },
+                                data: { balance: { decrement: quantity } }
+                            });
+                            // Increment recipient
+                            await prisma.sellerCoverBalance.upsert({
+                                where: { sellerId: actionData.recipientId },
+                                update: { balance: { increment: quantity } },
+                                create: { sellerId: actionData.recipientId, balance: quantity }
+                            });
+                            // Mark all related notifications as resolved so we don't duplicate
+                            await prisma.notification.updateMany({
+                                where: {
+                                    type: 'COVER_TRANSFER_REQUEST',
+                                    actionData: {
+                                        path: ['transferId'],
+                                        equals: actionData.transferId
+                                    },
+                                    status: 'UNREAD'
+                                },
+                                data: { status: 'RESOLVED' }
+                            });
+                        }
+                        else {
+                            // Just return early since we already marked this one as resolved
+                            return res.json({ success: true, message: 'Aceite registrado. Aguardando a outra parte.' });
+                        }
                     }
                     break;
                 case 'STOCK_RETURN_COVER':
