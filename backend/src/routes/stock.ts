@@ -60,18 +60,33 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
 
         const totalInAdmin = (adminBatches._sum.quantity || 0) - (sellerTransfers._sum.quantity || 0);
 
-        // Get total currently in sellers hands 
+        // Get all sellers
+        const sellers = await prisma.user.findMany({
+            where: {
+                role: 'SELLER',
+                ...(companyId ? { companyId } : {})
+            }
+        });
+
         const sellersBalance = await prisma.sellerCoverBalance.findMany({
             where: companyId ? { seller: { companyId } } : undefined,
-            include: { seller: true }
         });
 
         const totalWithSellers = sellersBalance.reduce((acc, curr) => acc + curr.balance, 0);
 
+        // Map sellers to include balance
+        const sellersWithBalance = sellers.map(seller => {
+            const balanceRecord = sellersBalance.find(b => b.sellerId === seller.id);
+            return {
+                seller: seller,
+                balance: balanceRecord ? balanceRecord.balance : 0
+            };
+        });
+
         res.json({
             totalInAdmin,
             totalWithSellers,
-            sellers: sellersBalance
+            sellers: sellersWithBalance
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
