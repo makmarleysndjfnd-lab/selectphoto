@@ -38,6 +38,8 @@ class LedButton extends StatefulWidget {
   static ButtonStyle styleFrom({
     Color? backgroundColor,
     Color? foregroundColor,
+    Color? disabledBackgroundColor,
+    Color? disabledForegroundColor,
     Color? shadowColor,
     double? elevation,
     TextStyle? textStyle,
@@ -52,6 +54,8 @@ class LedButton extends StatefulWidget {
     return ElevatedButton.styleFrom(
       backgroundColor: backgroundColor,
       foregroundColor: foregroundColor,
+      disabledBackgroundColor: disabledBackgroundColor,
+      disabledForegroundColor: disabledForegroundColor,
       shadowColor: shadowColor,
       elevation: elevation,
       textStyle: textStyle,
