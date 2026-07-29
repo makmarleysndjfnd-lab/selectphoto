@@ -128,8 +128,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 tooltip: 'Imprimir Ticket (Bluetooth)',
                                 onPressed: () => _printUnidadeBluetooth(Map<String, dynamic>.from(ficha as Map)),
                               ),
-                              if (ficha['bookStatus'] == 'CREATED')
-                                IconButton(
+                              IconButton(
                                   icon: const Icon(Icons.send_and_archive, color: Colors.greenAccent),
                                   tooltip: 'Forçar Envio ao Admin',
                                   onPressed: () async {
