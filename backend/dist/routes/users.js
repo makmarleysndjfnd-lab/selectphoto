@@ -35,7 +35,7 @@ router.get('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmi
 // Create user (Admin only)
 router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmin, upload_1.upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req, res) => {
     try {
-        const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, carId } = req.body;
+        const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
         if (!cpf)
             return res.status(400).json({ error: 'CPF is required' });
         let profilePhotoUrl = null;
@@ -50,6 +50,25 @@ router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdm
             }
         }
         const hashedPassword = await bcrypt_1.default.hash(password, 10);
+        let photographerCode = null;
+        if (role === 'PHOTOGRAPHER') {
+            if (providedPhotographerCode && providedPhotographerCode.trim() !== '') {
+                photographerCode = providedPhotographerCode.trim();
+            }
+            else {
+                const lastPhotographer = await prisma.user.findFirst({
+                    where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
+                    orderBy: { photographerCode: 'desc' }
+                });
+                if (lastPhotographer && lastPhotographer.photographerCode) {
+                    const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
+                    photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
+                }
+                else {
+                    photographerCode = '0001';
+                }
+            }
+        }
         const newUser = await prisma.user.create({
             data: {
                 name,
@@ -61,17 +80,17 @@ router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdm
                 phone: phone || null,
                 emergencyPhone: emergencyPhone || null,
                 address: address || null,
-                isTeamLeader: isTeamLeader === 'true',
                 usesOwnCar: usesOwnCar === 'true',
                 profilePhotoUrl,
                 criminalRecordUrl,
+                photographerCode,
                 companyId: req.user?.companyId
             }
         });
         if (carId && carId !== 'null' && carId !== '') {
             await prisma.car.update({
                 where: { id: carId },
-                data: { currentUserId: newUser.id }
+                data: { currentUserId: newUser.id, status: 'IN_USE' }
             });
         }
         res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
@@ -85,7 +104,7 @@ router.post('/', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdm
 router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdmin, upload_1.upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, isTeamLeader, usesOwnCar, password, carId } = req.body;
+        const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
         // Fetch existing to get old URLs
         const existingUser = await prisma.user.findUnique({ where: { id: id } });
         if (!existingUser || existingUser.companyId !== req.user?.companyId) {
@@ -111,11 +130,13 @@ router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireA
             phone: phone || null,
             emergencyPhone: emergencyPhone || null,
             address: address || null,
-            isTeamLeader: isTeamLeader === 'true',
             usesOwnCar: usesOwnCar === 'true',
             profilePhotoUrl,
             criminalRecordUrl
         };
+        if (role === 'PHOTOGRAPHER' && photographerCode !== undefined) {
+            updateData.photographerCode = photographerCode.trim() !== '' ? photographerCode.trim() : null;
+        }
         if (password && password.trim() !== '') {
             updateData.password = await bcrypt_1.default.hash(password, 10);
         }
@@ -127,13 +148,13 @@ router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireA
             // Clear previous car assignments for this user
             await prisma.car.updateMany({
                 where: { currentUserId: id },
-                data: { currentUserId: null }
+                data: { currentUserId: null, status: 'AVAILABLE' }
             });
             // Assign new car if valid
             if (carId && carId !== 'null' && carId !== '') {
                 await prisma.car.update({
                     where: { id: carId },
-                    data: { currentUserId: id }
+                    data: { currentUserId: id, status: 'IN_USE' }
                 });
             }
         }

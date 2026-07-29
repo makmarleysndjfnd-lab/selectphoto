@@ -1048,7 +1048,52 @@ class _SellerDashboardState extends State<SellerDashboard>
         ),
         title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         subtitle: Text('Ficha ${client['sequenceNumber']}', style: TextStyle(color: Colors.white.withOpacity(0.7))),
-        trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: Colors.white54),
+              color: const Color(0xFF2A2A3E),
+              onSelected: (val) async {
+                if (val == 'forcar_devolucao') {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      backgroundColor: const Color(0xFF1A1A2E),
+                      title: const Text('Forçar Devolução?', style: TextStyle(color: Colors.white)),
+                      content: const Text('Isso devolverá a ficha ao administrador imediatamente. Deseja continuar?', style: TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Devolver', style: TextStyle(color: Colors.orangeAccent))),
+                      ],
+                    ),
+                  );
+                  if (confirm == true) {
+                    try {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolvendo ficha...')));
+                      if (client['bookStatus'] == 'DISTRIBUTED_REBOLO') {
+                        await ApiService().forceReturnRebolo(clientId);
+                      } else {
+                        await ApiService().forceReturn(clientId);
+                      }
+                      _loadData();
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha devolvida!'), backgroundColor: Colors.green));
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao devolver: $e'), backgroundColor: Colors.red));
+                    }
+                  }
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'forcar_devolucao',
+                  child: Text('Forçar Devolução', style: TextStyle(color: Colors.orangeAccent)),
+                ),
+              ],
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+          ],
+        ),
       ),
     );
   }

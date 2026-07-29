@@ -63,7 +63,9 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
         // Get all sellers
         const sellers = await prisma.user.findMany({
             where: {
-                role: 'SELLER',
+                role: {
+                    in: ['SELLER', 'SELLER_MANAGER']
+                },
                 ...(companyId ? { companyId } : {})
             }
         });

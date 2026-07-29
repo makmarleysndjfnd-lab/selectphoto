@@ -37,6 +37,7 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 teamId: user.teamId,
                 companyId: user.companyId,
+                photographerCode: user.photographerCode,
             }
         });
     }

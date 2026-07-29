@@ -246,6 +246,42 @@ class ApiService {
     }
   }
 
+  // Resgate Admin (Vendedor -> Estoque)
+  Future<void> forceReturnToStock(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-return-to-stock');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao resgatar ficha');
+    }
+  }
+
+  // Resgate Vendedor (Vendedor -> AWAITING_RETURN)
+  Future<void> forceReturn(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-return');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao forçar devolução');
+    }
+  }
+
+  // Resgate Admin Rebolo (Rebolo -> Estoque Rebolo)
+  Future<void> forceReturnReboloStock(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-return-rebolo-stock');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao resgatar ficha de rebolo');
+    }
+  }
+
+  // Resgate Rebolo (Rebolo -> AWAITING_RETURN)
+  Future<void> forceReturnRebolo(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-return-rebolo');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao forçar devolução de rebolo');
+    }
+  }
+
   Future<void> updateBookBatchStatus(String id, String status) async {
     try {
       await _dio.put('/books/batch/$id', data: {'status': status});

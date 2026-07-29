@@ -17,6 +17,14 @@ router.post('/sync', authMiddleware_1.authenticateToken, async (req, res) => {
     for (const clientData of clients) {
         try {
             const { children, appointments, signatureBase64, ...basicClientData } = clientData;
+            let photographerId = basicClientData.photographerId;
+            let assignedSellerId = basicClientData.assignedSellerId;
+            if (!photographerId && req.user?.role === 'PHOTOGRAPHER') {
+                photographerId = req.user.id;
+            }
+            if (!assignedSellerId && (req.user?.role === 'SELLER' || req.user?.role === 'SELLER_MANAGER')) {
+                assignedSellerId = req.user.id;
+            }
             let finalSignatureUrl = basicClientData.signatureUrl;
             if (signatureBase64) {
                 // Store as a data URI in the database to keep it simple and compressed
@@ -30,12 +38,16 @@ router.post('/sync', authMiddleware_1.authenticateToken, async (req, res) => {
                     signatureUrl: finalSignatureUrl,
                     status: 'SYNCED',
                     companyId,
+                    photographerId,
+                    assignedSellerId,
                 },
                 create: {
                     ...basicClientData,
                     signatureUrl: finalSignatureUrl,
                     status: 'SYNCED',
                     companyId,
+                    photographerId,
+                    assignedSellerId,
                     children: children ? {
                         create: children.map((c) => ({ name: c.name, age: typeof c.age === 'string' ? parseInt(c.age, 10) : c.age }))
                     } : undefined,

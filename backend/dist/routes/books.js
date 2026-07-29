@@ -92,6 +92,196 @@ router.post('/receive-return', authMiddleware_1.authenticateToken, async (req, r
         res.status(500).json({ error: error.message });
     }
 });
+// Force release a single client to Admin (Photographer action)
+router.put('/client/:id/force-send', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const photographerId = req.user?.id;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId || client.photographerId !== photographerId) {
+            return res.status(404).json({ error: 'Client not found or unauthorized' });
+        }
+        if (client.bookStatus !== 'CREATED') {
+            return res.status(400).json({ error: 'Ficha já foi enviada ou não está pendente' });
+        }
+        // Create a mini batch just for this client to keep data integrity
+        const batch = await prisma.bookBatch.create({
+            data: {
+                name: `Lote Avulso - ${client.name}`,
+                photographerId: photographerId,
+                companyId,
+                status: 'AWAITING_RELEASE'
+            }
+        });
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: {
+                bookStatus: 'AWAITING_RELEASE',
+                batchId: batch.id
+            }
+        });
+        // Notify Admins
+        const admins = await prisma.user.findMany({ where: { role: 'ADMIN', companyId } });
+        for (const admin of admins) {
+            await prisma.notification.create({
+                data: {
+                    title: 'Ficha Resgatada (Fotógrafo)',
+                    message: `Fotógrafo resgatou e forçou envio da ficha de ${client.name || 'Sem Nome'}.`,
+                    type: 'SYSTEM',
+                    senderId: photographerId,
+                    recipientId: admin.id,
+                    companyId
+                }
+            });
+        }
+        res.json({ message: 'Ficha enviada com sucesso', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// Force release a single client to Stock (Admin action)
+router.put('/client/:id/force-release', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+        let batchId = client.batchId;
+        if (!batchId) {
+            // Create a pseudo batch if none exists
+            const batch = await prisma.bookBatch.create({
+                data: {
+                    name: `Resgate Admin - ${client.name}`,
+                    photographerId: client.photographerId || req.user.id,
+                    companyId,
+                    status: 'IN_STOCK'
+                }
+            });
+            batchId = batch.id;
+        }
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: {
+                bookStatus: 'IN_STOCK',
+                batchId
+            }
+        });
+        res.json({ message: 'Ficha liberada com sucesso', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// Admin puxa do Vendedor (DISTRIBUTED -> IN_STOCK)
+router.put('/client/:id/force-return-to-stock', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED') {
+            return res.status(404).json({ error: 'Client not found or not distributed' });
+        }
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { bookStatus: 'IN_STOCK' }
+        });
+        res.json({ message: 'Ficha resgatada para estoque', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// Vendedor força devolução pro Admin (DISTRIBUTED -> AWAITING_RETURN)
+router.put('/client/:id/force-return', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sellerId = req.user?.id;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED') {
+            return res.status(404).json({ error: 'Client not found or not distributed' });
+        }
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { bookStatus: 'AWAITING_RETURN' }
+        });
+        // Notify Admins
+        const admins = await prisma.user.findMany({ where: { role: 'ADMIN', companyId } });
+        for (const admin of admins) {
+            await prisma.notification.create({
+                data: {
+                    title: 'Devolução Forçada (Vendedor)',
+                    message: `Vendedor devolveu à força a ficha de ${client.name || 'Sem Nome'}.`,
+                    type: 'SYSTEM',
+                    senderId: sellerId,
+                    recipientId: admin.id,
+                    companyId
+                }
+            });
+        }
+        res.json({ message: 'Ficha enviada para devolução', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// Admin puxa do Rebolo (DISTRIBUTED_REBOLO -> IN_STOCK_REBOLO)
+router.put('/client/:id/force-return-rebolo-stock', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
+            return res.status(404).json({ error: 'Client not found or not distributed as rebolo' });
+        }
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { bookStatus: 'IN_STOCK_REBOLO' }
+        });
+        res.json({ message: 'Rebolo resgatado para estoque', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+// Rebolo força devolução pro Admin (DISTRIBUTED_REBOLO -> AWAITING_RETURN)
+router.put('/client/:id/force-return-rebolo', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const sellerId = req.user?.id;
+        const companyId = req.user?.companyId;
+        const client = await prisma.client.findUnique({ where: { id: id } });
+        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
+            return res.status(404).json({ error: 'Client not found or not distributed as rebolo' });
+        }
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { bookStatus: 'AWAITING_RETURN' } // Returns to Admin for inspection before discarding or restocking
+        });
+        // Notify Admins
+        const admins = await prisma.user.findMany({ where: { role: 'ADMIN', companyId } });
+        for (const admin of admins) {
+            await prisma.notification.create({
+                data: {
+                    title: 'Devolução Forçada (Rebolo)',
+                    message: `Rebolo devolveu à força a ficha de ${client.name || 'Sem Nome'}.`,
+                    type: 'SYSTEM',
+                    senderId: sellerId,
+                    recipientId: admin.id,
+                    companyId
+                }
+            });
+        }
+        res.json({ message: 'Rebolo enviado para devolução', client: updated });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 // Search book (Seller)
 router.get('/search', authMiddleware_1.authenticateToken, async (req, res) => {
     try {

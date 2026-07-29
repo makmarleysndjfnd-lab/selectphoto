@@ -2459,24 +2459,36 @@ class _AdminDashboardState extends State<AdminDashboard>
                 onPressed: () => _printItem(b, isRebolo),
               ),
               IconButton(
-                icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent, size: 18),
-                tooltip: 'Desatribuir',
-                onPressed: () {
-                  setState(() {
-                    books.remove(b);
-                    if (books.isEmpty) {
+                icon: const Icon(Icons.settings_backup_restore, color: Colors.orangeAccent, size: 18),
+                tooltip: 'Forçar Resgate pro Estoque',
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      backgroundColor: const Color(0xFF1A1A2E),
+                      title: const Text('Forçar Resgate?', style: TextStyle(color: Colors.white)),
+                      content: const Text('Isso removerá a ficha deste vendedor imediatamente e a devolverá para o estoque. Deseja continuar?', style: TextStyle(color: Colors.white70)),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Resgatar', style: TextStyle(color: Colors.orangeAccent))),
+                      ],
+                    ),
+                  );
+                  if (confirm == true) {
+                    try {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
+                      final fichaId = b['rawClientData']?['id'] ?? b['id'];
                       if (isRebolo) {
-                        _rebolosDistribuidos.remove(seller);
+                        await ApiService().forceReturnReboloStock(fichaId);
                       } else {
-                        _booksDistribuidos.remove(seller);
+                        await ApiService().forceReturnToStock(fichaId);
                       }
+                      _loadClients(); // Reload from backend
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha resgatada com sucesso!'), backgroundColor: Colors.green));
+                    } catch (e) {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
                     }
-                    if (isRebolo) {
-                      _rebolosNaoAtribuidos.add(b);
-                    } else {
-                      _booksNaoAtribuidos.add(b);
-                    }
-                  });
+                  }
                 },
               ),
             ],

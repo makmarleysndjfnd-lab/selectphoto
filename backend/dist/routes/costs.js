@@ -12,7 +12,7 @@ const prisma = new client_1.PrismaClient();
 // Submit a new cost (via Mobile App)
 router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { amount, category, subcategory, carId, description, paymentMethod, receiptUrl } = req.body;
+        const { amount, category, subcategory, carId, description, paymentMethod, receiptUrl, nextOilChangeKm } = req.body;
         // Validate carId format (UUID) - if it's mock, ignore it
         let validCarId = carId;
         if (carId && carId.startsWith('car_'))
@@ -40,13 +40,18 @@ router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
         for (const admin of admins) {
             // Don't send notification to the same admin who launched it (unless they are the only one)
             // Actually, let's send it to all admins including the creator so they see it in the panel!
+            const actionData = { costId: cost.id };
+            if (nextOilChangeKm) {
+                actionData.nextOilChangeKm = Number(nextOilChangeKm);
+                actionData.carId = validCarId;
+            }
             await prisma.notification.create({
                 data: {
                     title: 'Aprovação de Custo',
                     message: `${user?.name || 'Funcionário'} solicitou aprovação para ${category} (R$ ${amount}).`,
                     type: 'COST_APPROVAL',
                     status: 'UNREAD',
-                    actionData: { costId: cost.id },
+                    actionData: actionData,
                     senderId: req.user.id,
                     recipientId: admin.id,
                     companyId: req.user.companyId
