@@ -796,9 +796,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               child: Text('Só preencha se for PAI, MÃE, AVÓ, AVÕ OU TUTOR LEGAL.', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 12),
-            _buildTextField(_phoneController, 'WhatsApp', FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
+            _buildTextField(_phoneController, 'WhatsApp 1', FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
             const SizedBox(height: 12),
-            _buildTextField(_phone2Controller, 'Telefone 2 (Opcional)', Icons.phone, keyboardType: TextInputType.phone),
+            _buildTextField(_phone2Controller, 'WhatsApp 2 (Opcional)', FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
             const SizedBox(height: 12),
             RawAutocomplete<String>(
               textEditingController: _professionController,
