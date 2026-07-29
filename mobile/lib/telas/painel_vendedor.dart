@@ -8,6 +8,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../servicos/servico_api.dart';
 import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
+import '../widgets/led_card.dart';
+
 
 
 // ── Mock clients data ────────────────────────────────────────────────────────
@@ -346,7 +348,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                           default: icon = Icons.notifications_active_rounded;
                         }
 
-                        return Card(
+                        return LedCard(
                           color: Colors.white.withOpacity(0.05),
                           child: ListTile(
                             leading: Icon(icon, color: Colors.orangeAccent),
@@ -991,7 +993,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     final clientId = client['id'] as String;
     final isSelected = _selectedClientIds.contains(clientId);
 
-    return Card(
+    return LedCard(
       color: isSelected ? const Color(0xFFCE93D8).withOpacity(0.1) : Colors.white.withOpacity(0.05),
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(

@@ -3,6 +3,8 @@ import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_choice_chip.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../widgets/led_card.dart';
+
 
 class VisaoEstoqueAdmin extends StatefulWidget {
   const VisaoEstoqueAdmin({super.key});
@@ -435,7 +437,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             final name = (s['seller'] != null ? s['seller']['name'] : 'Sem Nome');
             final covers = s['balance'] ?? 0;
 
-            return Card(
+            return LedCard(
               color: Colors.white.withOpacity(0.05),
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(

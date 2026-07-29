@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
+import '../widgets/led_card.dart';
+
 
 
 class MyProspectsScreen extends StatefulWidget {
@@ -244,7 +246,7 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
                 itemCount: _prospects.length,
                 itemBuilder: (context, index) {
                   final p = _prospects[index];
-                  return Card(
+                  return LedCard(
                     color: const Color(0xFF1A1A2E),
                     margin: const EdgeInsets.only(bottom: 24),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

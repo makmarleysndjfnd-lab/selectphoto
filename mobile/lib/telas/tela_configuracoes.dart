@@ -9,6 +9,8 @@ import 'tela_config_impressora.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
+import '../widgets/led_card.dart';
+
 
 
 class SettingsScreen extends StatefulWidget {
@@ -82,7 +84,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           // Theme Settings
-          Card(
+          LedCard(
             color: const Color(0xFF1A1A2E),
             child: ListTile(
               leading: Icon(
@@ -100,7 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           
           // Server URL Settings
-          Card(
+          LedCard(
             color: const Color(0xFF1A1A2E),
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -141,7 +143,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           
           // Actions
-          Card(
+          LedCard(
             color: const Color(0xFF1A1A2E),
             child: Column(
               children: [

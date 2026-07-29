@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:signature/signature.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
+import '../widgets/led_card.dart';
+
 
 
 class EmployeeManagementScreen extends StatefulWidget {
@@ -135,7 +137,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                         carInfo = 'Empresa (${emp['currentCars'][0]['model']})';
                       }
 
-                      return Card(
+                      return LedCard(
                         color: const Color(0xFF1A1A2E),
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(

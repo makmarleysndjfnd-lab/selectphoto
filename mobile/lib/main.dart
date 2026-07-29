@@ -5,6 +5,7 @@ import 'servicos/servico_api.dart';
 import 'servicos/servico_sincronizacao.dart';
 import 'provedores/provedor_configuracoes.dart';
 import 'telas/tela_login.dart';
+import 'widgets/led_input_decoration.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -75,6 +76,7 @@ class MyApp extends StatelessWidget {
             ),
             useMaterial3: true,
             fontFamily: 'Roboto',
+            inputDecorationTheme: LedInputDecoration.build(),
           ),
           home: const LoginScreen(),
         );

@@ -25,6 +25,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
+import '../widgets/led_card.dart';
+
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _chartGreen = Color(0xFF43A047);
@@ -569,7 +571,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                           default: icon = Icons.notifications_active_rounded;
                         }
 
-                        return Card(
+                        return LedCard(
                           color: Colors.white.withOpacity(0.05),
                           child: ListTile(
                             leading: Icon(icon, color: Colors.orangeAccent),
@@ -1429,7 +1431,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             final seq = c['sequenceNumber'] ?? 'S/N';
             final isReleased = c['releasedForRouting'] == true;
 
-            return Card(
+            return LedCard(
               color: Colors.white.withOpacity(0.05),
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
@@ -1507,7 +1509,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             
             if (live == 0 && closed == 0) return const SizedBox.shrink();
 
-            return Card(
+            return LedCard(
               color: Colors.white.withOpacity(0.05),
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
@@ -2241,7 +2243,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   Widget _buildRotaCard(Map<String, dynamic> rota, bool isRebolo) {
     final List books = rota['books'] as List;
-    return Card(
+    return LedCard(
       color: Colors.white.withOpacity(0.05),
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -2423,7 +2425,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildMaloteCard(String seller, List<Map<String, dynamic>> books, bool isRebolo) {
-    return Card(
+    return LedCard(
       color: Colors.greenAccent.withOpacity(0.05),
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.greenAccent.withOpacity(0.3))),

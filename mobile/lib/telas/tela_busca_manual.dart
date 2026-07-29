@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
+import '../widgets/led_card.dart';
+
 
 
 class ManualSearchScreen extends StatefulWidget {
@@ -318,7 +320,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       itemCount: _searchResults.length,
                       itemBuilder: (context, index) {
                         final evt = _searchResults[index];
-                        return Card(
+                        return LedCard(
                           color: const Color(0xFF1A1A2E),
                           margin: const EdgeInsets.only(bottom: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

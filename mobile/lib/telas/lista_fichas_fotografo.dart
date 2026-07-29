@@ -5,6 +5,8 @@ import '../utils/pdf_generator.dart';
 import 'solicitar_correcao_ficha.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'tela_detalhes_cliente_vendedor.dart' as import_tela_detalhes;
+import '../widgets/led_card.dart';
+
 
 class ListaFichasFotografo extends StatefulWidget {
   const ListaFichasFotografo({super.key});
@@ -74,7 +76,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                     itemBuilder: (context, index) {
                       final ficha = _fichas[index];
                       final eventDate = ficha['eventDate'] != null ? DateTime.tryParse(ficha['eventDate']) : null;
-                      return Card(
+                      return LedCard(
                         color: Colors.black26,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
