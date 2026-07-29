@@ -225,7 +225,17 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               // WhatsApp
               if (client['phone1'] != null)
                 GestureDetector(
-                  onTap: () => _showSuccess('WhatsApp aberto (mock)'),
+                  onTap: () async {
+                    final num = (client['phone1'] as String).replaceAll(RegExp(r'\D'), '');
+                    // Se o número já tiver o código do país (ex: 55), evitar duplicar, senão adiciona o 55 por padrão do Brasil
+                    final fullNum = num.startsWith('55') ? num : '55$num';
+                    final uri = Uri.parse('https://wa.me/$fullNum');
+                    if (await canLaunchUrl(uri)) {
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    } else {
+                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
+                    }
+                  },
                   child: Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
