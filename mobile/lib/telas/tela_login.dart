@@ -96,7 +96,7 @@ class _LoginScreenState extends State<LoginScreen>
                 await launchUrl(uri, mode: LaunchMode.externalApplication);
               }
             },
-            child: const Text('Baixar Agora', style: TextStyle(color: Colors.black)),
+            child: const Text('Baixar Agora', style: TextStyle(color: Colors.white)),
           )
         ],
       ),

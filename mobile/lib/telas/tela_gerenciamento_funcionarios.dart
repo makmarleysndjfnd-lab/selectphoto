@@ -104,8 +104,8 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
               return FloatingActionButton.extended(
                 onPressed: () => _showEmployeeForm(),
                 backgroundColor: const Color(0xFFCE93D8),
-                icon: const Icon(Icons.person_add, color: Colors.black),
-                label: const Text('Novo Funcionário', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                icon: const Icon(Icons.person_add, color: Colors.white),
+                label: const Text('Novo Funcionário', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               );
             }
             return const SizedBox.shrink();
@@ -250,7 +250,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
               }
             },
             style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-            child: const Text('Criar e Selecionar', style: TextStyle(color: Colors.black)),
+            child: const Text('Criar e Selecionar', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -591,8 +591,8 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                       onPressed: _isSaving ? null : _save,
                       style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                       child: _isSaving 
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                        : const Text('Salvar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ),
                   ],
                 )
@@ -917,8 +917,8 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: _isSaving
-                  ? const CircularProgressIndicator(color: Colors.black)
-                  : const Text('Salvar Checklist', style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold)),
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text('Salvar Checklist', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ],
         ),

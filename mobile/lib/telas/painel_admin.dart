@@ -2539,7 +2539,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota atribuída para $selectedSeller!'), backgroundColor: Colors.green));
               },
               style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
-              child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
+              child: const Text('Atribuir', style: TextStyle(color: Colors.white)),
             )
           ],
         )
@@ -2598,7 +2598,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${isRebolo ? "Rebolo" : "Book"} atribuído para $selectedSeller!'), backgroundColor: Colors.green));
               },
               style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
-              child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
+              child: const Text('Atribuir', style: TextStyle(color: Colors.white)),
             )
           ],
         )

@@ -265,7 +265,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 }
               },
               style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Salvar Sessão', style: TextStyle(color: Colors.black)),
+              child: const Text('Salvar Sessão', style: TextStyle(color: Colors.white)),
             ),
           ],
         );
@@ -329,7 +329,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 }
               },
               style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Adicionar', style: TextStyle(color: Colors.black)),
+              child: const Text('Adicionar', style: TextStyle(color: Colors.white)),
             ),
           ],
         );
@@ -1020,8 +1020,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: _isLoading 
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black)) 
-                : const Text('Finalizar e Gerar QR Code', style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold)),
+                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
+                : const Text('Finalizar e Gerar QR Code', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 40),
           ],
@@ -1108,8 +1108,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 Expanded(
                   child: LedButton.icon(
                     onPressed: _resetForm,
-                    icon: const Icon(Icons.add, color: Colors.black),
-                    label: const Text('Nova Ficha', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    icon: const Icon(Icons.add, color: Colors.white),
+                    label: const Text('Nova Ficha', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   ),
                 ),

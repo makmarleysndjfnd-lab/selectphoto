@@ -519,7 +519,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                     }
                   },
                   style: LedButton.styleFrom(backgroundColor: Colors.orangeAccent),
-                  child: const Text('Confirmar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  child: const Text('Confirmar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 ),
               ],
             );

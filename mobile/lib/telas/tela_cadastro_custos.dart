@@ -297,7 +297,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              child: const Text('Registrar Despesa', style: TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text('Registrar Despesa', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
