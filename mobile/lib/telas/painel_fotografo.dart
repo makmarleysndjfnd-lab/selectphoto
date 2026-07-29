@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
+import 'tela_sincronizacao.dart' as tela_sincronizacao;
 
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -713,6 +714,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     },
                     icon: const Icon(Icons.list_alt_rounded, color: Color(0xFFCE93D8)),
                     tooltip: 'Ver Fichas Produzidas',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.sync, color: Colors.white70),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const tela_sincronizacao.SyncScreen(),
+                        ),
+                      );
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.settings, color: Colors.white70),

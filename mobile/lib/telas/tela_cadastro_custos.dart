@@ -40,14 +40,32 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
     'Outros'
   ];
 
-  final List<Map<String, String>> _mockCars = [
-    {'id': 'car_1', 'plate': 'ABC-1234'},
-    {'id': 'car_2', 'plate': 'XYZ-9876'},
-  ];
+  List<dynamic> _realCars = [];
+  bool _isLoadingCars = true;
 
   @override
   void initState() {
     super.initState();
+    _fetchCars();
+  }
+
+  Future<void> _fetchCars() async {
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      final cars = await apiService.getCars();
+      if (mounted) {
+        setState(() {
+          _realCars = cars;
+          _isLoadingCars = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingCars = false;
+        });
+      }
+    }
   }
 
   Future<void> _takePhoto() async {
@@ -63,6 +81,35 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
     if (_amountController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha o valor')));
       return;
+    }
+
+    if (_category == 'Manutenção/Óleo') {
+      if (_carId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Selecione um carro para a manutenção.')));
+        return;
+      }
+      if (_nextOilChangeKmController.text.isNotEmpty) {
+        final nextKm = int.tryParse(_nextOilChangeKmController.text);
+        if (nextKm == null) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('KM inválido')));
+          return;
+        }
+
+        final selectedCar = _realCars.firstWhere((c) => c['id'] == _carId, orElse: () => null);
+        if (selectedCar != null) {
+          final currentKm = (selectedCar['currentKm'] as num?)?.toInt() ?? 0;
+          if (nextKm < currentKm + 9000 || nextKm > currentKm + 14000) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('O KM da próxima troca deve ser entre ${currentKm + 9000} e ${currentKm + 14000} (9k a 14k a mais que o atual). Caso haja erro no KM atual, contate o Admin.'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+              )
+            );
+            return;
+          }
+        }
+      }
     }
     final cleanAmount = _amountController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
     final amount = double.tryParse(cleanAmount) ?? 0.0;
@@ -234,6 +281,37 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 });
               },
             ),
+            
+            if (_category == 'Manutenção/Óleo') ...[
+              const SizedBox(height: 16),
+              if (_isLoadingCars)
+                const CircularProgressIndicator()
+              else
+                DropdownButtonFormField<String>(
+                  value: _carId,
+                  dropdownColor: const Color(0xFF1A1A2E),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Veículo',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF1A1A2E),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    prefixIcon: const Icon(Icons.directions_car, color: Colors.white54),
+                  ),
+                  items: _realCars.map((c) {
+                    return DropdownMenuItem<String>(
+                      value: c['id'],
+                      child: Text('${c['plate']} - ${c['model'] ?? ''} (KM: ${c['currentKm'] ?? 0})'),
+                    );
+                  }).toList(),
+                  onChanged: (v) {
+                    setState(() {
+                      _carId = v;
+                    });
+                  },
+                ),
+            ],
             
             if (_category == 'Manutenção/Óleo') ...[
               const SizedBox(height: 16),
