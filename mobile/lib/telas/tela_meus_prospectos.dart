@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class MyProspectsScreen extends StatefulWidget {
   const MyProspectsScreen({super.key});
@@ -85,9 +87,9 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Salvar'),
             ),
           ],
@@ -119,9 +121,9 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
         content: const Text('Deseja realmente remover este prospecto da sua lista e do fluxo futuro?', style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
+          LedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
             child: const Text('Remover', style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -186,9 +188,9 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
               child: const Text('Confirmar Compra', style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -349,11 +351,11 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
                           const SizedBox(height: 16),
                           SizedBox(
                             width: double.infinity,
-                            child: ElevatedButton.icon(
+                            child: LedButton.icon(
                               onPressed: () => _buyEvent(p),
                               icon: const Icon(Icons.shopping_cart_checkout, color: Colors.white),
                               label: const Text('COMPRAR EVENTO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              style: ElevatedButton.styleFrom(
+                              style: LedButton.styleFrom(
                                 backgroundColor: const Color(0xFF4CAF50),
                                 padding: const EdgeInsets.symmetric(vertical: 14),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

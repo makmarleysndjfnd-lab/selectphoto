@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:flutter/services.dart';
+import '../widgets/led_button.dart';
+
 
 class PrinterConfigScreen extends StatefulWidget {
   const PrinterConfigScreen({super.key});
@@ -153,13 +155,13 @@ class _PrinterConfigScreenState extends State<PrinterConfigScreen> {
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
+                  child: LedButton.icon(
                     onPressed: _connected ? _disconnect : _connect,
                     icon: Icon(_connected ? Icons.bluetooth_disabled : Icons.bluetooth_connected,
                         color: Colors.white),
                     label: Text(_connected ? 'Desconectar' : 'Conectar',
                         style: const TextStyle(color: Colors.white)),
-                    style: ElevatedButton.styleFrom(
+                    style: LedButton.styleFrom(
                       backgroundColor: _connected ? Colors.redAccent : Colors.blueAccent,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -169,11 +171,11 @@ class _PrinterConfigScreenState extends State<PrinterConfigScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            ElevatedButton.icon(
+            LedButton.icon(
               onPressed: _connected ? _testPrint : null,
               icon: const Icon(Icons.print, color: Colors.white),
               label: const Text('Imprimir Teste', style: TextStyle(color: Colors.white)),
-              style: ElevatedButton.styleFrom(
+              style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

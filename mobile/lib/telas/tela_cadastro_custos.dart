@@ -7,6 +7,8 @@ import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import '../servicos/ajudante_bd.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
+import '../widgets/led_button.dart';
+
 
 class CostEntryScreen extends StatefulWidget {
   const CostEntryScreen({super.key});
@@ -288,9 +290,9 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
             ),
             
             const SizedBox(height: 32),
-            ElevatedButton(
+            LedButton(
               onPressed: _submitCost,
-              style: ElevatedButton.styleFrom(
+              style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

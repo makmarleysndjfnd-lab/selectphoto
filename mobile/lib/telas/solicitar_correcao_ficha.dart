@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class SolicitarCorrecaoFicha extends StatefulWidget {
   final dynamic ficha;
@@ -221,9 +223,9 @@ class _SolicitarCorrecaoFichaState extends State<SolicitarCorrecaoFicha> {
                 validator: (val) => val == null || val.isEmpty ? 'Informe o motivo' : null,
               ),
               const SizedBox(height: 32),
-              ElevatedButton(
+              LedButton(
                 onPressed: _isLoading ? null : _enviarSolicitacao,
-                style: ElevatedButton.styleFrom(
+                style: LedButton.styleFrom(
                   backgroundColor: const Color(0xFFCE93D8),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

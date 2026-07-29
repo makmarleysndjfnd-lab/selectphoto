@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:flutter/services.dart';
+import '../widgets/led_button.dart';
+
 
 class VisaoFechamentoAdmin extends StatefulWidget {
   const VisaoFechamentoAdmin({super.key});
@@ -301,7 +303,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
              if (saldoFinal > 0) ...[
                _infoRow('Comissão a Pagar (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
                const SizedBox(height: 16),
-               ElevatedButton(
+               LedButton(
                   onPressed: () async {
                     try {
                       await ApiService().payRepasse(_selectedSeller!, saldoFinal, commissionToLog: comissao);
@@ -311,7 +313,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  style: LedButton.styleFrom(backgroundColor: Colors.green),
                   child: const Text('Registrar Pagamento')
                ),
              ] else if (saldoFinal < 0) ...[
@@ -345,7 +347,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                  ],
                ),
                const SizedBox(height: 16),
-               ElevatedButton(
+               LedButton(
                   onPressed: () async {
                     try {
                       await ApiService().payRepasse(_selectedSeller!, saldoFinal.abs(), commissionToLog: comissao);
@@ -355,7 +357,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                  style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
                   child: const Text('Confirmar Recebimento de Repasse', style: TextStyle(color: Colors.white))
                ),
              ] else ...[
@@ -409,7 +411,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           Row(
             children: [
               Expanded(
-                child: ElevatedButton.icon(
+                child: LedButton.icon(
                   onPressed: () async {
                     final range = await showDateRangePicker(
                       context: context,
@@ -438,7 +440,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   label: Text(_selectedDateRangeCustom != null 
                     ? '${_selectedDateRangeCustom!.start.day}/${_selectedDateRangeCustom!.start.month}/${_selectedDateRangeCustom!.start.year} - ${_selectedDateRangeCustom!.end.day}/${_selectedDateRangeCustom!.end.month}/${_selectedDateRangeCustom!.end.year}' 
                     : 'Selecionar Período'),
-                  style: ElevatedButton.styleFrom(
+                  style: LedButton.styleFrom(
                     backgroundColor: const Color(0xFF2A2A3E),
                     foregroundColor: Colors.white,
                     alignment: Alignment.centerLeft,
@@ -453,7 +455,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             ],
           ),
           const SizedBox(height: 12),
-          ElevatedButton.icon(
+          LedButton.icon(
             onPressed: () {
               final allSellerIds = _sellers.map((e) => e['id'] as String).toList();
               _showMultiSelectDialog(
@@ -467,7 +469,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             },
             icon: const Icon(Icons.people, size: 16),
             label: Text(_selectedSellersCustom.isEmpty ? 'Selecionar Vendedores' : sellerNames, overflow: TextOverflow.ellipsis),
-            style: ElevatedButton.styleFrom(
+            style: LedButton.styleFrom(
               backgroundColor: const Color(0xFF2A2A3E),
               foregroundColor: Colors.white,
               alignment: Alignment.centerLeft,
@@ -477,11 +479,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton(
+            child: LedButton(
               onPressed: () {
                  setState(() {}); // refresh
               },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Buscar', style: TextStyle(color: Colors.white)),
             ),
           ),
@@ -570,12 +572,12 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
-                ElevatedButton(
+                LedButton(
                   onPressed: () {
                     onConfirm(tempSelected);
                     Navigator.pop(context);
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                   child: const Text('Confirmar'),
                 ),
               ],

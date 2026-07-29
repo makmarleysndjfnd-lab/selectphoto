@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class CashFlowAdminView extends StatefulWidget {
   const CashFlowAdminView({super.key});
@@ -219,8 +221,8 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            LedButton(
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               onPressed: () async {
                 try {
                   final data = {
@@ -397,11 +399,11 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
           ),
           Column(
             children: [
-              ElevatedButton.icon(
+              LedButton.icon(
                 onPressed: () => _approveCost(cost['id']),
                 icon: const Icon(Icons.check, color: Colors.white, size: 18),
                 label: const Text('Aprovar', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                style: LedButton.styleFrom(backgroundColor: Colors.green),
               ),
               const SizedBox(height: 8),
               TextButton.icon(

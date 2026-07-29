@@ -14,6 +14,8 @@ import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/km_request_dialog.dart';
+import '../widgets/led_button.dart';
+
 
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [
@@ -190,7 +192,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             ),
           ),
           actions: [
-            ElevatedButton(
+            LedButton(
               onPressed: () {
                 if (formKey.currentState!.validate()) {
                   setState(() {
@@ -200,7 +202,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   Navigator.pop(context);
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Salvar Sessão', style: TextStyle(color: Colors.black)),
             ),
           ],
@@ -255,7 +257,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            ElevatedButton(
+            LedButton(
               onPressed: () {
                 if (nameCtrl.text.isNotEmpty && ageCtrl.text.isNotEmpty) {
                   setState(() {
@@ -264,7 +266,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   Navigator.pop(context);
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Adicionar', style: TextStyle(color: Colors.black)),
             ),
           ],
@@ -338,9 +340,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             style: TextStyle(color: Colors.white70),
           ),
           actions: [
-            ElevatedButton(
+            LedButton(
               onPressed: () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              style: LedButton.styleFrom(backgroundColor: Colors.green),
               child: const Text('Li e Aceito', style: TextStyle(color: Colors.white)),
             ),
           ],
@@ -534,7 +536,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
               onPressed: () async {
                 final eventToFinish = _currentEventName!;
                 Navigator.pop(context);
@@ -555,7 +557,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   }
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Finalizar Lote', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
@@ -948,9 +950,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             ),
 
             const SizedBox(height: 24),
-            ElevatedButton(
+            LedButton(
               onPressed: _isLoading ? null : _submitForm,
-              style: ElevatedButton.styleFrom(
+              style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1033,20 +1035,20 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
+                  child: LedButton.icon(
                     onPressed: _printFicha,
                     icon: const Icon(Icons.print, color: Colors.white),
                     label: const Text('Imprimir Ficha', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
-                  child: ElevatedButton.icon(
+                  child: LedButton.icon(
                     onPressed: _resetForm,
                     icon: const Icon(Icons.add, color: Colors.black),
                     label: const Text('Nova Ficha', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   ),
                 ),
               ],

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class FleetAdminView extends StatefulWidget {
   const FleetAdminView({super.key});
@@ -78,11 +80,11 @@ class _FleetAdminViewState extends State<FleetAdminView> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              ElevatedButton.icon(
+              LedButton.icon(
                 onPressed: () => _showCarFormDialog(),
                 icon: const Icon(Icons.add, color: Colors.white),
                 label: const Text('Novo Veículo', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(
+                style: LedButton.styleFrom(
                   backgroundColor: const Color(0xFF9C27B0),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
@@ -481,9 +483,9 @@ Future<void> _save() async {
                       child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                     ),
                     const SizedBox(width: 16),
-                    ElevatedButton(
+                    LedButton(
                       onPressed: _isSaving ? null : _save,
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+                      style: LedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
                       child: _isSaving 
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),

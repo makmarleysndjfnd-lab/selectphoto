@@ -682,7 +682,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
+          LedButton(
             onPressed: () async {
               final code = codeCtrl.text.trim();
               if (code.isEmpty) return;
@@ -874,9 +874,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                       ],
                     ),
                   ),
-                  ElevatedButton(
+                  LedButton(
                     onPressed: () => setState(() => _navIndex = 0), // Go to IA Events
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
                     child: const Text('Ver', style: TextStyle(color: Colors.white)),
                   )
                 ],
@@ -1572,8 +1572,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                         contentPadding: EdgeInsets.zero,
                         title: Text('Lote Fotógrafo: ' + (batch['photographer'] ? batch['photographer']['name'] : 'N/A'), style: const TextStyle(color: Colors.white)),
                         subtitle: Text('${'Status: ' + batch['status']} | Fechado', style: const TextStyle(color: Colors.white70)),
-                        trailing: ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                        trailing: LedButton(
+                          style: LedButton.styleFrom(backgroundColor: Colors.green),
                           onPressed: () async {
                             try {
                               await ApiService().releaseBatchToStock(batch['id']);
@@ -2068,12 +2068,12 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-                ElevatedButton(
+                LedButton(
                   onPressed: selectedSeller == null ? null : () {
                     Navigator.pop(context);
                     _distribuirBookPorQR(qrCode, selectedSeller!, isRebolo);
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                   child: const Text('Confirmar', style: TextStyle(color: Colors.white)),
                 ),
               ],
@@ -2174,11 +2174,11 @@ class _AdminDashboardState extends State<AdminDashboard>
               Expanded(
                 child: Text(isRebolo ? 'Rotas de Rebolo (Revisita)' : 'Rotas Inteligentes (Manual)', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
               ),
-              ElevatedButton.icon(
+              LedButton.icon(
                 onPressed: () => _showNovaRotaDialog(isRebolo),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Nova Rota'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                style: LedButton.styleFrom(backgroundColor: Colors.blueAccent),
               ),
             ],
           ),
@@ -2358,7 +2358,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
+          LedButton(
             onPressed: () {
               if (ctrl.text.isNotEmpty) {
                 setState(() {
@@ -2371,7 +2371,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 Navigator.pop(context);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
             child: const Text('Criar', style: TextStyle(color: Colors.white)),
           )
         ],
@@ -2392,7 +2392,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
+          LedButton(
             onPressed: () {
               if (ctrl.text.isNotEmpty) {
                 setState(() {
@@ -2401,7 +2401,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 Navigator.pop(context);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
             child: const Text('Salvar', style: TextStyle(color: Colors.white)),
           )
         ],
@@ -2510,7 +2510,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            ElevatedButton(
+            LedButton(
               onPressed: selectedSeller == null ? null : () {
                 setState(() {
                   if (isRebolo) {
@@ -2524,7 +2524,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota atribuída para $selectedSeller!'), backgroundColor: Colors.green));
               },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+              style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
               child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
             )
           ],
@@ -2559,7 +2559,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            ElevatedButton(
+            LedButton(
               onPressed: selectedSeller == null ? null : () {
                 setState(() {
                   if (rotaId == null) {
@@ -2583,7 +2583,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${isRebolo ? "Rebolo" : "Book"} atribuído para $selectedSeller!'), backgroundColor: Colors.green));
               },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+              style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
               child: const Text('Atribuir', style: TextStyle(color: Colors.black)),
             )
           ],

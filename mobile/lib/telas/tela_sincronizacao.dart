@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_sincronizacao.dart';
+import '../widgets/led_button.dart';
+
 
 class SyncScreen extends StatelessWidget {
   const SyncScreen({super.key});
@@ -81,7 +83,7 @@ class SyncScreen extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.all(16.0),
-                child: ElevatedButton.icon(
+                child: LedButton.icon(
                   onPressed: () async {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Tentando sincronizar...')),
@@ -90,7 +92,7 @@ class SyncScreen extends StatelessWidget {
                   },
                   icon: const Icon(Icons.sync),
                   label: const Text('Tentar Sincronizar Agora'),
-                  style: ElevatedButton.styleFrom(
+                  style: LedButton.styleFrom(
                     backgroundColor: const Color(0xFF0288D1),
                     foregroundColor: Colors.white,
                     minimumSize: const Size(double.infinity, 50),

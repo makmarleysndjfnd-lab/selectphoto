@@ -11,6 +11,8 @@ import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
+import '../widgets/led_button.dart';
+
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
@@ -419,9 +421,9 @@ Widget _confirmButton(
             offset: const Offset(0, 5)),
       ],
     ),
-    child: ElevatedButton(
+    child: LedButton(
       onPressed: isLoading ? null : onPressed,
-      style: ElevatedButton.styleFrom(
+      style: LedButton.styleFrom(
         backgroundColor: Colors.transparent,
         shadowColor: Colors.transparent,
         shape:

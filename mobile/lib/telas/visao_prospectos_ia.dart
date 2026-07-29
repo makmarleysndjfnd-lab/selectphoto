@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import 'tela_busca_manual.dart';
 import 'tela_meus_prospectos.dart';
+import '../widgets/led_button.dart';
+
 
 class StateProspectsView extends StatefulWidget {
   const StateProspectsView({super.key});
@@ -87,9 +89,9 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Adicionar'),
             ),
           ],
@@ -216,9 +218,9 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                         child: Text(_errors[state]!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54)),
                       ),
                       const SizedBox(height: 16),
-                      ElevatedButton(
+                      LedButton(
                         onPressed: () => _loadDataForState(state),
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                        style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                         child: const Text('Tentar Novamente', style: TextStyle(color: Colors.white)),
                       )
                     ],
@@ -237,11 +239,11 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text('Resultados para $state', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                        ElevatedButton.icon(
+                        LedButton.icon(
                           onPressed: () => _loadDataForState(state, force: true),
                           icon: const Icon(Icons.refresh, color: Colors.white),
                           label: const Text('Atualizar', style: TextStyle(color: Colors.white)),
-                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047)),
+                          style: LedButton.styleFrom(backgroundColor: const Color(0xFF43A047)),
                         ),
                       ],
                     ),
@@ -295,11 +297,11 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                     )
                                   ),
                                   DataCell(
-                                    ElevatedButton.icon(
+                                    LedButton.icon(
                                       onPressed: () => _addProspect(evt, state),
                                       icon: const Icon(Icons.add, size: 16, color: Colors.white),
                                       label: const Text('Adicionar aos Prospectos', style: TextStyle(color: Colors.white, fontSize: 12)),
-                                style: ElevatedButton.styleFrom(
+                                style: LedButton.styleFrom(
                                   backgroundColor: const Color(0xFF9C27B0),
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                   minimumSize: Size.zero,

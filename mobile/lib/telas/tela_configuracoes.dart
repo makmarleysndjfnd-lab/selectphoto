@@ -8,6 +8,8 @@ import 'tela_login.dart';
 import 'tela_config_impressora.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import '../widgets/led_button.dart';
+
 
 class SettingsScreen extends StatefulWidget {
   final bool isFotografo;
@@ -121,8 +123,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0288D1)),
+                    child: LedButton(
+                      style: LedButton.styleFrom(backgroundColor: const Color(0xFF0288D1)),
                       onPressed: () {
                         settings.setServerUrl(_urlController.text.trim());
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -191,8 +193,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             content: const Text('Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelo conteúdo do arquivo.\n\nTem certeza que deseja continuar?', style: TextStyle(color: Colors.white)),
                             actions: [
                               TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                              LedButton(
+                                style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
                                 onPressed: () => Navigator.pop(context, true),
                                 child: const Text('CONFIRMO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                               ),
@@ -231,8 +233,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   content: const Text('O backup online atual é mais RECENTE do que este arquivo que você está tentando restaurar.\n\nDeseja forçar a restauração mesmo assim?', style: TextStyle(color: Colors.white)),
                                   actions: [
                                     TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-                                    ElevatedButton(
-                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                                    LedButton(
+                                      style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
                                       onPressed: () => Navigator.pop(context, true),
                                       child: const Text('FORÇAR RESTAURAÇÃO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                                     ),

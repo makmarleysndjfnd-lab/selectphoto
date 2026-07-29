@@ -6,6 +6,8 @@ import '../servicos/servico_api.dart';
 import 'tela_inicial.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import '../widgets/led_button.dart';
+
 
 // ── Mock credentials ──────────────────────────────────────────────────────────
 // vendedor@teste.com   / 123456  → SELLER
@@ -86,8 +88,8 @@ class _LoginScreenState extends State<LoginScreen>
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Depois', style: TextStyle(color: Colors.grey)),
             ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
+          LedButton(
+            style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
             onPressed: () async {
               final uri = Uri.parse(url);
               if (await canLaunchUrl(uri)) {
@@ -352,9 +354,9 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ],
       ),
-      child: ElevatedButton(
+      child: LedButton(
         onPressed: _isLoading ? null : _login,
-        style: ElevatedButton.styleFrom(
+        style: LedButton.styleFrom(
           backgroundColor: Colors.transparent,
           shadowColor: Colors.transparent,
           shape: RoundedRectangleBorder(

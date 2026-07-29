@@ -7,6 +7,8 @@ import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../servicos/servico_api.dart';
 import '../utils/km_request_dialog.dart';
+import '../widgets/led_button.dart';
+
 
 // ── Mock clients data ────────────────────────────────────────────────────────
 final List<Map<String, dynamic>> _mockClients = [
@@ -281,12 +283,12 @@ class _SellerDashboardState extends State<SellerDashboard>
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
-                ElevatedButton(
+                LedButton(
                   onPressed: () {
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fechamento enviado ao admin por $selectedSeller.')));
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
+                  style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
                   child: const Text('Confirmar Fechamento'),
                 ),
               ],
@@ -490,7 +492,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
-                ElevatedButton(
+                LedButton(
                   onPressed: selectedRecipient == null ? null : () async {
                     final qty = int.tryParse(qtyController.text) ?? 0;
                     if (qty <= 0) {
@@ -514,7 +516,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                       }
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+                  style: LedButton.styleFrom(backgroundColor: Colors.orangeAccent),
                   child: const Text('Confirmar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ],
@@ -735,14 +737,14 @@ class _SellerDashboardState extends State<SellerDashboard>
             ),
           ),
           const SizedBox(height: 16),
-          ElevatedButton.icon(
+          LedButton.icon(
             onPressed: _selectedSellerForTransfer == null ? null : () {
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Abrindo scanner para transferir para $_selectedSellerForTransfer...')));
               // Em produção, reutilizaria o MobileScanner para ler e atribuir ao vendedor
             },
             icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
             label: const Text('Escanear e Repassar Book', style: TextStyle(color: Colors.white)),
-            style: ElevatedButton.styleFrom(
+            style: LedButton.styleFrom(
               backgroundColor: const Color(0xFF9C27B0), 
               disabledBackgroundColor: Colors.grey.shade800,
               minimumSize: const Size(double.infinity, 45)
@@ -921,13 +923,13 @@ class _SellerDashboardState extends State<SellerDashboard>
         const SizedBox(height: 16),
         ..._filteredClients.map((client) => _buildClientCard(client)),
         const SizedBox(height: 24),
-        ElevatedButton.icon(
+        LedButton.icon(
           onPressed: () {
             _showFechamentoCidadeDialog();
           },
           icon: const Icon(Icons.check_circle_outline, color: Colors.white),
           label: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white)),
-          style: ElevatedButton.styleFrom(
+          style: LedButton.styleFrom(
             backgroundColor: const Color(0xFFCE93D8),
             minimumSize: const Size(double.infinity, 45),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

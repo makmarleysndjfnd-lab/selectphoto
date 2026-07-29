@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class ManualSearchScreen extends StatefulWidget {
   const ManualSearchScreen({super.key});
@@ -139,9 +141,9 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
               onPressed: () => Navigator.pop(context, false),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
               onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
               child: const Text('Adicionar'),
             ),
           ],
@@ -267,9 +269,9 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                           },
                       ),
                       const SizedBox(height: 12),
-                      ElevatedButton(
+                      LedButton(
                         onPressed: _isSearching ? null : () => _performSearch(_searchController.text),
-                        style: ElevatedButton.styleFrom(
+                        style: LedButton.styleFrom(
                           backgroundColor: const Color(0xFF43A047),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -353,11 +355,11 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                                 const SizedBox(height: 16),
                                 SizedBox(
                                   width: double.infinity,
-                                  child: ElevatedButton.icon(
+                                  child: LedButton.icon(
                                     onPressed: () => _addProspect(evt),
                                     icon: const Icon(Icons.bookmark_add, size: 20, color: Colors.white),
                                     label: const Text('Salvar Prospecto', style: TextStyle(color: Colors.white)),
-                                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF43A047), padding: const EdgeInsets.symmetric(vertical: 14)),
+                                    style: LedButton.styleFrom(backgroundColor: const Color(0xFF43A047), padding: const EdgeInsets.symmetric(vertical: 14)),
                                   ),
                                 )
                               ],

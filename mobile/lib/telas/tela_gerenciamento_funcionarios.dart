@@ -6,6 +6,8 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:signature/signature.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class EmployeeManagementScreen extends StatefulWidget {
   const EmployeeManagementScreen({super.key});
@@ -229,7 +231,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
           ),
-          ElevatedButton(
+          LedButton(
             onPressed: () async {
               if (nameCtrl.text.trim().isEmpty) return;
               try {
@@ -245,7 +247,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+            style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
             child: const Text('Criar e Selecionar', style: TextStyle(color: Colors.black)),
           ),
         ],
@@ -583,9 +585,9 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                       child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                     ),
                     const SizedBox(width: 16),
-                    ElevatedButton(
+                    LedButton(
                       onPressed: _isSaving ? null : _save,
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                      style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                       child: _isSaving 
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
                         : const Text('Salvar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -905,9 +907,9 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
             ),
             
             const SizedBox(height: 32),
-            ElevatedButton(
+            LedButton(
               onPressed: _isSaving ? null : _submit,
-              style: ElevatedButton.styleFrom(
+              style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

@@ -5,6 +5,8 @@ import '../servicos/ajudante_bd.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+
 
 class FleetChecklistScreen extends StatefulWidget {
   final String carId;
@@ -222,9 +224,9 @@ class _FleetChecklistScreenState extends State<FleetChecklistScreen> {
               ),
             ),
             const SizedBox(height: 32),
-            ElevatedButton(
+            LedButton(
               onPressed: _submitChecklist,
-              style: ElevatedButton.styleFrom(
+              style: LedButton.styleFrom(
                 backgroundColor: Colors.green,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
