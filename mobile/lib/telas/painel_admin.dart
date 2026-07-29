@@ -14,6 +14,7 @@ import 'visao_prospectos_ia.dart';
 import 'visao_fechamento_admin.dart';
 import 'visao_estoque_admin.dart';
 import '../utils/pdf_generator.dart';
+import 'tela_detalhes_cliente_vendedor.dart';
 
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1435,6 +1436,17 @@ class _AdminDashboardState extends State<AdminDashboard>
               color: Colors.white.withOpacity(0.05),
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => SellerClientDetailScreen(
+                        clientData: c,
+                        isFotografo: true,
+                      ),
+                    ),
+                  );
+                },
                 leading: const CircleAvatar(
                   backgroundColor: Colors.white12,
                   child: Icon(Icons.menu_book, color: Colors.white),
@@ -2292,6 +2304,17 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   Widget _buildBookTile(Map<String, dynamic> book, String? rotaId, bool isRebolo) {
     return ListTile(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => SellerClientDetailScreen(
+              clientData: book['rawClientData'] ?? book,
+              isFotografo: true,
+            ),
+          ),
+        );
+      },
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       title: Text(book['cliente'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
       subtitle: Padding(
@@ -2447,6 +2470,17 @@ class _AdminDashboardState extends State<AdminDashboard>
         iconColor: Colors.white,
         collapsedIconColor: Colors.white70,
         children: books.map((b) => ListTile(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SellerClientDetailScreen(
+                  clientData: b['rawClientData'] ?? b,
+                  isFotografo: true,
+                ),
+              ),
+            );
+          },
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
           title: Text(b['cliente'] as String, style: const TextStyle(color: Colors.white, fontSize: 13)),
           subtitle: Text('Ficha: ${b['ficha']} | Lote: ${b['lote']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
