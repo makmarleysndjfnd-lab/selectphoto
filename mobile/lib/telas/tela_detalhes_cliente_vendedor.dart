@@ -16,7 +16,8 @@ import '../widgets/led_button.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
-  const SellerClientDetailScreen({super.key, required this.clientData});
+  final bool isFotografo;
+  const SellerClientDetailScreen({super.key, required this.clientData, this.isFotografo = false});
 
   @override
   // ignore: library_private_types_in_public_api
@@ -75,8 +76,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
         children: [
           _buildHeader(client),
           _buildClientInfo(client),
-          _buildTabBar(),
-          Expanded(child: _buildTabView(client)),
+          if (!widget.isFotografo) _buildTabBar(),
+          if (!widget.isFotografo) Expanded(child: _buildTabView(client)),
         ],
       ),
     );

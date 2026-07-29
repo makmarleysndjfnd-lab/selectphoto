@@ -174,7 +174,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => import_tela_detalhes.SellerClientDetailScreen(clientData: Map<String, dynamic>.from(ficha as Map)),
+                                builder: (_) => import_tela_detalhes.SellerClientDetailScreen(clientData: Map<String, dynamic>.from(ficha as Map), isFotografo: true),
                               ),
                             );
                           },
