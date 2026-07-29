@@ -77,6 +77,15 @@ class MyApp extends StatelessWidget {
             useMaterial3: true,
             fontFamily: 'Roboto',
             inputDecorationTheme: LedInputDecoration.build(),
+            pageTransitionsTheme: const PageTransitionsTheme(
+              builders: {
+                TargetPlatform.android: ZoomPageTransitionsBuilder(),
+                TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+                TargetPlatform.windows: ZoomPageTransitionsBuilder(),
+                TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
+                TargetPlatform.linux: ZoomPageTransitionsBuilder(),
+              },
+            ),
           ),
           home: const LoginScreen(),
         );
