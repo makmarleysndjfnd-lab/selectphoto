@@ -1076,7 +1076,10 @@ class _SellerDashboardState extends State<SellerDashboard>
                       } else {
                         await ApiService().forceReturn(clientId);
                       }
-                      _loadData();
+                      setState(() {
+                        _mockClients.remove(client);
+                        _selectedClientIds.remove(clientId);
+                      });
                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha devolvida!'), backgroundColor: Colors.green));
                     } catch (e) {
                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao devolver: $e'), backgroundColor: Colors.red));
