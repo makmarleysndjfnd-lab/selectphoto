@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:provider/provider.dart';
 import 'tela_configuracoes.dart';
 import 'package:signature/signature.dart';
@@ -59,6 +60,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   final _cityController = TextEditingController();
   final _stateController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _phone2Controller = TextEditingController();
   final _referenceController = TextEditingController();
   final _professionController = TextEditingController();
 
@@ -149,6 +151,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     _cityController.dispose();
     _stateController.dispose();
     _phoneController.dispose();
+    _phone2Controller.dispose();
     _referenceController.dispose();
     _professionController.dispose();
     _clothesColorController.dispose();
@@ -436,6 +439,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         'event': _currentEventName,
         'name': _nameController.text,
         'phone1': _phoneController.text,
+        'phone2': _phone2Controller.text,
         'cep': _cepController.text,
         'street': _streetController.text,
         'number': _numberController.text,
@@ -487,6 +491,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     _cityController.clear();
     _stateController.clear();
     _phoneController.clear();
+    _phone2Controller.clear();
     _referenceController.clear();
     _professionController.clear();
     _clothesColorController.clear();
@@ -791,7 +796,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               child: Text('Só preencha se for PAI, MÃE, AVÓ, AVÕ OU TUTOR LEGAL.', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 12),
-            _buildTextField(_phoneController, 'Telefone / WhatsApp', Icons.phone, keyboardType: TextInputType.phone),
+            _buildTextField(_phoneController, 'WhatsApp', FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
+            const SizedBox(height: 12),
+            _buildTextField(_phone2Controller, 'Telefone 2 (Opcional)', Icons.phone, keyboardType: TextInputType.phone),
             const SizedBox(height: 12),
             RawAutocomplete<String>(
               textEditingController: _professionController,

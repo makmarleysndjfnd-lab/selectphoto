@@ -197,9 +197,42 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _infoRow(Icons.phone_rounded,
-                        client['phone1'] ?? 'Sem telefone'),
-                    const SizedBox(height: 4),
+                    if (client['phone1'] != null && client['phone1'].toString().isNotEmpty)
+                      GestureDetector(
+                        onTap: () async {
+                          final num = (client['phone1'] as String).replaceAll(RegExp(r'\D'), '');
+                          final fullNum = num.startsWith('55') ? num : '55$num';
+                          final uri = Uri.parse('https://wa.me/$fullNum');
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          } else {
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
+                          }
+                        },
+                        child: Container(
+                          color: Colors.transparent,
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone1']),
+                        ),
+                      ),
+                    if (client['phone2'] != null && client['phone2'].toString().isNotEmpty)
+                      GestureDetector(
+                        onTap: () async {
+                          final num = (client['phone2'] as String).replaceAll(RegExp(r'\D'), '');
+                          final fullNum = num.startsWith('55') ? num : '55$num';
+                          final uri = Uri.parse('https://wa.me/$fullNum');
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          } else {
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
+                          }
+                        },
+                        child: Container(
+                          color: Colors.transparent,
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone2']),
+                        ),
+                      ),
                     GestureDetector(
                       onTap: () async {
                         final q = "${client['street']}, ${client['number']} ${client['city']}";
@@ -222,32 +255,6 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   ],
                 ),
               ),
-              // WhatsApp
-              if (client['phone1'] != null)
-                GestureDetector(
-                  onTap: () async {
-                    final num = (client['phone1'] as String).replaceAll(RegExp(r'\D'), '');
-                    // Se o número já tiver o código do país (ex: 55), evitar duplicar, senão adiciona o 55 por padrão do Brasil
-                    final fullNum = num.startsWith('55') ? num : '55$num';
-                    final uri = Uri.parse('https://wa.me/$fullNum');
-                    if (await canLaunchUrl(uri)) {
-                      await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    } else {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF25D366).withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: const Color(0xFF25D366).withOpacity(0.4)),
-                    ),
-                    child: const Icon(Icons.chat_rounded,
-                        color: Color(0xFF25D366), size: 20),
-                  ),
-                ),
             ],
           ),
           

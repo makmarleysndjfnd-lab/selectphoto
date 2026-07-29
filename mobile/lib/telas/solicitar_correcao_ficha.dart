@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
 
@@ -158,7 +159,7 @@ class _SolicitarCorrecaoFichaState extends State<SolicitarCorrecaoFicha> {
               const SizedBox(height: 8),
               _buildTextField('Nome Principal', _nomeController, Icons.person),
               const SizedBox(height: 12),
-              _buildTextField('Telefone / WhatsApp', _telefoneController, Icons.phone, keyboardType: TextInputType.phone),
+              _buildTextField('WhatsApp', _telefoneController, FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
               const SizedBox(height: 12),
               _buildTextField('Telefone 2 (Opcional)', _telefone2Controller, Icons.phone, keyboardType: TextInputType.phone),
               const SizedBox(height: 12),
