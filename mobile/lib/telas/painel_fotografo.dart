@@ -163,6 +163,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     final eventCtrl = TextEditingController(text: _currentEventName ?? '');
     final formKey = GlobalKey<FormState>();
 
+    // Fetch upcoming events to suggest
+    List<String> eventSuggestions = [];
+    try {
+      final upcoming = await ApiService().getUpcomingEvents();
+      eventSuggestions = upcoming.map((e) => (e['name'] ?? '').toString()).toList();
+    } catch (_) {}
+
+    if (!mounted) return;
+
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -182,11 +191,64 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: eventCtrl,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Nome do Evento (Ex: Shopping)', labelStyle: TextStyle(color: Colors.white54)),
-                  validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                Autocomplete<String>(
+                  initialValue: TextEditingValue(text: _currentEventName ?? ''),
+                  optionsBuilder: (TextEditingValue textEditingValue) {
+                    if (textEditingValue.text.isEmpty) {
+                      return eventSuggestions;
+                    }
+                    return eventSuggestions.where((String option) {
+                      return option.toLowerCase().contains(textEditingValue.text.toLowerCase());
+                    });
+                  },
+                  onSelected: (String selection) {
+                    eventCtrl.text = selection;
+                  },
+                  fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                    // Sync the autocomplete controller with our eventCtrl
+                    controller.addListener(() {
+                      eventCtrl.text = controller.text;
+                    });
+                    return TextFormField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Nome do Evento (Sugestões automáticas)', 
+                        labelStyle: TextStyle(color: Colors.white54),
+                        hintText: 'Digite ou selecione um evento...',
+                        hintStyle: TextStyle(color: Colors.white24),
+                      ),
+                      validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                    );
+                  },
+                  optionsViewBuilder: (context, onSelected, options) {
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4.0,
+                        color: const Color(0xFF2A2A3E),
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 200, maxWidth: 250),
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            itemCount: options.length,
+                            itemBuilder: (BuildContext context, int index) {
+                              final String option = options.elementAt(index);
+                              return InkWell(
+                                onTap: () => onSelected(option),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: Text(option, style: const TextStyle(color: Colors.white)),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),

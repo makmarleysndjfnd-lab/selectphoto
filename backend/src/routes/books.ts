@@ -99,6 +99,84 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
     }
 });
 
+// Force release a single client to Admin (Photographer action)
+router.put('/client/:id/force-send', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const { id } = req.params;
+        const photographerId = req.user?.id;
+        const companyId = req.user?.companyId;
+
+        const client = await prisma.client.findUnique({ where: { id: id as string } });
+        if (!client || client.companyId !== companyId || client.photographerId !== photographerId) {
+            return res.status(404).json({ error: 'Client not found or unauthorized' });
+        }
+        if (client.bookStatus !== 'CREATED') {
+            return res.status(400).json({ error: 'Ficha já foi enviada ou não está pendente' });
+        }
+
+        // Create a mini batch just for this client to keep data integrity
+        const batch = await prisma.bookBatch.create({
+            data: {
+                name: `Lote Avulso - ${client.name}`,
+                photographerId: photographerId!,
+                companyId,
+                status: 'AWAITING_RELEASE'
+            }
+        });
+
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { 
+                bookStatus: 'AWAITING_RELEASE',
+                batchId: batch.id
+            }
+        });
+
+        res.json({ message: 'Ficha enviada com sucesso', client: updated });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Force release a single client to Stock (Admin action)
+router.put('/client/:id/force-release', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const { id } = req.params;
+        const companyId = req.user?.companyId;
+
+        const client = await prisma.client.findUnique({ where: { id: id as string } });
+        if (!client || client.companyId !== companyId) {
+            return res.status(404).json({ error: 'Client not found' });
+        }
+
+        let batchId = client.batchId;
+        if (!batchId) {
+            // Create a pseudo batch if none exists
+            const batch = await prisma.bookBatch.create({
+                data: {
+                    name: `Resgate Admin - ${client.name}`,
+                    photographerId: client.photographerId || req.user!.id,
+                    companyId,
+                    status: 'IN_STOCK'
+                }
+            });
+            batchId = batch.id;
+        }
+
+        const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: { 
+                bookStatus: 'IN_STOCK',
+                batchId
+            }
+        });
+
+        res.json({ message: 'Ficha liberada com sucesso', client: updated });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Search book (Seller)
 router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
     try {

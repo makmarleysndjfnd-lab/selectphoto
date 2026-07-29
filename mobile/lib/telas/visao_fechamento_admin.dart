@@ -138,8 +138,9 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         final clients = results[1] as List<dynamic>;
         
         final createdBatches = batches.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
+        final looseClients = clients.where((c) => c['bookStatus'] == 'CREATED' && c['batchId'] == null).toList();
 
-        if (createdBatches.isEmpty) {
+        if (createdBatches.isEmpty && looseClients.isEmpty) {
            return Container(
              padding: const EdgeInsets.all(20),
              decoration: BoxDecoration(
@@ -148,7 +149,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                border: Border.all(color: Colors.white12),
              ),
              child: const Center(
-               child: Text('Nenhuma cidade/lote aguardando liberação.', style: TextStyle(color: Colors.white54))
+               child: Text('Nenhuma cidade/lote ou ficha aguardando liberação.', style: TextStyle(color: Colors.white54))
              ),
            );
         }
@@ -163,59 +164,91 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            const Text('Lotes / Cidades Prontas para Liberação', style: TextStyle(color: Colors.orangeAccent, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text('Os fotógrafos finalizaram a produção destes lotes. Libere-os para formar as rotas inteligentes.', style: TextStyle(color: Colors.white70, fontSize: 14)),
-            const SizedBox(height: 24),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: createdBatches.map((batch) {
-                final city = batch['name'] ?? 'Desconhecida';
-                final batchId = batch['id'];
-                // Find clients for this city (now matching by batchId)
-                final cityClients = clients.where((c) => c['batchId'] == batchId).toList();
-                final clientCount = cityClients.length;
-                final sequenceNumbers = cityClients.map((c) => c['sequenceNumber'] ?? 'S/N').join(', ');
-                
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ActionChip(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      backgroundColor: const Color(0xFFCE93D8),
-                      label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                      onPressed: () async {
-                        try {
-                          // Liberar lote para estoque
-                          await ApiService().releaseBatchToStock(batchId);
-                          
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado para estoque!'), backgroundColor: Colors.green));
-                            setState(() {}); // refresh
+            if (createdBatches.isNotEmpty) ...[
+              const Text('Lotes / Cidades Prontas para Liberação', style: TextStyle(color: Colors.orangeAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('Os fotógrafos finalizaram a produção destes lotes. Libere-os para formar as rotas inteligentes.', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              const SizedBox(height: 24),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: createdBatches.map((batch) {
+                  final city = batch['name'] ?? 'Desconhecida';
+                  final batchId = batch['id'];
+                  final cityClients = clients.where((c) => c['batchId'] == batchId).toList();
+                  final clientCount = cityClients.length;
+                  final sequenceNumbers = cityClients.map((c) => c['sequenceNumber'] ?? 'S/N').join(', ');
+                  
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ActionChip(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        backgroundColor: const Color(0xFFCE93D8),
+                        label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        onPressed: () async {
+                          try {
+                            await ApiService().releaseBatchToStock(batchId);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado para estoque!'), backgroundColor: Colors.green));
+                              setState(() {}); 
+                            }
+                          } catch (e) {
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
                           }
-                        } catch (e) {
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
-                          }
-                        }
-                      },
-                    ),
-                    if (clientCount > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                        child: Text(
-                          'Fichas: $sequenceNumbers',
-                          style: const TextStyle(color: Colors.white54, fontSize: 11),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        },
                       ),
-                  ],
-                );
-              }).toList(),
-            ),
+                      if (clientCount > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                          child: Text(
+                            'Fichas: $sequenceNumbers',
+                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 32),
+            ],
+            
+            if (looseClients.isNotEmpty) ...[
+              const Text('⚠️ Fichas Órfãs / Avulsas', style: TextStyle(color: Colors.redAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text('Fichas criadas mas não agrupadas em lote. Resgate para o estoque:', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: looseClients.map((c) {
+                  final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
+                  return ActionChip(
+                    backgroundColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: Colors.redAccent)
+                    ),
+                    label: Text('Resgatar: $name', style: const TextStyle(color: Colors.redAccent)),
+                    onPressed: () async {
+                      try {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
+                        await ApiService().forceReleaseClient(c['id']);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha resgatada para o estoque!'), backgroundColor: Colors.green));
+                          setState(() {}); 
+                        }
+                      } catch (e) {
+                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
+                      }
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
           ],
         ),
       );

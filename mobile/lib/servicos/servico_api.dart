@@ -228,6 +228,24 @@ class ApiService {
     }
   }
 
+  // Force send a single client to admin (Photographer)
+  Future<void> forceSendClient(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-send');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao enviar ficha');
+    }
+  }
+
+  // Force release a single client to stock (Admin)
+  Future<void> forceReleaseClient(String clientId) async {
+    try {
+      await _dio.put('/books/client/$clientId/force-release');
+    } on DioException catch (e) {
+      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar ficha');
+    }
+  }
+
   Future<void> updateBookBatchStatus(String id, String status) async {
     try {
       await _dio.put('/books/batch/$id', data: {'status': status});

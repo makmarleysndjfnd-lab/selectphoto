@@ -100,6 +100,15 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                   'Data: ${DateFormat('dd/MM/yyyy').format(eventDate)}',
                                   style: const TextStyle(color: Colors.white54, fontSize: 12),
                                 ),
+                              const SizedBox(height: 4),
+                              Text(
+                                ficha['bookStatus'] == 'CREATED' ? '⚠️ Pendente de Envio' : '✅ Enviada / Em Rota',
+                                style: TextStyle(
+                                  color: ficha['bookStatus'] == 'CREATED' ? Colors.orangeAccent : Colors.greenAccent,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ],
                           ),
 
@@ -119,6 +128,34 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 tooltip: 'Imprimir Ticket (Bluetooth)',
                                 onPressed: () => _printUnidadeBluetooth(Map<String, dynamic>.from(ficha as Map)),
                               ),
+                              if (ficha['bookStatus'] == 'CREATED')
+                                IconButton(
+                                  icon: const Icon(Icons.send_and_archive, color: Colors.greenAccent),
+                                  tooltip: 'Forçar Envio ao Admin',
+                                  onPressed: () async {
+                                    final confirm = await showDialog<bool>(
+                                      context: context,
+                                      builder: (_) => AlertDialog(
+                                        backgroundColor: const Color(0xFF1A1A2E),
+                                        title: const Text('Forçar Envio?', style: TextStyle(color: Colors.white)),
+                                        content: const Text('Isso enviará esta ficha avulsa para a tela de liberação do Admin. Deseja continuar?', style: TextStyle(color: Colors.white70)),
+                                        actions: [
+                                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                                          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Enviar', style: TextStyle(color: Colors.greenAccent))),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirm == true) {
+                                      try {
+                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enviando...')));
+                                        await ApiService().forceSendClient(ficha['id']);
+                                        _carregarFichas();
+                                      } catch (e) {
+                                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+                                      }
+                                    }
+                                  },
+                                ),
                               IconButton(
                                 icon: const Icon(Icons.edit_note, color: Color(0xFFCE93D8)),
                                 onPressed: () {
