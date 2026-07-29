@@ -18,6 +18,9 @@ import '../utils/pdf_generator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import '../widgets/led_menu_item.dart';
+import '../widgets/led_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
@@ -703,13 +706,12 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-    Widget _sideMenuItem(int index, IconData icon, String label) {
+  Widget _sideMenuItem(int index, IconData icon, String label) {
     final selected = _navIndex == index;
-    return ListTile(
-      leading: Icon(icon, color: selected ? const Color(0xFFCE93D8) : const Color(0xFF546E7A)),
-      title: Text(label, style: TextStyle(color: selected ? Colors.white : const Color(0xFF546E7A), fontWeight: selected ? FontWeight.bold : FontWeight.normal)),
+    return LedMenuItem(
+      icon: icon,
+      label: label,
       selected: selected,
-      selectedTileColor: const Color(0xFFCE93D8).withOpacity(0.1),
       onTap: () {
         setState(() => _navIndex = index);
         if (_scaffoldKey.currentState?.isDrawerOpen == true) {
@@ -718,7 +720,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       },
     );
   }
-  
+
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
@@ -2200,11 +2202,10 @@ class _AdminDashboardState extends State<AdminDashboard>
               Expanded(
                 child: Text(isRebolo ? 'Malotes de Revisita (Saída)' : 'Malotes dos Vendedores (Saída)', style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
               ),
-              ElevatedButton.icon(
+              LedButton(
                 onPressed: () => _scanAndDistributeBooks(isRebolo: isRebolo),
-                icon: const Icon(Icons.qr_code_scanner, size: 16, color: Colors.white),
-                label: const Text('Escanear QR', style: TextStyle(color: Colors.white)),
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+                icon: Icons.qr_code_scanner,
+                text: 'Escanear QR',
               ),
             ],
           ),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/led_button.dart';
+import '../widgets/led_choice_chip.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 class VisaoEstoqueAdmin extends StatefulWidget {
@@ -82,31 +84,29 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                     runSpacing: 8,
                     alignment: WrapAlignment.center,
                     children: [
-                      ChoiceChip(
-                        label: const Text('Enviar (Admin -> Vend)'),
+                      LedChoiceChip(
+                        label: 'Enviar (Admin -> Vend)',
                         selected: transferType == 0,
-                        selectedColor: Colors.green.withOpacity(0.3),
-                        labelStyle: TextStyle(color: transferType == 0 ? Colors.greenAccent : Colors.white),
+                        color: Colors.greenAccent,
                         onSelected: (val) {
                           if (val) setDialogState(() => transferType = 0);
                         },
                       ),
-                      ChoiceChip(
-                        label: const Text('Devolver (Vend -> Admin)'),
+                      LedChoiceChip(
+                        label: 'Devolver (Vend -> Admin)',
                         selected: transferType == 1,
-                        selectedColor: Colors.orange.withOpacity(0.3),
-                        labelStyle: TextStyle(color: transferType == 1 ? Colors.orangeAccent : Colors.white),
+                        color: Colors.orangeAccent,
                         onSelected: (val) {
                           if (val) setDialogState(() => transferType = 1);
                         },
                       ),
                     ],
                   ),
-                  ChoiceChip(
-                    label: const Text('Descartar Defeituosas'),
+                  const SizedBox(height: 8),
+                  LedChoiceChip(
+                    label: 'Descartar Defeituosas',
                     selected: transferType == 2,
-                    selectedColor: Colors.red.withOpacity(0.3),
-                    labelStyle: TextStyle(color: transferType == 2 ? Colors.redAccent : Colors.white),
+                    color: Colors.redAccent,
                     onSelected: (val) {
                       if (val) setDialogState(() => transferType = 2);
                     },
@@ -130,7 +130,9 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                 ),
-                ElevatedButton(
+                LedButton(
+                  text: 'Confirmar',
+                  isSuccess: true,
                   onPressed: () async {
                     final qty = int.tryParse(quantityController.text) ?? 0;
                     if (qty <= 0) return;
@@ -152,8 +154,6 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-                  child: const Text('Confirmar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -191,7 +191,9 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
             ),
-            ElevatedButton(
+            LedButton(
+              text: 'Confirmar',
+              isSuccess: true,
               onPressed: () async {
                 final qty = int.tryParse(quantityController.text) ?? 0;
                 if (qty <= 0) return;
@@ -209,8 +211,6 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                   if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Confirmar', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -445,13 +445,10 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                 ),
                 title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text('Possui $covers capas', style: const TextStyle(color: Colors.white70)),
-                trailing: ElevatedButton(
+                trailing: LedButton(
+                  text: 'Editar / Transferir',
+                  color: Colors.white,
                   onPressed: () => _showTransferDialog(s),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white12,
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('Editar / Transferir'),
                 ),
               ),
             );
