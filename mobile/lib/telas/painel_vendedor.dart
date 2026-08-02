@@ -943,7 +943,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     final upcomingAppointments = sortedApps.where((app) {
       if (app['dateTime'] == null) return false;
       final dt = DateTime.parse(app['dateTime']);
-      return dt.isAfter(startOfToday.subtract(const Duration(seconds: 1)));
+      return dt.isAfter(startOfToday.subtract(const Duration(days: 7)));
     }).take(3).toList();
 
     return GestureDetector(
@@ -981,7 +981,7 @@ class _SellerDashboardState extends State<SellerDashboard>
               const Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
             ] else ...[
               const SizedBox(height: 12),
-              const Text('Próximos Agendamentos:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+              const Text('Agendamentos Recentes/Próximos:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               ...upcomingAppointments.map((app) {
                 final dt = DateTime.parse(app['dateTime']);
