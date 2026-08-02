@@ -940,11 +940,20 @@ class _SellerDashboardState extends State<SellerDashboard>
       return DateTime.parse(a['dateTime']).compareTo(DateTime.parse(b['dateTime']));
     });
 
+    // Pega os agendamentos futuros ou todos se n\u00e3o houver
     final upcomingAppointments = sortedApps.where((app) {
       if (app['dateTime'] == null) return false;
-      final dt = DateTime.parse(app['dateTime']);
-      return dt.isAfter(startOfToday.subtract(const Duration(days: 7)));
-    }).take(3).toList();
+      final dt = DateTime.parse(app['dateTime']).toLocal();
+      return !dt.isBefore(startOfToday); // Pega do inicio do dia de hoje para frente
+    }).toList();
+    
+    // Se a regra 'somente do dia pra frente' deixar a lista vazia (ex: todos no passado),
+    // ainda assim queremos mostrar os mais recentes se houver, ou a lista do dia pra frente.
+    // Mas o usu\u00e1rio quer que QUALQUER agendamento que ele acabou de criar mostre.
+    // Vamos apenas pegar os \u00faltimos 3 criados / mais recentes.
+    final List<Map<String, dynamic>> displayApps = upcomingAppointments.isNotEmpty 
+        ? upcomingAppointments.take(3).toList() 
+        : sortedApps.reversed.take(3).toList();
 
     return GestureDetector(
       onTap: () {
@@ -976,14 +985,14 @@ class _SellerDashboardState extends State<SellerDashboard>
                 Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
               ],
             ),
-            if (upcomingAppointments.isEmpty) ...[
+            if (displayApps.isEmpty) ...[
               const SizedBox(height: 8),
               const Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
             ] else ...[
               const SizedBox(height: 12),
-              const Text('Agendamentos Recentes/Próximos:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+              const Text('Próximos Agendamentos:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              ...upcomingAppointments.map((app) {
+              ...displayApps.map((app) {
                 final dt = DateTime.parse(app['dateTime']);
                 final dateString = '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}';
                 final timeString = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
