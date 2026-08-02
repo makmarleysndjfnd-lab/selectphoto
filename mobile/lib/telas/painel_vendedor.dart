@@ -930,12 +930,20 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   Widget _buildAppointmentsSummaryCard() {
+    // Pegar agendamentos de hoje
+    final today = DateTime.now();
+    final todaysAppointments = _personalAppointments.where((app) {
+      if (app['dateTime'] == null) return false;
+      final dt = DateTime.parse(app['dateTime']);
+      return dt.year == today.year && dt.month == today.month && dt.day == today.day;
+    }).toList();
+
     return GestureDetector(
       onTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const TelaAgenda()),
-        );
+        ).then((_) => _fetchClients());
       },
       child: Container(
         padding: const EdgeInsets.all(16),
@@ -960,8 +968,30 @@ class _SellerDashboardState extends State<SellerDashboard>
                 Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
               ],
             ),
-            const SizedBox(height: 8),
-            Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+            if (todaysAppointments.isEmpty) ...[
+              const SizedBox(height: 8),
+              const Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+            ] else ...[
+              const SizedBox(height: 12),
+              const Text('Agendamentos de Hoje:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              ...todaysAppointments.map((app) {
+                final dt = DateTime.parse(app['dateTime']);
+                final timeString = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.access_time, size: 14, color: Color(0xFF00E5FF)),
+                      const SizedBox(width: 6),
+                      Text(timeString, style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(app['title'] ?? '', style: const TextStyle(color: Colors.white), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                );
+              }),
+            ]
           ],
         ),
       ),

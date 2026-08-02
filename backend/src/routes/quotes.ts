@@ -1,9 +1,7 @@
 import { Router } from 'express';
-import * as fs from 'fs';
-import * as path from 'path';
+import quotesData from '../data/quotes.json';
 
 const router = Router();
-const quotesPath = path.join(__dirname, '../data/quotes.json');
 
 // Interface for type safety
 interface Quote {
@@ -17,13 +15,7 @@ interface Quote {
 
 // Function to read and parse the quotes file
 function getQuotes(): Quote[] {
-  try {
-    const rawData = fs.readFileSync(quotesPath, 'utf8');
-    return JSON.parse(rawData);
-  } catch (error) {
-    console.error('Error reading quotes.json:', error);
-    return [];
-  }
+  return quotesData as Quote[];
 }
 
 // Memory cache for daily quote to avoid reading file on every request
