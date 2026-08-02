@@ -10,7 +10,8 @@ import '../servicos/servico_api.dart';
 import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
-import 'tela_agenda.dart';// ── Mock clients data removed ────────────────────────────────────────────────────────
+import 'tela_agenda.dart';
+import 'package:intl/intl.dart';// ── Mock clients data removed ────────────────────────────────────────────────────────
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -33,6 +34,11 @@ class _SellerDashboardState extends State<SellerDashboard>
   List<Map<String, dynamic>> _sellerClients = [];
   List<dynamic> _personalAppointments = [];
   bool _isLoadingClients = true;
+  
+  // Variáveis para a Agenda no Painel
+  DateTime _selectedAgendaMonth = DateTime.now();
+  DateTime _selectedAgendaDay = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+
   
   // Variáveis para Distribuição de Equipe e Trocas
   String? _selectedSellerForTransfer;
