@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import '../utils/ui_helpers.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:signature/signature.dart';
@@ -184,10 +186,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A2535),
-        border: Border(
-            bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
+      decoration: UIHelpers.getLedDecoration(client['bookStatus'] as String?).copyWith(
+        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Column(
         children: [

@@ -132,12 +132,19 @@ class _LoginScreenState extends State<LoginScreen>
       final user = response['user'];
       role = user['role'];
 
-      // Save token
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('jwt_token', token);
-      await prefs.setString('user_role', role ?? '');
-      if (user['photographerCode'] != null) {
-        await prefs.setString('photographer_code', user['photographerCode']);
+      if (token != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', token);
+        await prefs.setString('user_role', role ?? '');
+        if (user['id'] != null) {
+          await prefs.setString('user_id', user['id']);
+        }
+        if (user['name'] != null) {
+          await prefs.setString('user_name', user['name']);
+        }
+        if (user['photographerCode'] != null) {
+          await prefs.setString('photographer_code', user['photographerCode']);
+        }
       }
       
       try {

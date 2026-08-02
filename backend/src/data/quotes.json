@@ -1,0 +1,82 @@
+[
+  {
+    "id": "000001",
+    "texto": "A persistência realiza o impossível.",
+    "categoria": "motivacao",
+    "autor": "Provérbio Chinês",
+    "idioma": "pt-BR",
+    "tags": ["persistencia", "foco"]
+  },
+  {
+    "id": "000002",
+    "texto": "Tudo posso naquele que me fortalece.",
+    "categoria": "fe",
+    "autor": "Filipenses 4:13",
+    "idioma": "pt-BR",
+    "tags": ["biblia", "forca", "superacao"]
+  },
+  {
+    "id": "000003",
+    "texto": "Grandes conquistas começam com pequenas decisões repetidas todos os dias.",
+    "categoria": "disciplina",
+    "autor": "Original",
+    "idioma": "pt-BR",
+    "tags": ["habitos", "constancia", "crescimento"]
+  },
+  {
+    "id": "000004",
+    "texto": "O Senhor é o meu pastor; de nada terei falta.",
+    "categoria": "fe",
+    "autor": "Salmos 23:1",
+    "idioma": "pt-BR",
+    "tags": ["biblia", "protecao", "paz"]
+  },
+  {
+    "id": "000005",
+    "texto": "Mil cairão ao teu lado, e dez mil à tua direita, mas não chegará a ti.",
+    "categoria": "fe",
+    "autor": "Salmos 91:7",
+    "idioma": "pt-BR",
+    "tags": ["biblia", "protecao", "livramento"]
+  },
+  {
+    "id": "000006",
+    "texto": "O sucesso é a soma de pequenos esforços repetidos dia após dia.",
+    "categoria": "sucesso",
+    "autor": "Robert Collier",
+    "idioma": "pt-BR",
+    "tags": ["sucesso", "esforco", "trabalho"]
+  },
+  {
+    "id": "000007",
+    "texto": "Você é mais forte do que imagina. Acredite no seu potencial.",
+    "categoria": "autoestima",
+    "autor": "Original",
+    "idioma": "pt-BR",
+    "tags": ["forca", "potencial", "autoestima"]
+  },
+  {
+    "id": "000008",
+    "texto": "O choro pode durar uma noite, mas a alegria vem pela manhã.",
+    "categoria": "fe",
+    "autor": "Salmos 30:5",
+    "idioma": "pt-BR",
+    "tags": ["alegria", "esperanca", "biblia"]
+  },
+  {
+    "id": "000009",
+    "texto": "Não fui eu que ordenei a você? Seja forte e corajoso!",
+    "categoria": "fe",
+    "autor": "Josué 1:9",
+    "idioma": "pt-BR",
+    "tags": ["coragem", "forca", "biblia"]
+  },
+  {
+    "id": "000010",
+    "texto": "Acredite que você pode, assim você já está no meio do caminho.",
+    "categoria": "autoestima",
+    "autor": "Theodore Roosevelt",
+    "idioma": "pt-BR",
+    "tags": ["confianca", "caminho"]
+  }
+]

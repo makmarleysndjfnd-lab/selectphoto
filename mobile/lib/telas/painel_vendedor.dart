@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'tela_configuracoes.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/ui_helpers.dart';
 
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -9,72 +10,7 @@ import '../servicos/servico_api.dart';
 import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
-
-
-
-// ── Mock clients data ────────────────────────────────────────────────────────
-final List<Map<String, dynamic>> _mockClients = [
-  {
-    'id': 'c001',
-    'sequenceNumber': 'CF-EQP1-0001',
-    'name': 'Maria Silva',
-    'phone1': '11999990001',
-    'street': 'Rua das Flores',
-    'number': '123',
-    'neighborhood': 'Centro',
-    'city': 'São Paulo',
-    'houseColor': 'Color(0xfff44336)',
-    'visitTime': '14:30',
-    'profession': 'Professora',
-    'children': [
-      {'name': 'Lucas', 'age': '5'},
-      {'name': 'Ana', 'age': '2'},
-    ],
-  },
-  {
-    'id': 'c002',
-    'sequenceNumber': 'CF-EQP1-0002',
-    'name': 'João Costa',
-    'phone1': '11999990002',
-    'street': 'Av. Brasil',
-    'number': '456',
-    'neighborhood': 'Jardim América',
-    'city': 'Campinas',
-    'houseColor': 'Color(0xff2196f3)',
-    'visitTime': '09:00',
-    'profession': 'Engenheiro',
-  },
-  {
-    'id': 'c003',
-    'sequenceNumber': 'CF-EQP2-0001',
-    'name': 'Ana Ferreira',
-    'phone1': '11999990003',
-    'street': 'Rua do Comércio',
-    'number': '789',
-    'neighborhood': 'Vila Nova',
-    'city': 'Ribeirão Preto',
-  },
-  {
-    'id': 'c004',
-    'sequenceNumber': 'CF-EQP2-0002',
-    'name': 'Carlos Mendes',
-    'phone1': '11999990004',
-    'street': 'Alameda Santos',
-    'number': '321',
-    'neighborhood': 'Bela Vista',
-    'city': 'São Paulo',
-  },
-  {
-    'id': 'c005',
-    'sequenceNumber': 'CF-EQP1-0003',
-    'name': 'Lucia Barbosa',
-    'phone1': '11999990005',
-    'street': 'Rua XV de Novembro',
-    'number': '55',
-    'neighborhood': 'Centro',
-    'city': 'Sorocaba',
-  },
-];
+import 'tela_agenda.dart';// ── Mock clients data removed ────────────────────────────────────────────────────────
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -90,6 +26,13 @@ class _SellerDashboardState extends State<SellerDashboard>
   String _searchQuery = '';
   bool _searched = false;
   bool _isManager = false; // Flag para Vendedor Gerente (Carregada via SharedPreferences)
+  
+  String _userName = '';
+  String _greeting = 'Olá';
+  String _verse = '';
+  List<Map<String, dynamic>> _sellerClients = [];
+  List<dynamic> _personalAppointments = [];
+  bool _isLoadingClients = true;
   
   // Variáveis para Distribuição de Equipe e Trocas
   String? _selectedSellerForTransfer;
@@ -113,9 +56,43 @@ class _SellerDashboardState extends State<SellerDashboard>
     _animController.forward();
     _fetchUnreadNotifications();
     _checkManagerRole();
+    _loadUserData();
+    _fetchClients();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       KmRequestHelper.checkKmRequests(context);
     });
+  }
+
+  Future<void> _loadUserData() async {
+    final name = await UIHelpers.getUserName();
+    final quote = await ApiService().getDailyQuote();
+    if (mounted) {
+      setState(() {
+        _userName = name;
+        _greeting = UIHelpers.getGreeting();
+        _verse = quote.isNotEmpty ? quote : '"A persistência realiza o impossível." - Provérbio Chinês';
+      });
+    }
+  }
+
+  Future<void> _fetchClients() async {
+    try {
+      final clients = await ApiService().getClientsBySeller();
+      final userId = await UIHelpers.getUserId();
+      final appointments = userId != null ? await ApiService().getPersonalAppointments(userId) : [];
+      if (mounted) {
+        setState(() {
+          _sellerClients = List<Map<String, dynamic>>.from(clients);
+          _personalAppointments = appointments;
+          _isLoadingClients = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoadingClients = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao buscar fichas/agendamentos: $e')));
+      }
+    }
   }
 
   Future<void> _checkManagerRole() async {
@@ -156,7 +133,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     final code = _codeController.text.trim().toUpperCase();
     if (code.isEmpty) return;
 
-    final found = _mockClients.firstWhere(
+    final found = _sellerClients.firstWhere(
       (c) => (c['sequenceNumber'] as String).toUpperCase() == code,
       orElse: () => {},
     );
@@ -229,12 +206,12 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   List<Map<String, dynamic>> get _filteredClients {
-    if (_searchQuery.isEmpty) return _mockClients;
+    if (_searchQuery.isEmpty) return _sellerClients;
     final q = _searchQuery.toLowerCase();
-    return _mockClients.where((c) {
+    return _sellerClients.where((c) {
       return (c['name'] as String).toLowerCase().contains(q) ||
           (c['sequenceNumber'] as String).toLowerCase().contains(q) ||
-          (c['city'] as String).toLowerCase().contains(q);
+          ((c['city'] as String?) ?? '').toLowerCase().contains(q);
     }).toList();
   }
 
@@ -625,18 +602,24 @@ class _SellerDashboardState extends State<SellerDashboard>
                     color: Colors.white, size: 22),
               ),
               const SizedBox(width: 14),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Painel do Vendedor',
-                        style: TextStyle(
+                    Text('$_greeting, $_userName',
+                        style: const TextStyle(
                             color: Colors.white,
                             fontSize: 17,
                             fontWeight: FontWeight.bold)),
-                    Text('Selecione um cliente para atender',
+                    const Text('Painel do Vendedor',
                         style: TextStyle(
                             color: Color(0xFF90CAF9), fontSize: 12)),
+                    const SizedBox(height: 4),
+                    Text(_verse,
+                        style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontStyle: FontStyle.italic)),
                   ],
                 ),
               ),
@@ -890,9 +873,14 @@ class _SellerDashboardState extends State<SellerDashboard>
                     color: Colors.white,
                     fontSize: 20,
                     fontWeight: FontWeight.bold)),
-            Text('${_filteredClients.length} fichas',
-                style: const TextStyle(
-                    color: Color(0xFF90CAF9), fontSize: 12)),
+            GestureDetector(
+              onTap: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const TelaAgenda())).then((_) => _fetchClients());
+              },
+              child: Text('${_filteredClients.length} fichas | ${_personalAppointments.length} agenda',
+                  style: const TextStyle(
+                      color: Color(0xFF00E5FF), fontSize: 14, fontWeight: FontWeight.bold)),
+            ),
           ],
         ),
         const SizedBox(height: 16),
@@ -942,48 +930,63 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   Widget _buildAppointmentsSummaryCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF283593), Color(0xFF1976D2)],
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const TelaAgenda()),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
         ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF1976D2).withOpacity(0.3),
-            blurRadius: 10,
-            spreadRadius: 1,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.event_note_rounded, color: Colors.white),
-              const SizedBox(width: 8),
-              const Text('Agendamentos de Hoje', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.event_note_rounded, color: Colors.white),
+                    SizedBox(width: 8),
+                    Text('Abrir Agenda Completa', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  ],
                 ),
-                child: const Text('3', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Text('10:00 - Ficha 4589 (João Silva)', style: TextStyle(color: Colors.white70, fontSize: 13)),
-          const SizedBox(height: 4),
-          const Text('14:30 - Ficha 4590 (Maria Sousa)', style: TextStyle(color: Colors.white70, fontSize: 13)),
-          const SizedBox(height: 4),
-          const Text('16:00 - Ficha 4595 (Carlos Maia)', style: TextStyle(color: Colors.white70, fontSize: 13)),
-        ],
+                Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAgendaItem(Map<String, dynamic> client) {
+    final status = client['bookStatus'] as String?;
+    final clientId = client['id'] as String;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: UIHelpers.getLedDecoration(status, isAgenda: true),
+      child: ListTile(
+        onTap: () => _openClientDetail(client),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: CircleAvatar(
+          backgroundColor: Colors.white.withOpacity(0.1),
+          child: Text(client['name'].toString().substring(0, 1).toUpperCase(),
+              style: const TextStyle(color: Colors.white)),
+        ),
+        title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text('Ficha ${client['sequenceNumber']} - ${client['visitTime'] ?? 'Sem horário'}', 
+          style: TextStyle(color: Colors.white.withOpacity(0.7))),
+        trailing: const Icon(Icons.chevron_right, color: Colors.white54),
       ),
     );
   }
@@ -992,9 +995,10 @@ class _SellerDashboardState extends State<SellerDashboard>
     final initials = client['name'].toString().substring(0, 1).toUpperCase();
     final clientId = client['id'] as String;
     final isSelected = _selectedClientIds.contains(clientId);
+    final statusColor = UIHelpers.getStatusColor(client['bookStatus'] as String?);
 
     return LedCard(
-      color: isSelected ? const Color(0xFFCE93D8).withOpacity(0.1) : Colors.white.withOpacity(0.05),
+      color: isSelected ? const Color(0xFFCE93D8) : statusColor,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -1077,8 +1081,11 @@ class _SellerDashboardState extends State<SellerDashboard>
                         await ApiService().forceReturn(clientId);
                       }
                       setState(() {
-                        _mockClients.remove(client);
+                        _sellerClients.remove(client);
                         _selectedClientIds.remove(clientId);
+                        if (_foundClient != null && _foundClient!['id'] == client['id']) {
+                          _foundClient = null;
+                        }
                       });
                       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha devolvida!'), backgroundColor: Colors.green));
                     } catch (e) {

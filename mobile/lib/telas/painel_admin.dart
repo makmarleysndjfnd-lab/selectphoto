@@ -27,6 +27,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../widgets/led_card.dart';
+import '../utils/ui_helpers.dart';
 
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
@@ -114,6 +115,10 @@ class _AdminDashboardState extends State<AdminDashboard>
   List<dynamic> _upcomingEvents = [];
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
+  
+  String _userName = '';
+  String _greeting = 'Olá';
+  String _verse = '';
 
   // Mock Rotas Inteligentes -> Nova Estrutura
   List<Map<String, dynamic>> _rotasManuais = [];
@@ -335,6 +340,19 @@ class _AdminDashboardState extends State<AdminDashboard>
     _fetchUnreadNotifications();
     _loadClients();
     _checkAutomaticBackup();
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final name = await UIHelpers.getUserName();
+    final quote = await ApiService().getDailyQuote();
+    if (mounted) {
+      setState(() {
+        _userName = name;
+        _greeting = UIHelpers.getGreeting();
+        _verse = quote.isNotEmpty ? quote : '"A persistência realiza o impossível." - Provérbio Chinês';
+      });
+    }
   }
 
   Future<void> _checkAutomaticBackup() async {
@@ -727,18 +745,6 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
-    const tabs = ['Eventos IA', 'Books', 'rebolo', 'Frota', 'Caixa', 'Funcionários', 'Saúde', 'Fechamentos', 'Capas'];
-    const icons = [
-      Icons.auto_awesome,
-      Icons.menu_book_rounded,
-      Icons.inventory_2_rounded,
-      Icons.directions_car_rounded,
-      Icons.attach_money_rounded,
-      Icons.people_alt_rounded,
-      Icons.bar_chart_rounded,
-      Icons.account_balance_wallet_rounded,
-      Icons.layers_rounded
-    ];
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -776,18 +782,25 @@ class _AdminDashboardState extends State<AdminDashboard>
                         color: Colors.white, size: 22),
                   ),
                   const SizedBox(width: 14),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Painel Administrativo',
-                            style: TextStyle(
+                        Text('$_greeting, $_userName',
+                            style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 17,
                                 fontWeight: FontWeight.bold)),
-                        Text('Visão completa das equipes',
+                        const SizedBox(height: 2),
+                        const Text('Painel Administrativo',
                             style: TextStyle(
-                                color: Color(0xFFCE93D8), fontSize: 12)),
+                                color: Color(0xFF90CAF9), fontSize: 12)),
+                        const SizedBox(height: 4),
+                        Text(_verse,
+                            style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic)),
                       ],
                     ),
                   ),
@@ -813,7 +826,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ],
               ),
             ),
-            // Removed sub-tabs as per user request to 'tirar a parte que fica rolando'
           ],
         ),
       ),

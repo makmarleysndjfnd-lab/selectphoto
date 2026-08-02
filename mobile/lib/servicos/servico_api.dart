@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   late Dio _dio;
-  String _baseUrl = 'http://192.168.0.129:3000/api';
+  String _baseUrl = 'https://selectphoto-k1ac.onrender.com/api';
   String? _token;
   bool _isInit = false;
 
@@ -15,6 +15,8 @@ class ApiService {
   ApiService._internal() {
     _initDio();
   }
+
+  Dio get dio => _dio;
 
   void _initDio() {
     _dio = Dio(BaseOptions(
@@ -61,7 +63,7 @@ class ApiService {
   // Auth endpoints
   String _extractError(DioException e) {
     if (e.response?.data is Map) {
-      return e.response?.data['error'] ?? 'Erro desconhecido na API';
+      return (e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro desconhecido na API';
     }
     return e.message ?? 'Erro de conexão';
   }
@@ -159,7 +161,7 @@ class ApiService {
       final response = await _dio.post('/sales', data: saleData);
       return response.data['id'];
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao registrar venda');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar venda');
     }
   }
 
@@ -168,7 +170,7 @@ class ApiService {
     try {
       await _dio.put('/finance/costs/$id', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao editar custo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao editar custo');
     }
   }
 
@@ -176,7 +178,7 @@ class ApiService {
     try {
       await _dio.put('/finance/sales/$id', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao editar venda');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao editar venda');
     }
   }
 
@@ -187,7 +189,7 @@ class ApiService {
       });
       await _dio.post('/sales/$saleId/receipt', data: formData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload do comprovante');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload do comprovante');
     }
   }
 
@@ -196,7 +198,7 @@ class ApiService {
     try {
       await _dio.post('/sales/non-sale', data: nonSaleData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao registrar não-venda');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar não-venda');
     }
   }
 
@@ -205,7 +207,7 @@ class ApiService {
     try {
       await _dio.post('/sales/appointments', data: appointmentData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao registrar agendamento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar agendamento');
     }
   }
 
@@ -214,7 +216,7 @@ class ApiService {
     try {
       await _dio.post('/sales/photos', data: photoData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload da book');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload da book');
     }
   }
 
@@ -224,7 +226,7 @@ class ApiService {
     try {
       await _dio.post('/books/close-event', data: {'eventName': eventName});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao fechar lote de evento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fechar lote de evento');
     }
   }
 
@@ -233,7 +235,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-send');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao enviar ficha');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao enviar ficha');
     }
   }
 
@@ -242,7 +244,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-release');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar ficha');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar ficha');
     }
   }
 
@@ -251,7 +253,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-to-stock');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao resgatar ficha');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao resgatar ficha');
     }
   }
 
@@ -260,7 +262,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao forçar devolução');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao forçar devolução');
     }
   }
 
@@ -269,7 +271,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-rebolo-stock');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao resgatar ficha de rebolo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao resgatar ficha de rebolo');
     }
   }
 
@@ -278,7 +280,7 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-rebolo');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao forçar devolução de rebolo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao forçar devolução de rebolo');
     }
   }
 
@@ -286,7 +288,7 @@ class ApiService {
     try {
       await _dio.put('/books/batch/$id', data: {'status': status});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar status do lote');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar status do lote');
     }
   }
 
@@ -295,7 +297,7 @@ class ApiService {
       final response = await _dio.get('/stock/info');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar informacoes de capas');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar informacoes de capas');
     }
   }
 
@@ -303,7 +305,7 @@ class ApiService {
     try {
       await _dio.post('/stock/transfer', data: {'sellerId': sellerId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao transferir capas');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao transferir capas');
     }
   }
 
@@ -311,7 +313,7 @@ class ApiService {
     try {
       await _dio.post('/stock/batch', data: {'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar estoque geral');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar estoque geral');
     }
   }
 
@@ -319,7 +321,7 @@ class ApiService {
     try {
       await _dio.post('/stock/transfer-between-sellers', data: {'recipientId': recipientId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao solicitar transferência');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao solicitar transferência');
     }
   }
 
@@ -327,7 +329,7 @@ class ApiService {
     try {
       await _dio.post('/stock/defective', data: {'sellerId': sellerId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao devolver capas defeituosas');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao devolver capas defeituosas');
     }
   }
 
@@ -341,7 +343,7 @@ class ApiService {
       final response = await _dio.get('/books/batch');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar lotes de books');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar lotes de books');
     }
   }
 
@@ -351,7 +353,7 @@ class ApiService {
     try {
       await _dio.post('/fleet', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao cadastrar veículo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao cadastrar veículo');
     }
   }
 
@@ -359,7 +361,7 @@ class ApiService {
     try {
       await _dio.put('/fleet/$id', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar veículo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar veículo');
     }
   }
 
@@ -367,7 +369,7 @@ class ApiService {
     try {
       await _dio.delete('/fleet/$id');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao excluir veículo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir veículo');
     }
   }
 
@@ -375,7 +377,7 @@ class ApiService {
     try {
       await _dio.post('/fleet/checklist', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao enviar checklist');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao enviar checklist');
     }
   }
 
@@ -421,7 +423,7 @@ class ApiService {
     } on DioException catch (e) {
       print('=== DIO ERROR IN SEARCH ===');
       print(e.message);
-      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      final errorMsg = (e.response?.data is Map) ? (e.response?.data is Map ? e.response?.data['error'] : null) : null;
       throw Exception(errorMsg ?? 'Erro ao buscar eventos na IA: ${e.message}');
     }
   }
@@ -431,7 +433,7 @@ class ApiService {
       final response = await _dio.get('/events/state-radar?state=$state&force=$force');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      final errorMsg = (e.response?.data is Map) ? (e.response?.data is Map ? e.response?.data['error'] : null) : null;
       throw Exception(errorMsg ?? 'Erro ao buscar radar por estado: ${e.message}');
     }
   }
@@ -440,7 +442,7 @@ class ApiService {
     try {
       await _dio.post('/closing/daily', data: closingData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao salvar fechamento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar fechamento');
     }
   }
 
@@ -452,7 +454,7 @@ class ApiService {
         'commissionToLog': commissionToLog
       });
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao pagar repasse');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao pagar repasse');
     }
   }
 
@@ -460,7 +462,7 @@ class ApiService {
     try {
       await _dio.post('/events', data: eventData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao salvar prospect');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar prospect');
     }
   }
 
@@ -469,7 +471,7 @@ class ApiService {
       final response = await _dio.get('/events');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar prospects');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar prospects');
     }
   }
 
@@ -480,7 +482,7 @@ class ApiService {
       final response = await _dio.get('/events/upcoming');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar eventos próximos');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar eventos próximos');
     }
   }
 
@@ -488,7 +490,7 @@ class ApiService {
     try {
       await _dio.put('/events/$eventId/favorite', data: {'isFavorite': isFavorite});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao favoritar evento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao favoritar evento');
     }
   }
 
@@ -496,7 +498,7 @@ class ApiService {
     try {
       await _dio.put('/events/$eventId/prospect');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao transformar em prospect');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao transformar em prospect');
     }
   }
 
@@ -504,7 +506,7 @@ class ApiService {
     try {
       await _dio.put('/events/$eventId', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar prospect');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar prospect');
     }
   }
 
@@ -512,7 +514,7 @@ class ApiService {
     try {
       await _dio.delete('/events/$eventId');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao excluir prospect');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir prospect');
     }
   }
 
@@ -522,7 +524,7 @@ class ApiService {
       costData['status'] = 'PLANNED';
       await _dio.post('/costs', data: costData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao salvar custo planejado');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar custo planejado');
     }
   }
 
@@ -533,7 +535,7 @@ class ApiService {
       final response = await _dio.get('/finance/overview');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fluxo de caixa');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fluxo de caixa');
     }
   }
 
@@ -553,7 +555,7 @@ class ApiService {
       );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
     }
   }
 
@@ -587,7 +589,7 @@ class ApiService {
       final response = await _dio.get('/closing/daily/$sellerId');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
     }
   }
 
@@ -596,7 +598,7 @@ class ApiService {
       final response = await _dio.get('/closing/photographer/$photographerId');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fechamento');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
     }
   }
 
@@ -605,7 +607,7 @@ class ApiService {
       final response = await _dio.get('/finance/pending-costs');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar custos pendentes');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar custos pendentes');
     }
   }
 
@@ -613,7 +615,7 @@ class ApiService {
     try {
       await _dio.put('/finance/costs/$costId/status', data: {'status': status});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar status do custo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar status do custo');
     }
   }
 
@@ -623,7 +625,7 @@ class ApiService {
       final response = await _dio.get('/finance/health');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar indicadores de saúde');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar indicadores de saúde');
     }
   }
 
@@ -631,7 +633,7 @@ class ApiService {
     try {
       await _dio.post('/costs', data: costData);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao registrar custo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar custo');
     }
   }
 
@@ -653,7 +655,7 @@ class ApiService {
       final response = await _dio.get('/users');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar funcionários');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar funcionários');
     }
   }
 
@@ -661,7 +663,7 @@ class ApiService {
     try {
       await _dio.post('/users', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao criar funcionário');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar funcionário');
     }
   }
 
@@ -669,7 +671,7 @@ class ApiService {
     try {
       await _dio.put('/users/$id', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar funcionário');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar funcionário');
     }
   }
 
@@ -677,7 +679,7 @@ class ApiService {
     try {
       await _dio.delete('/users/$id');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao excluir funcionário');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir funcionário');
     }
   }
 
@@ -688,7 +690,7 @@ class ApiService {
       final response = await _dio.get('/teams');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar equipes');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar equipes');
     }
   }
 
@@ -697,7 +699,7 @@ class ApiService {
       final res = await _dio.post('/teams', data: data);
       return res.data;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao criar equipe');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar equipe');
     }
   }
 
@@ -705,7 +707,7 @@ class ApiService {
     try {
       await _dio.put('/teams/$id', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao atualizar equipe');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar equipe');
     }
   }
 
@@ -713,7 +715,7 @@ class ApiService {
     try {
       await _dio.delete('/teams/$id');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao excluir equipe');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir equipe');
     }
   }
 
@@ -724,7 +726,7 @@ class ApiService {
       final response = await _dio.get('/fleet');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar frota');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar frota');
     }
   }
 
@@ -736,7 +738,7 @@ class ApiService {
       final response = await _dio.post('/upload', data: formData);
       return response.data['url'];
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao fazer upload do arquivo');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload do arquivo');
     }
   }
 
@@ -748,7 +750,7 @@ class ApiService {
       final response = await _dio.get('/notifications');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar notificações');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar notificações');
     }
   }
 
@@ -760,7 +762,7 @@ class ApiService {
       }
       await _dio.post('/notifications/$id/action', data: data);
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao processar notificação');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao processar notificação');
     }
   }
 
@@ -768,7 +770,7 @@ class ApiService {
     try {
       await _dio.patch('/notifications/$id/read');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao marcar notificação como lida');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao marcar notificação como lida');
     }
   }
 
@@ -798,7 +800,7 @@ class ApiService {
         'targetUserId': targetUserId,
       });
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao criar notificação');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar notificação');
     }
   }
 
@@ -806,7 +808,7 @@ class ApiService {
     try {
       await _dio.put('/clients/release-city', data: {'city': city});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar lotes da cidade');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar lotes da cidade');
     }
   }
   Future<void> createEditRequest({
@@ -825,7 +827,7 @@ class ApiService {
         'reason': reason,
       });
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao criar solicitação de edição');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar solicitação de edição');
     }
   }
 
@@ -834,7 +836,25 @@ class ApiService {
       final response = await _dio.get('/clients/photographer');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar fichas');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fichas');
+    }
+  }
+
+  Future<List<dynamic>> getClientsBySeller() async {
+    try {
+      final response = await _dio.get('/clients/seller');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fichas do vendedor');
+    }
+  }
+
+  Future<List<dynamic>> getPersonalAppointments(String sellerId) async {
+    try {
+      final response = await _dio.get('/appointments/seller/$sellerId');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar agendamentos pessoais');
     }
   }
 
@@ -843,7 +863,7 @@ class ApiService {
       final response = await _dio.get('/edit-requests/pending');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar solicitações');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar solicitações');
     }
   }
 
@@ -851,7 +871,7 @@ class ApiService {
     try {
       await _dio.post('/edit-requests/$id/approve');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao aprovar solicitação');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao aprovar solicitação');
     }
   }
 
@@ -859,7 +879,7 @@ class ApiService {
     try {
       await _dio.post('/edit-requests/$id/reject');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao rejeitar solicitação');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao rejeitar solicitação');
     }
   }
 
@@ -868,7 +888,7 @@ class ApiService {
       final response = await _dio.get('/books/search', queryParameters: {'q': query});
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao buscar livros');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar livros');
     }
   }
 
@@ -876,7 +896,7 @@ class ApiService {
     try {
       await _dio.put('/books/batch/$id/release');
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao liberar lote para estoque');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar lote para estoque');
     }
   }
 
@@ -884,7 +904,7 @@ class ApiService {
     try {
       await _dio.post('/books/receive-return', data: {'sequenceNumber': sequenceNumber});
     } on DioException catch (e) {
-      throw Exception(e.response?.data['error'] ?? 'Erro ao receber devolução');
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao receber devolução');
     }
   }
   Future<String> downloadBackup() async {
@@ -929,12 +949,28 @@ class ApiService {
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) {
         // Specifically throw to handle conflict
-        throw Exception('CONFLICT: ${e.response?.data['error']}');
+        throw Exception('CONFLICT: ${(e.response?.data is Map ? e.response?.data['error'] : null)}');
       }
       throw Exception('Network error');
     } catch (e) {
       print('Error restoring backup: $e');
       throw Exception('Error restoring backup');
+    }
+  }
+
+  Future<String> getDailyQuote() async {
+    try {
+      final res = await _dio.get('/quotes/random');
+      if (res.statusCode == 200 && res.data != null) {
+        final quoteData = res.data;
+        if (quoteData['texto'] != null && quoteData['autor'] != null) {
+          return '"${quoteData['texto']}" - ${quoteData['autor']}';
+        }
+      }
+      return '';
+    } catch (e) {
+      print('Error fetching daily quote: $e');
+      return '';
     }
   }
 }

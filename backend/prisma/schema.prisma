@@ -68,6 +68,7 @@ model User {
   rg                      String?
   usesOwnCar              Boolean               @default(false)
   photographerCode        String?
+  personalAppointments    PersonalAppointment[]
   salesType               String?
   company                 Company?              @relation(fields: [companyId], references: [id])
   appointments            Appointment[]
@@ -416,4 +417,16 @@ model ClientEditRequest {
   client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   photographer   User?    @relation(fields: [photographerId], references: [id])
   company        Company? @relation(fields: [companyId], references: [id])
+}
+
+model PersonalAppointment {
+  id          String   @id @default(uuid())
+  sellerId    String
+  title       String
+  description String?
+  dateTime    DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  seller      User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 }

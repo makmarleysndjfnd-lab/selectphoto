@@ -485,6 +485,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         value: _role,
+                        isExpanded: true,
                         dropdownColor: const Color(0xFF111122),
                         style: const TextStyle(color: Colors.white),
                         decoration: const InputDecoration(labelText: 'Cargo', labelStyle: TextStyle(color: Colors.white54)),
@@ -502,6 +503,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         value: _salesType,
+                        isExpanded: true,
                         dropdownColor: const Color(0xFF111122),
                         style: const TextStyle(color: Colors.white),
                         decoration: const InputDecoration(labelText: 'Tipo de Venda', labelStyle: TextStyle(color: Colors.white54)),

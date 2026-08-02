@@ -16,6 +16,8 @@ import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/km_request_dialog.dart';
+import '../utils/ui_helpers.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../widgets/led_button.dart';
 
 
@@ -87,6 +89,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   late Animation<double> _fadeAnim;
 
   List<String> _professionsCache = [];
+  
+  String _userName = '';
+  String _greeting = 'Olá';
+  String _verse = '';
 
   @override
   void initState() {
@@ -97,6 +103,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     
     _loadProfessions();
     _loadFichasHojeCount();
+    _loadUserData();
 
     // Check if Lote is configured immediately after frame renders
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -105,6 +112,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       }
       KmRequestHelper.checkKmRequests(context);
     });
+  }
+
+  Future<void> _loadUserData() async {
+    final name = await UIHelpers.getUserName();
+    final quote = await ApiService().getDailyQuote();
+    if (mounted) {
+      setState(() {
+        _userName = name;
+        _greeting = UIHelpers.getGreeting();
+        _verse = quote.isNotEmpty ? quote : '"A persistência realiza o impossível." - Provérbio Chinês';
+      });
+    }
   }
 
   Future<void> _loadFichasHojeCount() async {
@@ -685,12 +704,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 22),
                   ),
                   const SizedBox(width: 14),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Painel do Fotógrafo', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
-                        Text('Captação em Campo', style: TextStyle(color: Color(0xFFE1BEE7), fontSize: 12)),
+                        Text('$_greeting, $_userName', style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+                        const Text('Painel do Fotógrafo', style: TextStyle(color: Color(0xFFE1BEE7), fontSize: 12)),
+                        const SizedBox(height: 4),
+                        Text(_verse,
+                            style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic)),
                       ],
                     ),
                   ),

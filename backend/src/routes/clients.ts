@@ -170,4 +170,21 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
+// Get clients by seller
+router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const clients = await prisma.client.findMany({
+      where: { 
+        companyId: req.user?.companyId,
+        assignedSellerId: req.user?.id
+      },
+      include: { children: true, appointments: true, assignedSeller: true, photographer: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(clients);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch seller clients' });
+  }
+});
+
 export default router;
