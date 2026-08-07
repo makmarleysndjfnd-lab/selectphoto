@@ -180,6 +180,26 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
   }
 });
 
+// Update own profile name
+router.put('/profile', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { name } = req.body;
+    if (!userId || !name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { name: name.trim() },
+      select: { id: true, name: true, email: true, role: true }
+    });
+    res.json(updatedUser);
+  } catch (error) {
+    console.error('Error updating user profile:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
 // Get all users in the same company (accessible by any logged in user)
 router.get('/company', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {

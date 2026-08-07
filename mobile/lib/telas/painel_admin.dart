@@ -381,6 +381,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                 if (newName.isNotEmpty) {
                   final prefs = await SharedPreferences.getInstance();
                   await prefs.setString('user_name', newName);
+                  try {
+                    await ApiService().updateProfileName(newName);
+                  } catch (e) {
+                    print('Error saving profile name to backend: $e');
+                  }
                   if (mounted) {
                     setState(() => _userName = newName);
                     Navigator.pop(context);

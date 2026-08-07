@@ -999,4 +999,8 @@ class ApiService {
     final resp = await _dio.get('/stats/rebolos');
     return resp.data;
   }
+
+  Future<void> updateProfileName(String newName) async {
+    await _dio.put('/users/profile', data: {'name': newName});
+  }
 }

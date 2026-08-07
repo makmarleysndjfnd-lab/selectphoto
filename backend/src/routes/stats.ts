@@ -187,7 +187,7 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
 
     // 8. Ranking de Fotografos
     const photogSales = await prisma.sale.findMany({ where: saleWhere, select: { value: true, client: { select: { photographerId: true } } } });
-    const allClientsPhotog = await prisma.client.groupBy({ by: ['photographerId'], where: { companyId, photographerId: { not: null } }, _count: { id: true } });
+    const allClientsPhotog = await prisma.client.groupBy({ by: ['photographerId'], where: { companyId, NOT: { photographerId: null } }, _count: { id: true } });
     const photogValueAgg: Record<string, { count: number; sum: number }> = {};
     photogSales.forEach(s => {
       const pid = s.client?.photographerId;
@@ -222,7 +222,7 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
 
     // Filtros disponiveis
     const allCities = await prisma.sale.findMany({ where: { companyId }, select: { city: true }, distinct: ['city'] });
-    const allEvents = await prisma.client.findMany({ where: { companyId, event: { not: null } }, select: { event: true }, distinct: ['event'] });
+    const allEvents = await prisma.client.findMany({ where: { companyId, NOT: { event: null } }, select: { event: true }, distinct: ['event'] });
     const allBatches = await prisma.bookBatch.findMany({ where: { companyId }, select: { id: true, name: true } });
 
     return res.json({

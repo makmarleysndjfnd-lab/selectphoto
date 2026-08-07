@@ -165,6 +165,26 @@ router.put('/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireA
         res.status(500).json({ error: 'Failed to update user' });
     }
 });
+// Update own profile name
+router.put('/profile', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { name } = req.body;
+        if (!userId || !name || typeof name !== 'string' || name.trim().length === 0) {
+            return res.status(400).json({ error: 'Name is required' });
+        }
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: { name: name.trim() },
+            select: { id: true, name: true, email: true, role: true }
+        });
+        res.json(updatedUser);
+    }
+    catch (error) {
+        console.error('Error updating user profile:', error);
+        res.status(500).json({ error: 'Failed to update profile' });
+    }
+});
 // Get all users in the same company (accessible by any logged in user)
 router.get('/company', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
