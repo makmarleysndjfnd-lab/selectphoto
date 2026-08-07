@@ -1,16 +1,16 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import OpenAI from 'openai';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 const getOpenAIClient = () => {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || !apiKey.trim()) return null;
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) return null;
   try {
-    return new OpenAI({ apiKey });
+    const OpenAI = require('openai');
+    return new OpenAI({ apiKey: apiKey.trim() });
   } catch (e) {
     console.error('Error initializing OpenAI client:', e);
     return null;
