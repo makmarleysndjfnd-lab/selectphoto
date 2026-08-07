@@ -9,7 +9,18 @@ const authMiddleware_1 = require("../middleware/authMiddleware");
 const openai_1 = __importDefault(require("openai"));
 const router = (0, express_1.Router)();
 const prisma = new client_1.PrismaClient();
-const openai = new openai_1.default({ apiKey: process.env.OPENAI_API_KEY });
+const getOpenAIClient = () => {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey || !apiKey.trim())
+        return null;
+    try {
+        return new openai_1.default({ apiKey });
+    }
+    catch (e) {
+        console.error('Error initializing OpenAI client:', e);
+        return null;
+    }
+};
 // GET /api/stats/books
 router.get('/books', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
@@ -255,6 +266,10 @@ DADOS:
 - Top cliente: ${stats.rankingClientes?.[0]?.name ?? 'N/A'} com ${stats.rankingClientes?.[0]?.books ?? 0} books
 
 Retorne SOMENTE um array JSON: [{"emoji": "emoji aqui", "insight": "Texto do insight aqui."}]`;
+        const openai = getOpenAIClient();
+        if (!openai) {
+            return res.status(503).json({ error: 'Chave OPENAI_API_KEY não configurada no servidor.' });
+        }
         const completion = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [{ role: 'user', content: prompt }],
