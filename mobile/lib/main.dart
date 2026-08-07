@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'servicos/servico_api.dart';
@@ -75,7 +76,9 @@ class MyApp extends StatelessWidget {
               brightness: settings.isDarkMode ? Brightness.dark : Brightness.light,
             ),
             useMaterial3: true,
-            fontFamily: 'Roboto',
+            textTheme: GoogleFonts.interTextTheme(
+              settings.isDarkMode ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
+            ),
             inputDecorationTheme: LedInputDecoration.build(),
             pageTransitionsTheme: const PageTransitionsTheme(
               builders: {

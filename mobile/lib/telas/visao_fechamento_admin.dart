@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
-import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:flutter/services.dart';
 import '../widgets/led_button.dart';
 
@@ -14,7 +13,6 @@ class VisaoFechamentoAdmin extends StatefulWidget {
 
 class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   List<dynamic> _sellers = [];
-  bool _isLoadingSellers = true;
 
   @override
   void initState() {
@@ -28,65 +26,17 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       if (mounted) {
         setState(() {
           _sellers = users;
-          _isLoadingSellers = false;
         });
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoadingSellers = false);
-      }
-    }
+    } catch (_) {}
   }
   String? _selectedSeller;
   
   // Para o card Análise de Desempenho
   List<String> _selectedSellersCustom = [];
   DateTimeRange? _selectedDateRangeCustom;
-
-  // Para o card Fechamento Mês
-  final List<String> _months = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-  final List<String> _selectedMonthsMes = [];
-  final List<String> _selectedSellersMes = [];
   
   final List<String> _mockReceipts = [];
-
-  final Map<String, Map<String, dynamic>> _mockFinanceiroVendedor = {
-    '1': {
-      'totalVendas': 5000.0,
-      'dinheiro': 300.0,
-      'pix': 2000.0,
-      'credito': 1500.0,
-      'debito': 1200.0,
-    },
-    '2': {
-      'totalVendas': 3000.0,
-      'dinheiro': 1500.0,
-      'pix': 500.0,
-      'credito': 500.0,
-      'debito': 500.0,
-    },
-    '3': {
-      'totalVendas': 4000.0,
-      'dinheiro': 0.0,
-      'pix': 2000.0,
-      'credito': 1000.0,
-      'debito': 1000.0,
-    },
-    '4': {
-      'totalVendas': 6000.0,
-      'dinheiro': 500.0,
-      'pix': 3000.0,
-      'credito': 1500.0,
-      'debito': 1000.0,
-    }
-  };
-
-  final Map<String, double> _saldoAcumuladoVendedor = {
-    '1': 0.0,
-    '2': -200.0, // Exemplo de dívida prévia
-    '3': 0.0,
-    '4': 100.0,
-  };
 
   @override
   Widget build(BuildContext context) {
@@ -234,15 +184,16 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                     ),
                     label: Text('Resgatar: $name', style: const TextStyle(color: Colors.redAccent)),
                     onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
                       try {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
+                        messenger.showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
                         await ApiService().forceReleaseClient(c['id']);
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha resgatada para o estoque!'), backgroundColor: Colors.green));
+                          messenger.showSnackBar(const SnackBar(content: Text('Ficha resgatada para o estoque!'), backgroundColor: Colors.green));
                           setState(() {}); 
                         }
                       } catch (e) {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
+                        if (mounted) messenger.showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
                       }
                     },
                   );
@@ -621,19 +572,6 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     );
   }
 
-  final Map<String, Map<String, dynamic>> _mockMetricasCidadeVendedor = {
-    'Vendedor 1': {
-      'fichasVenda': 10,
-      'fichasNaoVenda': 5,
-      'valorTotal': 7550.0,
-    },
-    'Vendedor 2': {
-      'fichasVenda': 6,
-      'fichasNaoVenda': 2,
-      'valorTotal': 3300.0,
-    },
-  };
-
   Widget _infoRow(String label, String value, {Color? color}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -644,28 +582,6 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           Text(value, style: TextStyle(color: color ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
         ],
       ),
-    );
-  }
-
-  Widget _buildAverageRatingRow(String title, double rating) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(title, style: const TextStyle(color: Colors.white, fontSize: 14)),
-        Row(
-          children: [
-            RatingBarIndicator(
-              rating: rating,
-              itemBuilder: (context, index) => const Icon(Icons.star, color: Colors.amber),
-              itemCount: 5,
-              itemSize: 16.0,
-              direction: Axis.horizontal,
-            ),
-            const SizedBox(width: 8),
-            Text(rating.toStringAsFixed(1), style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-          ],
-        )
-      ],
     );
   }
 }

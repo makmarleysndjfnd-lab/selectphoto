@@ -11,7 +11,7 @@ import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 import 'tela_agenda.dart';
-import 'package:intl/intl.dart';// ── Mock clients data removed ────────────────────────────────────────────────────────
+import 'package:intl/intl.dart';
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -39,12 +39,11 @@ class _SellerDashboardState extends State<SellerDashboard>
   DateTime _selectedAgendaMonth = DateTime.now();
   DateTime _selectedAgendaDay = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
-  
   // Variáveis para Distribuição de Equipe e Trocas
-  String? _selectedSellerForTransfer;
-  final List<String> _teamSellers = ['João (Vendedor 1)', 'Maria (Vendedora 2)', 'Carlos (Vendedor 3)'];
+  Map<String, dynamic>? _selectedSellerForTransfer;
+  List<Map<String, dynamic>> _companySellers = [];
   final Set<String> _selectedClientIds = {};
-  
+
   Map<String, dynamic>? _foundClient;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -81,6 +80,26 @@ class _SellerDashboardState extends State<SellerDashboard>
     }
   }
 
+  Future<void> _fetchTeamSellers() async {
+    try {
+      final users = await ApiService().getCompanyUsers();
+      final currentUserId = await UIHelpers.getUserId();
+      final sellers = List<Map<String, dynamic>>.from(
+        users.where((u) {
+          final isNotSelf = currentUserId == null || u['id'] != currentUserId;
+          return isNotSelf;
+        })
+      );
+      if (mounted) {
+        setState(() {
+          _companySellers = sellers.isNotEmpty ? sellers : List<Map<String, dynamic>>.from(users);
+        });
+      }
+    } catch (e) {
+      debugPrint('Erro ao buscar vendedores da equipe: $e');
+    }
+  }
+
   Future<void> _fetchClients() async {
     try {
       final clients = await ApiService().getClientsBySeller();
@@ -104,11 +123,12 @@ class _SellerDashboardState extends State<SellerDashboard>
   Future<void> _checkManagerRole() async {
     final prefs = await SharedPreferences.getInstance();
     final role = prefs.getString('user_role');
-    if (role == 'SELLER_MANAGER' && mounted) {
+    if ((role == 'SELLER_MANAGER' || role == 'SUPER_ADMIN' || role == 'COMPANY_ADMIN' || role == 'ADMIN') && mounted) {
       setState(() {
         _isManager = true;
       });
     }
+    await _fetchTeamSellers();
   }
 
   Future<void> _fetchUnreadNotifications() async {
@@ -678,6 +698,70 @@ class _SellerDashboardState extends State<SellerDashboard>
       ),
     );
   }
+  void _showRepassBookDialog() {
+    if (_selectedSellerForTransfer == null) return;
+    final codeCtrl = TextEditingController();
+    final sellerName = _selectedSellerForTransfer!['name'] ?? 'Vendedor';
+    final sellerId = _selectedSellerForTransfer!['id'] as String;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Repassar Book para $sellerName', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Informe o código da ficha/book que deseja repassar para $sellerName:', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: codeCtrl,
+                style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
+                decoration: InputDecoration(
+                  labelText: 'Código da Ficha (Ex: CF-EQP1-0001)',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  prefixIcon: const Icon(Icons.qr_code, color: Color(0xFFCE93D8)),
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.05),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            LedButton(
+              onPressed: () async {
+                final code = codeCtrl.text.trim();
+                if (code.isEmpty) return;
+                try {
+                  await ApiService().assignSeller(code, sellerId);
+                  if (mounted) {
+                    Navigator.pop(context);
+                    _fetchClients();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Book $code repassado para $sellerName com sucesso!'), backgroundColor: Colors.green),
+                    );
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Erro ao repassar book: $e'), backgroundColor: Colors.red),
+                  );
+                }
+              },
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFF9C27B0)),
+              child: const Text('Confirmar Repasse'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   Widget _buildDistribuicaoEquipeCard() {
     return Container(
@@ -704,14 +788,14 @@ class _SellerDashboardState extends State<SellerDashboard>
           const SizedBox(height: 12),
           const Text('Atribua os books da sua rota para os vendedores da sua equipe.', style: TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 16),
-          DropdownButtonFormField<String>(
+          DropdownButtonFormField<Map<String, dynamic>>(
             value: _selectedSellerForTransfer,
-            hint: const Text('Selecione o vendedor', style: TextStyle(color: Colors.white54)),
+            hint: const Text('Selecione o vendedor da empresa', style: TextStyle(color: Colors.white54)),
             dropdownColor: const Color(0xFF1A1A2E),
-            items: _teamSellers.map((seller) {
-              return DropdownMenuItem(
+            items: _companySellers.map((seller) {
+              return DropdownMenuItem<Map<String, dynamic>>(
                 value: seller,
-                child: Text(seller, style: const TextStyle(color: Colors.white)),
+                child: Text(seller['name'] ?? 'Vendedor', style: const TextStyle(color: Colors.white)),
               );
             }).toList(),
             onChanged: (val) {
@@ -729,12 +813,9 @@ class _SellerDashboardState extends State<SellerDashboard>
           ),
           const SizedBox(height: 16),
           LedButton.icon(
-            onPressed: _selectedSellerForTransfer == null ? null : () {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Abrindo scanner para transferir para $_selectedSellerForTransfer...')));
-              // Em produção, reutilizaria o MobileScanner para ler e atribuir ao vendedor
-            },
+            onPressed: _selectedSellerForTransfer == null ? null : _showRepassBookDialog,
             icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-            label: const Text('Escanear e Repassar Book', style: TextStyle(color: Colors.white)),
+            label: const Text('Escanear / Repassar Book', style: TextStyle(color: Colors.white)),
             style: LedButton.styleFrom(
               backgroundColor: const Color(0xFF9C27B0), 
               disabledBackgroundColor: Colors.grey.shade800,

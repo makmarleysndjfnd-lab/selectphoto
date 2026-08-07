@@ -93,51 +93,59 @@ class SyncService extends ChangeNotifier {
     await _savePendingRequests();
   }
 
+  bool _isSyncing = false;
+
   Future<void> syncAllPending() async {
-    if (_pendingRequests.isEmpty) return;
+    if (_isSyncing || _pendingRequests.isEmpty) return;
+    _isSyncing = true;
     
-    // Create a copy to iterate
-    final requestsToSync = List<SyncRequest>.from(_pendingRequests);
-    bool hasChanges = false;
+    try {
+      // Create a copy to iterate
+      final requestsToSync = List<SyncRequest>.from(_pendingRequests);
+      bool hasChanges = false;
 
-    for (var req in requestsToSync) {
-      if (req.isSyncing) continue;
-      req.isSyncing = true;
-      
-      bool success = false;
-      try {
-        if (req.type == 'SYNC_CLIENTS') {
-          await apiService.syncClients([req.payload]);
-          success = true;
-        } else if (req.type == 'REGISTER_SALE') {
-          await apiService.registerSale(req.payload);
-          success = true;
-        } else if (req.type == 'REGISTER_NONSALE') {
-          await apiService.registerNonSale(req.payload);
-          success = true;
-        } else if (req.type == 'REGISTER_APPOINTMENT') {
-          await apiService.registerAppointment(req.payload);
-          success = true;
-        } else if (req.type == 'SUBMIT_COST') {
-          await apiService.submitCost(req.payload);
-          success = true;
+      for (var req in requestsToSync) {
+        if (req.isSyncing) continue;
+        req.isSyncing = true;
+        
+        bool success = false;
+        try {
+          if (req.type == 'SYNC_CLIENTS') {
+            await apiService.syncClients([req.payload]);
+            success = true;
+          } else if (req.type == 'REGISTER_SALE') {
+            await apiService.registerSale(req.payload);
+            success = true;
+          } else if (req.type == 'REGISTER_NONSALE') {
+            await apiService.registerNonSale(req.payload);
+            success = true;
+          } else if (req.type == 'REGISTER_APPOINTMENT') {
+            await apiService.registerAppointment(req.payload);
+            success = true;
+          } else if (req.type == 'SUBMIT_COST') {
+            await apiService.submitCost(req.payload);
+            success = true;
+          }
+        } catch (e) {
+          // Failed to sync (maybe still offline)
+          if (kDebugMode) {
+            print("Failed to sync request ${req.id}: $e");
+          }
+        } finally {
+          req.isSyncing = false;
         }
-        // If other types are needed, add here
-      } catch (e) {
-        // Failed to sync (maybe still offline)
-        print("Failed to sync request ${req.id}: $e");
-      } finally {
-        req.isSyncing = false;
+
+        if (success) {
+          _pendingRequests.removeWhere((e) => e.id == req.id);
+          hasChanges = true;
+        }
       }
 
-      if (success) {
-        _pendingRequests.removeWhere((e) => e.id == req.id);
-        hasChanges = true;
+      if (hasChanges) {
+        await _savePendingRequests();
       }
-    }
-
-    if (hasChanges) {
-      await _savePendingRequests();
+    } finally {
+      _isSyncing = false;
     }
   }
 }

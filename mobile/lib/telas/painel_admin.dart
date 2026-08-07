@@ -29,6 +29,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../widgets/led_card.dart';
 import '../utils/ui_helpers.dart';
+import 'visao_estatisticas_admin.dart';
 
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
@@ -238,18 +239,22 @@ class _AdminDashboardState extends State<AdminDashboard>
         final teamColor = colors[colorIndex % colors.length];
         
         // Group books by event/city for this photographer
-        final Map<String, int> eventCounts = {};
+        final Map<String, List<Map<String, dynamic>>> eventBooks = {};
         for (var b in entry.value) {
           final city = b['city'] ?? 'Sem Cidade';
-          eventCounts[city] = (eventCounts[city] ?? 0) + 1;
+          if (!eventBooks.containsKey(city)) {
+            eventBooks[city] = [];
+          }
+          eventBooks[city]!.add(b);
         }
         
         final List<Map<String, dynamic>> events = [];
-        for (var ev in eventCounts.entries) {
+        for (var ev in eventBooks.entries) {
           events.add({
             'event': 'Produção em ${ev.key}',
             'city': ev.key,
-            'photos': ev.value,
+            'photos': ev.value.length,
+            'books': ev.value,
           });
         }
         
@@ -258,6 +263,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           'code': entry.key.substring(0, entry.key.length > 3 ? 3 : entry.key.length).toUpperCase(),
           'color': teamColor,
           'events': events,
+          'allBooks': entry.value,
         });
         
         colorIndex++;
@@ -342,6 +348,54 @@ class _AdminDashboardState extends State<AdminDashboard>
     _loadClients();
     _checkAutomaticBackup();
     _loadUserData();
+  }
+
+  Future<void> _showEditProfileDialog() async {
+    final controller = TextEditingController(text: _userName);
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1E2C),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Alterar Nome de Exibição', style: TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: controller,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Seu Nome',
+              labelStyle: const TextStyle(color: Colors.white70),
+              filled: true,
+              fillColor: Colors.white10,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            LedButton(
+              onPressed: () async {
+                final newName = controller.text.trim();
+                if (newName.isNotEmpty) {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('user_name', newName);
+                  if (mounted) {
+                    setState(() => _userName = newName);
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nome atualizado com sucesso!'), backgroundColor: Colors.green),
+                    );
+                  }
+                }
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _loadUserData() async {
@@ -496,7 +550,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded, 'Fechamentos'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
-                      _sideMenuItem(2, Icons.inventory_2_rounded, 'rebolo'),
+                      _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
+                      _sideMenuItem(9, Icons.bar_chart_rounded, 'Estatísticas'),
                       _sideMenuItem(8, Icons.layers_rounded, 'Capas'),
                     ],
                   ),
@@ -784,25 +839,45 @@ class _AdminDashboardState extends State<AdminDashboard>
                   ),
                   const SizedBox(width: 14),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('$_greeting, $_userName',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 2),
-                        const Text('Painel Administrativo',
-                            style: TextStyle(
-                                color: Color(0xFF90CAF9), fontSize: 12)),
-                        const SizedBox(height: 4),
-                        Text(_verse,
-                            style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 11,
-                                fontStyle: FontStyle.italic)),
-                      ],
+                    child: InkWell(
+                      onTap: _showEditProfileDialog,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    '$_greeting, $_userName',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Icon(Icons.edit, color: Colors.white54, size: 14),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            const Text('Painel Administrativo',
+                                style: TextStyle(
+                                    color: Color(0xFF90CAF9), fontSize: 12)),
+                            const SizedBox(height: 4),
+                            Text(_verse,
+                                style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                    fontStyle: FontStyle.italic)),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                   IconButton(
@@ -851,6 +926,8 @@ class _AdminDashboardState extends State<AdminDashboard>
         return const VisaoFechamentoAdmin();
       case 8:
         return const VisaoEstoqueAdmin();
+      case 9:
+        return const VisaoEstatisticasAdmin();
       default:
         return const VisaoFechamentoAdmin();
     }
@@ -1560,6 +1637,81 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
+  void _showBooksModal(String title, List<Map<String, dynamic>> books) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (_, scrollController) {
+            return Column(
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white30,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.menu_book_rounded, color: Color(0xFFCE93D8)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$title (${books.length})',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white70),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                Expanded(
+                  child: books.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Nenhum book encontrado nesta seleção.',
+                            style: TextStyle(color: Colors.white54),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: scrollController,
+                          itemCount: books.length,
+                          itemBuilder: (context, index) {
+                            final b = books[index];
+                            return _buildBookTile(b, null, false);
+                          },
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildPhotosTab() {
     int totalGeral = 0;
     for (final team in _realPhotoEvents) {
@@ -1619,45 +1771,58 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
 
             // Resumo geral
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF1A0030), Color(0xFF3A0068)],
+          InkWell(
+            onTap: () {
+              final allBooksList = <Map<String, dynamic>>[];
+              for (final team in _realPhotoEvents) {
+                final teamBooks = team['allBooks'] as List?;
+                if (teamBooks != null) {
+                  allBooksList.addAll(teamBooks.cast<Map<String, dynamic>>());
+                }
+              }
+              _showBooksModal('Total de Books Criadas', allBooksList);
+            },
+            borderRadius: BorderRadius.circular(18),
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1A0030), Color(0xFF3A0068)],
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                    color: _accentPurple.withOpacity(0.3)),
               ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                  color: _accentPurple.withOpacity(0.3)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _accentPurple.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(14),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _accentPurple.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(Icons.photo_library_rounded,
+                        color: Color(0xFFCE93D8), size: 26),
                   ),
-                  child: const Icon(Icons.photo_library_rounded,
-                      color: Color(0xFFCE93D8), size: 26),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Total de books Criadas',
-                        style: TextStyle(
-                            color: Color(0xFF90CAF9), fontSize: 12)),
-                    Text('$totalGeral books',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold)),
-                    Text('${_realPhotoEvents.length} equipes ativas',
-                        style: const TextStyle(
-                            color: Color(0xFFCE93D8), fontSize: 12)),
-                  ],
-                ),
-              ],
+                  const SizedBox(width: 16),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Total de books Criadas',
+                          style: TextStyle(
+                              color: Color(0xFF90CAF9), fontSize: 12)),
+                      Text('$totalGeral books',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold)),
+                      Text('${_realPhotoEvents.length} equipes ativas (Toque p/ ver)',
+                          style: const TextStyle(
+                              color: Color(0xFFCE93D8), fontSize: 12)),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -1680,59 +1845,66 @@ class _AdminDashboardState extends State<AdminDashboard>
               child: Column(
                 children: [
                   // Header da equipe
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          color.withOpacity(0.15),
-                          Colors.transparent
-                        ],
-                      ),
-                      borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(20)),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: color.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                                color: color.withOpacity(0.5)),
-                          ),
-                          child: Text(team['code'] as String,
-                              style: TextStyle(
-                                  color: color,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 11)),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(team['team'] as String,
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14)),
-                        ),
-                        Column(
-                          crossAxisAlignment:
-                              CrossAxisAlignment.end,
-                          children: [
-                            Text('$teamTotal',
-                                style: TextStyle(
-                                    color: color,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold)),
-                            const Text('books totais',
-                                style: TextStyle(
-                                    color: Color(0xFF90CAF9),
-                                    fontSize: 10)),
+                  InkWell(
+                    onTap: () {
+                      final books = List<Map<String, dynamic>>.from(team['allBooks'] ?? []);
+                      _showBooksModal('Books - ${team['team']}', books);
+                    },
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            color.withOpacity(0.15),
+                            Colors.transparent
                           ],
                         ),
-                      ],
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(20)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color: color.withOpacity(0.5)),
+                            ),
+                            child: Text(team['code'] as String,
+                                style: TextStyle(
+                                    color: color,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(team['team'] as String,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14)),
+                          ),
+                          Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.end,
+                            children: [
+                              Text('$teamTotal',
+                                  style: TextStyle(
+                                      color: color,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold)),
+                              const Text('books (Toque p/ abrir)',
+                                  style: TextStyle(
+                                      color: Color(0xFF90CAF9),
+                                      fontSize: 10)),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   // Eventos
@@ -1740,78 +1912,83 @@ class _AdminDashboardState extends State<AdminDashboard>
                     final i = entry.key;
                     final e = entry.value as Map;
                     final isLast = i == events.length - 1;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        border: isLast
-                            ? null
-                            : Border(
-                                bottom: BorderSide(
-                                    color: Colors.white
-                                        .withOpacity(0.06))),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: color.withOpacity(0.1),
-                              borderRadius:
-                                  BorderRadius.circular(10),
+                    final eventBooks = List<Map<String, dynamic>>.from(e['books'] ?? []);
+
+                    return InkWell(
+                      onTap: () => _showBooksModal(e['event'] as String, eventBooks),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          border: isLast
+                              ? null
+                              : Border(
+                                  bottom: BorderSide(
+                                      color: Colors.white
+                                          .withOpacity(0.06))),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.1),
+                                borderRadius:
+                                    BorderRadius.circular(10),
+                              ),
+                              child: Icon(
+                                  Icons.camera_alt_rounded,
+                                  color: color,
+                                  size: 18),
                             ),
-                            child: Icon(
-                                Icons.camera_alt_rounded,
-                                color: color,
-                                size: 18),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-                              children: [
-                                Text(e['event'] as String,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight:
-                                            FontWeight.w600)),
-                                const SizedBox(height: 2),
-                                Row(children: [
-                                  const Icon(
-                                      Icons
-                                          .location_on_outlined,
-                                      color: Color(0xFF90CAF9),
-                                      size: 12),
-                                  const SizedBox(width: 3),
-                                  Text(e['city'] as String,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(e['event'] as String,
                                       style: const TextStyle(
-                                          color:
-                                              Color(0xFF90CAF9),
-                                          fontSize: 11)),
-                                ]),
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight:
+                                              FontWeight.w600)),
+                                  const SizedBox(height: 2),
+                                  Row(children: [
+                                    const Icon(
+                                        Icons
+                                            .location_on_outlined,
+                                        color: Color(0xFF90CAF9),
+                                        size: 12),
+                                    const SizedBox(width: 3),
+                                    Text(e['city'] as String,
+                                        style: const TextStyle(
+                                            color:
+                                                Color(0xFF90CAF9),
+                                            fontSize: 11)),
+                                  ]),
+                                ],
+                              ),
+                            ),
+                            Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.end,
+                              children: [
+                                Text('${e['photos']}',
+                                    style: TextStyle(
+                                        color: color,
+                                        fontSize: 18,
+                                        fontWeight:
+                                            FontWeight.bold)),
+                                const Text('books',
+                                    style: TextStyle(
+                                        color: Color(0xFF90CAF9),
+                                        fontSize: 10)),
                               ],
                             ),
-                          ),
-                          Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.end,
-                            children: [
-                              Text('${e['photos']}',
-                                  style: TextStyle(
-                                      color: color,
-                                      fontSize: 18,
-                                      fontWeight:
-                                          FontWeight.bold)),
-                              const Text('books',
-                                  style: TextStyle(
-                                      color: Color(0xFF90CAF9),
-                                      fontSize: 10)),
-                            ],
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     );
                   }),

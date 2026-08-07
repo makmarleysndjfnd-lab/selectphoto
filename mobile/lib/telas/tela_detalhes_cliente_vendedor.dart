@@ -331,7 +331,42 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   fit: BoxFit.contain,
                 ),
               ),
-            ]
+            ],
+            if (client['nonSales'] != null && (client['nonSales'] as List).isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: const [
+                        Icon(Icons.report_problem_rounded, color: Colors.redAccent, size: 18),
+                        SizedBox(width: 8),
+                        Text('Histórico de Não-Venda (Rebolo)', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ...(client['nonSales'] as List).map((ns) {
+                      final reason = ns['reason'] ?? 'Motivo não especificado';
+                      final sellerName = ns['seller']?['name'] ?? ns['sellerName'] ?? 'Vendedor';
+                      final dateStr = ns['date'] != null ? ns['date'].toString().split('T')[0] : '';
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('• Motivo: "$reason" | Vendedor: $sellerName ($dateStr)',
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+            ],
           ]
         ],
       ),

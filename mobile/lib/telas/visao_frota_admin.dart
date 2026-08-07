@@ -131,8 +131,11 @@ class _FleetAdminViewState extends State<FleetAdminView> {
     }
 
     final inUse = car['status'] == 'IN_USE';
-    final userName = car['currentUser']?['name'] ?? '';
-    final teamPrefix = car['currentUser']?['team']?['prefix'] ?? '';
+    final rawUser = car['currentUser']?['name']?.toString() ?? '';
+    final userName = (rawUser.isEmpty || rawUser == 'null' || rawUser == 'nll') ? 'Usuário' : rawUser;
+    final rawTeam = car['currentUser']?['team']?['prefix']?.toString() ?? '';
+    final teamPrefix = (rawTeam.isEmpty || rawTeam == 'null' || rawTeam == 'nll') ? '' : rawTeam;
+    final userLabel = teamPrefix.isNotEmpty ? '$userName ($teamPrefix)' : userName;
 
     return Container(
       width: 320,
@@ -244,7 +247,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  inUse ? 'Com: $userName ($teamPrefix)' : 'Veículo Livre (Garagem)',
+                  inUse ? 'Com: $userLabel' : 'Veículo Livre (Garagem)',
                   style: TextStyle(
                     color: inUse ? const Color(0xFFCE93D8) : Colors.green,
                     fontSize: 13,
@@ -264,7 +267,12 @@ class _FleetAdminViewState extends State<FleetAdminView> {
       children: [
         Icon(icon, color: color, size: 16),
         const SizedBox(width: 6),
-        Text(text, style: TextStyle(color: color == const Color(0xFF546E7A) ? Colors.white70 : color, fontSize: 13)),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(color: color == const Color(0xFF546E7A) ? Colors.white70 : color, fontSize: 13),
+          ),
+        ),
       ],
     );
   }
@@ -324,13 +332,21 @@ Future<void> _pickImage(String type) async {
       setState(() {
         if (type == 'photo') {
           _photo = File(pickedFile.path);
-        } else if (type == 'frontPhoto') _frontPhoto = File(pickedFile.path);
-        else if (type == 'backPhoto') _backPhoto = File(pickedFile.path);
-        else if (type == 'leftPhoto') _leftPhoto = File(pickedFile.path);
-        else if (type == 'rightPhoto') _rightPhoto = File(pickedFile.path);
-        else if (type == 'dashboardPhoto') _dashboardPhoto = File(pickedFile.path);
-        else if (type == 'enginePhoto') _enginePhoto = File(pickedFile.path);
-        else if (type == 'trunkPhoto') _trunkPhoto = File(pickedFile.path);
+        } else if (type == 'frontPhoto') {
+          _frontPhoto = File(pickedFile.path);
+        } else if (type == 'backPhoto') {
+          _backPhoto = File(pickedFile.path);
+        } else if (type == 'leftPhoto') {
+          _leftPhoto = File(pickedFile.path);
+        } else if (type == 'rightPhoto') {
+          _rightPhoto = File(pickedFile.path);
+        } else if (type == 'dashboardPhoto') {
+          _dashboardPhoto = File(pickedFile.path);
+        } else if (type == 'enginePhoto') {
+          _enginePhoto = File(pickedFile.path);
+        } else if (type == 'trunkPhoto') {
+          _trunkPhoto = File(pickedFile.path);
+        }
       });
     }
   }

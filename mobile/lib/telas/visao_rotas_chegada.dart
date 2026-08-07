@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
-import '../widgets/led_card.dart';
-import '../widgets/led_button.dart';
-import 'dart:math';
 
 class VisaoRotasChegada extends StatefulWidget {
   const VisaoRotasChegada({super.key});
@@ -47,7 +44,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         tNames[t['id'].toString()] = t['name'] ?? 'Equipe Desconhecida';
       }
 
-      final clients = await _api.getClients();
+      final clients = await _api.getAllClients();
       
       final Map<String, Map<String, List<dynamic>>> agrupado = {};
       

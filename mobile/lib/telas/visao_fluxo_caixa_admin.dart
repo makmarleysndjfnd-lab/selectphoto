@@ -292,9 +292,6 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
             DataColumn(label: Text('Ações', style: TextStyle(color: Colors.white))),
           ],
           rows: allTransactions.map((t) {
-            final isIncome = t['type'] == 'IN';
-            final date = DateTime.parse(t['date']);
-            final dateStr = '${date.day.toString().padLeft(2,'0')}/${date.month.toString().padLeft(2,'0')} ${date.hour.toString().padLeft(2,'0')}:${date.minute.toString().padLeft(2,'0')}';
             final isOut = t['type'] == 'OUT';
             return DataRow(cells: [
               DataCell(Text(t['date'].toString().split('T')[0], style: const TextStyle(color: Colors.white70))),

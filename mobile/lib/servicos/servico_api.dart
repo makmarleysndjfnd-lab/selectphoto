@@ -26,8 +26,8 @@ class ApiService {
         'Bypass-Tunnel-Reminder': 'true',
         'User-Agent': 'loca.lt'
       },
-      connectTimeout: const Duration(seconds: 100),
-      receiveTimeout: const Duration(seconds: 100),
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 20),
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
@@ -373,7 +373,7 @@ class ApiService {
     }
   }
 
-  Future<void> submitChecklist(FormData data) async {
+  Future<void> submitChecklist(dynamic data) async {
     try {
       await _dio.post('/fleet/checklist', data: data);
     } on DioException catch (e) {
@@ -743,6 +743,8 @@ class ApiService {
   }
 
 
+
+
   // ── Notificações (Notifications) ──────────────────────────────────────────
 
   Future<List<dynamic>> getNotifications() async {
@@ -958,6 +960,8 @@ class ApiService {
     }
   }
 
+
+
   Future<String> getDailyQuote() async {
     try {
       final res = await _dio.get('/quotes/random');
@@ -972,5 +976,27 @@ class ApiService {
       print('Error fetching daily quote: $e');
       return '';
     }
+  }
+
+  // ── Estatísticas / BI ──────────────────────────────────────
+  Future<dynamic> getStatsBooks({String? from, String? to, String? city, String? event, String? batchId}) async {
+    final queryParams = <String, String>{};
+    if (from != null) queryParams['from'] = from;
+    if (to != null) queryParams['to'] = to;
+    if (city != null) queryParams['city'] = city;
+    if (event != null) queryParams['event'] = event;
+    if (batchId != null) queryParams['batchId'] = batchId;
+    final resp = await _dio.get('/stats/books', queryParameters: queryParams.isEmpty ? null : queryParams);
+    return resp.data;
+  }
+
+  Future<dynamic> getStatsAiInsights(Map<String, dynamic> statsData) async {
+    final resp = await _dio.post('/stats/books/ai-insights', data: statsData);
+    return resp.data;
+  }
+
+  Future<dynamic> getStatsRebolos() async {
+    final resp = await _dio.get('/stats/rebolos');
+    return resp.data;
   }
 }

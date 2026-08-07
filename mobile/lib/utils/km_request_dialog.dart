@@ -36,8 +36,8 @@ class KmRequestHelper {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setState) {
-            return WillPopScope(
-              onWillPop: () async => !isOverdue,
+            return PopScope(
+              canPop: !isOverdue,
               child: AlertDialog(
                 title: Row(
                   children: [

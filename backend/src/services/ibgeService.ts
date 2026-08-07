@@ -44,7 +44,7 @@ export async function enrichCityData(stateUF: string, cityName: string) {
       if (popData && popData.length > 0) {
         population = parseInt(popData[0].resultados[0].series[0].serie['2022'], 10);
         if (!isNaN(population)) {
-          defaultData.population = population.toLocaleString('pt-BR');
+          defaultData.population = population.toLocaleString('pt-BR').replace(/[\u00A0\u202F\s]/g, '.');
         }
       }
     }
@@ -79,17 +79,19 @@ export async function enrichCityData(stateUF: string, cityName: string) {
       
       let creditPotential = '';
       if (monthlyPerCapita >= 4000) {
-        creditPotential = ' (Potencial de Crédito: Altíssimo 💳)';
+        creditPotential = ' (PotC: Altíssimo)';
       } else if (monthlyPerCapita >= 2500) {
-        creditPotential = ' (Potencial de Crédito: Alto 💳)';
+        creditPotential = ' (PotC: Alto)';
       } else if (monthlyPerCapita >= 1500) {
-        creditPotential = ' (Potencial de Crédito: Médio 💳)';
+        creditPotential = ' (Potencial de Crédito: Médio)';
       } else {
         creditPotential = ' (Potencial de Crédito: Baixo)';
       }
 
-      // Format to Brazilian currency format manually since toLocaleString inside Node sometimes ignores pt-BR without full ICU
-      const formattedIncome = monthlyPerCapita.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      // Format to Brazilian currency format manually
+      const parts = monthlyPerCapita.toFixed(2).split('.');
+      const integerPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      const formattedIncome = `${integerPart},${parts[1]}`;
       
       defaultData.perCapitaIncome = `R$ ${formattedIncome}${creditPotential}`;
     }

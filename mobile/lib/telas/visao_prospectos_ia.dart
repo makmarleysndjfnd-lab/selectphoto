@@ -142,6 +142,19 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
     Navigator.push(context, MaterialPageRoute(builder: (_) => const MyProspectsScreen()));
   }
 
+  String _formatIncome(String? incomeRaw) {
+    if (incomeRaw == null || incomeRaw.isEmpty) return '';
+    String text = incomeRaw;
+    text = text.replaceAll('(Potencial de Crédito:', 'PotC:');
+    text = text.replaceAll('Altíssimo', 'alti');
+    text = text.replaceAll('Alto', 'alto');
+    text = text.replaceAll('Médio', 'med');
+    text = text.replaceAll('Baixo', 'baixo');
+    text = text.replaceAll('💳', '');
+    text = text.replaceAll(')', '');
+    return text.trim();
+  }
+
 
 
   @override
@@ -234,16 +247,41 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Resultados para $state', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                        Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF7C4DFF),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Resultados para $state',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.1,
+                              ),
+                            ),
+                          ],
+                        ),
                         LedButton.icon(
                           onPressed: () => _loadDataForState(state, force: true),
-                          icon: const Icon(Icons.refresh, color: Colors.white),
-                          label: const Text('Atualizar', style: TextStyle(color: Colors.white)),
-                          style: LedButton.styleFrom(backgroundColor: const Color(0xFF43A047)),
+                          icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.white),
+                          label: const Text('Atualizar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                          style: LedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2E7D32),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
                         ),
                       ],
                     ),
@@ -251,71 +289,122 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                   if (events.isEmpty)
                     const Expanded(
                       child: Center(
-                        child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54)),
+                        child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54, fontSize: 15)),
                       ),
                     )
                   else
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: SingleChildScrollView(
-                        child: Theme(
-                          data: Theme.of(context).copyWith(
-                            dividerColor: Colors.white10,
-                          ),
-                          child: DataTable(
-                            headingTextStyle: const TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold),
-                            dataTextStyle: const TextStyle(color: Colors.white),
-                            columnSpacing: 24,
-                            columns: const [
-                              DataColumn(label: Text('Cidade')),
-                              DataColumn(label: Text('Evento')),
-                              DataColumn(label: Text('Data')),
-                              DataColumn(label: Text('População')),
-                              DataColumn(label: Text('Renda Per Capita')),
-                              DataColumn(label: Text('PIB')),
-                              DataColumn(label: Text('Nota')),
-                              DataColumn(label: Text('Ação')),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF131522),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFF26293A)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
                             ],
-                            rows: events.map<DataRow>((evt) {
-                              return DataRow(
-                                cells: [
-                                  DataCell(Text(evt['city'] ?? '')),
-                                  DataCell(Text(evt['name'] ?? '')),
-                                  DataCell(Text(evt['startDate'] ?? '')),
-                                  DataCell(Text(evt['population']?.toString() ?? '')),
-                                  DataCell(Text(evt['perCapitaIncome']?.toString() ?? evt['income']?.toString() ?? '')),
-                                  DataCell(Text(evt['gdp']?.toString() ?? '-')),
-                                  DataCell(
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.withOpacity(0.2),
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(evt['score']?.toString() ?? '', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                                    )
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: SingleChildScrollView(
+                                child: Theme(
+                                  data: Theme.of(context).copyWith(
+                                    dividerColor: const Color(0xFF26293A),
                                   ),
-                                  DataCell(
-                                    LedButton.icon(
-                                      onPressed: () => _addProspect(evt, state),
-                                      icon: const Icon(Icons.add, size: 16, color: Colors.white),
-                                      label: const Text('Adicionar aos Prospectos', style: TextStyle(color: Colors.white, fontSize: 12)),
-                                style: LedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF9C27B0),
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                  minimumSize: Size.zero,
+                                  child: DataTable(
+                                    headingRowColor: WidgetStateProperty.all(const Color(0xFF1A1C2C)),
+                                    headingTextStyle: const TextStyle(
+                                      color: Color(0xFF90CAF9),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      letterSpacing: 0.2,
+                                    ),
+                                    dataTextStyle: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      letterSpacing: 0.0,
+                                    ),
+                                    columnSpacing: 28,
+                                    horizontalMargin: 16,
+                                    columns: const [
+                                      DataColumn(label: Text('Cidade')),
+                                      DataColumn(label: Text('Evento')),
+                                      DataColumn(label: Text('Data')),
+                                      DataColumn(label: Text('População')),
+                                      DataColumn(label: Text('Renda Per Capita')),
+                                      DataColumn(label: Text('PIB')),
+                                      DataColumn(label: Text('Nota')),
+                                      DataColumn(label: Text('Ação')),
+                                    ],
+                                    rows: events.map<DataRow>((evt) {
+                                      final rawInc = evt['perCapitaIncome']?.toString() ?? evt['income']?.toString();
+                                      final incStr = _formatIncome(rawInc).replaceAll('Renda Per Capita:', '').trim();
+                                      final score = evt['score']?.toString().toUpperCase() ?? 'HIGH';
+                                      
+                                      Color scoreColor = const Color(0xFF00E676);
+                                      Color scoreBg = const Color(0xFF00E676).withOpacity(0.15);
+                                      if (score == 'MEDIUM' || score == 'MÉDIO') {
+                                        scoreColor = const Color(0xFFFFB74D);
+                                        scoreBg = const Color(0xFFFFB74D).withOpacity(0.15);
+                                      } else if (score == 'LOW' || score == 'BAIXO') {
+                                        scoreColor = const Color(0xFFFF5252);
+                                        scoreBg = const Color(0xFFFF5252).withOpacity(0.15);
+                                      }
+
+                                      return DataRow(
+                                        cells: [
+                                          DataCell(Text(evt['city']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
+                                          DataCell(Text(evt['name']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '')),
+                                          DataCell(Text(evt['startDate']?.toString() ?? '', style: const TextStyle(color: Colors.white70))),
+                                          DataCell(Text(evt['population']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), '.').trim() ?? '-', style: const TextStyle(color: Colors.white))),
+                                          DataCell(Text(incStr, style: const TextStyle(color: Colors.white))),
+                                          DataCell(Text(evt['gdp']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '-', style: const TextStyle(color: Colors.white))),
+                                          DataCell(
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: scoreBg,
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(color: scoreColor.withOpacity(0.3)),
+                                              ),
+                                              child: Text(
+                                                score,
+                                                style: TextStyle(color: scoreColor, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.5),
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            IconButton(
+                                              onPressed: () => _addProspect(evt, state),
+                                              tooltip: 'Adicionar Prospecto',
+                                              icon: Container(
+                                                padding: const EdgeInsets.all(6),
+                                                decoration: const BoxDecoration(
+                                                  color: Color(0xFF7C4DFF),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(Icons.add_rounded, size: 16, color: Colors.white),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    }).toList(),
+                                  ),
                                 ),
-                              )
+                              ),
                             ),
-                          ],
-                        );
-                      }).toList(),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                ),
-                ),
               ],
             );
             }).toList(),

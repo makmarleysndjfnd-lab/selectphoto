@@ -12,7 +12,8 @@ const authenticateToken = (req, res, next) => {
         res.status(401).json({ error: 'Access token missing' });
         return;
     }
-    jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET, (err, user) => {
+    const secret = process.env.JWT_SECRET || 'selectphoto-jwt-secret-key';
+    jsonwebtoken_1.default.verify(token, secret, (err, user) => {
         if (err) {
             res.status(403).json({ error: 'Invalid token' });
             return;

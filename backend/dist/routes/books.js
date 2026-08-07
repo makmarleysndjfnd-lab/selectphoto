@@ -14,38 +14,50 @@ router.post('/close-event', authMiddleware_1.authenticateToken, async (req, res)
         const { eventName } = req.body;
         const photographerId = req.user?.id;
         const companyId = req.user?.companyId;
-        if (!photographerId || !eventName)
-            return res.status(400).json({ error: 'Missing photographer or event' });
-        // Find all CREATED clients for this event
+        if (!photographerId)
+            return res.status(400).json({ error: 'Missing photographer' });
+        // Find all CREATED clients for this photographer
         const clients = await prisma.client.findMany({
             where: {
                 photographerId,
-                event: eventName,
                 bookStatus: 'CREATED',
                 companyId
             }
         });
         if (clients.length === 0) {
-            return res.status(404).json({ error: 'Nenhuma ficha CREATED encontrada para este evento.' });
+            return res.status(404).json({ error: 'Nenhuma ficha CREATED encontrada.' });
         }
-        // Create the batch
-        const batch = await prisma.bookBatch.create({
-            data: {
-                name: `Lote - ${eventName}`,
-                photographerId,
-                companyId,
-                status: 'AWAITING_RELEASE'
-            }
+        // Group clients by event name
+        const eventsGrouped = {};
+        for (const client of clients) {
+            const ev = client.event || eventName || 'Evento Geral';
+            if (!eventsGrouped[ev])
+                eventsGrouped[ev] = [];
+            eventsGrouped[ev].push(client);
+        }
+        const createdBatches = [];
+        for (const [evName, eventClients] of Object.entries(eventsGrouped)) {
+            const batch = await prisma.bookBatch.create({
+                data: {
+                    name: `Lote - ${evName}`,
+                    photographerId,
+                    companyId,
+                    status: 'AWAITING_RELEASE'
+                }
+            });
+            await prisma.client.updateMany({
+                where: { id: { in: eventClients.map(c => c.id) } },
+                data: {
+                    bookStatus: 'AWAITING_RELEASE',
+                    batchId: batch.id
+                }
+            });
+            createdBatches.push(batch);
+        }
+        res.status(201).json({
+            message: `${clients.length} fichas enviadas para a gráfica em ${createdBatches.length} lote(s).`,
+            batches: createdBatches
         });
-        // Update all clients to AWAITING_RELEASE
-        await prisma.client.updateMany({
-            where: { id: { in: clients.map(c => c.id) } },
-            data: {
-                bookStatus: 'AWAITING_RELEASE',
-                batchId: batch.id
-            }
-        });
-        res.status(201).json({ message: `${clients.length} fichas enviadas para a gráfica.`, batch });
     }
     catch (error) {
         res.status(500).json({ error: error.message });

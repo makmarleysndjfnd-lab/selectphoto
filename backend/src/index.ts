@@ -38,6 +38,7 @@ import backupRouter from './routes/backup';
 import editRequestsRoutes from './routes/editRequests';
 import quotesRoutes from './routes/quotes';
 import appointmentsRoutes from './routes/appointments';
+import statsRoutes from './routes/stats';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 
@@ -61,6 +62,7 @@ app.use('/api/backup', backupRouter);
 app.use('/api/edit-requests', editRequestsRoutes);
 app.use('/api/quotes', quotesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
+app.use('/api/stats', statsRoutes);
 
 initWarrantyCron();
 initBackupCron();

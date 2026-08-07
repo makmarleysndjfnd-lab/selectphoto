@@ -161,4 +161,21 @@ router.get('/photographer', authMiddleware_1.authenticateToken, async (req, res)
         res.status(500).json({ error: 'Failed to fetch photographer clients' });
     }
 });
+// Get clients by seller
+router.get('/seller', authMiddleware_1.authenticateToken, async (req, res) => {
+    try {
+        const clients = await prisma.client.findMany({
+            where: {
+                companyId: req.user?.companyId,
+                assignedSellerId: req.user?.id
+            },
+            include: { children: true, appointments: true, assignedSeller: true, photographer: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        res.json(clients);
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch seller clients' });
+    }
+});
 exports.default = router;

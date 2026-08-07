@@ -105,13 +105,34 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     _loadFichasHojeCount();
     _loadUserData();
 
-    // Check if Lote is configured immediately after frame renders
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_currentCityLote == null || _currentEventName == null) {
-        _showLoteConfigDialog();
-      }
-      KmRequestHelper.checkKmRequests(context);
+      _initLoteAndCheckKm();
     });
+  }
+
+  Future<void> _initLoteAndCheckKm() async {
+    final prefs = await SharedPreferences.getInstance();
+    final city = prefs.getString('lote_city');
+    final event = prefs.getString('lote_event_name');
+    final seq = prefs.getInt('lote_sequence_count') ?? 1;
+
+    if (mounted) {
+      setState(() {
+        _currentCityLote = city;
+        _currentEventName = event;
+        _sequenceCount = seq;
+      });
+    }
+
+    if (!mounted) return;
+
+    if (_currentCityLote == null || _currentCityLote!.isEmpty || _currentEventName == null || _currentEventName!.isEmpty) {
+      await _showLoteConfigDialog();
+    }
+    
+    if (mounted) {
+      KmRequestHelper.checkKmRequests(context);
+    }
   }
 
   Future<void> _loadUserData() async {
@@ -277,14 +298,28 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             ),
           ),
           actions: [
+            if (_currentCityLote != null && _currentCityLote!.isNotEmpty && _currentEventName != null && _currentEventName!.isNotEmpty)
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
             LedButton(
-              onPressed: () {
+              onPressed: () async {
                 if (formKey.currentState!.validate()) {
-                  setState(() {
-                    _currentCityLote = loteCtrl.text.toUpperCase();
-                    _currentEventName = eventCtrl.text;
-                  });
-                  Navigator.pop(context);
+                  final city = loteCtrl.text.toUpperCase();
+                  final event = eventCtrl.text;
+
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString('lote_city', city);
+                  await prefs.setString('lote_event_name', event);
+
+                  if (mounted) {
+                    setState(() {
+                      _currentCityLote = city;
+                      _currentEventName = event;
+                    });
+                    Navigator.pop(context);
+                  }
                 }
               },
               style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
@@ -493,6 +528,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         _sequenceCount++; // Increment for next client
         _fichasHojeCount++; // Atualiza UI de Hoje
       });
+      await prefs.setInt('lote_sequence_count', _sequenceCount);
       
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -630,6 +666,12 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                 
                 try {
                   await ApiService().createBookBatch(eventToFinish);
+
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.remove('lote_city');
+                  await prefs.remove('lote_event_name');
+                  await prefs.remove('lote_sequence_count');
+
                   if (mounted) {
                     setState(() {
                       _currentCityLote = null;
@@ -637,6 +679,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                       _sequenceCount = 1;
                     });
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
+
+                    // Automatically open config dialog for next event session
+                    _showLoteConfigDialog();
                   }
                 } catch (e) {
                   if (mounted) {
