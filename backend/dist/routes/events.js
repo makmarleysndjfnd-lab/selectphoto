@@ -15,6 +15,25 @@ const prisma = new client_1.PrismaClient();
 const ai = process.env.GEMINI_API_KEY
     ? new genai_1.GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
     : null;
+// Helper for exact duration calculation
+function computeExactDurationDays(startDateStr, endDateStr, providedDays) {
+    if (startDateStr && endDateStr) {
+        const s = new Date(startDateStr.split('T')[0]);
+        const e = new Date(endDateStr.split('T')[0]);
+        if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+            const diffMs = e.getTime() - s.getTime();
+            const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1; // +1 to count both start and end days inclusive
+            if (diffDays >= 1)
+                return diffDays;
+        }
+    }
+    if (providedDays !== undefined && providedDays !== null) {
+        const p = parseInt(providedDays.toString(), 10);
+        if (!isNaN(p) && p >= 1)
+            return p;
+    }
+    return 1;
+}
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
     console.log('--- REQUISIÇÃO RECEBIDA NA ROTA /search ---', req.body);
@@ -38,20 +57,40 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
         const currentDateStr = currentDate.toISOString().split('T')[0];
         const targetDateStr = targetDate.toISOString().split('T')[0];
         const maxDateStr = maxDate.toISOString().split('T')[0];
-        const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
+        const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure eventos na cidade "${city}".
     Hoje é dia ${currentDateStr}.
-    Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+    Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
     
-    Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
+    FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
+    1. Sympla (pesquise 'site:sympla.com.br ${city}' e 'sympla eventos ${city}')
+    2. Instagram e Facebook (pesquise 'site:instagram.com circo ${city}', 'site:instagram.com parque ${city}', 'site:facebook.com/events ${city}')
+    3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
+    4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${city}', 'exposição ${city}', 'festa de peão ${city}', 'aniversário da cidade ${city}')
     
-    REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se não houver clareza se o evento vai acontecer no futuro, retorne a lista "events" VAZIA (ex: "events": []).
-    PESQUISE A DURAÇÃO EXATA: Para circos de lona, parques temporários e feiras, descubra a DATA DE ENCERRAMENTO nas notícias/anúncios e calcule o número total de dias que o evento ficará instalado. Se não souber a data de término, use null em endDate e durationDays.
-    FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
-    PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
-    Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
+    REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
+    - O ano atual de referência é ${new Date().getFullYear()}.
+    - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
+    - Se não houver confirmação de data futura real, retorne "events": [].
+    
+    CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
+    - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
+    - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
+    - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
+    - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
+    - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
+    
+    CONTATOS E REDES (MUITO IMPORTANTE):
+    - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
+    - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
+    
+    PÚBLICO E CATEGORIAS:
+    - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
+    - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
+    - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
+    - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
 
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado (se não souber alguma informação, use "N/A" ao invés de "..."):
+    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
       "cityInfo": {
         "rendaDomiciliarPerCapitaMedia": "N/A",
@@ -68,13 +107,15 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
           "score": "HIGH",
           "startDate": "YYYY-MM-DD",
           "endDate": "YYYY-MM-DD",
-          "durationDays": 20,
+          "durationDays": 1,
           "isItinerant": true,
           "venueType": "LONA_INSTALADA",
           "audience": "N/A",
           "ticketPrice": "N/A",
           "organizerContact": "N/A",
           "socialMedia": "N/A",
+          "sourcePlatform": "Sympla",
+          "sourceUrl": "N/A",
           "notes": "N/A"
         }
       ]
@@ -106,6 +147,11 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
         let result;
         try {
             result = JSON.parse(cleanJson);
+            if (result && result.events && Array.isArray(result.events)) {
+                for (let ev of result.events) {
+                    ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
+                }
+            }
         }
         catch (parseError) {
             console.warn("JSON Parse Failed, defaulting to empty result:", text);
@@ -168,20 +214,40 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
             const currentDateStr = currentDate.toISOString().split('T')[0];
             const targetDateStr = targetDate.toISOString().split('T')[0];
             const maxDateStr = maxDate.toISOString().split('T')[0];
-            const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure as principais cidades no estado "${stateUF}" que terão grandes eventos.
+            const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos.
       Hoje é dia ${currentDateStr}.
-      Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+      Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
       
-      Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
+      FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
+      1. Sympla (pesquise 'site:sympla.com.br ${stateUF}' e 'sympla eventos ${stateUF}')
+      2. Instagram e Facebook (pesquise 'site:instagram.com circo ${stateUF}', 'site:instagram.com parque ${stateUF}', 'site:facebook.com/events ${stateUF}')
+      3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
+      4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${stateUF}', 'exposição agropecuária ${stateUF}', 'festa de peão ${stateUF}')
       
-      REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se o evento já passou ou a data for antiga, NÃO o inclua. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
-      PESQUISE A DURAÇÃO EXATA: Para circos de lona, parques temporários e feiras, descubra a DATA DE ENCERRAMENTO nas notícias/anúncios e calcule o número total de dias que o evento ficará instalado. Se não souber a data de término, use null em endDate e durationDays.
-      FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
-      PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
-      Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
+      REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
+      - O ano atual de referência é ${new Date().getFullYear()}.
+      - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
+      - Se o evento já passou ou não há confirmação de data futura real, NÃO o inclua.
+      
+      CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
+      - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
+      - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
+      - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
+      - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
+      - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
+      
+      CONTATOS E REDES (MUITO IMPORTANTE):
+      - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
+      - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
+      
+      PÚBLICO E CATEGORIAS:
+      - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
+      - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
+      - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
+      - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
       
       Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-      Formato esperado (se não souber a informação, use "N/A" ao invés de "..."):
+      Formato esperado:
       {
         "events": [
           {
@@ -189,7 +255,7 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
             "name": "Nome do Evento",
             "startDate": "YYYY-MM-DD",
             "endDate": "YYYY-MM-DD",
-            "durationDays": 20,
+            "durationDays": 1,
             "isItinerant": true,
             "venueType": "LONA_INSTALADA",
             "population": "N/A",
@@ -198,8 +264,11 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
             "score": "HIGH",
             "category": "AGRO",
             "audience": "N/A",
+            "ticketPrice": "N/A",
             "organizerContact": "N/A",
             "socialMedia": "N/A",
+            "sourcePlatform": "Sympla",
+            "sourceUrl": "N/A",
             "notes": "N/A"
           }
         ]
@@ -226,9 +295,10 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
             const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
             try {
                 resultData = JSON.parse(cleanJson);
-                // Enrich data with IBGE
+                // Enrich data with IBGE and compute exact duration
                 if (resultData && resultData.events && Array.isArray(resultData.events)) {
                     for (let ev of resultData.events) {
+                        ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
                         if (ev.city) {
                             const ibgeData = await (0, ibgeService_1.enrichCityData)(stateUF, ev.city);
                             ev.population = ibgeData.population;
@@ -255,6 +325,9 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
             }
         }
         if (resultData && resultData.events) {
+            for (let ev of resultData.events) {
+                ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
+            }
             resultData.events = resultData.events.filter((e) => !existingKeys.has(`${e.city.toLowerCase()}-${e.name.toLowerCase()}`));
         }
         res.json(resultData);
@@ -303,7 +376,7 @@ router.get('/', authMiddleware_1.authenticateToken, async (req, res) => {
 // POST /api/events
 router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { name, city, category, score, audience, organizerContact, socialMedia, notes, isFavorite, isProspect, startDate, observations, expectedRevenue, cityAge, cityIncome, cityPerCapita, cityEconomy } = req.body;
+        const { name, city, category, score, audience, organizerContact, socialMedia, notes, isFavorite, isProspect, startDate, endDate, durationDays, isItinerant, venueType, ticketPrice, observations, expectedRevenue, cityAge, cityIncome, cityPerCapita, cityEconomy } = req.body;
         if (!name || !city || !category || !score) {
             res.status(400).json({ error: 'Faltam campos obrigatórios' });
             return;
@@ -313,6 +386,11 @@ router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
                 name, city, category, score, audience, organizerContact, socialMedia, notes,
                 isFavorite: isFavorite || false, isProspect: isProspect || false,
                 startDate: startDate ? new Date(startDate) : null,
+                endDate: endDate ? new Date(endDate) : null,
+                durationDays: durationDays ? parseInt(durationDays.toString()) : null,
+                isItinerant: isItinerant !== undefined ? Boolean(isItinerant) : false,
+                venueType,
+                ticketPrice,
                 observations,
                 expectedRevenue: expectedRevenue ? parseFloat(expectedRevenue.toString()) : 0,
                 cityAge, cityIncome, cityPerCapita, cityEconomy,
@@ -459,8 +537,9 @@ router.get('/smart-route', authMiddleware_1.authenticateToken, async (req, res) 
         res.json({ routes, message: 'Roteiros gerados com sucesso.' });
     }
     catch (error) {
-        console.error('Erro ao gerar roteiros inteligentes:', error);
-        res.status(500).json({ error: 'Erro ao gerar roteiros inteligentes' });
+        console.error('Erro ao gerar roteiros inteligentes:', error?.message || error);
+        console.error('Stack:', error?.stack);
+        res.status(500).json({ error: `Erro ao gerar roteiros inteligentes: ${error?.message || 'Erro interno'}` });
     }
 });
 // PATCH /api/events/:id/approve-roi - Approve ROI and send cost to Cash Flow as PREVISTO

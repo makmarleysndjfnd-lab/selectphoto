@@ -14,6 +14,24 @@ const ai = process.env.GEMINI_API_KEY
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 
+// Helper for exact duration calculation
+function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
+  if (startDateStr && endDateStr) {
+    const s = new Date(startDateStr.split('T')[0]);
+    const e = new Date(endDateStr.split('T')[0]);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+      const diffMs = e.getTime() - s.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1; // +1 to count both start and end days inclusive
+      if (diffDays >= 1) return diffDays;
+    }
+  }
+  if (providedDays !== undefined && providedDays !== null) {
+    const p = parseInt(providedDays.toString(), 10);
+    if (!isNaN(p) && p >= 1) return p;
+  }
+  return 1;
+}
+
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
   console.log('--- REQUISIÇÃO RECEBIDA NA ROTA /search ---', req.body);
@@ -127,23 +145,6 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
       throw err;
     }
-
-function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
-  if (startDateStr && endDateStr) {
-    const s = new Date(startDateStr.split('T')[0]);
-    const e = new Date(endDateStr.split('T')[0]);
-    if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
-      const diffMs = e.getTime() - s.getTime();
-      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1; // +1 to count both start and end days inclusive
-      if (diffDays >= 1) return diffDays;
-    }
-  }
-  if (providedDays !== undefined && providedDays !== null) {
-    const p = parseInt(providedDays.toString(), 10);
-    if (!isNaN(p) && p >= 1) return p;
-  }
-  return 1;
-}
 
     const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
     let result;
