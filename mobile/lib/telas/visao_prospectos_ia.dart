@@ -274,7 +274,22 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
 
               final rawEvents = _stateData[state] ?? [];
               final events = rawEvents.where((evt) {
-                final int duration = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 10) : 10;
+                // Recalculate duration from startDate/endDate (inclusive) to avoid AI hallucination
+                int duration;
+                try {
+                  final sRaw = evt['startDate']?.toString() ?? '';
+                  final eRaw = evt['endDate']?.toString() ?? '';
+                  if (sRaw.isNotEmpty && eRaw.isNotEmpty) {
+                    final s = DateTime.parse(sRaw.split('T')[0]);
+                    final e = DateTime.parse(eRaw.split('T')[0]);
+                    final diff = e.difference(s).inDays + 1;
+                    duration = diff >= 1 ? diff : 1;
+                  } else {
+                    duration = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 10) : 10;
+                  }
+                } catch (_) {
+                  duration = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 10) : 10;
+                }
                 if (_durationFilter == 'IDEAL') return duration >= 6 && duration <= 30;
                 if (_durationFilter == 'LONG') return duration > 30;
                 if (_durationFilter == 'SHORT') return duration < 6;

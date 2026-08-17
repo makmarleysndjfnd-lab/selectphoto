@@ -30,7 +30,22 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
   List<dynamic> get _filteredEvents {
     if (_selectedDurationFilter == 'ALL') return _searchResults;
     return _searchResults.where((evt) {
-      final int days = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+      // Recalculate duration from startDate/endDate (inclusive) to avoid AI hallucination
+      int days;
+      try {
+        final sRaw = evt['startDate']?.toString() ?? '';
+        final eRaw = evt['endDate']?.toString() ?? '';
+        if (sRaw.isNotEmpty && eRaw.isNotEmpty) {
+          final s = DateTime.parse(sRaw.split('T')[0]);
+          final e = DateTime.parse(eRaw.split('T')[0]);
+          final diff = e.difference(s).inDays + 1;
+          days = diff >= 1 ? diff : 1;
+        } else {
+          days = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+        }
+      } catch (_) {
+        days = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+      }
       if (_selectedDurationFilter == '6_30') return days >= 6 && days <= 30;
       if (_selectedDurationFilter == 'OVER_30') return days > 30;
       if (_selectedDurationFilter == 'SHORT') return days < 6;
