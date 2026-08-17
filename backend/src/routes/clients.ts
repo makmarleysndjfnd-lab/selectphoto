@@ -85,7 +85,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const clients = await prisma.client.findMany({
       where: { companyId: req.user?.companyId },
-      include: { children: true, appointments: true, assignedSeller: true }
+      include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
     });
     res.json(clients);
   } catch (error) {
