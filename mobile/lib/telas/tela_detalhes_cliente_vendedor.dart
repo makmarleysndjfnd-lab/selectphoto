@@ -236,7 +236,20 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                       ),
                     GestureDetector(
                       onTap: () async {
-                        final q = "${client['street']}, ${client['number']} ${client['city']}";
+                        final street = client['street']?.toString() ?? '';
+                        final number = client['number']?.toString() ?? '';
+                        final neighborhood = client['neighborhood']?.toString() ?? '';
+                        final city = client['city']?.toString() ?? '';
+                        final state = client['state']?.toString() ?? '';
+                        final parts = [
+                          if (street.isNotEmpty) street,
+                          if (number.isNotEmpty) number,
+                          if (neighborhood.isNotEmpty) neighborhood,
+                          if (city.isNotEmpty) city,
+                          if (state.isNotEmpty) state,
+                          'Brasil',
+                        ];
+                        final q = parts.join(', ');
                         final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
                         if (await canLaunchUrl(url)) {
                           await launchUrl(url, mode: LaunchMode.externalApplication);

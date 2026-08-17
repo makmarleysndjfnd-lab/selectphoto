@@ -310,7 +310,21 @@ class _VisaoRoteiroInteligenteState extends State<VisaoRoteiroInteligente> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text('${stop['durationDays'] ?? 0} dias', style: const TextStyle(color: Color(0xFF80DEEA), fontWeight: FontWeight.bold, fontSize: 12)),
+                              Text(() {
+                                // Recalculate inclusive duration from dates
+                                try {
+                                  final sRaw = stop['startDate']?.toString() ?? '';
+                                  final eRaw = stop['endDate']?.toString() ?? '';
+                                  if (sRaw.isNotEmpty && eRaw.isNotEmpty) {
+                                    final s = DateTime.parse(sRaw.split('T')[0]);
+                                    final e = DateTime.parse(eRaw.split('T')[0]);
+                                    final diff = e.difference(s).inDays + 1;
+                                    final days = diff >= 1 ? diff : (stop['durationDays'] ?? 1);
+                                    return '$days dias';
+                                  }
+                                } catch (_) {}
+                                return '${stop['durationDays'] ?? 0} dias';
+                              }(), style: const TextStyle(color: Color(0xFF80DEEA), fontWeight: FontWeight.bold, fontSize: 12)),
                               const SizedBox(height: 2),
                               const Text('Destino no Trajeto', style: TextStyle(color: Colors.white38, fontSize: 10)),
                             ],

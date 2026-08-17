@@ -262,7 +262,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           }
           distributedBooks[assignedSeller]!.add(b);
         } else {
-          final pId = client['photographer']?['name'] ?? 'Equipe Desconhecida';
+          final pId = client['photographer']?['name'] 
+              ?? (client['photographerId'] != null 
+                  ? 'Fotógrafo #${client['photographerId'].toString().substring(0, client['photographerId'].toString().length > 8 ? 8 : client['photographerId'].toString().length)}'
+                  : 'Sem Fotógrafo');
         if (!photographerBooks.containsKey(pId)) {
           photographerBooks[pId] = [];
         }
