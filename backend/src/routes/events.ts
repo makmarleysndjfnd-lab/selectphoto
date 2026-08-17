@@ -57,15 +57,20 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
     - Se não houver confirmação de data futura real, retorne "events": [].
     
-    CÁLCULO ESTRITO DE DURAÇÃO (NUNCA INVENTE DIAS):
-    - Se o evento for em um ÚNICO DIA (ex: uma festa no domingo das 15h às 20h, ou dia 19/10), "startDate" e "endDate" devem ser IGUAIS e "durationDays" DEVE SER OBRIGATORIAMENTE 1.
-    - Se o evento for um festival de fim de semana (ex: sexta a domingo, 3 dias), "durationDays" DEVE SER 3.
-    - Se for um circo de lona ou parque temporário de temporada (ex: 10 de maio a 30 de maio), calcule a diferença exata de dias ("durationDays": 21).
-    - NUNCA atribua 10 ou 20 dias para eventos de 1 dia ou curta duração.
+    CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
+    - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
+    - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
+    - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
+    - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
+    - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
+    
+    CONTATOS E REDES (MUITO IMPORTANTE):
+    - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
+    - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
     
     PÚBLICO E CATEGORIAS:
-    - Foco principal: INFANTIL / FAMILIAR (Livre até 14 anos).
-    - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Espetáculos de Mágica.
+    - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
+    - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
     - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
     - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
 
@@ -123,10 +128,32 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       throw err;
     }
 
+function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
+  if (startDateStr && endDateStr) {
+    const s = new Date(startDateStr.split('T')[0]);
+    const e = new Date(endDateStr.split('T')[0]);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+      const diffMs = e.getTime() - s.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1; // +1 to count both start and end days inclusive
+      if (diffDays >= 1) return diffDays;
+    }
+  }
+  if (providedDays !== undefined && providedDays !== null) {
+    const p = parseInt(providedDays.toString(), 10);
+    if (!isNaN(p) && p >= 1) return p;
+  }
+  return 1;
+}
+
     const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
     let result;
     try {
       result = JSON.parse(cleanJson);
+      if (result && result.events && Array.isArray(result.events)) {
+        for (let ev of result.events) {
+          ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
+        }
+      }
     } catch (parseError) {
       console.warn("JSON Parse Failed, defaulting to empty result:", text);
       result = { cityInfo: {}, events: [] };
@@ -213,15 +240,20 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
       - Se o evento já passou ou não há confirmação de data futura real, NÃO o inclua.
       
-      CÁLCULO ESTRITO DE DURAÇÃO (NUNCA INVENTE DIAS):
-      - Se o evento for em um ÚNICO DIA (ex: uma festa no domingo das 15h às 20h, ou dia 19/10), "startDate" e "endDate" devem ser IGUAIS e "durationDays" DEVE SER OBRIGATORIAMENTE 1.
-      - Se o evento for um festival de fim de semana (ex: sexta a domingo, 3 dias), "durationDays" DEVE SER 3.
-      - Se for um circo de lona ou parque temporário de temporada (ex: 10 de maio a 30 de maio), calcule a diferença exata de dias ("durationDays": 21).
-      - NUNCA atribua 10 ou 20 dias para eventos de 1 dia ou curta duração.
+      CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
+      - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
+      - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
+      - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
+      - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
+      - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
+      
+      CONTATOS E REDES (MUITO IMPORTANTE):
+      - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
+      - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
       
       PÚBLICO E CATEGORIAS:
-      - Foco principal: INFANTIL / FAMILIAR (Livre até 14 anos).
-      - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Espetáculos de Mágica.
+      - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
+      - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
       - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
       - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
       
@@ -276,9 +308,10 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       try {
         resultData = JSON.parse(cleanJson);
         
-        // Enrich data with IBGE
+        // Enrich data with IBGE and compute exact duration
         if (resultData && resultData.events && Array.isArray(resultData.events)) {
           for (let ev of resultData.events) {
+            ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
             if (ev.city) {
               const ibgeData = await enrichCityData(stateUF, ev.city);
               ev.population = ibgeData.population;
@@ -305,6 +338,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     if (resultData && resultData.events) {
+      for (let ev of resultData.events) {
+        ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
+      }
       resultData.events = resultData.events.filter((e: any) => !existingKeys.has(`${e.city.toLowerCase()}-${e.name.toLowerCase()}`));
     }
     res.json(resultData);

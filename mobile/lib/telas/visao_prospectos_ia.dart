@@ -408,13 +408,24 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                       DataColumn(label: Text('Nota')),
                                       DataColumn(label: Text('Ação')),
                                     ],
-                                    rows: events.map<DataRow>((evt) {
+rows: events.map<DataRow>((evt) {
                                       final rawInc = evt['perCapitaIncome']?.toString() ?? evt['income']?.toString();
                                       final incStr = _formatIncome(rawInc).replaceAll('Renda Per Capita:', '').trim();
                                       final score = evt['score']?.toString().toUpperCase() ?? 'HIGH';
                                       
                                       final settings = Provider.of<SettingsProvider>(context, listen: false);
-                                      final int durationDays = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+                                      final int durationDays = (evt['startDate'] != null && evt['endDate'] != null && evt['startDate'].toString().isNotEmpty && evt['endDate'].toString().isNotEmpty)
+                                           ? () {
+                                               try {
+                                                 final s = DateTime.parse(evt['startDate'].toString().split('T')[0]);
+                                                 final e = DateTime.parse(evt['endDate'].toString().split('T')[0]);
+                                                 final diff = e.difference(s).inDays + 1;
+                                                 return diff >= 1 ? diff : 1;
+                                               } catch (_) {
+                                                 return evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+                                               }
+                                             }()
+                                           : (evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1);
                                       final double estRevenue = durationDays * settings.defaultFichasPerDay * settings.defaultTicket;
                                       final double estCost = (durationDays * settings.defaultFichasPerDay * settings.productCost) +
                                           (durationDays * 2 * settings.hotelCostPerPersonDay) +
@@ -441,6 +452,21 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                       } else if (score == 'LOW' || score == 'BAIXO') {
                                         scoreColor = const Color(0xFFFF5252);
                                         scoreBg = const Color(0xFFFF5252).withOpacity(0.15);
+                                      }
+
+                                      final String startRaw = evt['startDate']?.toString() ?? '';
+                                      final String endRaw = evt['endDate']?.toString() ?? '';
+                                      String dateRangeDisplay = startRaw;
+                                      if (startRaw.isNotEmpty) {
+                                        final sParts = startRaw.split('T')[0].split('-');
+                                        final sFmt = sParts.length == 3 ? '${sParts[2]}/${sParts[1]}' : startRaw;
+                                        if (endRaw.isNotEmpty && endRaw.split('T')[0] != startRaw.split('T')[0]) {
+                                          final eParts = endRaw.split('T')[0].split('-');
+                                          final eFmt = eParts.length == 3 ? '${eParts[2]}/${eParts[1]}' : endRaw;
+                                          dateRangeDisplay = '$sFmt a $eFmt';
+                                        } else {
+                                          dateRangeDisplay = sFmt;
+                                        }
                                       }
 
                                       return DataRow(
@@ -528,7 +554,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                                ],
                                              ),
                                            ),
-                                           DataCell(Text(evt['startDate']?.toString() ?? '', style: const TextStyle(color: Colors.white70))),
+                                           DataCell(Text(dateRangeDisplay, style: const TextStyle(color: Colors.white70))),
                                           DataCell(
                                             Text(
                                               durationDays == 1 ? '1 dia' : '$durationDays dias',
