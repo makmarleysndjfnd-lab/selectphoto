@@ -32,16 +32,16 @@ class KmRequestHelper {
 
     showDialog(
       context: context,
-      barrierDismissible: !isOverdue, // Block if overdue
+      barrierDismissible: true, // Liberado para testes (não trava o app)
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setState) {
             return PopScope(
-              canPop: !isOverdue,
+              canPop: true,
               child: AlertDialog(
                 title: Row(
                   children: [
-                    Icon(Icons.speed, color: isOverdue ? Colors.red : Colors.blue),
+                    Icon(Icons.speed, color: isOverdue ? Colors.amberAccent : Colors.blue),
                     const SizedBox(width: 8),
                     const Text('Atualizar KM', style: TextStyle(fontSize: 18)),
                   ],
@@ -51,8 +51,8 @@ class KmRequestHelper {
                   children: [
                     if (isOverdue)
                       const Text(
-                        'Você está há mais de 2 dias sem atualizar o KM. O aplicativo está bloqueado até o preenchimento.',
-                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                        'Lembrete: Você está há mais de 2 dias sem atualizar o KM do veículo.',
+                        style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
                       )
                     else
                       const Text('Por favor, informe a quilometragem atual do veículo da empresa.'),
@@ -74,10 +74,10 @@ class KmRequestHelper {
                   ],
                 ),
                 actions: [
-                  if (!isOverdue && !isLoading)
+                  if (!isLoading)
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Mais Tarde', style: TextStyle(color: Colors.grey)),
+                      child: const Text('Mais Tarde / Fechar', style: TextStyle(color: Colors.grey)),
                     ),
                   ElevatedButton(
                     onPressed: isLoading ? null : () async {
