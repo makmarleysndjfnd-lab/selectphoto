@@ -176,18 +176,23 @@ router.get('/photographer/:photographerId', authMiddleware_1.authenticateToken, 
         res.status(500).json({ error: error.message });
     }
 });
-// Custom Metrics Overview (by Date Range and Sellers)
+// Custom Metrics Overview (by Date Range, Sellers, and City)
 router.get('/custom', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const sellerIdsStr = req.query.sellerIds;
         const startDateParam = req.query.startDate;
         const endDateParam = req.query.endDate;
+        const cityParam = req.query.city;
         let whereSale = {};
         let whereNonSale = {};
         if (sellerIdsStr) {
             const sellerIds = sellerIdsStr.split(',');
             whereSale.sellerId = { in: sellerIds };
             whereNonSale.sellerId = { in: sellerIds };
+        }
+        if (cityParam && cityParam.trim() !== '') {
+            whereSale.client = { city: cityParam.trim() };
+            whereNonSale.client = { city: cityParam.trim() };
         }
         if (startDateParam && endDateParam) {
             const startDate = new Date(startDateParam);

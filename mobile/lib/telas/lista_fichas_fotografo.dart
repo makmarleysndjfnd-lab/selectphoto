@@ -29,8 +29,9 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     setState(() => _isLoading = true);
     try {
       final fichas = await ApiService().getClientsByPhotographer();
+      final pendingFichas = (fichas as List).where((f) => f['bookStatus'] == 'CREATED').toList();
       setState(() {
-        _fichas = fichas;
+        _fichas = pendingFichas;
         _isLoading = false;
       });
     } catch (e) {

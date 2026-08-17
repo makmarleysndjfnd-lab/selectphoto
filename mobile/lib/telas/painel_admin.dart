@@ -19,25 +19,23 @@ import 'tela_detalhes_cliente_vendedor.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import '../widgets/led_menu_item.dart';
 import 'visao_rotas_chegada.dart';
+import 'visao_roteiro_inteligente.dart';
 import '../widgets/led_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../widgets/led_card.dart';
 import '../utils/ui_helpers.dart';
 import 'visao_estatisticas_admin.dart';
 
-
 // ── Constantes visuais ────────────────────────────────────────────────────────
-const _chartGreen = Color(0xFF43A047);
 const _accentPurple = Color(0xFF9C27B0);
-
-// ── Mock: Métricas de vendas ──────────────────────────────────────────────────
+const _chartGreen = Color(0xFF43A047);
 final _months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'];
+
 
 final _teamData = [
   {
@@ -97,6 +95,78 @@ final _teamData = [
 
 // ── Mock: Estoque não-vendas ──────────────────────────────────────────────────
 
+
+class AdminErrorBoundary extends StatefulWidget {
+  final Widget child;
+  final String tabName;
+  final VoidCallback onRetry;
+
+  const AdminErrorBoundary({
+    super.key,
+    required this.child,
+    required this.tabName,
+    required this.onRetry,
+  });
+
+  @override
+  State<AdminErrorBoundary> createState() => _AdminErrorBoundaryState();
+}
+
+class _AdminErrorBoundaryState extends State<AdminErrorBoundary> {
+  bool _hasError = false;
+
+  @override
+  void didUpdateWidget(AdminErrorBoundary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tabName != widget.tabName) {
+      _hasError = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        margin: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFCE93D8).withOpacity(0.5)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.shield_outlined, color: Color(0xFFCE93D8), size: 48),
+            const SizedBox(height: 16),
+            const Text(
+              'Aba Protegida',
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Esta seção está blindada. Se houver falha de conexão ou dados pendentes, clique no botão para recarregar.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 20),
+            LedButton(
+              onPressed: () {
+                setState(() => _hasError = false);
+                widget.onRetry();
+              },
+              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Atualizar Aba', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return widget.child;
+  }
+}
 
 // ── AdminDashboard ────────────────────────────────────────────────────────────
 class AdminDashboard extends StatefulWidget {
@@ -819,61 +889,83 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  if (!isDesktop)
-                    IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white),
-                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                    ),
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                            color: _accentPurple.withOpacity(0.5),
-                            blurRadius: 14,
-                            offset: const Offset(0, 4)),
+                  // Esquerda: Admin badge (topo) + Menu 3 barras (baixo)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: _accentPurple.withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: _accentPurple.withOpacity(0.5), width: 1.2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: _accentPurple.withOpacity(0.4),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(Icons.admin_panel_settings_rounded,
+                            color: Colors.white, size: 20),
+                      ),
+                      if (!isDesktop) ...[
+                        const SizedBox(height: 4),
+                        InkWell(
+                          onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                          borderRadius: BorderRadius.circular(8),
+                          child: const Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.menu, color: Colors.white, size: 22),
+                          ),
+                        ),
                       ],
-                    ),
-                    child: const Icon(Icons.admin_panel_settings_rounded,
-                        color: Colors.white, size: 22),
+                    ],
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
+                  // Centro: Boas vindas com nome ampliado + subtítulo + versículo
                   Expanded(
                     child: InkWell(
                       onTap: _showEditProfileDialog,
                       borderRadius: BorderRadius.circular(8),
                       child: Padding(
-                        padding: const EdgeInsets.all(4),
+                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Flexible(
-                                  child: Text(
-                                    '$_greeting, $_userName',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.bold,
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      '$_greeting, $_userName',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.2,
+                                      ),
                                     ),
-                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                                const SizedBox(width: 6),
+                                const SizedBox(width: 4),
                                 const Icon(Icons.edit, color: Colors.white54, size: 14),
                               ],
                             ),
                             const SizedBox(height: 2),
                             const Text('Painel Administrativo',
                                 style: TextStyle(
-                                    color: Color(0xFF90CAF9), fontSize: 12)),
+                                    color: Color(0xFF90CAF9), fontSize: 13, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 4),
                             Text(_verse,
                                 style: const TextStyle(
@@ -885,24 +977,36 @@ class _AdminDashboardState extends State<AdminDashboard>
                       ),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () {
-                      _showNotificacoesDialog();
-                    },
-                    icon: _unreadNotifs > 0 
-                      ? Badge(
-                          label: Text(_unreadNotifs.toString()),
-                          child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
-                        )
-                      : const Icon(Icons.notifications_none_rounded, color: Colors.white54),
-                    tooltip: 'Notificações',
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
-                    },
-                    icon: const Icon(Icons.settings, color: Color(0xFFCE93D8)),
-                    tooltip: 'Configurações',
+                  const SizedBox(width: 8),
+                  // Direita: Notificação (topo) + Configuração (baixo)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        padding: const EdgeInsets.all(4),
+                        onPressed: () {
+                          _showNotificacoesDialog();
+                        },
+                        icon: _unreadNotifs > 0 
+                          ? Badge(
+                              label: Text(_unreadNotifs.toString()),
+                              child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent, size: 22),
+                            )
+                          : const Icon(Icons.notifications_none_rounded, color: Colors.white70, size: 22),
+                        tooltip: 'Notificações',
+                      ),
+                      const SizedBox(height: 2),
+                      IconButton(
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        padding: const EdgeInsets.all(4),
+                        onPressed: () {
+                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
+                        },
+                        icon: const Icon(Icons.settings, color: Color(0xFFCE93D8), size: 22),
+                        tooltip: 'Configurações',
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -914,28 +1018,44 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildBody() {
+    Widget tabWidget;
     switch (_navIndex) {
       case 0:
-        return const StateProspectsView();
+        tabWidget = const StateProspectsView();
+        break;
       case 1:
-        return _buildPhotosTab();
+        tabWidget = _buildPhotosTab();
+        break;
       case 2:
-        return _buildStockTab();
+        tabWidget = _buildStockTab();
+        break;
       case 3:
-        return const FleetAdminView();
+        tabWidget = const FleetAdminView();
+        break;
       case 4:
-        return const CashFlowAdminView();
+        tabWidget = const CashFlowAdminView();
+        break;
       case 5:
-        return const EmployeeManagementScreen();
+        tabWidget = const EmployeeManagementScreen();
+        break;
       case 7:
-        return const VisaoFechamentoAdmin();
+        tabWidget = const VisaoFechamentoAdmin();
+        break;
       case 8:
-        return const VisaoEstoqueAdmin();
+        tabWidget = const VisaoEstoqueAdmin();
+        break;
       case 9:
-        return const VisaoEstatisticasAdmin();
+        tabWidget = const VisaoEstatisticasAdmin();
+        break;
       default:
-        return const VisaoFechamentoAdmin();
+        tabWidget = const VisaoFechamentoAdmin();
     }
+
+    return AdminErrorBoundary(
+      tabName: 'Aba $_navIndex',
+      onRetry: () => setState(() {}),
+      child: tabWidget,
+    );
   }
 
 
@@ -1643,6 +1763,11 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   void _showBooksModal(String title, List<Map<String, dynamic>> books) {
+    Set<String> selectedIds = {};
+    String? selectedSellerId;
+    List<dynamic> sellersList = [];
+    bool isLoadingSellers = true;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1651,65 +1776,191 @@ class _AdminDashboardState extends State<AdminDashboard>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.7,
-          minChildSize: 0.4,
-          maxChildSize: 0.95,
-          expand: false,
-          builder: (_, scrollController) {
-            return Column(
-              children: [
-                const SizedBox(height: 12),
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white30,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.menu_book_rounded, color: Color(0xFFCE93D8)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '$title (${books.length})',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            if (isLoadingSellers) {
+              ApiService().getSellers().then((s) {
+                if (ctx.mounted) {
+                  setModalState(() {
+                    sellersList = s;
+                    isLoadingSellers = false;
+                  });
+                }
+              });
+            }
+
+            return DraggableScrollableSheet(
+              initialChildSize: 0.85,
+              minChildSize: 0.4,
+              maxChildSize: 0.95,
+              expand: false,
+              builder: (_, scrollController) {
+                final allSelected = books.isNotEmpty && selectedIds.length == books.length;
+
+                return Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white30,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.menu_book_rounded, color: Color(0xFFCE93D8)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '$title (${books.length})',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
+                          if (books.isNotEmpty)
+                            TextButton.icon(
+                              onPressed: () {
+                                setModalState(() {
+                                  if (allSelected) {
+                                    selectedIds.clear();
+                                  } else {
+                                    selectedIds = books.map((b) => b['id'].toString()).toSet();
+                                  }
+                                });
+                              },
+                              icon: Icon(allSelected ? Icons.deselect : Icons.select_all, color: const Color(0xFFCE93D8), size: 18),
+                              label: Text(allSelected ? 'Desmarcar' : 'Marcar Tudo', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12)),
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white70),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(color: Colors.white12, height: 1),
+                    Expanded(
+                      child: books.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'Nenhum book encontrado nesta seleção.',
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              itemCount: books.length,
+                              itemBuilder: (context, index) {
+                                final b = books[index];
+                                final bId = b['id'].toString();
+                                final isSelected = selectedIds.contains(bId);
+
+                                return Container(
+                                  color: isSelected ? const Color(0xFFCE93D8).withOpacity(0.1) : null,
+                                  child: Row(
+                                    children: [
+                                      Checkbox(
+                                        value: isSelected,
+                                        activeColor: const Color(0xFFCE93D8),
+                                        onChanged: (val) {
+                                          setModalState(() {
+                                            if (val == true) {
+                                              selectedIds.add(bId);
+                                            } else {
+                                              selectedIds.remove(bId);
+                                            }
+                                          });
+                                        },
+                                      ),
+                                      Expanded(child: _buildBookTile(b, null, false)),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    if (selectedIds.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A1A4A),
+                          boxShadow: [
+                            BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, -2))
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: selectedSellerId,
+                                    dropdownColor: const Color(0xFF1A1A2E),
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: InputDecoration(
+                                      labelText: 'Selecione o Vendedor Destinatário',
+                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      filled: true,
+                                      fillColor: Colors.white10,
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    ),
+                                    items: sellersList.map<DropdownMenuItem<String>>((s) {
+                                      return DropdownMenuItem<String>(
+                                        value: s['id'].toString(),
+                                        child: Text(s['name'] ?? 'Vendedor', style: const TextStyle(color: Colors.white)),
+                                      );
+                                    }).toList(),
+                                    onChanged: (val) {
+                                      setModalState(() => selectedSellerId = val);
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: LedButton.icon(
+                                onPressed: selectedSellerId == null
+                                    ? null
+                                    : () async {
+                                        try {
+                                          await ApiService().batchAssignClients(selectedIds.toList(), selectedSellerId!);
+                                          Navigator.pop(ctx);
+                                          _loadClients();
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('Sucesso! ${selectedIds.length} fichas distribuídas.'), backgroundColor: Colors.green),
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('Erro ao atribuir: $e'), backgroundColor: Colors.red),
+                                            );
+                                          }
+                                        }
+                                      },
+                                icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+                                label: Text('Distribuir Lote (${selectedIds.length} Fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                style: LedButton.styleFrom(backgroundColor: Colors.green),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white70),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(color: Colors.white12, height: 1),
-                Expanded(
-                  child: books.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'Nenhum book encontrado nesta seleção.',
-                            style: TextStyle(color: Colors.white54),
-                          ),
-                        )
-                      : ListView.builder(
-                          controller: scrollController,
-                          itemCount: books.length,
-                          itemBuilder: (context, index) {
-                            final b = books[index];
-                            return _buildBookTile(b, null, false);
-                          },
-                        ),
-                ),
-              ],
+                  ],
+                );
+              },
             );
           },
         );
@@ -1730,50 +1981,38 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          
-            if (_pendingReleaseBatches.isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(bottom: 20),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orangeAccent),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.hourglass_top_rounded, color: Colors.orangeAccent, size: 24),
-                        SizedBox(width: 8),
-                        Text('Lotes Aguardando Liberação', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 16)),
-                      ],
+          // 🚛 Card Rotas e Chegada da Gráfica no topo da Aba Books
+          LedCard(
+            color: const Color(0xFF1A1A2E),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.local_shipping_rounded, color: Color(0xFFFFB74D), size: 22),
+                      SizedBox(width: 8),
+                      Text('Rotas e Chegada da Gráfica', style: TextStyle(color: Color(0xFFFFB74D), fontWeight: FontWeight.bold, fontSize: 16)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text('Confirme a chegada dos lotes impressos por evento para o estoque e distribua aos vendedores.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: LedButton.icon(
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VisaoRotasChegada())),
+                      icon: const Icon(Icons.inventory_rounded, color: Colors.black),
+                      label: const Text('Abrir Chegada da Gráfica', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      style: LedButton.styleFrom(backgroundColor: const Color(0xFFFFB74D)),
                     ),
-                    const SizedBox(height: 12),
-                    ..._pendingReleaseBatches.map((batch) {
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text('Lote Fotógrafo: ' + (batch['photographer'] ? batch['photographer']['name'] : 'N/A'), style: const TextStyle(color: Colors.white)),
-                        subtitle: Text('${'Status: ' + batch['status']} | Fechado', style: const TextStyle(color: Colors.white70)),
-                        trailing: LedButton(
-                          style: LedButton.styleFrom(backgroundColor: Colors.green),
-                          onPressed: () async {
-                            try {
-                              await ApiService().releaseBatchToStock(batch['id']);
-                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote liberado para estoque!'), backgroundColor: Colors.green));
-                              _loadClients();
-                            } catch(e) {
-                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                            }
-                          },
-                          child: const Text('Liberar para Estoque'),
-                        ),
-                      );
-                    }),
-                  ],
-                ),
+                  ),
+                ],
               ),
+            ),
+          ),
+          const SizedBox(height: 20),
 
             // Resumo geral
           InkWell(
@@ -2002,7 +2241,37 @@ class _AdminDashboardState extends State<AdminDashboard>
             );
           }),
           const SizedBox(height: 24),
-          _buildRotasInteligentes(),
+          // 🗺️ Card Mapeamento de Rotas no final da Aba Books
+          LedCard(
+            color: const Color(0xFF1A1A2E),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.route_rounded, color: Color(0xFF80DEEA), size: 22),
+                      SizedBox(width: 8),
+                      Text('Mapeamento de Rotas & Transbordo', style: TextStyle(color: Color(0xFF80DEEA), fontWeight: FontWeight.bold, fontSize: 16)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text('Visualiza itinerários de 300 km para retransportar fichas perdidas entre rotas de vendedores no mesmo trajeto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: LedButton.icon(
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VisaoRoteiroInteligente())),
+                      icon: const Icon(Icons.alt_route_rounded, color: Colors.black),
+                      label: const Text('Abrir Mapeamento de Rotas', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      style: LedButton.styleFrom(backgroundColor: const Color(0xFF80DEEA)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 20),
 
         ],
@@ -2077,8 +2346,16 @@ class _AdminDashboardState extends State<AdminDashboard>
                   color: Colors.white,
                   fontSize: 15,
                   fontWeight: FontWeight.bold)),
-          const SizedBox(height: 24),
-          _buildRotasInteligentes(isRebolo: true),
+          const SizedBox(height: 12),
+          if (_rotasRebolo.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text('Nenhum rebolo acumulado em estoque por enquanto.', style: TextStyle(color: Colors.white54)),
+              ),
+            )
+          else
+            ..._rotasRebolo.map((c) => _buildCityStockCard(c)),
           const SizedBox(height: 20),
         ],
       ),

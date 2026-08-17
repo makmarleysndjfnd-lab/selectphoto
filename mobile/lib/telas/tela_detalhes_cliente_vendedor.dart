@@ -186,7 +186,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: UIHelpers.getLedDecoration(client['bookStatus'] as String?).copyWith(
+      decoration: UIHelpers.getLedDecoration(client['bookStatus']?.toString()).copyWith(
         border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Column(
@@ -201,7 +201,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                     if (client['phone1'] != null && client['phone1'].toString().isNotEmpty)
                       GestureDetector(
                         onTap: () async {
-                          final num = (client['phone1'] as String).replaceAll(RegExp(r'\D'), '');
+                          final num = client['phone1'].toString().replaceAll(RegExp(r'\D'), '');
                           final fullNum = num.startsWith('55') ? num : '55$num';
                           final uri = Uri.parse('https://wa.me/$fullNum');
                           if (await canLaunchUrl(uri)) {
@@ -213,13 +213,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                         child: Container(
                           color: Colors.transparent,
                           padding: const EdgeInsets.only(bottom: 4),
-                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone1']),
+                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone1'].toString()),
                         ),
                       ),
                     if (client['phone2'] != null && client['phone2'].toString().isNotEmpty)
                       GestureDetector(
                         onTap: () async {
-                          final num = (client['phone2'] as String).replaceAll(RegExp(r'\D'), '');
+                          final num = client['phone2'].toString().replaceAll(RegExp(r'\D'), '');
                           final fullNum = num.startsWith('55') ? num : '55$num';
                           final uri = Uri.parse('https://wa.me/$fullNum');
                           if (await canLaunchUrl(uri)) {
@@ -231,7 +231,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                         child: Container(
                           color: Colors.transparent,
                           padding: const EdgeInsets.only(bottom: 4),
-                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone2']),
+                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone2'].toString()),
                         ),
                       ),
                     GestureDetector(
@@ -260,7 +260,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
           ),
           
           // Additional Info Row (Cor da Casa, Cor do Portão, Profissao, Horario, Criancas)
-          if (parsedHouseColor != null || parsedGateColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && (client['children'] as List).isNotEmpty)) ...[
+          if (parsedHouseColor != null || parsedGateColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty)) ...[
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
             const SizedBox(height: 8),
@@ -305,13 +305,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   Expanded(child: _infoRow(Icons.access_time, "Visita: ${client['visitTime']}")),
                 ],
                 if (client['profession'] != null && client['profession'].toString().isNotEmpty) ...[
-                  Expanded(child: _infoRow(Icons.work, client['profession'])),
+                  Expanded(child: _infoRow(Icons.work, client['profession'].toString())),
                 ],
               ],
             ),
-            if (client['children'] != null && (client['children'] as List).isNotEmpty) ...[
+            if (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty) ...[
               const SizedBox(height: 8),
-              _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => "${c['name']} (${c['age']})").join(', ')}"),
+              _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
             ],
             if (client['signatureUrl'] != null && client['signatureUrl'].toString().startsWith('data:image')) ...[
               const SizedBox(height: 12),
@@ -332,7 +332,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 ),
               ),
             ],
-            if (client['nonSales'] != null && (client['nonSales'] as List).isNotEmpty) ...[
+            if (client['nonSales'] != null && client['nonSales'] is List && (client['nonSales'] as List).isNotEmpty) ...[
               const SizedBox(height: 12),
               Container(
                 width: double.infinity,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
+import '../provedores/provedor_configuracoes.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 
@@ -364,12 +365,191 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
                               ),
                             ),
                           ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: LedButton.icon(
+                                  onPressed: () => _showRoiDialog(p),
+                                  icon: const Icon(Icons.calculate, size: 20, color: Colors.white),
+                                  label: Text(
+                                    p['roiApproved'] == true ? '✅ ROI Aprovado (Ver Detalhes)' : '📊 Calculadora de ROI da Viagem',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                  style: LedButton.styleFrom(
+                                    backgroundColor: p['roiApproved'] == true ? Colors.blueAccent : const Color(0xFFCE93D8),
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
                   );
                 },
-              )
+              ),
+    );
+  }
+
+  void _showRoiDialog(Map<String, dynamic> prospect) {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+
+    final int durationDays = prospect['durationDays'] != null ? (int.tryParse(prospect['durationDays'].toString()) ?? 10) : 10;
+    
+    final TextEditingController fichasDiaCtrl = TextEditingController(text: (prospect['estimatedFichasPerDay'] ?? settings.defaultFichasPerDay).toString());
+    final TextEditingController ticketCtrl = TextEditingController(text: (prospect['estimatedTicketValue'] ?? settings.defaultTicket).toString());
+    final TextEditingController espacoCtrl = TextEditingController(text: (prospect['estimatedSpaceCost'] ?? 1000.0).toString());
+    final TextEditingController pessoasCtrl = TextEditingController(text: (prospect['estimatedTeamSize'] ?? 2).toString());
+    final TextEditingController distanciaCtrl = TextEditingController(text: (prospect['distanceFromBaseKm'] ?? 200.0).toString());
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final int fichasDia = int.tryParse(fichasDiaCtrl.text) ?? settings.defaultFichasPerDay;
+            final double ticketMedio = double.tryParse(ticketCtrl.text.replaceAll(',', '.')) ?? settings.defaultTicket;
+            final double custoEspaco = double.tryParse(espacoCtrl.text.replaceAll(',', '.')) ?? 1000.0;
+            final int pessoas = int.tryParse(pessoasCtrl.text) ?? 2;
+            final double distanciaKm = double.tryParse(distanciaCtrl.text.replaceAll(',', '.')) ?? 200.0;
+
+            final double receitaTotal = durationDays * fichasDia * ticketMedio;
+            final double custoProduto = durationDays * fichasDia * settings.productCost;
+            final double custoHotel = durationDays * pessoas * settings.hotelCostPerPersonDay;
+            final double custoAlimentacao = durationDays * pessoas * settings.foodCostPerPersonDay;
+            final double custoCombustivel = (distanciaKm / 2.0) * settings.fuelCostPerKm;
+            final double custoTotal = custoProduto + custoHotel + custoAlimentacao + custoCombustivel + custoEspaco;
+            final double lucroEstimado = receitaTotal - custoTotal;
+            final bool isApproved = prospect['roiApproved'] == true;
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E2C),
+              title: Text('Calculadora de ROI — ${prospect['name']}', style: const TextStyle(color: Colors.white, fontSize: 18)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(color: Colors.purple.withOpacity(0.15), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFCE93D8))),
+                      child: Text('📍 ${prospect['city'] ?? 'Cidade'} · Permanência: $durationDays dias', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: fichasDiaCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Fichas Produzidas / Dia', labelStyle: TextStyle(color: Colors.white54), filled: true, fillColor: Colors.white10),
+                      onChanged: (_) => setModalState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: ticketCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Ticket Médio de Venda (R\$)', labelStyle: TextStyle(color: Colors.white54), filled: true, fillColor: Colors.white10),
+                      onChanged: (_) => setModalState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: espacoCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Custo do Espaço (R\$ 500 a R\$ 3.000)', labelStyle: TextStyle(color: Colors.white54), filled: true, fillColor: Colors.white10),
+                      onChanged: (_) => setModalState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: pessoasCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Nº Pessoas Equipe', labelStyle: TextStyle(color: Colors.white54), filled: true, fillColor: Colors.white10),
+                            onChanged: (_) => setModalState(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: distanciaCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(labelText: 'Distância Goiânia (km)', labelStyle: TextStyle(color: Colors.white54), filled: true, fillColor: Colors.white10),
+                            onChanged: (_) => setModalState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(color: Colors.white24),
+                    const Text('Resumo Financeiro da Viagem:', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text('📈 Receita Estimada: R\$ ${receitaTotal.toStringAsFixed(2)}', style: const TextStyle(color: Colors.greenAccent, fontSize: 14)),
+                    Text('📦 Custo do Produto (Livro+Capa): R\$ ${custoProduto.toStringAsFixed(2)} (R\$ ${settings.productCost.toStringAsFixed(2)}/un)', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('🏨 Hospedagem ($pessoas p × $durationDays d @ R\$ ${settings.hotelCostPerPersonDay.toStringAsFixed(0)}/dia): R\$ ${custoHotel.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('🍽️ Alimentação ($pessoas p × $durationDays d @ R\$ ${settings.foodCostPerPersonDay.toStringAsFixed(0)}/dia): R\$ ${custoAlimentacao.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('⛽ Combustível (@ R\$ ${settings.fuelCostPerKm.toStringAsFixed(2)}/km): R\$ ${custoCombustivel.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    Text('🎪 Espaço: R\$ ${custoEspaco.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: lucroEstimado >= 0 ? Colors.green.withOpacity(0.2) : Colors.red.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: lucroEstimado >= 0 ? Colors.greenAccent : Colors.redAccent),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('💸 Custo Total da Viagem: R\$ ${custoTotal.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                          const SizedBox(height: 4),
+                          Text(
+                            '💰 LUCRO LÍQUIDO (ROI): R\$ ${lucroEstimado.toStringAsFixed(2)}',
+                            style: TextStyle(color: lucroEstimado >= 0 ? Colors.greenAccent : Colors.redAccent, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Fechar', style: TextStyle(color: Colors.white54)),
+                ),
+                if (!isApproved)
+                  LedButton(
+                    onPressed: () async {
+                      try {
+                        final api = Provider.of<ApiService>(context, listen: false);
+                        await api.approveEventRoi(prospect['id'], totalCost: custoTotal, expectedRevenue: receitaTotal);
+                        Navigator.pop(ctx);
+                        _loadProspects();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Viagem Aprovada! Despesa enviada ao Fluxo de Caixa como PREVISTO.'), backgroundColor: Colors.green),
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao aprovar ROI: $e'), backgroundColor: Colors.red));
+                        }
+                      }
+                    },
+                    style: LedButton.styleFrom(backgroundColor: Colors.green),
+                    child: const Text('Aprovar Viagem → Fluxo de Caixa', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

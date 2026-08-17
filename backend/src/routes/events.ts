@@ -42,20 +42,35 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const targetDateStr = targetDate.toISOString().split('T')[0];
     const maxDateStr = maxDate.toISOString().split('T')[0];
 
-    const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure eventos na cidade "${city}".
+    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure eventos na cidade "${city}".
     Hoje é dia ${currentDateStr}.
-    Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+    Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
     
-    Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows da cidade.
+    FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
+    1. Sympla (pesquise 'site:sympla.com.br ${city}' e 'sympla eventos ${city}')
+    2. Instagram e Facebook (pesquise 'site:instagram.com circo ${city}', 'site:instagram.com parque ${city}', 'site:facebook.com/events ${city}')
+    3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
+    4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${city}', 'exposição ${city}', 'festa de peão ${city}', 'aniversário da cidade ${city}')
     
-    REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se não houver clareza se o evento vai acontecer no futuro, retorne a lista "events" VAZIA (ex: "events": []).
-    FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
-    PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
-    Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público. Tente estimar os números em "5000 pessoas" ou use "Médio/Grande público".
-    renda per capita, as atividades econômicas principais, idade da cidade e quais costumam ser as Festas Fixas daquele município, só por curiosidade.
+    REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
+    - O ano atual de referência é ${new Date().getFullYear()}.
+    - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
+    - Se não houver confirmação de data futura real, retorne "events": [].
+    
+    CÁLCULO ESTRITO DE DURAÇÃO (NUNCA INVENTE DIAS):
+    - Se o evento for em um ÚNICO DIA (ex: uma festa no domingo das 15h às 20h, ou dia 19/10), "startDate" e "endDate" devem ser IGUAIS e "durationDays" DEVE SER OBRIGATORIAMENTE 1.
+    - Se o evento for um festival de fim de semana (ex: sexta a domingo, 3 dias), "durationDays" DEVE SER 3.
+    - Se for um circo de lona ou parque temporário de temporada (ex: 10 de maio a 30 de maio), calcule a diferença exata de dias ("durationDays": 21).
+    - NUNCA atribua 10 ou 20 dias para eventos de 1 dia ou curta duração.
+    
+    PÚBLICO E CATEGORIAS:
+    - Foco principal: INFANTIL / FAMILIAR (Livre até 14 anos).
+    - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Espetáculos de Mágica.
+    - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
+    - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
 
     Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado (se não souber alguma informação, use "N/A" ao invés de "..."):
+    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
     {
       "cityInfo": {
         "rendaDomiciliarPerCapitaMedia": "N/A",
@@ -71,10 +86,16 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           "category": "AGRO",
           "score": "HIGH",
           "startDate": "YYYY-MM-DD",
+          "endDate": "YYYY-MM-DD",
+          "durationDays": 1,
+          "isItinerant": true,
+          "venueType": "LONA_INSTALADA",
           "audience": "N/A",
           "ticketPrice": "N/A",
           "organizerContact": "N/A",
           "socialMedia": "N/A",
+          "sourcePlatform": "Sympla",
+          "sourceUrl": "N/A",
           "notes": "N/A"
         }
       ]
@@ -177,33 +198,56 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const targetDateStr = targetDate.toISOString().split('T')[0];
       const maxDateStr = maxDate.toISOString().split('T')[0];
 
-      const prompt = `Você é um agente de Inteligência Comercial extremamente rigoroso com fatos reais. Procure as principais cidades no estado "${stateUF}" que terão grandes eventos.
+      const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos.
       Hoje é dia ${currentDateStr}.
-      Você DEVE retornar APENAS eventos cuja data de início esteja entre ${targetDateStr} e ${maxDateStr}.
+      Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
       
-      Use sua ferramenta de busca no Google para pesquisar exaustivamente a agenda de eventos, circos e shows do estado.
+      FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
+      1. Sympla (pesquise 'site:sympla.com.br ${stateUF}' e 'sympla eventos ${stateUF}')
+      2. Instagram e Facebook (pesquise 'site:instagram.com circo ${stateUF}', 'site:instagram.com parque ${stateUF}', 'site:facebook.com/events ${stateUF}')
+      3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
+      4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${stateUF}', 'exposição agropecuária ${stateUF}', 'festa de peão ${stateUF}')
       
-      REGRA DE OURO ANTI-ALUCINAÇÃO E DATAS: É EXPRESSAMENTE PROIBIDO inventar eventos ou retornar eventos de anos anteriores (ex: 2023, 2024, 2025). O ano atual é ${new Date().getFullYear()}. Verifique com rigor o ANO do evento nas notícias. Se o evento já passou ou a data for antiga, NÃO o inclua. Se não houver nada claro nas notícias para o futuro, retorne a lista "events" VAZIA (ex: "events": []).
-      FILTRO DE PÚBLICO OBRIGATÓRIO: O foco do negócio é INFANTIL/FAMILIAR. Retorne APENAS eventos com classificação indicativa "Livre" ou até 14 anos. EXCLUA SUMARIAMENTE qualquer show adulto, festa open bar ou evento para maiores de 16/18 anos.
-      PRIORIDADE MÁXIMA: Dê atenção especial e busque ativamente por pequenos espetáculos, pequenos circos de lona, shows regionais em cidades de interior, além dos grandes eventos. Para encontrar os circos pequenos, pesquise também por anúncios recentes no Instagram e Facebook usando a busca do Google (ex: 'circo instagram cidade').
-      Priorize: todos e quaiquer eventos circenses, Circos, festa de peao, festival de comidas, Parques, parque de diversao, parks, Exposições, agro, show safras, expo, agronegocios, agropecuaria, pecuaria, rodeios, Festivais Gastronômicos e Moto Weeks, médio a grande público.
+      REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
+      - O ano atual de referência é ${new Date().getFullYear()}.
+      - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
+      - Se o evento já passou ou não há confirmação de data futura real, NÃO o inclua.
+      
+      CÁLCULO ESTRITO DE DURAÇÃO (NUNCA INVENTE DIAS):
+      - Se o evento for em um ÚNICO DIA (ex: uma festa no domingo das 15h às 20h, ou dia 19/10), "startDate" e "endDate" devem ser IGUAIS e "durationDays" DEVE SER OBRIGATORIAMENTE 1.
+      - Se o evento for um festival de fim de semana (ex: sexta a domingo, 3 dias), "durationDays" DEVE SER 3.
+      - Se for um circo de lona ou parque temporário de temporada (ex: 10 de maio a 30 de maio), calcule a diferença exata de dias ("durationDays": 21).
+      - NUNCA atribua 10 ou 20 dias para eventos de 1 dia ou curta duração.
+      
+      PÚBLICO E CATEGORIAS:
+      - Foco principal: INFANTIL / FAMILIAR (Livre até 14 anos).
+      - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Espetáculos de Mágica.
+      - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
+      - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
       
       Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-      Formato esperado (se não souber a informação, use "N/A" ao invés de "..."):
+      Formato esperado:
       {
         "events": [
           {
             "city": "Nome da Cidade",
             "name": "Nome do Evento",
             "startDate": "YYYY-MM-DD",
+            "endDate": "YYYY-MM-DD",
+            "durationDays": 1,
+            "isItinerant": true,
+            "venueType": "LONA_INSTALADA",
             "population": "N/A",
             "perCapitaIncome": "N/A",
             "gdp": "N/A",
             "score": "HIGH",
             "category": "AGRO",
             "audience": "N/A",
+            "ticketPrice": "N/A",
             "organizerContact": "N/A",
             "socialMedia": "N/A",
+            "sourcePlatform": "Sympla",
+            "sourceUrl": "N/A",
             "notes": "N/A"
           }
         ]
@@ -272,6 +316,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
   }
 });
 
+
 // GET /api/events/upcoming
 router.get('/upcoming', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -313,7 +358,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { 
       name, city, category, score, audience, organizerContact, socialMedia, 
-      notes, isFavorite, isProspect, startDate, observations, expectedRevenue,
+      notes, isFavorite, isProspect, startDate, endDate, durationDays, isItinerant,
+      venueType, ticketPrice, observations, expectedRevenue,
       cityAge, cityIncome, cityPerCapita, cityEconomy 
     } = req.body;
     
@@ -327,6 +373,11 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         name, city, category, score, audience, organizerContact, socialMedia, notes,
         isFavorite: isFavorite || false, isProspect: isProspect || false,
         startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
+        durationDays: durationDays ? parseInt(durationDays.toString()) : null,
+        isItinerant: isItinerant !== undefined ? Boolean(isItinerant) : false,
+        venueType,
+        ticketPrice,
         observations,
         expectedRevenue: expectedRevenue ? parseFloat(expectedRevenue.toString()) : 0,
         cityAge, cityIncome, cityPerCapita, cityEconomy,
@@ -340,11 +391,221 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Helper for Smart Route distance
+const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
+  'goiania': { lat: -16.6869, lng: -49.2648 },
+  'aparecida de goiania': { lat: -16.8228, lng: -49.2469 },
+  'anapolis': { lat: -16.3286, lng: -48.9534 },
+  'rio verde': { lat: -17.7924, lng: -50.9189 },
+  'jatai': { lat: -17.8814, lng: -51.7144 },
+  'itumbiara': { lat: -18.4194, lng: -49.2158 },
+  'caldas novas': { lat: -17.7441, lng: -48.6257 },
+  'cuiaba': { lat: -15.6010, lng: -56.0979 },
+  'varzea grande': { lat: -15.6469, lng: -56.1325 },
+  'rondonopolis': { lat: -16.4677, lng: -54.6364 },
+  'sinop': { lat: -11.8608, lng: -55.5094 },
+  'sorriso': { lat: -12.5448, lng: -55.7208 },
+  'lucas do rio verde': { lat: -13.0537, lng: -55.9128 },
+  'primavera do leste': { lat: -15.5562, lng: -54.2964 },
+  'barra do garcas': { lat: -15.8906, lng: -52.2569 },
+  'campo grande': { lat: -20.4697, lng: -54.6201 },
+  'dourados': { lat: -22.2231, lng: -54.8064 },
+  'tres lagoas': { lat: -20.7851, lng: -51.7011 },
+  'corumba': { lat: -19.0078, lng: -57.6533 },
+  'ponta pora': { lat: -22.5361, lng: -55.7256 },
+  'uberlandia': { lat: -18.9186, lng: -48.2772 },
+  'uberaba': { lat: -19.7483, lng: -47.9319 },
+  'patos de minas': { lat: -18.5789, lng: -46.5181 },
+  'montes claros': { lat: -16.7281, lng: -43.8617 },
+  'porto velho': { lat: -8.7619, lng: -63.9039 },
+  'ji-parana': { lat: -10.8778, lng: -61.9511 },
+  'ariquemes': { lat: -9.9133, lng: -63.0408 },
+  'cacoal': { lat: -11.4386, lng: -61.4472 },
+  'vilhena': { lat: -12.7414, lng: -60.1458 },
+};
+
+function haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
+}
+
+// GET /api/events/smart-route
+router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+
+    // Fetch prospects
+    let prospects = await prisma.commercialEvent.findMany({
+      where: { companyId, isProspect: true },
+      orderBy: { startDate: 'asc' }
+    });
+
+    if (prospects.length === 0) {
+      // Fallback: try fetching all saved commercial events
+      prospects = await prisma.commercialEvent.findMany({
+        where: { companyId },
+        orderBy: { startDate: 'asc' }
+      });
+    }
+
+    if (prospects.length === 0) {
+      res.json({
+        routes: [],
+        message: 'Nenhum prospecto cadastrado. Adicione eventos no Radar para gerar roteiros.'
+      });
+      return;
+    }
+
+    // Filter prospects with duration >= 6 days (or fallback to all if none)
+    let filtered = prospects.filter(p => (p.durationDays ?? 10) >= 6);
+    if (filtered.length === 0) filtered = prospects;
+
+    // Group into clusters within 300km radius
+    const clusters: any[][] = [];
+    const visited = new Set<string>();
+
+    for (let i = 0; i < filtered.length; i++) {
+      const p1 = filtered[i];
+      if (visited.has(p1.id)) continue;
+
+      const cluster = [p1];
+      visited.add(p1.id);
+
+      const cityKey1 = (p1.city || '').toLowerCase().trim();
+      const coords1 = CITY_COORDS[cityKey1] || { lat: -16.6869, lng: -49.2648 };
+
+      for (let j = i + 1; j < filtered.length; j++) {
+        const p2 = filtered[j];
+        if (visited.has(p2.id)) continue;
+
+        const cityKey2 = (p2.city || '').toLowerCase().trim();
+        const coords2 = CITY_COORDS[cityKey2] || { lat: -16.6869, lng: -49.2648 };
+
+        const dist = haversineDistanceKm(coords1.lat, coords1.lng, coords2.lat, coords2.lng);
+        if (dist <= 300) {
+          cluster.push(p2);
+          visited.add(p2.id);
+        }
+      }
+      clusters.push(cluster);
+    }
+
+    // Process clusters into routes
+    const routes = clusters.map((cluster, idx) => {
+      let totalKm = 0;
+      let totalDays = 0;
+
+      const stops = cluster.map((evt, sIdx) => {
+        const duration = evt.durationDays ?? 10;
+        totalDays += duration;
+
+        let distFromPrev = 0;
+        if (sIdx > 0) {
+          const prevKey = (cluster[sIdx - 1].city || '').toLowerCase().trim();
+          const currKey = (evt.city || '').toLowerCase().trim();
+          const cPrev = CITY_COORDS[prevKey] || { lat: -16.6869, lng: -49.2648 };
+          const cCurr = CITY_COORDS[currKey] || { lat: -16.6869, lng: -49.2648 };
+          distFromPrev = haversineDistanceKm(cPrev.lat, cPrev.lng, cCurr.lat, cCurr.lng);
+        }
+        totalKm += distFromPrev;
+
+        return {
+          id: evt.id,
+          city: evt.city,
+          name: evt.name,
+          startDate: evt.startDate,
+          endDate: evt.endDate,
+          durationDays: duration,
+          score: evt.score || 'HIGH',
+          distanceFromPrevKm: distFromPrev,
+        };
+      });
+
+      return {
+        id: `route-${idx + 1}`,
+        summary: {
+          stopCount: stops.length,
+          totalKm,
+          totalDays,
+        },
+        stops
+      };
+    });
+
+    res.json({ routes, message: 'Roteiros gerados com sucesso.' });
+  } catch (error: any) {
+    console.error('Erro ao gerar roteiros inteligentes:', error?.message || error);
+    console.error('Stack:', error?.stack);
+    res.status(500).json({ error: `Erro ao gerar roteiros inteligentes: ${error?.message || 'Erro interno'}` });
+  }
+});
+
+// PATCH /api/events/:id/approve-roi - Approve ROI and send cost to Cash Flow as PREVISTO
+router.patch('/:id/approve-roi', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { totalCost, expectedRevenue } = req.body;
+
+    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: String(id) } });
+    if (!existingEvent) {
+      res.status(404).json({ error: 'Evento não encontrado' });
+      return;
+    }
+
+    if (existingEvent.companyId && req.user?.companyId && existingEvent.companyId !== req.user.companyId) {
+      res.status(403).json({ error: 'Acesso negado a este evento' });
+      return;
+    }
+
+    const updated = await prisma.commercialEvent.update({
+      where: { id: String(id) },
+      data: {
+        roiApproved: true,
+        roiApprovedAt: new Date(),
+        expectedRevenue: expectedRevenue !== undefined ? parseFloat(expectedRevenue.toString()) : existingEvent.expectedRevenue
+      }
+    });
+
+    if (totalCost && parseFloat(totalCost.toString()) > 0) {
+      const userCompId = req.user?.companyId || existingEvent.companyId || undefined;
+      await prisma.cost.create({
+        data: {
+          description: `Viagem Aprovada: ${existingEvent.name} (${existingEvent.city})`,
+          amount: parseFloat(totalCost.toString()),
+          category: 'VIAGEM_EVENTO',
+          date: existingEvent.startDate || new Date(),
+          status: 'PREVISTO',
+          eventId: existingEvent.id,
+          userId: req.user?.id || '',
+          companyId: userCompId
+        }
+      });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Erro ao aprovar ROI do evento:", error);
+    res.status(500).json({ error: 'Erro ao aprovar ROI do evento' });
+  }
+});
+
 // PUT /api/events/:id
 router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { observations, expectedRevenue, isProspect, isFavorite, name, city, category, score, audience, organizerContact, socialMedia, startDate, notes } = req.body;
+    const { 
+      observations, expectedRevenue, isProspect, isFavorite, name, city, category, score, 
+      audience, organizerContact, socialMedia, startDate, endDate, durationDays, isItinerant, 
+      venueType, ticketPrice, notes, estimatedFichasPerDay, estimatedTicketValue, 
+      estimatedSpaceCost, estimatedTeamSize, distanceFromBaseKm, roiApproved
+    } = req.body;
 
     const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: id as string } });
     if (!existingEvent || existingEvent.companyId !== req.user?.companyId) {
@@ -366,6 +627,17 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     if (socialMedia !== undefined) dataToUpdate.socialMedia = socialMedia;
     if (notes !== undefined) dataToUpdate.notes = notes;
     if (startDate !== undefined) dataToUpdate.startDate = startDate ? new Date(startDate) : null;
+    if (endDate !== undefined) dataToUpdate.endDate = endDate ? new Date(endDate) : null;
+    if (durationDays !== undefined) dataToUpdate.durationDays = parseInt(durationDays.toString());
+    if (isItinerant !== undefined) dataToUpdate.isItinerant = Boolean(isItinerant);
+    if (venueType !== undefined) dataToUpdate.venueType = venueType;
+    if (ticketPrice !== undefined) dataToUpdate.ticketPrice = ticketPrice;
+    if (estimatedFichasPerDay !== undefined) dataToUpdate.estimatedFichasPerDay = parseInt(estimatedFichasPerDay.toString());
+    if (estimatedTicketValue !== undefined) dataToUpdate.estimatedTicketValue = parseFloat(estimatedTicketValue.toString());
+    if (estimatedSpaceCost !== undefined) dataToUpdate.estimatedSpaceCost = parseFloat(estimatedSpaceCost.toString());
+    if (estimatedTeamSize !== undefined) dataToUpdate.estimatedTeamSize = parseInt(estimatedTeamSize.toString());
+    if (distanceFromBaseKm !== undefined) dataToUpdate.distanceFromBaseKm = parseFloat(distanceFromBaseKm.toString());
+    if (roiApproved !== undefined) dataToUpdate.roiApproved = Boolean(roiApproved);
 
     const updated = await prisma.commercialEvent.update({
       where: { id: id as string },
@@ -376,6 +648,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     res.status(500).json({ error: 'Erro ao atualizar evento' });
   }
 });
+
 
 // DELETE /api/events/:id
 router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {

@@ -632,11 +632,15 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('$_greeting, $_userName',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold)),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text('$_greeting, $_userName',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold)),
+                    ),
                     const Text('Painel do Vendedor',
                         style: TextStyle(
                             color: Color(0xFF90CAF9), fontSize: 12)),

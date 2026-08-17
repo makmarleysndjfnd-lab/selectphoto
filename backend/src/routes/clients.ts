@@ -118,6 +118,54 @@ router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
+// Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK for a city
+router.put('/confirm-grafica', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { city } = req.body;
+    if (!city) {
+      res.status(400).json({ error: 'City is required' });
+      return;
+    }
+
+    const updated = await prisma.client.updateMany({
+      where: {
+        companyId: req.user?.companyId,
+        city: { equals: city, mode: 'insensitive' },
+        bookStatus: 'AWAITING_RELEASE'
+      },
+      data: {
+        bookStatus: 'IN_STOCK'
+      }
+    });
+
+    res.json({ message: `${updated.count} fichas movidas para estoque!`, count: updated.count });
+  } catch (error) {
+    console.error('Erro ao confirmar gráfica:', error);
+    res.status(500).json({ error: 'Falha ao confirmar chegada da gráfica' });
+  }
+});
+
+// Get clients by city and optional bookStatus (for gráfica/estoque flow)
+router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { city, bookStatus } = req.query as { city?: string; bookStatus?: string };
+
+    const clients = await prisma.client.findMany({
+      where: {
+        companyId: req.user?.companyId,
+        ...(city ? { city: { equals: city as string, mode: 'insensitive' } } : {}),
+        ...(bookStatus ? { bookStatus: bookStatus as string } : {})
+      },
+      include: { assignedSeller: true, team: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(clients);
+  } catch (error) {
+    res.status(500).json({ error: 'Falha ao buscar fichas por cidade' });
+  }
+});
+
+
 // Get rebolos (clients with nonSales but no sales)
 router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -184,6 +232,34 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
     res.json(clients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch seller clients' });
+  }
+});
+
+// Batch assign seller to multiple clients
+router.patch('/batch-assign', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { clientIds, assignedSellerId } = req.body;
+
+    if (!Array.isArray(clientIds) || clientIds.length === 0 || !assignedSellerId) {
+      res.status(400).json({ error: 'Lista de fichas ou vendedor inválido' });
+      return;
+    }
+
+    const updated = await prisma.client.updateMany({
+      where: {
+        id: { in: clientIds },
+        companyId: req.user?.companyId
+      },
+      data: {
+        assignedSellerId,
+        bookStatus: 'DISTRIBUTED'
+      }
+    });
+
+    res.json({ success: true, count: updated.count });
+  } catch (error) {
+    console.error("Erro ao atribuir lote de fichas:", error);
+    res.status(500).json({ error: 'Erro ao atribuir lote de fichas' });
   }
 });
 

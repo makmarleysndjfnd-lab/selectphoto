@@ -23,12 +23,46 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _hotelCtrl = TextEditingController();
+  final TextEditingController _foodCtrl = TextEditingController();
+  final TextEditingController _fuelCtrl = TextEditingController();
+  final TextEditingController _prodCtrl = TextEditingController();
+  final TextEditingController _ticketCtrl = TextEditingController();
+  final TextEditingController _fichasCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     _urlController.text = settings.serverUrl;
+    _hotelCtrl.text = settings.hotelCostPerPersonDay.toStringAsFixed(2);
+    _foodCtrl.text = settings.foodCostPerPersonDay.toStringAsFixed(2);
+    _fuelCtrl.text = settings.fuelCostPerKm.toStringAsFixed(2);
+    _prodCtrl.text = settings.productCost.toStringAsFixed(2);
+    _ticketCtrl.text = settings.defaultTicket.toStringAsFixed(2);
+    _fichasCtrl.text = settings.defaultFichasPerDay.toString();
+  }
+
+  void _saveRoiSettings(SettingsProvider settings) {
+    final double hotel = double.tryParse(_hotelCtrl.text.replaceAll(',', '.')) ?? 70.0;
+    final double food = double.tryParse(_foodCtrl.text.replaceAll(',', '.')) ?? 50.0;
+    final double fuel = double.tryParse(_fuelCtrl.text.replaceAll(',', '.')) ?? 0.60;
+    final double prod = double.tryParse(_prodCtrl.text.replaceAll(',', '.')) ?? 21.0;
+    final double ticket = double.tryParse(_ticketCtrl.text.replaceAll(',', '.')) ?? 150.0;
+    final int fichas = int.tryParse(_fichasCtrl.text) ?? 30;
+
+    settings.updateRoiSettings(
+      hotelCost: hotel,
+      foodCost: food,
+      fuelKmCost: fuel,
+      prodCost: prod,
+      ticket: ticket,
+      fichasPerDay: fichas,
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Parâmetros de ROI salvos com sucesso!'), backgroundColor: Colors.green),
+    );
   }
 
   void _handleLogout(BuildContext context) async {
@@ -141,6 +175,147 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
+
+          if (!widget.isFotografo) ...[
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.calculate, color: Color(0xFFCE93D8), size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          'Parâmetros Base da Calculadora de ROI',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Valores padrão usados para estimar o lucro líquido das viagens.',
+                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _hotelCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Hospedagem (R\$/p/dia)',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _foodCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Alimentação (R\$/p/dia)',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _fuelCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Combustível (R\$/km)',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _prodCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Custo Produto (R\$)',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _ticketCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Ticket Médio (R\$)',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _fichasCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Fichas/Dia Padrão',
+                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              filled: true,
+                              fillColor: Color(0xFF161625),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: LedButton(
+                        style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                        onPressed: () => _saveRoiSettings(settings),
+                        child: const Text('Salvar Parâmetros de ROI', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           
           // Actions
           LedCard(
@@ -264,6 +439,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
                 ],
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 12),
+                // Recursos em Breve (Bloqueados)
+                Opacity(
+                  opacity: 0.55,
+                  child: ListTile(
+                    leading: const Icon(Icons.notifications_active_outlined, color: Colors.amberAccent),
+                    title: const Text('Scout Automático de Eventos (Push IA)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text('Notificações automáticas quando novos circos ou eventos longos forem detectados na sua região.', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    trailing: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.lock_outline, color: Colors.amberAccent, size: 13),
+                          SizedBox(width: 4),
+                          Text('Em Breve', style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
                 const Divider(color: Colors.white12, height: 1),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.redAccent),

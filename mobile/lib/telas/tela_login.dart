@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
@@ -53,11 +54,60 @@ class _LoginScreenState extends State<LoginScreen>
             CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
     _logoAnimController.repeat(); // Loop the rotation
-    
-    // Check for OTA updates (Disabled for local testing)
-    // WidgetsBinding.instance.addPostFrameCallback((_) {
-    //   _checkForUpdates();
-    // });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAutoLogin();
+    });
+  }
+
+  Future<void> _checkAutoLogin() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('jwt_token');
+      final role = prefs.getString('user_role');
+      final savedCpf = prefs.getString('user_cpf');
+
+      if (savedCpf != null && savedCpf.isNotEmpty) {
+        _cpfController.text = savedCpf;
+      }
+
+      if (token != null && token.isNotEmpty && role != null && role.isNotEmpty) {
+        final LocalAuthentication auth = LocalAuthentication();
+        final bool canAuthenticateWithBiometrics = await auth.canCheckBiometrics;
+        final bool canAuthenticate = canAuthenticateWithBiometrics || await auth.isDeviceSupported();
+
+        bool authenticated = false;
+
+        if (canAuthenticate) {
+          try {
+            authenticated = await auth.authenticate(
+              localizedReason: 'Autentique para acessar o Lumora',
+              options: const AuthenticationOptions(
+                stickyAuth: true,
+                biometricOnly: false,
+              ),
+            );
+          } catch (e) {
+            authenticated = false;
+          }
+        }
+
+        if (authenticated) {
+          final apiService = Provider.of<ApiService>(context, listen: false);
+          apiService.setToken(token);
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              PageRouteBuilder(
+                pageBuilder: (_, __, ___) => HomeScreen(role: role),
+                transitionsBuilder: (_, anim, __, child) =>
+                    FadeTransition(opacity: anim, child: child),
+                transitionDuration: const Duration(milliseconds: 300),
+              ),
+            );
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkForUpdates() async {
@@ -136,6 +186,7 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('jwt_token', token);
         await prefs.setString('user_role', role ?? '');
+        await prefs.setString('user_cpf', cpf);
         if (user['id'] != null) {
           await prefs.setString('user_id', user['id']);
         }

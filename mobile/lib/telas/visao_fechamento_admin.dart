@@ -35,6 +35,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   // Para o card Análise de Desempenho
   List<String> _selectedSellersCustom = [];
   DateTimeRange? _selectedDateRangeCustom;
+  String? _selectedCityCustom;
   
   final List<String> _mockReceipts = [];
 
@@ -362,16 +363,14 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                  borderRadius: BorderRadius.circular(8),
                  child: Image.network(url, width: 100, height: 140, fit: BoxFit.cover),
                ),
-             )).toList(),
-           ),
-         ),
-      ]
-    );
+                  )).toList(),
+                ),
+              ),
+            ]
+          );
       }
     );
   }
-
-  
 
   Widget _buildAnaliseDesempenhoCard() {
     final sellerNames = _selectedSellersCustom.map((id) {
@@ -441,10 +440,9 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           const SizedBox(height: 12),
           LedButton.icon(
             onPressed: () {
-              final allSellerIds = _sellers.map((e) => e['id'] as String).toList();
-              _showMultiSelectDialog(
+              _showMultiSelectSellerDialog(
                 'Selecione os Vendedores',
-                allSellerIds,
+                _sellers,
                 _selectedSellersCustom,
                 (List<String> results) {
                   setState(() => _selectedSellersCustom = results);
@@ -460,6 +458,54 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               minimumSize: const Size(double.infinity, 48),
             ),
           ),
+          const SizedBox(height: 12),
+
+          // Seletor de Cidade Finalizada
+          FutureBuilder<List<dynamic>>(
+            future: ApiService().getAllClients(),
+            builder: (context, snapshot) {
+              final clients = snapshot.data ?? [];
+              final citiesSet = <String>{};
+              for (final c in clients) {
+                if (c is Map && c['city'] != null && c['city'].toString().trim().isNotEmpty) {
+                  citiesSet.add(c['city'].toString().trim());
+                }
+              }
+              final citiesList = citiesSet.toList()..sort();
+
+              return DropdownButtonFormField<String>(
+                value: _selectedCityCustom,
+                dropdownColor: const Color(0xFF1E1E2C),
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Filtrar por Cidade Finalizada',
+                  labelStyle: const TextStyle(color: Color(0xFFCE93D8), fontSize: 13),
+                  filled: true,
+                  fillColor: const Color(0xFF2A2A3E),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  prefixIcon: const Icon(Icons.location_city, color: Color(0xFFCE93D8), size: 18),
+                  suffixIcon: _selectedCityCustom != null
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                          onPressed: () => setState(() => _selectedCityCustom = null),
+                        )
+                      : null,
+                ),
+                items: [
+                  const DropdownMenuItem<String>(
+                    value: null,
+                    child: Text('Todas as Cidades Finalizadas', style: TextStyle(color: Colors.white70)),
+                  ),
+                  ...citiesList.map((city) => DropdownMenuItem<String>(
+                        value: city,
+                        child: Text(city, style: const TextStyle(color: Colors.white)),
+                      )),
+                ],
+                onChanged: (val) => setState(() => _selectedCityCustom = val),
+              );
+            },
+          ),
+
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -477,6 +523,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               sellerIds: _selectedSellersCustom,
               startDate: _selectedDateRangeCustom?.start.toIso8601String(),
               endDate: _selectedDateRangeCustom?.end.toIso8601String(),
+              city: _selectedCityCustom,
             ),
             builder: (context, snapshot) {
                if (snapshot.connectionState == ConnectionState.waiting) {
@@ -516,8 +563,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     );
   }
 
-  void _showMultiSelectDialog(String title, List<String> items, List<String> selectedItems, Function(List<String>) onConfirm) {
-    List<String> tempSelected = List.from(selectedItems);
+  void _showMultiSelectSellerDialog(String title, List<dynamic> sellers, List<String> selectedIds, Function(List<String>) onConfirm) {
+    List<String> tempSelected = List.from(selectedIds);
     showDialog(
       context: context,
       builder: (context) {
@@ -530,20 +577,23 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                 width: double.maxFinite,
                 child: ListView.builder(
                   shrinkWrap: true,
-                  itemCount: items.length,
+                  itemCount: sellers.length,
                   itemBuilder: (context, index) {
-                    final item = items[index];
+                    final seller = sellers[index];
+                    final id = seller['id'] as String;
+                    final name = seller['name'] ?? 'Vendedor ${index + 1}';
                     return CheckboxListTile(
-                      title: Text(item, style: const TextStyle(color: Colors.white)),
-                      value: tempSelected.contains(item),
+                      title: Text(name, style: const TextStyle(color: Colors.white)),
+                      subtitle: seller['role'] != null ? Text(seller['role'] == 'SELLER' ? 'Vendedor' : seller['role'], style: const TextStyle(color: Colors.white54, fontSize: 11)) : null,
+                      value: tempSelected.contains(id),
                       activeColor: const Color(0xFFCE93D8),
                       checkColor: Colors.black,
                       onChanged: (bool? checked) {
                         setStateDialog(() {
                           if (checked == true) {
-                            tempSelected.add(item);
+                            tempSelected.add(id);
                           } else {
-                            tempSelected.remove(item);
+                            tempSelected.remove(id);
                           }
                         });
                       },

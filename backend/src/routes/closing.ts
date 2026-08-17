@@ -193,12 +193,13 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
     }
 });
 
-// Custom Metrics Overview (by Date Range and Sellers)
+// Custom Metrics Overview (by Date Range, Sellers, and City)
 router.get('/custom', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const sellerIdsStr = req.query.sellerIds as string;
         const startDateParam = req.query.startDate as string;
         const endDateParam = req.query.endDate as string;
+        const cityParam = req.query.city as string;
 
         let whereSale: any = {};
         let whereNonSale: any = {};
@@ -207,6 +208,11 @@ router.get('/custom', authMiddleware, async (req: AuthRequest, res) => {
             const sellerIds = sellerIdsStr.split(',');
             whereSale.sellerId = { in: sellerIds };
             whereNonSale.sellerId = { in: sellerIds };
+        }
+
+        if (cityParam && cityParam.trim() !== '') {
+            whereSale.client = { city: cityParam.trim() };
+            whereNonSale.client = { city: cityParam.trim() };
         }
 
         if (startDateParam && endDateParam) {

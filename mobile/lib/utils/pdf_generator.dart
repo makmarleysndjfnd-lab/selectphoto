@@ -35,12 +35,9 @@ class PdfGenerator {
           
           _buildSectionTitle('DADOS DO CLIENTE'),
           _buildRow('Nome:', client['name'] ?? 'N/A'),
-          _buildRow('CPF:', client['cpf'] ?? 'N/A'),
-          _buildRow('RG:', client['rg'] ?? 'N/A'),
           _buildRow('Endereço:', client['address'] ?? 'N/A'),
           _buildRow('Telefone 1:', client['phone1'] ?? 'N/A'),
           _buildRow('Telefone 2:', client['phone2'] ?? 'N/A'),
-          _buildRow('Email:', client['email'] ?? 'N/A'),
           _buildRow('Profissão:', client['profession'] ?? 'N/A'),
           
           pw.SizedBox(height: 16),

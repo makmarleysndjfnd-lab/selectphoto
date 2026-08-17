@@ -30,6 +30,7 @@ model Company {
   bookBatches          BookBatch[]
   notifications        Notification[]
   clientEditRequests   ClientEditRequest[]
+  tripSettings         TripSettings?
 }
 
 model Team {
@@ -301,28 +302,51 @@ model Cost {
 }
 
 model CommercialEvent {
-  id               String    @id @default(uuid())
-  name             String
-  city             String
-  category         String
-  score            String
-  audience         String?
-  organizerContact String?
-  socialMedia      String?
-  notes            String?
-  isFavorite       Boolean   @default(false)
-  isProspect       Boolean   @default(true)
-  createdAt        DateTime  @default(now())
-  startDate        DateTime?
-  observations     String?
-  expectedRevenue  Float?    @default(0)
-  cityAge          String?
-  cityIncome       String?
-  cityPerCapita    String?
-  cityEconomy      String?
-  companyId        String?
-  company          Company?  @relation(fields: [companyId], references: [id])
-  costs            Cost[]
+  id                     String    @id @default(uuid())
+  name                   String
+  city                   String
+  category               String
+  score                  String
+  audience               String?
+  organizerContact       String?
+  socialMedia            String?
+  notes                  String?
+  isFavorite             Boolean   @default(false)
+  isProspect             Boolean   @default(true)
+  createdAt              DateTime  @default(now())
+  startDate              DateTime?
+  endDate                DateTime?
+  durationDays           Int?
+  isItinerant            Boolean   @default(false)
+  venueType              String?
+  ticketPrice            String?
+  observations           String?
+  expectedRevenue        Float?    @default(0)
+  estimatedFichasPerDay  Int?
+  estimatedTicketValue   Float?
+  estimatedSpaceCost     Float?
+  estimatedTeamSize      Int?      @default(2)
+  distanceFromBaseKm     Float?
+  roiApproved            Boolean   @default(false)
+  roiApprovedAt          DateTime?
+  cityAge                String?
+  cityIncome             String?
+  cityPerCapita          String?
+  cityEconomy            String?
+  companyId              String?
+  company                Company?  @relation(fields: [companyId], references: [id])
+  costs                  Cost[]
+}
+
+model TripSettings {
+  id               String   @id @default(uuid())
+  companyId        String   @unique
+  costPerKm        Float    @default(0.60)
+  hotelCostPerDay  Float    @default(70.0)
+  foodCostPerDay   Float    @default(50.0)
+  productCostUnit  Float    @default(21.0)
+  baseCityName     String   @default("Goiânia")
+  company          Company  @relation(fields: [companyId], references: [id])
 }
 
 model CoverStockBatch {

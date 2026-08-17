@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
-
-
 
 class ManualSearchScreen extends StatefulWidget {
   const ManualSearchScreen({super.key});
@@ -25,6 +24,19 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
 
   List<String> _ibgeCities = [];
   bool _isLoadingCities = true;
+
+  String _selectedDurationFilter = 'ALL'; // 'ALL', '6_30', 'OVER_30', 'SHORT'
+
+  List<dynamic> get _filteredEvents {
+    if (_selectedDurationFilter == 'ALL') return _searchResults;
+    return _searchResults.where((evt) {
+      final int days = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+      if (_selectedDurationFilter == '6_30') return days >= 6 && days <= 30;
+      if (_selectedDurationFilter == 'OVER_30') return days > 30;
+      if (_selectedDurationFilter == 'SHORT') return days < 6;
+      return true;
+    }).toList();
+  }
 
   @override
   void initState() {
@@ -160,6 +172,8 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
           'name': event['name'],
           'city': event['city'],
           'startDate': event['startDate'],
+          'endDate': event['endDate'],
+          'durationDays': event['durationDays'],
           'score': event['score']?.toString() ?? 'MEDIUM',
           'category': event['category'] ?? 'OTHER',
           'notes': event['notes'] ?? 'Ingressos: ${event['ticketPrice']} | Público: ${event['audience']}',
@@ -168,7 +182,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
           'isProspect': true,
           'audience': event['audience'],
           'organizerContact': event['organizerContact'],
-          'socialMedia': event['socialMedia'],
+          'socialMedia': event['socialMedia'] ?? (event['sourcePlatform'] != null ? 'Fonte: ${event['sourcePlatform']}' : null),
           'cityAge': _cityInfo?['cityAge'],
           'cityIncome': _cityInfo?['rendaDomiciliarPerCapitaMedia'],
           'cityPerCapita': _cityInfo?['rendaPerCapita'],
@@ -314,12 +328,82 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       ),
                     )
                   else if (_searchResults.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    // Filtro por Duração do Evento
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('Todos'),
+                            selected: _selectedDurationFilter == 'ALL',
+                            selectedColor: const Color(0xFFCE93D8),
+                            backgroundColor: Colors.white10,
+                            labelStyle: TextStyle(color: _selectedDurationFilter == 'ALL' ? Colors.black : Colors.white),
+                            onSelected: (val) => setState(() => _selectedDurationFilter = 'ALL'),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('🟢 6 a 30 Dias (Ideal)'),
+                            selected: _selectedDurationFilter == '6_30',
+                            selectedColor: Colors.greenAccent,
+                            backgroundColor: Colors.white10,
+                            labelStyle: TextStyle(color: _selectedDurationFilter == '6_30' ? Colors.black : Colors.white),
+                            onSelected: (val) => setState(() => _selectedDurationFilter = '6_30'),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('🔵 +30 Dias'),
+                            selected: _selectedDurationFilter == 'OVER_30',
+                            selectedColor: Colors.lightBlueAccent,
+                            backgroundColor: Colors.white10,
+                            labelStyle: TextStyle(color: _selectedDurationFilter == 'OVER_30' ? Colors.black : Colors.white),
+                            onSelected: (val) => setState(() => _selectedDurationFilter = 'OVER_30'),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('🔴 1 a 5 Dias (Curto)'),
+                            selected: _selectedDurationFilter == 'SHORT',
+                            selectedColor: Colors.amberAccent,
+                            backgroundColor: Colors.white10,
+                            labelStyle: TextStyle(color: _selectedDurationFilter == 'SHORT' ? Colors.black : Colors.white),
+                            onSelected: (val) => setState(() => _selectedDurationFilter = 'SHORT'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     ListView.builder(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _searchResults.length,
+                      itemCount: _filteredEvents.length,
                       itemBuilder: (context, index) {
-                        final evt = _searchResults[index];
+                        final evt = _filteredEvents[index];
+                        final int durationDays = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+                        final String sourcePlatform = (evt['sourcePlatform']?.toString() ?? '').trim();
+                        final String sourceUrl = (evt['sourceUrl']?.toString() ?? '').trim();
+                        
+                        Widget durationBadge;
+                        if (durationDays >= 6 && durationDays <= 30) {
+                          durationBadge = Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.green.withOpacity(0.2), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.greenAccent)),
+                            child: Text('🟢 $durationDays dias · Janela Ideal', style: const TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          );
+                        } else if (durationDays > 30) {
+                          durationBadge = Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.blue.withOpacity(0.2), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.lightBlueAccent)),
+                            child: Text('🔵 $durationDays dias · Longa Permanência', style: const TextStyle(color: Colors.lightBlueAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          );
+                        } else {
+                          durationBadge = Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.amber.withOpacity(0.2), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.amberAccent)),
+                            child: Text(durationDays == 1 ? '🟡 1 dia · Curto Prazo' : '🟡 $durationDays dias · Curto Prazo', style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                          );
+                        }
+
                         return LedCard(
                           color: const Color(0xFF1A1A2E),
                           margin: const EdgeInsets.only(bottom: 16),
@@ -329,12 +413,86 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(evt['name'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                                  child: Text(evt['category'] ?? 'OTHER', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                                Row(
+                                  children: [
+                                    Expanded(child: Text(evt['name'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+                                    durationBadge,
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
+                                      child: Text(evt['category'] ?? 'OTHER', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                                    ),
+                                    if (sourcePlatform.isNotEmpty && sourcePlatform != 'N/A') ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: sourcePlatform.toLowerCase().contains('sympla')
+                                              ? const Color(0xFF00E676).withOpacity(0.2)
+                                              : (sourcePlatform.toLowerCase().contains('insta')
+                                                  ? const Color(0xFFE1306C).withOpacity(0.2)
+                                                  : Colors.cyanAccent.withOpacity(0.2)),
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border.all(
+                                            color: sourcePlatform.toLowerCase().contains('sympla')
+                                                ? const Color(0xFF00E676)
+                                                : (sourcePlatform.toLowerCase().contains('insta')
+                                                    ? const Color(0xFFE1306C)
+                                                    : Colors.cyanAccent),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '📍 $sourcePlatform',
+                                          style: TextStyle(
+                                            color: sourcePlatform.toLowerCase().contains('sympla')
+                                                ? const Color(0xFF00E676)
+                                                : (sourcePlatform.toLowerCase().contains('insta')
+                                                    ? const Color(0xFFFF80AB)
+                                                    : Colors.cyanAccent),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                    const Spacer(),
+                                    InkWell(
+                                      onTap: () async {
+                                        Uri? url;
+                                        if (sourceUrl.isNotEmpty && sourceUrl.startsWith('http')) {
+                                          url = Uri.tryParse(sourceUrl);
+                                        }
+                                        if (url == null) {
+                                          final query = Uri.encodeComponent('${evt['name'] ?? ''} ${_searchController.text} contato telefone sympla instagram');
+                                          url = Uri.parse('https://www.google.com/search?q=$query');
+                                        }
+                                        if (await canLaunchUrl(url!)) {
+                                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                                        }
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueAccent.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+                                        ),
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.search, size: 12, color: Colors.blueAccent),
+                                            SizedBox(width: 4),
+                                            Text('Fonte / Buscar', style: TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 12),
                                 _buildEventDetailRow(Icons.calendar_month, 'Data: ${evt['startDate'] ?? 'A definir'}'),

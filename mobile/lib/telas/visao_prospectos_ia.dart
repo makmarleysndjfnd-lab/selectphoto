@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../servicos/servico_api.dart';
+import '../provedores/provedor_configuracoes.dart';
 import 'tela_busca_manual.dart';
 import 'tela_meus_prospectos.dart';
 import '../widgets/led_button.dart';
@@ -19,6 +22,32 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
   final Map<String, List<dynamic>> _stateData = {};
   final Map<String, bool> _isLoading = {};
   final Map<String, String?> _errors = {};
+
+  String _durationFilter = 'ALL'; // 'ALL', 'IDEAL', 'LONG', 'SHORT'
+
+  Widget _buildFilterChip(String value, String label) {
+    final bool isSelected = _durationFilter == value;
+    return ChoiceChip(
+      label: Text(
+        label,
+        style: TextStyle(
+          color: isSelected ? Colors.black : Colors.white70,
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          fontSize: 12,
+        ),
+      ),
+      selected: isSelected,
+      selectedColor: const Color(0xFFCE93D8),
+      backgroundColor: const Color(0xFF1E1E2C),
+      onSelected: (bool selected) {
+        if (selected) {
+          setState(() {
+            _durationFilter = value;
+          });
+        }
+      },
+    );
+  }
 
   @override
   void initState() {
@@ -106,11 +135,13 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
           'name': event['name'],
           'city': event['city'],
           'startDate': event['startDate'],
+          'endDate': event['endDate'],
+          'durationDays': event['durationDays'],
           'score': event['score']?.toString() ?? 'MEDIUM',
           'category': event['category'] ?? 'OTHER',
           'audience': event['audience'],
           'organizerContact': event['organizerContact'],
-          'socialMedia': event['socialMedia'],
+          'socialMedia': event['socialMedia'] ?? (event['sourcePlatform'] != null ? 'Fonte: ${event['sourcePlatform']}' : null),
           'notes': event['notes'] ?? 'Pop: ${event['population']} | Renda: ${event['perCapitaIncome'] ?? event['income']} | PIB: ${event['gdp']}',
           'observations': obsController.text,
           'isProspect': true,
@@ -241,8 +272,15 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                 );
               }
 
-              final events = _stateData[state] ?? [];
-              
+              final rawEvents = _stateData[state] ?? [];
+              final events = rawEvents.where((evt) {
+                final int duration = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 10) : 10;
+                if (_durationFilter == 'IDEAL') return duration >= 6 && duration <= 30;
+                if (_durationFilter == 'LONG') return duration > 30;
+                if (_durationFilter == 'SHORT') return duration < 6;
+                return true;
+              }).toList();
+
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -263,7 +301,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              'Resultados para $state',
+                              'Resultados para $state (${events.length})',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,
@@ -286,10 +324,34 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                       ],
                     ),
                   ),
+
+                  // 🏷️ Item 7: Filter Chip Bar (Duração do Evento)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          const Text('Filtro Duração: ', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('ALL', 'Todos (${rawEvents.length})'),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('IDEAL', '🟢 6-30 dias (Ideal)'),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('LONG', '🟡 +30 dias'),
+                          const SizedBox(width: 6),
+                          _buildFilterChip('SHORT', '🔴 1-5 dias'),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 6),
+
                   if (events.isEmpty)
                     const Expanded(
                       child: Center(
-                        child: Text('Nenhum evento prospectado no momento.', style: TextStyle(color: Colors.white54, fontSize: 15)),
+                        child: Text('Nenhum evento corresponde ao filtro selecionado.', style: TextStyle(color: Colors.white54, fontSize: 15)),
                       ),
                     )
                   else
@@ -331,13 +393,16 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                       fontSize: 13,
                                       letterSpacing: 0.0,
                                     ),
-                                    columnSpacing: 28,
+                                    columnSpacing: 24,
                                     horizontalMargin: 16,
                                     columns: const [
                                       DataColumn(label: Text('Cidade')),
                                       DataColumn(label: Text('Evento')),
                                       DataColumn(label: Text('Data')),
+                                      DataColumn(label: Text('Duração')),
+                                      DataColumn(label: Text('ROI Est.')),
                                       DataColumn(label: Text('População')),
+                                      DataColumn(label: Text('Infantil IBGE')),
                                       DataColumn(label: Text('Renda Per Capita')),
                                       DataColumn(label: Text('PIB')),
                                       DataColumn(label: Text('Nota')),
@@ -348,6 +413,26 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                                       final incStr = _formatIncome(rawInc).replaceAll('Renda Per Capita:', '').trim();
                                       final score = evt['score']?.toString().toUpperCase() ?? 'HIGH';
                                       
+                                      final settings = Provider.of<SettingsProvider>(context, listen: false);
+                                      final int durationDays = evt['durationDays'] != null ? (int.tryParse(evt['durationDays'].toString()) ?? 1) : 1;
+                                      final double estRevenue = durationDays * settings.defaultFichasPerDay * settings.defaultTicket;
+                                      final double estCost = (durationDays * settings.defaultFichasPerDay * settings.productCost) +
+                                          (durationDays * 2 * settings.hotelCostPerPersonDay) +
+                                          (durationDays * 2 * settings.foodCostPerPersonDay) +
+                                          (150 * settings.fuelCostPerKm) + 1000.0;
+                                      final double estProfit = estRevenue - estCost;
+                                      final currencyFmt = NumberFormat.compactSimpleCurrency(locale: 'pt_BR');
+                                      final estProfitStr = currencyFmt.format(estProfit);
+
+                                      // 👶 Item 8: IBGE Público Infantil (0-14 anos ~ 22.5%)
+                                      final String popRaw = (evt['population']?.toString() ?? '').replaceAll(RegExp(r'[^\d]'), '');
+                                      final int popInt = int.tryParse(popRaw) ?? 45000;
+                                      final int childPop = (popInt * 0.225).round();
+                                      final bool isHighChildDensity = childPop >= 12000;
+
+                                      final String sourcePlatform = (evt['sourcePlatform']?.toString() ?? '').trim();
+                                      final String sourceUrl = (evt['sourceUrl']?.toString() ?? '').trim();
+
                                       Color scoreColor = const Color(0xFF00E676);
                                       Color scoreBg = const Color(0xFF00E676).withOpacity(0.15);
                                       if (score == 'MEDIUM' || score == 'MÉDIO') {
@@ -360,10 +445,140 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
 
                                       return DataRow(
                                         cells: [
-                                          DataCell(Text(evt['city']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
-                                          DataCell(Text(evt['name']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '')),
-                                          DataCell(Text(evt['startDate']?.toString() ?? '', style: const TextStyle(color: Colors.white70))),
+                                           DataCell(Text(evt['city']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '', style: const TextStyle(fontWeight: FontWeight.w600))),
+                                           DataCell(
+                                             Column(
+                                               mainAxisAlignment: MainAxisAlignment.center,
+                                               crossAxisAlignment: CrossAxisAlignment.start,
+                                               children: [
+                                                 Text(
+                                                   evt['name']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '',
+                                                   style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                                                 ),
+                                                 const SizedBox(height: 3),
+                                                 Row(
+                                                   mainAxisSize: MainAxisSize.min,
+                                                   children: [
+                                                     if (sourcePlatform.isNotEmpty && sourcePlatform != 'N/A') ...[
+                                                       Container(
+                                                         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                                         decoration: BoxDecoration(
+                                                           color: sourcePlatform.toLowerCase().contains('sympla')
+                                                               ? const Color(0xFF00E676).withOpacity(0.2)
+                                                               : (sourcePlatform.toLowerCase().contains('insta')
+                                                                   ? const Color(0xFFE1306C).withOpacity(0.2)
+                                                                   : Colors.cyanAccent.withOpacity(0.2)),
+                                                           borderRadius: BorderRadius.circular(4),
+                                                           border: Border.all(
+                                                             color: sourcePlatform.toLowerCase().contains('sympla')
+                                                                 ? const Color(0xFF00E676)
+                                                                 : (sourcePlatform.toLowerCase().contains('insta')
+                                                                     ? const Color(0xFFE1306C)
+                                                                     : Colors.cyanAccent),
+                                                           ),
+                                                         ),
+                                                         child: Text(
+                                                           '📍 $sourcePlatform',
+                                                           style: TextStyle(
+                                                             color: sourcePlatform.toLowerCase().contains('sympla')
+                                                                 ? const Color(0xFF00E676)
+                                                                 : (sourcePlatform.toLowerCase().contains('insta')
+                                                                     ? const Color(0xFFFF80AB)
+                                                                     : Colors.cyanAccent),
+                                                             fontSize: 9,
+                                                             fontWeight: FontWeight.bold,
+                                                           ),
+                                                         ),
+                                                       ),
+                                                       const SizedBox(width: 4),
+                                                     ],
+                                                     InkWell(
+                                                       onTap: () async {
+                                                         Uri? url;
+                                                         if (sourceUrl.isNotEmpty && sourceUrl.startsWith('http')) {
+                                                           url = Uri.tryParse(sourceUrl);
+                                                         }
+                                                         if (url == null) {
+                                                           final query = Uri.encodeComponent('${evt['name'] ?? ''} ${evt['city'] ?? ''} contato telefone sympla instagram');
+                                                           url = Uri.parse('https://www.google.com/search?q=$query');
+                                                         }
+                                                         if (await canLaunchUrl(url!)) {
+                                                           await launchUrl(url, mode: LaunchMode.externalApplication);
+                                                         }
+                                                       },
+                                                       child: Container(
+                                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                         decoration: BoxDecoration(
+                                                           color: Colors.blueAccent.withOpacity(0.15),
+                                                           borderRadius: BorderRadius.circular(4),
+                                                           border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+                                                         ),
+                                                         child: const Row(
+                                                           mainAxisSize: MainAxisSize.min,
+                                                           children: [
+                                                             Icon(Icons.search, size: 11, color: Colors.blueAccent),
+                                                             SizedBox(width: 3),
+                                                             Text('Fonte / Buscar', style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                                           ],
+                                                         ),
+                                                       ),
+                                                     ),
+                                                   ],
+                                                 ),
+                                               ],
+                                             ),
+                                           ),
+                                           DataCell(Text(evt['startDate']?.toString() ?? '', style: const TextStyle(color: Colors.white70))),
+                                          DataCell(
+                                            Text(
+                                              durationDays == 1 ? '1 dia' : '$durationDays dias',
+                                              style: TextStyle(
+                                                color: durationDays == 1
+                                                    ? Colors.amberAccent
+                                                    : (durationDays >= 6 && durationDays <= 30 ? const Color(0xFF80DEEA) : Colors.white70),
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          DataCell(
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                              decoration: BoxDecoration(
+                                                color: estProfit >= 0 ? const Color(0xFF00E676).withOpacity(0.15) : Colors.redAccent.withOpacity(0.15),
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(color: estProfit >= 0 ? const Color(0xFF00E676).withOpacity(0.4) : Colors.redAccent.withOpacity(0.4)),
+                                              ),
+                                              child: Text(
+                                                estProfitStr,
+                                                style: TextStyle(
+                                                  color: estProfit >= 0 ? const Color(0xFF00E676) : Colors.redAccent,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
                                           DataCell(Text(evt['population']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), '.').trim() ?? '-', style: const TextStyle(color: Colors.white))),
+                                          DataCell(
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text('👶 ${NumberFormat.compact().format(childPop)}', style: const TextStyle(color: Colors.white70)),
+                                                if (isHighChildDensity) ...[
+                                                  const SizedBox(width: 4),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.amberAccent.withOpacity(0.15),
+                                                      borderRadius: BorderRadius.circular(6),
+                                                      border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+                                                    ),
+                                                    child: const Text('✨ Alta Conc.', style: TextStyle(color: Colors.amberAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
                                           DataCell(Text(incStr, style: const TextStyle(color: Colors.white))),
                                           DataCell(Text(evt['gdp']?.toString().replaceAll(RegExp(r'[\u00A0\u202F]'), ' ').trim() ?? '-', style: const TextStyle(color: Colors.white))),
                                           DataCell(

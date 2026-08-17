@@ -15,6 +15,9 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
   }
 
   const secret = process.env.JWT_SECRET || 'selectphoto-jwt-secret-key';
+  if (!process.env.JWT_SECRET) {
+    console.warn('[SECURITY WARNING] JWT_SECRET não está definida no .env! Usando chave padrão insegura.');
+  }
   jwt.verify(token, secret, (err: any, user: any) => {
     if (err) {
       res.status(403).json({ error: 'Invalid token' });

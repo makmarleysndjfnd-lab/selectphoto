@@ -26,8 +26,8 @@ class ApiService {
         'Bypass-Tunnel-Reminder': 'true',
         'User-Agent': 'loca.lt'
       },
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 20),
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 90),
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
@@ -149,6 +149,41 @@ class ApiService {
     try {
       final response = await _dio.get('/clients');
       return response.data;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  // Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK for a city
+  Future<Map<String, dynamic>> confirmGrafica(String city) async {
+    try {
+      final response = await _dio.put('/clients/confirm-grafica', data: {'city': city});
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  // Get clients by city and optional bookStatus
+  Future<List<dynamic>> getClientsByCity(String city, {String? bookStatus}) async {
+    try {
+      final Map<String, dynamic> params = {'city': city};
+      if (bookStatus != null) params['bookStatus'] = bookStatus;
+      final response = await _dio.get('/clients/by-city', queryParameters: params);
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  // Batch assign a list of client IDs to a seller
+  Future<Map<String, dynamic>> batchAssignSeller(List<String> clientIds, String assignedSellerId) async {
+    try {
+      final response = await _dio.patch('/clients/batch-assign', data: {
+        'clientIds': clientIds,
+        'assignedSellerId': assignedSellerId,
+      });
+      return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
@@ -404,7 +439,11 @@ class ApiService {
     }
 
     try {
-      final response = await _dio.post('/events/search', data: {'city': city});
+      final response = await _dio.post(
+        '/events/search',
+        data: {'city': city},
+        options: Options(receiveTimeout: const Duration(seconds: 120)),
+      );
       final Map<String, dynamic> responseData = response.data as Map<String, dynamic>;
 
       _searchCache.removeWhere((c) => c['cityQuery'] == lowerCity);
@@ -423,18 +462,32 @@ class ApiService {
     } on DioException catch (e) {
       print('=== DIO ERROR IN SEARCH ===');
       print(e.message);
-      final errorMsg = (e.response?.data is Map) ? (e.response?.data is Map ? e.response?.data['error'] : null) : null;
-      throw Exception(errorMsg ?? 'Erro ao buscar eventos na IA: ${e.message}');
+      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ?? 'Erro ao buscar eventos na IA (tempo limite excedido). Tente novamente.');
     }
   }
 
   Future<Map<String, dynamic>> fetchStateRadar(String state, {bool force = false}) async {
     try {
-      final response = await _dio.get('/events/state-radar?state=$state&force=$force');
+      final response = await _dio.get(
+        '/events/state-radar?state=$state&force=$force',
+        options: Options(receiveTimeout: const Duration(seconds: 120)),
+      );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      final errorMsg = (e.response?.data is Map) ? (e.response?.data is Map ? e.response?.data['error'] : null) : null;
-      throw Exception(errorMsg ?? 'Erro ao buscar radar por estado: ${e.message}');
+      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ?? 'Erro ao buscar radar por estado. O servidor demorou para responder. Tente novamente.');
+    }
+  }
+
+  // Roteiro Inteligente — clusters de prospectos dentro de 300km
+  Future<Map<String, dynamic>> getSmartRoute() async {
+    try {
+      final response = await _dio.get('/events/smart-route');
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ?? 'Erro ao buscar roteiro inteligente.');
     }
   }
 
@@ -559,7 +612,7 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getCustomMetrics({List<String>? sellerIds, String? startDate, String? endDate}) async {
+  Future<Map<String, dynamic>> getCustomMetrics({List<String>? sellerIds, String? startDate, String? endDate, String? city}) async {
     try {
       final queryParams = <String, dynamic>{};
       if (sellerIds != null && sellerIds.isNotEmpty) {
@@ -570,6 +623,9 @@ class ApiService {
       }
       if (endDate != null && endDate.isNotEmpty) {
         queryParams['endDate'] = endDate;
+      }
+      if (city != null && city.isNotEmpty) {
+        queryParams['city'] = city;
       }
       
       final response = await _dio.get(
@@ -912,7 +968,7 @@ class ApiService {
   Future<String> downloadBackup() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token');
+      final token = prefs.getString('jwt_token');
       
       final res = await _dio.get('/backup/download', options: Options(
         headers: {'Authorization': 'Bearer $token'},
@@ -932,7 +988,7 @@ class ApiService {
   Future<void> restoreBackup(String filePath, {bool force = false}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token');
+      final token = prefs.getString('jwt_token');
       
       final formData = FormData.fromMap({
         'file': await MultipartFile.fromFile(filePath, filename: 'backup.json'),
@@ -991,7 +1047,11 @@ class ApiService {
   }
 
   Future<dynamic> getStatsAiInsights(Map<String, dynamic> statsData) async {
-    final resp = await _dio.post('/stats/books/ai-insights', data: statsData);
+    final resp = await _dio.post(
+      '/stats/books/ai-insights',
+      data: statsData,
+      options: Options(receiveTimeout: const Duration(seconds: 120)),
+    );
     return resp.data;
   }
 
@@ -1002,5 +1062,32 @@ class ApiService {
 
   Future<void> updateProfileName(String newName) async {
     await _dio.put('/users/profile', data: {'name': newName});
+  }
+
+  Future<void> approveEventRoi(String eventId, {required double totalCost, double? expectedRevenue}) async {
+    await _dio.patch('/events/$eventId/approve-roi', data: {
+      'totalCost': totalCost,
+      if (expectedRevenue != null) 'expectedRevenue': expectedRevenue,
+    });
+  }
+
+  Future<void> batchAssignClients(List<String> clientIds, String sellerId) async {
+    await _dio.patch('/clients/batch-assign', data: {
+      'clientIds': clientIds,
+      'assignedSellerId': sellerId,
+    });
+  }
+
+  Future<List<dynamic>> getSellers() async {
+    try {
+      final resp = await _dio.get('/users');
+      final List<dynamic> users = resp.data;
+      return users.where((u) {
+        final role = (u['role'] ?? '').toString().toUpperCase();
+        return role == 'VENDEDOR' || role == 'SELLER' || role == 'ADMIN' || role == 'SUPER_ADMIN';
+      }).toList();
+    } catch (_) {
+      return [];
+    }
   }
 }
