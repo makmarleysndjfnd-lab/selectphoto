@@ -6,7 +6,6 @@ class ApiService {
   late Dio _dio;
   String _baseUrl = 'https://selectphoto-k1ac.onrender.com/api';
   String? _token;
-  bool _isInit = false;
 
   // Singleton pattern for easy global access (optional, but good for backward compatibility)
   static final ApiService _instance = ApiService._internal();
@@ -55,8 +54,8 @@ class ApiService {
         return handler.next(error);
       },
     ));
-    _isInit = true;
   }
+
 
 
   void updateBaseUrl(String newUrl) {
