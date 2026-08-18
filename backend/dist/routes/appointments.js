@@ -5,20 +5,47 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const client_1 = require("@prisma/client");
+const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
-const prisma = new client_1.PrismaClient();
+const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+// Helper to check if a user is allowed to access/modify a given seller's appointments
+async function canAccessSellerAppointments(reqUser, targetSellerId) {
+    if (!reqUser)
+        return false;
+    // If the user is the seller themselves
+    if (reqUser.id === targetSellerId)
+        return true;
+    // If the user is an admin or supervisor in the same company
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
+    if (isAdminOrSupervisor) {
+        if (reqUser.role === 'SUPER_ADMIN')
+            return true;
+        const seller = await prisma.user.findUnique({
+            where: { id: targetSellerId },
+            select: { companyId: true },
+        });
+        return !!seller && seller.companyId === reqUser.companyId;
+    }
+    return false;
+}
 // Criar um agendamento pessoal
-router.post('/', async (req, res) => {
+router.post('/', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const { sellerId, title, description, dateTime } = req.body;
         if (!sellerId || !title || !dateTime) {
-            return res.status(400).json({ error: 'Missing required fields' });
+            res.status(400).json({ error: 'Missing required fields' });
+            return;
+        }
+        const hasAccess = await canAccessSellerAppointments(req.user, sellerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para criar agendamento para este vendedor' });
+            return;
         }
         const appointment = await prisma.personalAppointment.create({
             data: {
                 sellerId,
-                title,
-                description,
+                title: String(title).slice(0, 200),
+                description: description ? String(description).slice(0, 1000) : undefined,
                 dateTime: new Date(dateTime),
             },
         });
@@ -30,10 +57,15 @@ router.post('/', async (req, res) => {
     }
 });
 // Listar agendamentos pessoais de um vendedor (opcionalmente filtrados por data/mes)
-router.get('/seller/:sellerId', async (req, res) => {
+router.get('/seller/:sellerId', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { sellerId } = req.params;
-        const { date, month, year } = req.query; // params opicionais
+        const sellerId = req.params.sellerId;
+        const { date, month, year } = req.query;
+        const hasAccess = await canAccessSellerAppointments(req.user, sellerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para consultar a agenda deste vendedor' });
+            return;
+        }
         let whereClause = { sellerId };
         if (date) {
             const startOfDay = new Date(date);
@@ -65,15 +97,27 @@ router.get('/seller/:sellerId', async (req, res) => {
     }
 });
 // Atualizar um agendamento
-router.put('/:id', async (req, res) => {
+router.put('/:id', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = req.params.id;
         const { title, description, dateTime } = req.body;
+        const existing = await prisma.personalAppointment.findUnique({
+            where: { id },
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Appointment not found' });
+            return;
+        }
+        const hasAccess = await canAccessSellerAppointments(req.user, existing.sellerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para alterar este agendamento' });
+            return;
+        }
         const dataToUpdate = {};
         if (title)
-            dataToUpdate.title = title;
+            dataToUpdate.title = String(title).slice(0, 200);
         if (description !== undefined)
-            dataToUpdate.description = description;
+            dataToUpdate.description = description ? String(description).slice(0, 1000) : null;
         if (dateTime)
             dataToUpdate.dateTime = new Date(dateTime);
         const appointment = await prisma.personalAppointment.update({
@@ -88,9 +132,21 @@ router.put('/:id', async (req, res) => {
     }
 });
 // Deletar um agendamento
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = req.params.id;
+        const existing = await prisma.personalAppointment.findUnique({
+            where: { id },
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Appointment not found' });
+            return;
+        }
+        const hasAccess = await canAccessSellerAppointments(req.user, existing.sellerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para excluir este agendamento' });
+            return;
+        }
         await prisma.personalAppointment.delete({
             where: { id },
         });

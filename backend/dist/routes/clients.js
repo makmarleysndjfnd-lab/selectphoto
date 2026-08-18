@@ -77,7 +77,7 @@ router.get('/', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const clients = await prisma.client.findMany({
             where: { companyId: req.user?.companyId },
-            include: { children: true, appointments: true, assignedSeller: true }
+            include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
         });
         res.json(clients);
     }
@@ -174,13 +174,36 @@ router.get('/rebolos', authMiddleware_1.authenticateToken, async (req, res) => {
 router.post('/assign-seller', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const { sequenceNumber, sellerId } = req.body;
+        const userCompanyId = req.user?.companyId;
         if (!sequenceNumber || !sellerId) {
             res.status(400).json({ error: 'Faltam sequenceNumber ou sellerId' });
             return;
         }
+        // Verify seller belongs to company
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: sellerId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+            return;
+        }
+        // Find client in same company
+        const existingClient = await prisma.client.findFirst({
+            where: {
+                sequenceNumber,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!existingClient) {
+            res.status(404).json({ error: 'Cliente não encontrado na sua empresa' });
+            return;
+        }
         const client = await prisma.client.update({
-            where: { sequenceNumber },
-            data: { assignedSellerId: sellerId }
+            where: { id: existingClient.id },
+            data: { assignedSellerId: sellerId },
         });
         res.json({ success: true, client });
     }
@@ -226,14 +249,26 @@ router.get('/seller', authMiddleware_1.authenticateToken, async (req, res) => {
 router.patch('/batch-assign', authMiddleware_1.authenticateToken, async (req, res) => {
     try {
         const { clientIds, assignedSellerId } = req.body;
+        const userCompanyId = req.user?.companyId;
         if (!Array.isArray(clientIds) || clientIds.length === 0 || !assignedSellerId) {
             res.status(400).json({ error: 'Lista de fichas ou vendedor inválido' });
+            return;
+        }
+        // Verify seller belongs to user's company
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: assignedSellerId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
             return;
         }
         const updated = await prisma.client.updateMany({
             where: {
                 id: { in: clientIds },
-                companyId: req.user?.companyId
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
             },
             data: {
                 assignedSellerId,

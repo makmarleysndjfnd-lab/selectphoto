@@ -1,15 +1,40 @@
-import express from 'express';
+import express, { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+
+// Helper to verify user can view a seller's closing
+async function canAccessSellerClosing(reqUser: any, targetSellerId: string): Promise<boolean> {
+  if (!reqUser) return false;
+  if (reqUser.id === targetSellerId) return true;
+
+  const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
+  if (isAdminOrSupervisor) {
+    if (reqUser.role === 'SUPER_ADMIN') return true;
+    const seller = await prisma.user.findUnique({
+      where: { id: targetSellerId },
+      select: { companyId: true },
+    });
+    return !!seller && seller.companyId === reqUser.companyId;
+  }
+
+  return false;
+}
 
 // Get Daily Closing for a Seller
-router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
-        const { sellerId } = req.params;
-        const dateParam = req.query.date as string; // Optional specific date
+        const sellerId = req.params.sellerId as string;
+        const userCompanyId = req.user?.companyId;
+        const dateParam = req.query.date as string;
+
+        const hasAccess = await canAccessSellerClosing(req.user, sellerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para visualizar o fechamento deste vendedor' });
+            return;
+        }
 
         let startDate = new Date();
         let endDate = new Date();
@@ -19,17 +44,15 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res) => 
             endDate = new Date(dateParam);
         }
 
-        // Rule: 23:00 previous day to 22:59 current day
-        // For simplicity, we assume the 'date' refers to the day it ends
         startDate.setDate(startDate.getDate() - 1);
         startDate.setHours(23, 0, 0, 0);
-
         endDate.setHours(22, 59, 59, 999);
 
         // Fetch sales
         const sales = await prisma.sale.findMany({
             where: {
                 sellerId: sellerId as string,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -42,6 +65,7 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res) => 
         const nonSales = await prisma.nonSale.findMany({
             where: {
                 sellerId: sellerId as string,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -88,39 +112,66 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res) => 
             nonSales
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao carregar fechamento diário' });
     }
 });
 
 // Admin saves/generates the repasse debt permanently for a day
-router.post('/daily', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/daily', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
         const { sellerId, totalSalesValue, cashValue, pixValue, debitValue, creditValue, commission, repasseDebt } = req.body;
+        const userCompanyId = req.user?.companyId;
+
+        // Verify seller belongs to company
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: sellerId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+            return;
+        }
 
         const closing = await prisma.dailyClosing.create({
             data: {
                 sellerId,
-                totalSalesValue: parseFloat(totalSalesValue),
-                cashValue: parseFloat(cashValue),
-                pixValue: parseFloat(pixValue),
-                debitValue: parseFloat(debitValue),
-                creditValue: parseFloat(creditValue),
-                commission: parseFloat(commission),
-                repasseDebt: parseFloat(repasseDebt)
+                totalSalesValue: parseFloat(totalSalesValue) || 0,
+                cashValue: parseFloat(cashValue) || 0,
+                pixValue: parseFloat(pixValue) || 0,
+                debitValue: parseFloat(debitValue) || 0,
+                creditValue: parseFloat(creditValue) || 0,
+                commission: parseFloat(commission) || 0,
+                repasseDebt: parseFloat(repasseDebt) || 0
             }
         });
 
         res.status(201).json(closing);
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao salvar fechamento' });
     }
 });
 
-// Pay/Clear repasse
-router.post('/pay-repasse', authMiddleware, async (req: AuthRequest, res) => {
+// Pay/Clear repasse (Admin or Supervisor)
+router.post('/pay-repasse', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
         const { sellerId, amount, commissionToLog } = req.body;
-        // Negative repasseDebt represents a payment reducing the total debt
+        const userCompanyId = req.user?.companyId;
+
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: sellerId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+            return;
+        }
+
         const closing = await prisma.dailyClosing.create({
             data: {
                 sellerId,
@@ -130,19 +181,18 @@ router.post('/pay-repasse', authMiddleware, async (req: AuthRequest, res) => {
                 debitValue: 0,
                 creditValue: 0,
                 commission: 0,
-                repasseDebt: -parseFloat(amount) // Deducts from total debt
+                repasseDebt: -parseFloat(amount || 0)
             }
         });
 
         if (commissionToLog && parseFloat(commissionToLog) > 0) {
-            const seller = await prisma.user.findUnique({ where: { id: sellerId } });
             await prisma.cost.create({
                 data: {
-                    companyId: seller?.companyId || 'c1',
+                    companyId: seller.companyId || userCompanyId || 'c1',
                     userId: sellerId,
                     amount: parseFloat(commissionToLog),
                     category: 'COMMISSION',
-                    description: `Comissão fechamento de ${seller?.name}`,
+                    description: `Comissão fechamento de ${seller.name}`,
                     date: new Date(),
                     paymentMethod: 'PIX',
                     status: 'APPROVED'
@@ -152,15 +202,22 @@ router.post('/pay-repasse', authMiddleware, async (req: AuthRequest, res) => {
 
         res.status(201).json(closing);
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao registrar pagamento de repasse' });
     }
 });
 
 // Photographer Closing
-router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
-        const { photographerId } = req.params;
+        const photographerId = req.params.photographerId as string;
+        const userCompanyId = req.user?.companyId;
         const dateParam = req.query.date as string;
+
+        const hasAccess = await canAccessSellerClosing(req.user, photographerId);
+        if (!hasAccess) {
+            res.status(403).json({ error: 'Forbidden: Sem permissão para visualizar o fechamento deste fotógrafo' });
+            return;
+        }
 
         let startDate = new Date();
         let endDate = new Date();
@@ -176,6 +233,7 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
         const books = await prisma.bookBatch.findMany({
             where: {
                 photographerId: photographerId as string,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -183,26 +241,30 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
             }
         });
 
-        // Sum photos taken in those books (if books have quantities) or just count books
         res.json({
             booksCount: books.length,
             books
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao carregar fechamento do fotógrafo' });
     }
 });
 
 // Custom Metrics Overview (by Date Range, Sellers, and City)
-router.get('/custom', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/custom', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const sellerIdsStr = req.query.sellerIds as string;
         const startDateParam = req.query.startDate as string;
         const endDateParam = req.query.endDate as string;
         const cityParam = req.query.city as string;
+        const userCompanyId = req.user?.companyId;
 
-        let whereSale: any = {};
-        let whereNonSale: any = {};
+        let whereSale: any = {
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        };
+        let whereNonSale: any = {
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        };
 
         if (sellerIdsStr) {
             const sellerIds = sellerIdsStr.split(',');
@@ -239,19 +301,26 @@ router.get('/custom', authMiddleware, async (req: AuthRequest, res) => {
             averageTicket
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao carregar métricas customizadas' });
     }
 });
 
 // City Closing
-router.get('/city/:city', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/city/:city', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const { city } = req.params;
         const sellerIdsStr = req.query.sellerIds as string;
         const dateParam = req.query.date as string;
+        const userCompanyId = req.user?.companyId;
 
-        let whereSale: any = { city };
-        let whereNonSale: any = { client: { city } };
+        let whereSale: any = {
+            city,
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        };
+        let whereNonSale: any = {
+            client: { city },
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        };
 
         if (sellerIdsStr) {
             const sellerIds = sellerIdsStr.split(',');
@@ -284,8 +353,9 @@ router.get('/city/:city', authMiddleware, async (req: AuthRequest, res) => {
             averageTicket
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao carregar fechamento da cidade' });
     }
 });
 
 export default router;
+

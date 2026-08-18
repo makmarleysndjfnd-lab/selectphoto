@@ -1,30 +1,53 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = Router();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+
+// Whitelist of allowed editable fields for Client during EDIT_REQUEST_APPROVAL
+const ALLOWED_CLIENT_FIELDS = new Set([
+  'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'condo',
+  'block', 'apartment', 'neighborhood', 'city', 'state', 'referencePoint',
+  'houseColor', 'gateColor', 'gateObservation', 'profession', 'visitTime',
+  'clothesColor', 'notes',
+]);
+
+function sanitizeProposedData(data: any): Record<string, any> {
+  if (!data || typeof data !== 'object') return {};
+  const sanitized: Record<string, any> = {};
+  for (const key of Object.keys(data)) {
+    if (ALLOWED_CLIENT_FIELDS.has(key)) {
+      sanitized[key] = data[key];
+    }
+  }
+  return sanitized;
+}
 
 // Lista as notificações do usuário logado
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+
     if (!userId) {
-      return res.status(401).json({ error: 'User ID is required' });
+      res.status(401).json({ error: 'User ID is required' });
+      return;
     }
 
     const notifications = await prisma.notification.findMany({
       where: {
         recipientId: userId,
-        status: { not: 'RESOLVED' } // Mostra UNREAD e READ
+        ...(companyId ? { companyId } : {}),
+        status: { not: 'RESOLVED' },
       },
       include: {
         sender: {
-          select: { name: true }
-        }
+          select: { name: true },
+        },
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
 
     res.json(notifications);
@@ -34,13 +57,29 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Marca uma notificação específica como lida
+// Marca uma notificação específica como lida (apenas o próprio destinatário)
 router.patch('/:id/read', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
+    const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+
+    const existing = await prisma.notification.findFirst({
+      where: {
+        id,
+        recipientId: userId,
+        ...(companyId ? { companyId } : {}),
+      },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Notification not found' });
+      return;
+    }
+
     const notification = await prisma.notification.update({
       where: { id },
-      data: { status: 'READ' }
+      data: { status: 'READ' },
     });
     res.json(notification);
   } catch (error) {
@@ -52,218 +91,260 @@ router.patch('/:id/read', authenticateToken, async (req: AuthRequest, res: Respo
 router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
-    const { actionType } = req.body; // 'ACCEPT' ou 'REJECT'
+    const { actionType } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
+    const userCompanyId = req.user?.companyId;
 
-    const notification = await prisma.notification.findUnique({
-      where: { id }
+    const notification = await prisma.notification.findFirst({
+      where: {
+        id,
+        recipientId: userId,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
     });
 
     if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
+      res.status(404).json({ error: 'Notification not found' });
+      return;
     }
 
     if (notification.status === 'RESOLVED') {
-      return res.status(400).json({ error: 'Notification already resolved' });
+      res.status(400).json({ error: 'Notification already resolved' });
+      return;
     }
 
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(userRole);
     const actionData = notification.actionData as any;
 
     if (actionType === 'UPDATE_KM') {
       if (notification.type === 'KM_REQUEST' && actionData && actionData.carId) {
         const { km } = req.body;
         if (typeof km !== 'number') {
-          return res.status(400).json({ error: 'O valor do KM é obrigatório e deve ser numérico' });
+          res.status(400).json({ error: 'O valor do KM é obrigatório e deve ser numérico' });
+          return;
         }
         
-        const car = await prisma.car.findUnique({ where: { id: actionData.carId } });
+        const car = await prisma.car.findFirst({
+          where: {
+            id: actionData.carId,
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+          },
+        });
+
         if (!car) {
-          return res.status(404).json({ error: 'Carro não encontrado' });
+          res.status(404).json({ error: 'Carro não encontrado' });
+          return;
         }
         
         if (km < car.currentKm) {
-          return res.status(400).json({ error: `KM inválido: o valor (${km}) não pode ser menor que o registrado atualmente (${car.currentKm}).`, code: 'KM_LOWER' });
+          res.status(400).json({ error: `KM inválido: o valor (${km}) não pode ser menor que o registrado atualmente (${car.currentKm}).`, code: 'KM_LOWER' });
+          return;
         }
         
         await prisma.car.update({
           where: { id: car.id },
-          data: { currentKm: km }
+          data: { currentKm: km },
         });
       } else {
-        return res.status(400).json({ error: 'Invalid notification type for UPDATE_KM' });
+        res.status(400).json({ error: 'Invalid notification type for UPDATE_KM' });
+        return;
       }
     } else if (actionType === 'ACCEPT') {
+      // Administrative approvals require Admin or Supervisor
+      const adminActions = ['COST_APPROVAL', 'STOCK_TRANSFER_COVER', 'STOCK_RETURN_COVER', 'EDIT_REQUEST_APPROVAL'];
+      if (adminActions.includes(notification.type) && !isAdminOrSupervisor) {
+        res.status(403).json({ error: 'Forbidden: Apenas administradores ou supervisores podem aprovar esta solicitação' });
+        return;
+      }
+
       switch (notification.type) {
         case 'COST_APPROVAL':
           if (actionData && actionData.costId) {
-            await prisma.cost.update({
-              where: { id: actionData.costId },
-              data: { status: 'APPROVED' }
-            });
-            if (actionData.nextOilChangeKm && actionData.carId) {
-              await prisma.car.update({
-                where: { id: actionData.carId },
-                data: { nextOilChangeKm: Number(actionData.nextOilChangeKm) }
+            await prisma.$transaction(async (tx) => {
+              await tx.cost.update({
+                where: { id: actionData.costId },
+                data: { status: 'APPROVED' },
               });
-            }
+              if (actionData.nextOilChangeKm && actionData.carId) {
+                await tx.car.update({
+                  where: { id: actionData.carId },
+                  data: { nextOilChangeKm: Number(actionData.nextOilChangeKm) },
+                });
+              }
+            });
           }
           break;
+
         case 'STOCK_TRANSFER_COVER':
           if (actionData && actionData.quantity && notification.senderId) {
             const quantity = Number(actionData.quantity);
-            const sellerBalance = await prisma.sellerCoverBalance.findUnique({
-              where: { sellerId: notification.senderId }
-            });
-            if (sellerBalance) {
-              await prisma.sellerCoverBalance.update({
-                where: { sellerId: notification.senderId },
-                data: { balance: sellerBalance.balance + quantity }
+            await prisma.$transaction(async (tx) => {
+              const sellerBalance = await tx.sellerCoverBalance.findUnique({
+                where: { sellerId: notification.senderId! },
               });
-            } else {
-              await prisma.sellerCoverBalance.create({
-                data: { sellerId: notification.senderId, balance: quantity }
+              if (sellerBalance) {
+                await tx.sellerCoverBalance.update({
+                  where: { sellerId: notification.senderId! },
+                  data: { balance: sellerBalance.balance + quantity },
+                });
+              } else {
+                await tx.sellerCoverBalance.create({
+                  data: { sellerId: notification.senderId!, balance: quantity },
+                });
+              }
+              
+              await tx.sellerCoverTransfer.create({
+                data: {
+                  sellerId: notification.senderId!,
+                  adminId: notification.recipientId,
+                  quantity: quantity,
+                  companyId: notification.companyId,
+                },
               });
-            }
-            
-            await prisma.sellerCoverTransfer.create({
-               data: {
-                 sellerId: notification.senderId,
-                 adminId: notification.recipientId,
-                 quantity: quantity,
-                 companyId: notification.companyId
-               }
             });
           }
           break;
+
         case 'COVER_TRANSFER_REQUEST':
           if (actionData && actionData.transferId && actionData.senderId && actionData.recipientId && actionData.quantity) {
             // First mark this notification as resolved
             await prisma.notification.update({
               where: { id: notification.id },
-              data: { status: 'RESOLVED' }
+              data: { status: 'RESOLVED' },
             });
 
-            // Check if the other party also accepted (has it been resolved?)
             const otherRole = actionData.role === 'ADMIN' ? 'RECIPIENT' : 'ADMIN';
-            
-            // Note: Since there could be multiple admins, any admin accepting is enough for the ADMIN role.
-            // But if there are multiple admin notifications, we just check if AT LEAST ONE admin has RESOLVED it, 
-            // OR if this is the admin, we check if the RECIPIENT has RESOLVED it.
             const otherNotifications = await prisma.notification.findMany({
               where: {
-                 type: 'COVER_TRANSFER_REQUEST',
-                 actionData: {
-                   path: ['transferId'],
-                   equals: actionData.transferId
-                 },
-                 status: 'RESOLVED',
-                 id: { not: notification.id } // exclude current one
-              }
+                type: 'COVER_TRANSFER_REQUEST',
+                actionData: {
+                  path: ['transferId'],
+                  equals: actionData.transferId,
+                },
+                status: 'RESOLVED',
+                id: { not: notification.id },
+              },
             });
 
-            // We need to see if the other role has accepted. 
-            // The actionData in JSON contains the role.
             let otherAccepted = false;
             for (const notif of otherNotifications) {
-                const data = notif.actionData as any;
-                if (data && data.role === otherRole) {
-                    otherAccepted = true;
-                    break;
-                }
+              const data = notif.actionData as any;
+              if (data && data.role === otherRole) {
+                otherAccepted = true;
+                break;
+              }
             }
 
             if (otherAccepted) {
-               // Execute transfer
-               const quantity = Number(actionData.quantity);
-               
-               // Decrement sender
-               await prisma.sellerCoverBalance.update({
+              const quantity = Number(actionData.quantity);
+              await prisma.$transaction(async (tx) => {
+                // Decrement sender
+                await tx.sellerCoverBalance.update({
                   where: { sellerId: actionData.senderId },
-                  data: { balance: { decrement: quantity } }
-               });
+                  data: { balance: { decrement: quantity } },
+                });
 
-               // Increment recipient
-               await prisma.sellerCoverBalance.upsert({
+                // Increment recipient
+                await tx.sellerCoverBalance.upsert({
                   where: { sellerId: actionData.recipientId },
                   update: { balance: { increment: quantity } },
-                  create: { sellerId: actionData.recipientId, balance: quantity }
-               });
-               
-               // Mark all related notifications as resolved so we don't duplicate
-               await prisma.notification.updateMany({
+                  create: { sellerId: actionData.recipientId, balance: quantity },
+                });
+                
+                // Mark all related notifications as resolved
+                await tx.notification.updateMany({
                   where: {
-                     type: 'COVER_TRANSFER_REQUEST',
-                     actionData: {
-                       path: ['transferId'],
-                       equals: actionData.transferId
-                     },
-                     status: 'UNREAD'
+                    type: 'COVER_TRANSFER_REQUEST',
+                    actionData: {
+                      path: ['transferId'],
+                      equals: actionData.transferId,
+                    },
+                    status: 'UNREAD',
                   },
-                  data: { status: 'RESOLVED' }
-               });
+                  data: { status: 'RESOLVED' },
+                });
+              });
             } else {
-               // Just return early since we already marked this one as resolved
-               return res.json({ success: true, message: 'Aceite registrado. Aguardando a outra parte.' });
+              res.json({ success: true, message: 'Aceite registrado. Aguardando a outra parte.' });
+              return;
             }
           }
           break;
+
         case 'STOCK_RETURN_COVER':
           if (actionData && actionData.quantity && notification.senderId) {
             const quantity = Number(actionData.quantity);
-            const sellerBalance = await prisma.sellerCoverBalance.findUnique({
-              where: { sellerId: notification.senderId }
-            });
-            if (sellerBalance) {
-              await prisma.sellerCoverBalance.update({
-                where: { sellerId: notification.senderId },
-                // Decrements balance on return
-                data: { balance: Math.max(0, sellerBalance.balance - quantity) }
+            await prisma.$transaction(async (tx) => {
+              const sellerBalance = await tx.sellerCoverBalance.findUnique({
+                where: { sellerId: notification.senderId! },
               });
-            }
-            // Record transfer history with negative quantity to signify return
-            await prisma.sellerCoverTransfer.create({
-               data: {
-                 sellerId: notification.senderId,
-                 adminId: notification.recipientId,
-                 quantity: -quantity,
-                 companyId: notification.companyId
-               }
+              if (sellerBalance) {
+                await tx.sellerCoverBalance.update({
+                  where: { sellerId: notification.senderId! },
+                  data: { balance: Math.max(0, sellerBalance.balance - quantity) },
+                });
+              }
+              await tx.sellerCoverTransfer.create({
+                data: {
+                  sellerId: notification.senderId!,
+                  adminId: notification.recipientId,
+                  quantity: -quantity,
+                  companyId: notification.companyId,
+                },
+              });
             });
           }
           break;
+
         case 'EDIT_REQUEST_APPROVAL':
           if (actionData && actionData.editRequestId) {
-            const editRequest = await prisma.clientEditRequest.findUnique({
-              where: { id: actionData.editRequestId }
+            const editRequest = await prisma.clientEditRequest.findFirst({
+              where: {
+                id: actionData.editRequestId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+              },
             });
             if (editRequest && editRequest.status === 'PENDING') {
-              const proposedData = editRequest.proposedData as any;
-              await prisma.client.update({
-                where: { id: editRequest.clientId },
-                data: { ...proposedData }
-              });
-              await prisma.clientEditRequest.update({
-                where: { id: actionData.editRequestId },
-                data: { status: 'APPROVED' }
-              });
+              const sanitizedData = sanitizeProposedData(editRequest.proposedData);
+              await prisma.$transaction([
+                prisma.client.update({
+                  where: { id: editRequest.clientId },
+                  data: sanitizedData,
+                }),
+                prisma.clientEditRequest.update({
+                  where: { id: actionData.editRequestId },
+                  data: { status: 'APPROVED' },
+                }),
+              ]);
             }
           }
           break;
       }
     } else if (actionType === 'REJECT') {
+      const adminActions = ['COST_APPROVAL', 'EDIT_REQUEST_APPROVAL'];
+      if (adminActions.includes(notification.type) && !isAdminOrSupervisor) {
+        res.status(403).json({ error: 'Forbidden: Apenas administradores ou supervisores podem rejeitar esta solicitação' });
+        return;
+      }
+
       if (notification.type === 'COST_APPROVAL' && actionData && actionData.costId) {
         await prisma.cost.update({
           where: { id: actionData.costId },
-          data: { status: 'REJECTED' }
+          data: { status: 'REJECTED' },
         });
       }
       if (notification.type === 'EDIT_REQUEST_APPROVAL' && actionData && actionData.editRequestId) {
-        const editRequest = await prisma.clientEditRequest.findUnique({
-          where: { id: actionData.editRequestId }
+        const editRequest = await prisma.clientEditRequest.findFirst({
+          where: {
+            id: actionData.editRequestId,
+            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+          },
         });
         if (editRequest && editRequest.status === 'PENDING') {
           await prisma.clientEditRequest.update({
             where: { id: actionData.editRequestId },
-            data: { status: 'REJECTED' }
+            data: { status: 'REJECTED' },
           });
         }
       }
@@ -284,8 +365,8 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
           status: 'UNREAD',
           senderId: req.user.id,
           recipientId: notification.senderId,
-          companyId: notification.companyId
-        }
+          companyId: notification.companyId,
+        },
       });
 
       if (sender?.fcmToken) {
@@ -300,7 +381,7 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
 
     const updatedNotification = await prisma.notification.update({
       where: { id },
-      data: { status: 'RESOLVED' }
+      data: { status: 'RESOLVED' },
     });
     
     res.json({ success: true, message: 'Action performed', notification: updatedNotification });
@@ -311,3 +392,4 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
 });
 
 export default router;
+

@@ -1,35 +1,97 @@
-import express from 'express';
+import express, { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 dotenv.config();
 
 const router = express.Router();
 const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
-// Create an edit request
-router.post('/', async (req, res) => {
-  const { clientId, photographerId, companyId, proposedData, reason } = req.body;
+// Whitelist of allowed editable fields for Client
+const ALLOWED_CLIENT_FIELDS = new Set([
+  'name',
+  'phone1',
+  'phone2',
+  'cep',
+  'street',
+  'number',
+  'condo',
+  'block',
+  'apartment',
+  'neighborhood',
+  'city',
+  'state',
+  'referencePoint',
+  'houseColor',
+  'gateColor',
+  'gateObservation',
+  'profession',
+  'visitTime',
+  'clothesColor',
+  'notes',
+]);
+
+function sanitizeProposedData(data: any): Record<string, any> {
+  if (!data || typeof data !== 'object') return {};
+  const sanitized: Record<string, any> = {};
+  for (const key of Object.keys(data)) {
+    if (ALLOWED_CLIENT_FIELDS.has(key)) {
+      sanitized[key] = data[key];
+    }
+  }
+  return sanitized;
+}
+
+// Create an edit request (authenticated users: photographers/sellers/admins)
+router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
+  const { clientId, proposedData, reason } = req.body;
+  const userCompanyId = req.user?.companyId;
+  const userId = req.user?.id;
+
+  if (!clientId || !proposedData) {
+    res.status(400).json({ error: 'clientId e proposedData são obrigatórios' });
+    return;
+  }
 
   try {
+    // Verify that client exists and belongs to the user's company
+    const client = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!client) {
+      res.status(404).json({ error: 'Cliente não encontrado ou não pertence à sua empresa' });
+      return;
+    }
+
+    const sanitizedData = sanitizeProposedData(proposedData);
+    if (Object.keys(sanitizedData).length === 0) {
+      res.status(400).json({ error: 'Nenhum campo válido para alteração fornecido' });
+      return;
+    }
+
     const editRequest = await prisma.clientEditRequest.create({
       data: {
         clientId,
-        photographerId,
-        companyId,
-        proposedData,
-        reason,
+        photographerId: userId,
+        companyId: client.companyId || userCompanyId,
+        proposedData: sanitizedData,
+        reason: typeof reason === 'string' ? reason.slice(0, 500) : undefined,
         status: 'PENDING',
       },
-      include: { client: true, photographer: true }
+      include: { client: true, photographer: true },
     });
 
-    // Notify admins
+    // Notify company admins
     const admins = await prisma.user.findMany({
-      where: { 
-        companyId: companyId || undefined,
-        role: { in: ['ADMIN', 'SUPERADMIN'] }
-      }
+      where: {
+        companyId: client.companyId || userCompanyId || undefined,
+        role: { in: ['ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN', 'SUPERVISOR'] },
+      },
     });
 
     const requesterName = editRequest.photographer?.name || 'Vendedor/Fotógrafo';
@@ -43,10 +105,10 @@ router.post('/', async (req, res) => {
           type: 'EDIT_REQUEST_APPROVAL',
           status: 'UNREAD',
           recipientId: admin.id,
-          senderId: photographerId,
-          companyId: companyId,
-          actionData: { editRequestId: editRequest.id, proposedData }
-        }
+          senderId: userId,
+          companyId: client.companyId || userCompanyId,
+          actionData: { editRequestId: editRequest.id, proposedData: sanitizedData },
+        },
       });
     }
 
@@ -57,18 +119,23 @@ router.post('/', async (req, res) => {
   }
 });
 
-// List pending edit requests
-router.get('/pending', async (req, res) => {
+// List pending edit requests for current user's company (Admin or Supervisor)
+router.get('/pending', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+
     const requests = await prisma.clientEditRequest.findMany({
-      where: { status: 'PENDING' },
+      where: {
+        status: 'PENDING',
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
       include: {
         client: true,
         photographer: {
-          select: { name: true, id: true }
-        }
+          select: { name: true, id: true },
+        },
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
 
     res.json(requests);
@@ -78,40 +145,41 @@ router.get('/pending', async (req, res) => {
   }
 });
 
-// Approve an edit request
-router.post('/:id/approve', async (req, res) => {
-  const { id } = req.params;
+// Approve an edit request (Admin or Supervisor in the same company)
+router.post('/:id/approve', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const userCompanyId = req.user?.companyId;
 
   try {
-    const editRequest = await prisma.clientEditRequest.findUnique({
-      where: { id }
+    const editRequest = await prisma.clientEditRequest.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
     });
 
     if (!editRequest) {
-      return res.status(404).json({ error: 'Solicitação não encontrada' });
+      res.status(404).json({ error: 'Solicitação não encontrada' });
+      return;
     }
 
     if (editRequest.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Solicitação já processada' });
+      res.status(400).json({ error: 'Solicitação já processada' });
+      return;
     }
 
-    // Process the update on the client
-    const proposedData = editRequest.proposedData as any;
-    
-    // Update client with proposed data
-    // Remove fields that should not be dynamically updated via proposedData if any, or just trust the app.
-    await prisma.client.update({
-      where: { id: editRequest.clientId },
-      data: {
-        ...proposedData
-      }
-    });
+    const sanitizedData = sanitizeProposedData(editRequest.proposedData);
 
-    // Mark request as APPROVED
-    const updatedRequest = await prisma.clientEditRequest.update({
-      where: { id },
-      data: { status: 'APPROVED' }
-    });
+    const [updatedClient, updatedRequest] = await prisma.$transaction([
+      prisma.client.update({
+        where: { id: editRequest.clientId },
+        data: sanitizedData,
+      }),
+      prisma.clientEditRequest.update({
+        where: { id },
+        data: { status: 'APPROVED' },
+      }),
+    ]);
 
     res.json(updatedRequest);
   } catch (error) {
@@ -120,27 +188,32 @@ router.post('/:id/approve', async (req, res) => {
   }
 });
 
-// Reject an edit request
-router.post('/:id/reject', async (req, res) => {
-  const { id } = req.params;
+// Reject an edit request (Admin or Supervisor in the same company)
+router.post('/:id/reject', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const userCompanyId = req.user?.companyId;
 
   try {
-    const editRequest = await prisma.clientEditRequest.findUnique({
-      where: { id }
+    const editRequest = await prisma.clientEditRequest.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
     });
 
     if (!editRequest) {
-      return res.status(404).json({ error: 'Solicitação não encontrada' });
+      res.status(404).json({ error: 'Solicitação não encontrada' });
+      return;
     }
 
     if (editRequest.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Solicitação já processada' });
+      res.status(400).json({ error: 'Solicitação já processada' });
+      return;
     }
 
-    // Mark request as REJECTED
     const updatedRequest = await prisma.clientEditRequest.update({
       where: { id },
-      data: { status: 'REJECTED' }
+      data: { status: 'REJECTED' },
     });
 
     res.json(updatedRequest);
@@ -151,3 +224,5 @@ router.post('/:id/reject', async (req, res) => {
 });
 
 export default router;
+
+

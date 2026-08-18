@@ -187,13 +187,42 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
 router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { sequenceNumber, sellerId } = req.body;
+    const userCompanyId = req.user?.companyId;
+
     if (!sequenceNumber || !sellerId) {
       res.status(400).json({ error: 'Faltam sequenceNumber ou sellerId' });
       return;
     }
+
+    // Verify seller belongs to company
+    const seller = await prisma.user.findFirst({
+      where: {
+        id: sellerId,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!seller) {
+      res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+      return;
+    }
+
+    // Find client in same company
+    const existingClient = await prisma.client.findFirst({
+      where: {
+        sequenceNumber,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!existingClient) {
+      res.status(404).json({ error: 'Cliente não encontrado na sua empresa' });
+      return;
+    }
+
     const client = await prisma.client.update({
-      where: { sequenceNumber },
-      data: { assignedSellerId: sellerId }
+      where: { id: existingClient.id },
+      data: { assignedSellerId: sellerId },
     });
     res.json({ success: true, client });
   } catch (error) {
@@ -239,16 +268,30 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
 router.patch('/batch-assign', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { clientIds, assignedSellerId } = req.body;
+    const userCompanyId = req.user?.companyId;
 
     if (!Array.isArray(clientIds) || clientIds.length === 0 || !assignedSellerId) {
       res.status(400).json({ error: 'Lista de fichas ou vendedor inválido' });
       return;
     }
 
+    // Verify seller belongs to user's company
+    const seller = await prisma.user.findFirst({
+      where: {
+        id: assignedSellerId,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!seller) {
+      res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+      return;
+    }
+
     const updated = await prisma.client.updateMany({
       where: {
         id: { in: clientIds },
-        companyId: req.user?.companyId
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
       },
       data: {
         assignedSellerId,
