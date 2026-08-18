@@ -3,6 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.extractCleanJson = extractCleanJson;
+exports.computeExactDurationDays = computeExactDurationDays;
 const express_1 = require("express");
 const client_1 = require("@prisma/client");
 const genai_1 = require("@google/genai");
@@ -10,11 +12,22 @@ const path_1 = __importDefault(require("path"));
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const ibgeService_1 = require("../services/ibgeService");
 const router = (0, express_1.Router)();
-const prisma = new client_1.PrismaClient();
+const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 // Initialize Gemini AI Client
 const ai = process.env.GEMINI_API_KEY
     ? new genai_1.GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
     : null;
+// Helper to robustly extract clean JSON from AI responses (even with conversational wrappers)
+function extractCleanJson(text) {
+    let cleaned = text.trim();
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+    return cleaned;
+}
 // Helper for exact duration calculation
 function computeExactDurationDays(startDateStr, endDateStr, providedDays) {
     if (startDateStr && endDateStr) {
@@ -143,7 +156,7 @@ router.post('/search', authMiddleware_1.authenticateToken, async (req, res) => {
             }
             throw err;
         }
-        const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const cleanJson = extractCleanJson(text);
         let result;
         try {
             result = JSON.parse(cleanJson);
@@ -292,7 +305,7 @@ router.get('/state-radar', authMiddleware_1.authenticateToken, async (req, res) 
                 }
                 text = '{"events":[]}';
             }
-            const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const cleanJson = extractCleanJson(text);
             try {
                 resultData = JSON.parse(cleanJson);
                 // Enrich data with IBGE and compute exact duration

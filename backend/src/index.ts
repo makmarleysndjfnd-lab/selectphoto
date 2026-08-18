@@ -9,14 +9,23 @@ const app = express();
 const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 const port = process.env.PORT || 3000;
 
+import path from 'path';
+import { requestLogger } from './middleware/requestLogger';
+
+app.use(requestLogger);
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increased limit for base64 signatures
-import path from 'path';
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+  });
 });
+
 
 import authRoutes from './routes/auth';
 import teamRoutes from './routes/teams';

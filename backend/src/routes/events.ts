@@ -7,15 +7,27 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { enrichCityData } from '../services/ibgeService';
 
 const router = Router();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
 // Initialize Gemini AI Client
 const ai = process.env.GEMINI_API_KEY 
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 
+// Helper to robustly extract clean JSON from AI responses (even with conversational wrappers)
+export function extractCleanJson(text: string): string {
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+  return cleaned;
+}
+
 // Helper for exact duration calculation
-function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
+export function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
   if (startDateStr && endDateStr) {
     const s = new Date(startDateStr.split('T')[0]);
     const e = new Date(endDateStr.split('T')[0]);
@@ -31,6 +43,7 @@ function computeExactDurationDays(startDateStr?: string, endDateStr?: string, pr
   }
   return 1;
 }
+
 
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -146,7 +159,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       throw err;
     }
 
-    const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const cleanJson = extractCleanJson(text);
     let result;
     try {
       result = JSON.parse(cleanJson);
@@ -159,6 +172,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       console.warn("JSON Parse Failed, defaulting to empty result:", text);
       result = { cityInfo: {}, events: [] };
     }
+
     
     // Inject the AI source into the response
     if (result.cityInfo) {
@@ -305,9 +319,10 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         text = '{"events":[]}'; 
       }
       
-      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const cleanJson = extractCleanJson(text);
       try {
         resultData = JSON.parse(cleanJson);
+
         
         // Enrich data with IBGE and compute exact duration
         if (resultData && resultData.events && Array.isArray(resultData.events)) {

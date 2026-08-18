@@ -11,12 +11,19 @@ dotenv_1.default.config();
 const app = (0, express_1.default)();
 const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 const port = process.env.PORT || 3000;
+const path_1 = __importDefault(require("path"));
+const requestLogger_1 = require("./middleware/requestLogger");
+app.use(requestLogger_1.requestLogger);
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' })); // Increased limit for base64 signatures
-const path_1 = __importDefault(require("path"));
 app.use('/uploads', express_1.default.static(path_1.default.join(__dirname, '../uploads')));
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date() });
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptimeSeconds: Math.floor(process.uptime()),
+        memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    });
 });
 const auth_1 = __importDefault(require("./routes/auth"));
 const teams_1 = __importDefault(require("./routes/teams"));
