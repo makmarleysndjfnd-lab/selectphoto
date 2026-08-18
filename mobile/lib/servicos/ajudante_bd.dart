@@ -20,8 +20,9 @@ class DbHelper {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _onUpgradeDB,
     );
   }
 
@@ -30,8 +31,8 @@ class DbHelper {
     return join(dbPath, 'central_fotografica.db');
   }
 
-  Future _createDB(Database db, int version) async {
-    // Sync Queue Table
+  Future<void> _createDB(Database db, int version) async {
+    // Sync Queue Table with retry tracking
     await db.execute('''
       CREATE TABLE sync_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +40,10 @@ class DbHelper {
         method TEXT NOT NULL,
         payload TEXT NOT NULL,
         status TEXT NOT NULL,
-        createdAt TEXT NOT NULL
+        retryCount INTEGER NOT NULL DEFAULT 0,
+        lastError TEXT,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT
       )
     ''');
 
@@ -123,23 +127,41 @@ class DbHelper {
     ''');
   }
 
-  Future<void> insertSyncTask(String endpoint, String method, Map<String, dynamic> payload) async {
+  Future<void> _onUpgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      try {
+        await db.execute('ALTER TABLE sync_queue ADD COLUMN retryCount INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE sync_queue ADD COLUMN lastError TEXT');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE sync_queue ADD COLUMN updatedAt TEXT');
+      } catch (_) {}
+    }
+  }
+
+  Future<int> insertSyncTask(String endpoint, String method, Map<String, dynamic> payload) async {
     final db = await instance.database;
-    await db.insert('sync_queue', {
+    final now = DateTime.now().toIso8601String();
+    return await db.insert('sync_queue', {
       'endpoint': endpoint,
       'method': method,
       'payload': jsonEncode(payload),
       'status': 'PENDING',
-      'createdAt': DateTime.now().toIso8601String(),
+      'retryCount': 0,
+      'lastError': null,
+      'createdAt': now,
+      'updatedAt': now,
     });
   }
 
-  Future<List<Map<String, dynamic>>> getPendingSyncTasks() async {
+  Future<List<Map<String, dynamic>>> getPendingSyncTasks({int maxRetries = 5}) async {
     final db = await instance.database;
     return await db.query(
       'sync_queue',
-      where: 'status = ?',
-      whereArgs: ['PENDING'],
+      where: 'status = ? AND retryCount < ?',
+      whereArgs: ['PENDING', maxRetries],
       orderBy: 'createdAt ASC',
     );
   }
@@ -148,9 +170,42 @@ class DbHelper {
     final db = await instance.database;
     await db.update(
       'sync_queue',
-      {'status': 'COMPLETED'},
+      {
+        'status': 'COMPLETED',
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
   }
+
+  Future<void> recordTaskFailure(int id, String error, {int maxRetries = 5}) async {
+    final db = await instance.database;
+    final tasks = await db.query('sync_queue', where: 'id = ?', whereArgs: [id]);
+    if (tasks.isNotEmpty) {
+      final currentRetries = (tasks.first['retryCount'] as int? ?? 0) + 1;
+      final newStatus = currentRetries >= maxRetries ? 'FAILED' : 'PENDING';
+      await db.update(
+        'sync_queue',
+        {
+          'retryCount': currentRetries,
+          'lastError': error,
+          'status': newStatus,
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  Future<void> clearCompletedTasks() async {
+    final db = await instance.database;
+    await db.delete(
+      'sync_queue',
+      where: 'status = ?',
+      whereArgs: ['COMPLETED'],
+    );
+  }
 }
+

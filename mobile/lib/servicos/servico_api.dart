@@ -43,9 +43,21 @@ class ApiService {
         }
         return handler.next(options);
       },
+      onError: (DioException error, handler) async {
+        if (error.response?.statusCode == 401) {
+          // Token expired or invalid: clear local cached token
+          _token = null;
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove('jwt_token');
+          } catch (_) {}
+        }
+        return handler.next(error);
+      },
     ));
     _isInit = true;
   }
+
 
   void updateBaseUrl(String newUrl) {
     _baseUrl = newUrl;
