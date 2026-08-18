@@ -2,24 +2,38 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.restoreBackupJson = exports.generateBackupJson = void 0;
 const client_1 = require("@prisma/client");
-const prisma = new client_1.PrismaClient();
-const generateBackupJson = async () => {
-    // Pega a lista de todos os modelos através do DMMF
+const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const generateBackupJson = async (companyId) => {
     const models = client_1.Prisma.dmmf.datamodel.models;
     const backupData = {
         _metadata: {
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            companyId: companyId || 'GLOBAL',
+            version: '1.0',
         }
     };
     for (const model of models) {
         const modelName = model.name;
-        // O nome da propriedade no prismaClient é geralmente minúsculo com o primeiro caractere em minúsculo
         const prismaProp = modelName.charAt(0).toLowerCase() + modelName.slice(1);
         try {
             // @ts-ignore
             if (prisma[prismaProp] && typeof prisma[prismaProp].findMany === 'function') {
+                const hasCompanyIdField = model.fields.some(f => f.name === 'companyId');
+                let whereClause = undefined;
+                if (companyId && hasCompanyIdField) {
+                    whereClause = { companyId };
+                }
+                else if (companyId && !hasCompanyIdField) {
+                    // If model has no direct companyId (e.g. system configurations), skip if doing tenant-scoped backup
+                    if (['User', 'Team', 'Car'].includes(modelName)) {
+                        whereClause = { companyId };
+                    }
+                    else {
+                        continue;
+                    }
+                }
                 // @ts-ignore
-                const rows = await prisma[prismaProp].findMany();
+                const rows = await prisma[prismaProp].findMany(whereClause ? { where: whereClause } : undefined);
                 backupData[modelName] = rows;
             }
         }
@@ -31,13 +45,15 @@ const generateBackupJson = async () => {
 };
 exports.generateBackupJson = generateBackupJson;
 const restoreBackupJson = async (backupData) => {
+    if (!backupData || typeof backupData !== 'object' || !backupData._metadata) {
+        throw new Error('Formato de arquivo de backup inválido.');
+    }
     await prisma.$transaction(async (tx) => {
-        // Disable foreign key checks for Postgres
+        // Disable foreign key checks for Postgres during restore
         await tx.$executeRawUnsafe(`SET session_replication_role = replica;`);
         try {
-            // Loop backwards or any order to delete and recreate. Since FKs are disabled, order doesn't matter strictly for Postgres, but let's just do it.
             for (const model of Object.keys(backupData)) {
-                if (model === '_metadata')
+                if (model.startsWith('_'))
                     continue;
                 const prismaProp = model.charAt(0).toLowerCase() + model.slice(1);
                 // @ts-ignore
@@ -45,7 +61,7 @@ const restoreBackupJson = async (backupData) => {
                     // @ts-ignore
                     await tx[prismaProp].deleteMany({});
                     const rows = backupData[model];
-                    if (rows && rows.length > 0) {
+                    if (Array.isArray(rows) && rows.length > 0) {
                         // @ts-ignore
                         await tx[prismaProp].createMany({ data: rows });
                     }
@@ -57,7 +73,7 @@ const restoreBackupJson = async (backupData) => {
             await tx.$executeRawUnsafe(`SET session_replication_role = DEFAULT;`);
         }
     }, {
-        timeout: 30000 // Aumenta timeout caso banco seja grande
+        timeout: 60000
     });
 };
 exports.restoreBackupJson = restoreBackupJson;

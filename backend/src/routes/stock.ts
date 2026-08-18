@@ -1,34 +1,39 @@
-import express from 'express';
+import express, { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
-const router = express.Router();
-const prisma = new PrismaClient();
+import { v4 as uuidv4 } from 'uuid';
 
-// Add stock batch
-router.post('/batch', authMiddleware, async (req: AuthRequest, res) => {
+const router = express.Router();
+const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+
+// Add stock batch (Admin or Supervisor only)
+router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
-    const { quantity, companyId } = req.body;
-    
-    // Fallback to user company if not provided
+    const { quantity } = req.body;
     const userCompanyId = req.user?.companyId;
-    const finalCompanyId = companyId || userCompanyId;
+
+    const parsedQty = parseInt(quantity, 10);
+    if (isNaN(parsedQty) || parsedQty <= 0) {
+      res.status(400).json({ error: 'A quantidade do lote deve ser um número inteiro positivo.' });
+      return;
+    }
 
     const batch = await prisma.coverStockBatch.create({
       data: {
-        quantity: parseInt(quantity),
-        companyId: finalCompanyId,
+        quantity: parsedQty,
+        companyId: userCompanyId,
       },
     });
 
     res.status(201).json(batch);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || 'Erro ao adicionar lote de estoque' });
   }
 });
 
-// List stock batches
-router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
+// List stock batches (Scoped by company)
+router.get('/batch', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
     const batches = await prisma.coverStockBatch.findMany({
@@ -37,12 +42,12 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
     });
     res.json(batches);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || 'Erro ao listar lotes de estoque' });
   }
 });
 
 // Get total stock info (Admin hand vs Seller hand)
-router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
+router.get('/info', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const companyId = req.user?.companyId;
         
@@ -60,7 +65,7 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
 
         const totalInAdmin = (adminBatches._sum.quantity || 0) - (sellerTransfers._sum.quantity || 0);
 
-        // Get all sellers
+        // Get all sellers in the same company
         const sellers = await prisma.user.findMany({
             where: {
                 role: {
@@ -76,7 +81,6 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
 
         const totalWithSellers = sellersBalance.reduce((acc, curr) => acc + curr.balance, 0);
 
-        // Map sellers to include balance
         const sellersWithBalance = sellers.map(seller => {
             const balanceRecord = sellersBalance.find(b => b.sellerId === seller.id);
             return {
@@ -91,33 +95,50 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res) => {
             sellers: sellersWithBalance
         });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao carregar informações de estoque' });
     }
 });
 
-// Transfer covers to seller (Add, Edit, Delete)
-router.post('/transfer', authMiddleware, async (req: AuthRequest, res) => {
+// Transfer covers to seller (Admin or Supervisor only)
+router.post('/transfer', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
-        const { sellerId, quantity, companyId } = req.body;
+        const { sellerId, quantity } = req.body;
         const adminId = req.user?.id;
+        const companyId = req.user?.companyId;
 
-        if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+        const parsedQty = parseInt(quantity, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+            res.status(400).json({ error: 'A quantidade para transferência deve ser um número inteiro positivo.' });
+            return;
+        }
+
+        // Verify seller belongs to company
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: sellerId,
+                ...(companyId ? { companyId } : {}),
+            }
+        });
+
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+            return;
+        }
 
         const transfer = await prisma.$transaction(async (tx) => {
             const newTransfer = await tx.sellerCoverTransfer.create({
                 data: {
                     sellerId,
-                    adminId,
-                    quantity: parseInt(quantity),
-                    companyId: companyId || req.user?.companyId,
+                    adminId: adminId!,
+                    quantity: parsedQty,
+                    companyId: companyId,
                 }
             });
 
-            // Update balance
             const balance = await tx.sellerCoverBalance.upsert({
                 where: { sellerId },
-                update: { balance: { increment: parseInt(quantity) } },
-                create: { sellerId, balance: parseInt(quantity) }
+                update: { balance: { increment: parsedQty } },
+                create: { sellerId, balance: parsedQty }
             });
 
             return { transfer: newTransfer, balance };
@@ -125,23 +146,40 @@ router.post('/transfer', authMiddleware, async (req: AuthRequest, res) => {
 
         res.status(201).json(transfer);
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao transferir capas' });
     }
 });
 
 // Seller requests to return covers to Admin
-router.post('/return-cover', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/return-cover', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const { quantity } = req.body;
         const sellerId = req.user?.id;
         const companyId = req.user?.companyId;
 
-        if (!sellerId) return res.status(401).json({ error: 'Unauthorized' });
+        const parsedQty = parseInt(quantity, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+            res.status(400).json({ error: 'A quantidade para devolução deve ser um número inteiro positivo.' });
+            return;
+        }
 
         const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+        if (!seller) {
+            res.status(404).json({ error: 'Usuário não encontrado' });
+            return;
+        }
+
+        const sellerBalance = await prisma.sellerCoverBalance.findUnique({ where: { sellerId } });
+        if (!sellerBalance || sellerBalance.balance < parsedQty) {
+            res.status(400).json({ error: `Saldo insuficiente. Seu saldo atual é de ${sellerBalance?.balance || 0} capas.` });
+            return;
+        }
 
         const admins = await prisma.user.findMany({
-            where: { role: 'ADMIN', companyId }
+            where: {
+                role: { in: ['ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN', 'SUPERVISOR'] },
+                ...(companyId ? { companyId } : {}),
+            }
         });
 
         const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null) as string[];
@@ -150,10 +188,10 @@ router.post('/return-cover', authMiddleware, async (req: AuthRequest, res) => {
             await prisma.notification.create({
                 data: {
                     title: 'Devolução de Capas',
-                    message: `${seller?.name || 'Vendedor'} deseja devolver ${quantity} capas.`,
+                    message: `${seller.name} deseja devolver ${parsedQty} capas.`,
                     type: 'STOCK_RETURN_COVER',
                     status: 'UNREAD',
-                    actionData: { quantity },
+                    actionData: { quantity: parsedQty },
                     senderId: sellerId,
                     recipientId: admin.id,
                     companyId
@@ -161,44 +199,62 @@ router.post('/return-cover', authMiddleware, async (req: AuthRequest, res) => {
             });
         }
 
-        await sendPushNotification(
-          adminTokens,
-          'Devolução de Capas',
-          `${seller?.name || 'Vendedor'} deseja devolver ${quantity} capas.`,
-          { type: 'STOCK_RETURN_COVER', quantity }
-        );
+        if (adminTokens.length > 0) {
+          await sendPushNotification(
+            adminTokens,
+            'Devolução de Capas',
+            `${seller.name} deseja devolver ${parsedQty} capas.`,
+            { type: 'STOCK_RETURN_COVER', quantity: parsedQty }
+          );
+        }
 
-        res.status(201).json({ success: true, message: 'Return request sent' });
+        res.status(201).json({ success: true, message: 'Solicitação de devolução enviada' });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao solicitar devolução de capas' });
     }
 });
 
 // User (Seller/Photographer) requests covers/books from another user or Admin
-router.post('/request-transfer', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/request-transfer', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
-        const { recipientId, quantity, itemType } = req.body; // itemType: 'COVER' or 'BOOK'
+        const { recipientId, quantity, itemType } = req.body;
         const senderId = req.user?.id;
         const companyId = req.user?.companyId;
 
-        if (!senderId || !recipientId) return res.status(400).json({ error: 'Missing parameters' });
+        const parsedQty = parseInt(quantity, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+            res.status(400).json({ error: 'A quantidade deve ser um número inteiro positivo.' });
+            return;
+        }
+
+        if (!senderId || !recipientId) {
+            res.status(400).json({ error: 'Parâmetros obrigatórios ausentes' });
+            return;
+        }
 
         const sender = await prisma.user.findUnique({ where: { id: senderId } });
-        const recipient = await prisma.user.findUnique({ where: { id: recipientId } });
+        const recipient = await prisma.user.findFirst({
+            where: {
+                id: recipientId,
+                ...(companyId ? { companyId } : {}),
+            }
+        });
 
-        if (!sender || !recipient) return res.status(404).json({ error: 'User not found' });
+        if (!sender || !recipient) {
+            res.status(404).json({ error: 'Destinatário não encontrado na sua empresa' });
+            return;
+        }
 
         const notifType = itemType === 'BOOK' ? 'STOCK_TRANSFER_BOOK' : 'STOCK_TRANSFER_COVER';
         const itemName = itemType === 'BOOK' ? 'Books' : 'Capas';
 
-        // Notify the recipient (they must accept to give the items)
         await prisma.notification.create({
             data: {
                 title: `Solicitação de ${itemName}`,
-                message: `${sender.name} está solicitando ${quantity} ${itemName}.`,
+                message: `${sender.name} está solicitando ${parsedQty} ${itemName}.`,
                 type: notifType,
                 status: 'UNREAD',
-                actionData: { quantity, itemType },
+                actionData: { quantity: parsedQty, itemType },
                 senderId: senderId,
                 recipientId: recipientId,
                 companyId
@@ -209,81 +265,71 @@ router.post('/request-transfer', authMiddleware, async (req: AuthRequest, res) =
             await sendPushNotification(
                 [recipient.fcmToken],
                 `Solicitação de ${itemName}`,
-                `${sender.name} está solicitando ${quantity} ${itemName}.`,
-                { type: notifType, quantity }
-            );
-        }
-
-        // Notify Admin as well (just for visibility/INFO)
-        const admins = await prisma.user.findMany({
-            where: { role: 'ADMIN', companyId }
-        });
-        const adminTokens = admins.filter(a => a.fcmToken != null && a.id !== recipientId).map(a => a.fcmToken as string);
-
-        for (const admin of admins) {
-            if (admin.id === recipientId) continue; // already notified above
-            await prisma.notification.create({
-                data: {
-                    title: `Nova Solicitação de ${itemName}`,
-                    message: `${sender.name} solicitou ${quantity} ${itemName} para ${recipient.name}.`,
-                    type: 'INFO',
-                    status: 'UNREAD',
-                    senderId: senderId,
-                    recipientId: admin.id,
-                    companyId
-                }
-            });
-        }
-
-        if (adminTokens.length > 0) {
-            await sendPushNotification(
-                adminTokens,
-                `Nova Solicitação de ${itemName}`,
-                `${sender.name} solicitou ${quantity} ${itemName} para ${recipient.name}.`,
-                { type: 'INFO' }
+                `${sender.name} está solicitando ${parsedQty} ${itemName}.`,
+                { type: notifType, quantity: parsedQty }
             );
         }
 
         res.status(201).json({ success: true, message: 'Transfer request sent' });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao solicitar transferência' });
     }
 });
+
 // Transfer covers between sellers
-router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest, res) => {
+router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const { recipientId, quantity } = req.body;
         const senderId = req.user?.id;
         const companyId = req.user?.companyId;
 
-        if (!senderId || !recipientId) return res.status(400).json({ error: 'Missing parameters' });
+        const parsedQty = parseInt(quantity, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+            res.status(400).json({ error: 'A quantidade deve ser um número inteiro positivo.' });
+            return;
+        }
+
+        if (!senderId || !recipientId) {
+            res.status(400).json({ error: 'Missing parameters' });
+            return;
+        }
 
         const sender = await prisma.user.findUnique({ where: { id: senderId } });
-        const recipient = await prisma.user.findUnique({ where: { id: recipientId } });
+        const recipient = await prisma.user.findFirst({
+            where: {
+                id: recipientId,
+                ...(companyId ? { companyId } : {}),
+            }
+        });
 
-        if (!sender || !recipient) return res.status(404).json({ error: 'User not found' });
+        if (!sender || !recipient) {
+            res.status(404).json({ error: 'Vendedor destinatário não encontrado na sua empresa' });
+            return;
+        }
 
         const senderBalance = await prisma.sellerCoverBalance.findUnique({ where: { sellerId: senderId } });
-        if (!senderBalance || senderBalance.balance < quantity) {
-            return res.status(400).json({ error: 'Insufficient covers' });
+        if (!senderBalance || senderBalance.balance < parsedQty) {
+            res.status(400).json({ error: `Saldo insuficiente. Seu saldo atual é de ${senderBalance?.balance || 0} capas.` });
+            return;
         }
 
         const admins = await prisma.user.findMany({
-            where: { role: 'ADMIN', companyId }
+            where: {
+                role: { in: ['ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN', 'SUPERVISOR'] },
+                ...(companyId ? { companyId } : {}),
+            }
         });
 
-        // Use a unique ID to link both notifications
-        const { v4: uuidv4 } = require('uuid');
         const transferId = uuidv4();
 
         // Notify Recipient
         await prisma.notification.create({
             data: {
                 title: 'Transferência de Capas',
-                message: `${sender.name} quer transferir ${quantity} capas para você. Confirme para aceitar.`,
+                message: `${sender.name} quer transferir ${parsedQty} capas para você. Confirme para aceitar.`,
                 type: 'COVER_TRANSFER_REQUEST',
                 status: 'UNREAD',
-                actionData: { quantity, senderId, recipientId, transferId, role: 'RECIPIENT' },
+                actionData: { quantity: parsedQty, senderId, recipientId, transferId, role: 'RECIPIENT' },
                 senderId: senderId,
                 recipientId: recipientId,
                 companyId
@@ -294,7 +340,7 @@ router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest
             await sendPushNotification(
                 [recipient.fcmToken],
                 'Transferência de Capas',
-                `${sender.name} quer transferir ${quantity} capas para você.`,
+                `${sender.name} quer transferir ${parsedQty} capas para você.`,
                 { type: 'COVER_TRANSFER_REQUEST' }
             );
         }
@@ -305,10 +351,10 @@ router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest
             await prisma.notification.create({
                 data: {
                     title: 'Transferência de Capas (Aprovação)',
-                    message: `${sender.name} quer transferir ${quantity} capas para ${recipient.name}.`,
+                    message: `${sender.name} quer transferir ${parsedQty} capas para ${recipient.name}.`,
                     type: 'COVER_TRANSFER_REQUEST',
                     status: 'UNREAD',
-                    actionData: { quantity, senderId, recipientId, transferId, role: 'ADMIN' },
+                    actionData: { quantity: parsedQty, senderId, recipientId, transferId, role: 'ADMIN' },
                     senderId: senderId,
                     recipientId: admin.id,
                     companyId
@@ -320,52 +366,73 @@ router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest
             await sendPushNotification(
                 adminTokens,
                 'Transferência de Capas (Aprovação)',
-                `${sender.name} quer transferir ${quantity} capas para ${recipient.name}.`,
+                `${sender.name} quer transferir ${parsedQty} capas para ${recipient.name}.`,
                 { type: 'COVER_TRANSFER_REQUEST' }
             );
         }
 
         res.status(201).json({ success: true, message: 'Transfer request sent' });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao transferir capas entre vendedores' });
     }
 });
 
-// Defective cover return
-router.post('/defective', authMiddleware, async (req: AuthRequest, res) => {
+// Defective cover return (Admin or Supervisor only)
+router.post('/defective', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
         const { quantity, sellerId } = req.body;
-        const adminId = req.user?.id;
         const companyId = req.user?.companyId;
 
-        if (!adminId || !sellerId) return res.status(400).json({ error: 'Missing parameters' });
-
-        const seller = await prisma.user.findUnique({ where: { id: sellerId } });
-        if (!seller) return res.status(404).json({ error: 'User not found' });
-
-        const sellerBalance = await prisma.sellerCoverBalance.findUnique({ where: { sellerId } });
-        if (!sellerBalance || sellerBalance.balance < quantity) {
-            return res.status(400).json({ error: 'Insufficient covers' });
+        const parsedQty = parseInt(quantity, 10);
+        if (isNaN(parsedQty) || parsedQty <= 0) {
+            res.status(400).json({ error: 'A quantidade de capas danificadas deve ser um número inteiro positivo.' });
+            return;
         }
 
-        // Decrement seller balance
-        await prisma.sellerCoverBalance.update({
-            where: { sellerId },
-            data: { balance: { decrement: parseInt(quantity) } }
+        if (!sellerId) {
+            res.status(400).json({ error: 'sellerId é obrigatório' });
+            return;
+        }
+
+        const seller = await prisma.user.findFirst({
+            where: {
+                id: sellerId,
+                ...(companyId ? { companyId } : {}),
+            }
         });
 
-        // Add a negative entry to Admin Batches to represent the defective covers thrown away
-        await prisma.coverStockBatch.create({
-            data: {
-                quantity: -parseInt(quantity),
-                companyId: companyId,
-            },
+        if (!seller) {
+            res.status(404).json({ error: 'Vendedor não encontrado na sua empresa' });
+            return;
+        }
+
+        const sellerBalance = await prisma.sellerCoverBalance.findUnique({ where: { sellerId } });
+        if (!sellerBalance || sellerBalance.balance < parsedQty) {
+            res.status(400).json({ error: `Saldo insuficiente para descarte. Saldo atual do vendedor: ${sellerBalance?.balance || 0} capas.` });
+            return;
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // Decrement seller balance
+            await tx.sellerCoverBalance.update({
+                where: { sellerId },
+                data: { balance: { decrement: parsedQty } }
+            });
+
+            // Add negative entry to Admin Batches to represent discarded stock
+            await tx.coverStockBatch.create({
+                data: {
+                    quantity: -parsedQty,
+                    companyId: companyId,
+                },
+            });
         });
 
-        res.status(200).json({ success: true, message: 'Defective covers returned and excluded from stock' });
+        res.status(200).json({ success: true, message: 'Capas danificadas devolvidas e descartadas do estoque com sucesso.' });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message || 'Erro ao processar devolução de capas danificadas' });
     }
 });
 
 export default router;
+

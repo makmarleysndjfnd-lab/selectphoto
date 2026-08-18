@@ -1,15 +1,17 @@
-import express from 'express';
+import express, { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
-// Get financial overview global
-router.get('/overview', authenticateToken, async (req: AuthRequest, res) => {
+// Get financial overview global (Admin or Supervisor)
+router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+
     const sales = await prisma.sale.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId: userCompanyId },
       orderBy: { date: 'desc' },
       take: 50,
       include: {
@@ -19,7 +21,7 @@ router.get('/overview', authenticateToken, async (req: AuthRequest, res) => {
     });
 
     const costs = await prisma.cost.findMany({
-      where: { status: 'APPROVED', companyId: req.user?.companyId },
+      where: { status: 'APPROVED', companyId: userCompanyId },
       orderBy: { date: 'desc' },
       take: 50,
       include: {
@@ -28,7 +30,7 @@ router.get('/overview', authenticateToken, async (req: AuthRequest, res) => {
     });
 
     const prospects = await prisma.commercialEvent.findMany({
-      where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: req.user?.companyId },
+      where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
       orderBy: { createdAt: 'desc' }
     });
 
@@ -72,11 +74,13 @@ router.get('/overview', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// Get pending costs for audit
-router.get('/pending-costs', authenticateToken, async (req: AuthRequest, res) => {
+// Get pending costs for audit (Admin or Supervisor)
+router.get('/pending-costs', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+
     const pendingCosts = await prisma.cost.findMany({
-      where: { status: 'PENDING', companyId: req.user?.companyId },
+      where: { status: 'PENDING', companyId: userCompanyId },
       include: {
         user: { select: { name: true, role: true } },
         team: { select: { prefix: true } }
@@ -89,23 +93,32 @@ router.get('/pending-costs', authenticateToken, async (req: AuthRequest, res) =>
   }
 });
 
-// Approve or Reject a cost
-router.put('/costs/:id/status', authenticateToken, async (req: AuthRequest, res) => {
+// Approve or Reject a cost (Admin or Supervisor)
+router.put('/costs/:id/status', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-    const { status } = req.body; // APPROVED or REJECTED
+    const id = req.params.id as string;
+    const { status } = req.body;
+    const userCompanyId = req.user?.companyId;
     
     if (!['APPROVED', 'REJECTED'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
+      res.status(400).json({ error: 'Status inválido. Permitido apenas APPROVED ou REJECTED' });
+      return;
     }
 
-    const existing = await prisma.cost.findUnique({ where: { id: id as string } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
-      return res.status(404).json({ error: 'Cost not found' });
+    const existing = await prisma.cost.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Cost not found' });
+      return;
     }
 
     const updated = await prisma.cost.update({
-      where: { id: id as string },
+      where: { id },
       data: { status }
     });
     res.json(updated);
@@ -114,18 +127,20 @@ router.put('/costs/:id/status', authenticateToken, async (req: AuthRequest, res)
   }
 });
 
-// Health Dashboard
-router.get('/health', authenticateToken, async (req: AuthRequest, res) => {
+// Health Dashboard (Admin or Supervisor)
+router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+
     const sales = await prisma.sale.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId: userCompanyId },
       include: {
         seller: { select: { name: true } }
       }
     });
 
     const costs = await prisma.cost.findMany({
-      where: { status: { not: 'REJECTED' }, companyId: req.user?.companyId },
+      where: { status: { not: 'REJECTED' }, companyId: userCompanyId },
       include: {
         user: { select: { name: true } },
         car: { select: { plate: true, model: true } }
@@ -145,20 +160,17 @@ router.get('/health', authenticateToken, async (req: AuthRequest, res) => {
     const caixa = salesCash - costsCash;
 
     // Charts Data
-    // Custos por categoria
     const costsByCategory = costs.reduce((acc: any, c) => {
       acc[c.category] = (acc[c.category] || 0) + c.amount;
       return acc;
     }, {});
 
-    // Custos por Veículo
     const costsByCar = costs.filter(c => c.car).reduce((acc: any, c) => {
       const plate = c.car?.plate || 'Desconhecido';
       acc[plate] = (acc[plate] || 0) + c.amount;
       return acc;
     }, {});
 
-    // Custos por Vendedor/Usuário
     const costsByUser = costs.reduce((acc: any, c) => {
       const name = c.user?.name || 'Desconhecido';
       acc[name] = (acc[name] || 0) + c.amount;
@@ -187,25 +199,43 @@ router.get('/health', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// Edit a cost
-router.put('/costs/:id', authenticateToken, async (req: AuthRequest, res) => {
+// Edit a cost (Admin or Supervisor)
+router.put('/costs/:id', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const { amount, category, description, paymentMethod, status } = req.body;
+    const userCompanyId = req.user?.companyId;
     
-    const existing = await prisma.cost.findUnique({ where: { id } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
-      return res.status(404).json({ error: 'Cost not found' });
+    if (amount !== undefined && (typeof amount !== 'number' || amount < 0)) {
+      res.status(400).json({ error: 'Valor do custo deve ser um número positivo.' });
+      return;
+    }
+
+    if (status !== undefined && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+      res.status(400).json({ error: 'Status inválido.' });
+      return;
+    }
+
+    const existing = await prisma.cost.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Cost not found' });
+      return;
     }
 
     const updated = await prisma.cost.update({
       where: { id },
       data: {
         amount: amount !== undefined ? Number(amount) : undefined,
-        category,
-        description,
-        paymentMethod,
-        status
+        category: category ? String(category) : undefined,
+        description: description !== undefined ? String(description) : undefined,
+        paymentMethod: paymentMethod ? String(paymentMethod) : undefined,
+        status: status ? String(status) : undefined,
       }
     });
     res.json(updated);
@@ -215,23 +245,36 @@ router.put('/costs/:id', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// Edit a sale (limited fields for finance view)
-router.put('/sales/:id', authenticateToken, async (req: AuthRequest, res) => {
+// Edit a sale (limited fields for finance view - Admin or Supervisor)
+router.put('/sales/:id', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const { value, paymentMethod, paymentStatus } = req.body;
+    const userCompanyId = req.user?.companyId;
     
-    const existing = await prisma.sale.findUnique({ where: { id } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
-      return res.status(404).json({ error: 'Sale not found' });
+    if (value !== undefined && (typeof value !== 'number' || value < 0)) {
+      res.status(400).json({ error: 'Valor da venda deve ser um número positivo.' });
+      return;
+    }
+
+    const existing = await prisma.sale.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Sale not found' });
+      return;
     }
 
     const updated = await prisma.sale.update({
       where: { id },
       data: {
         value: value !== undefined ? Number(value) : undefined,
-        paymentMethod,
-        paymentStatus
+        paymentMethod: paymentMethod ? String(paymentMethod) : undefined,
+        paymentStatus: paymentStatus ? String(paymentStatus) : undefined,
       }
     });
     res.json(updated);
@@ -242,3 +285,4 @@ router.put('/sales/:id', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 export default router;
+

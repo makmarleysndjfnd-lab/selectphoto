@@ -7,12 +7,13 @@ const express_1 = __importDefault(require("express"));
 const client_1 = require("@prisma/client");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
-const prisma = new client_1.PrismaClient();
-// Get financial overview global
-router.get('/overview', authMiddleware_1.authenticateToken, async (req, res) => {
+const prisma = new client_1.PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+// Get financial overview global (Admin or Supervisor)
+router.get('/overview', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
+        const userCompanyId = req.user?.companyId;
         const sales = await prisma.sale.findMany({
-            where: { companyId: req.user?.companyId },
+            where: { companyId: userCompanyId },
             orderBy: { date: 'desc' },
             take: 50,
             include: {
@@ -21,7 +22,7 @@ router.get('/overview', authMiddleware_1.authenticateToken, async (req, res) => 
             }
         });
         const costs = await prisma.cost.findMany({
-            where: { status: 'APPROVED', companyId: req.user?.companyId },
+            where: { status: 'APPROVED', companyId: userCompanyId },
             orderBy: { date: 'desc' },
             take: 50,
             include: {
@@ -29,7 +30,7 @@ router.get('/overview', authMiddleware_1.authenticateToken, async (req, res) => 
             }
         });
         const prospects = await prisma.commercialEvent.findMany({
-            where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: req.user?.companyId },
+            where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
             orderBy: { createdAt: 'desc' }
         });
         const totalEntradas = sales.reduce((acc, sale) => acc + sale.value, 0);
@@ -71,11 +72,12 @@ router.get('/overview', authMiddleware_1.authenticateToken, async (req, res) => 
         res.status(500).json({ error: 'Failed to calculate finance overview' });
     }
 });
-// Get pending costs for audit
-router.get('/pending-costs', authMiddleware_1.authenticateToken, async (req, res) => {
+// Get pending costs for audit (Admin or Supervisor)
+router.get('/pending-costs', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
+        const userCompanyId = req.user?.companyId;
         const pendingCosts = await prisma.cost.findMany({
-            where: { status: 'PENDING', companyId: req.user?.companyId },
+            where: { status: 'PENDING', companyId: userCompanyId },
             include: {
                 user: { select: { name: true, role: true } },
                 team: { select: { prefix: true } }
@@ -88,20 +90,28 @@ router.get('/pending-costs', authMiddleware_1.authenticateToken, async (req, res
         res.status(500).json({ error: 'Failed to fetch pending costs' });
     }
 });
-// Approve or Reject a cost
-router.put('/costs/:id/status', authMiddleware_1.authenticateToken, async (req, res) => {
+// Approve or Reject a cost (Admin or Supervisor)
+router.put('/costs/:id/status', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
-        const { id } = req.params;
-        const { status } = req.body; // APPROVED or REJECTED
+        const id = req.params.id;
+        const { status } = req.body;
+        const userCompanyId = req.user?.companyId;
         if (!['APPROVED', 'REJECTED'].includes(status)) {
-            return res.status(400).json({ error: 'Invalid status' });
+            res.status(400).json({ error: 'Status inválido. Permitido apenas APPROVED ou REJECTED' });
+            return;
         }
-        const existing = await prisma.cost.findUnique({ where: { id: id } });
-        if (!existing || existing.companyId !== req.user?.companyId) {
-            return res.status(404).json({ error: 'Cost not found' });
+        const existing = await prisma.cost.findFirst({
+            where: {
+                id,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Cost not found' });
+            return;
         }
         const updated = await prisma.cost.update({
-            where: { id: id },
+            where: { id },
             data: { status }
         });
         res.json(updated);
@@ -110,17 +120,18 @@ router.put('/costs/:id/status', authMiddleware_1.authenticateToken, async (req, 
         res.status(500).json({ error: 'Failed to update cost status' });
     }
 });
-// Health Dashboard
-router.get('/health', authMiddleware_1.authenticateToken, async (req, res) => {
+// Health Dashboard (Admin or Supervisor)
+router.get('/health', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
+        const userCompanyId = req.user?.companyId;
         const sales = await prisma.sale.findMany({
-            where: { companyId: req.user?.companyId },
+            where: { companyId: userCompanyId },
             include: {
                 seller: { select: { name: true } }
             }
         });
         const costs = await prisma.cost.findMany({
-            where: { status: { not: 'REJECTED' }, companyId: req.user?.companyId },
+            where: { status: { not: 'REJECTED' }, companyId: userCompanyId },
             include: {
                 user: { select: { name: true } },
                 car: { select: { plate: true, model: true } }
@@ -137,18 +148,15 @@ router.get('/health', authMiddleware_1.authenticateToken, async (req, res) => {
         const costsCash = costs.filter(c => c.paymentMethod === 'CASH' && c.status === 'APPROVED').reduce((acc, c) => acc + c.amount, 0);
         const caixa = salesCash - costsCash;
         // Charts Data
-        // Custos por categoria
         const costsByCategory = costs.reduce((acc, c) => {
             acc[c.category] = (acc[c.category] || 0) + c.amount;
             return acc;
         }, {});
-        // Custos por Veículo
         const costsByCar = costs.filter(c => c.car).reduce((acc, c) => {
             const plate = c.car?.plate || 'Desconhecido';
             acc[plate] = (acc[plate] || 0) + c.amount;
             return acc;
         }, {});
-        // Custos por Vendedor/Usuário
         const costsByUser = costs.reduce((acc, c) => {
             const name = c.user?.name || 'Desconhecido';
             acc[name] = (acc[name] || 0) + c.amount;
@@ -175,23 +183,38 @@ router.get('/health', authMiddleware_1.authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch health data' });
     }
 });
-// Edit a cost
-router.put('/costs/:id', authMiddleware_1.authenticateToken, async (req, res) => {
+// Edit a cost (Admin or Supervisor)
+router.put('/costs/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
         const id = req.params.id;
         const { amount, category, description, paymentMethod, status } = req.body;
-        const existing = await prisma.cost.findUnique({ where: { id } });
-        if (!existing || existing.companyId !== req.user?.companyId) {
-            return res.status(404).json({ error: 'Cost not found' });
+        const userCompanyId = req.user?.companyId;
+        if (amount !== undefined && (typeof amount !== 'number' || amount < 0)) {
+            res.status(400).json({ error: 'Valor do custo deve ser um número positivo.' });
+            return;
+        }
+        if (status !== undefined && !['PENDING', 'APPROVED', 'REJECTED'].includes(status)) {
+            res.status(400).json({ error: 'Status inválido.' });
+            return;
+        }
+        const existing = await prisma.cost.findFirst({
+            where: {
+                id,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Cost not found' });
+            return;
         }
         const updated = await prisma.cost.update({
             where: { id },
             data: {
                 amount: amount !== undefined ? Number(amount) : undefined,
-                category,
-                description,
-                paymentMethod,
-                status
+                category: category ? String(category) : undefined,
+                description: description !== undefined ? String(description) : undefined,
+                paymentMethod: paymentMethod ? String(paymentMethod) : undefined,
+                status: status ? String(status) : undefined,
             }
         });
         res.json(updated);
@@ -201,21 +224,32 @@ router.put('/costs/:id', authMiddleware_1.authenticateToken, async (req, res) =>
         res.status(500).json({ error: 'Failed to edit cost' });
     }
 });
-// Edit a sale (limited fields for finance view)
-router.put('/sales/:id', authMiddleware_1.authenticateToken, async (req, res) => {
+// Edit a sale (limited fields for finance view - Admin or Supervisor)
+router.put('/sales/:id', authMiddleware_1.authenticateToken, authMiddleware_1.requireAdminOrSupervisor, async (req, res) => {
     try {
         const id = req.params.id;
         const { value, paymentMethod, paymentStatus } = req.body;
-        const existing = await prisma.sale.findUnique({ where: { id } });
-        if (!existing || existing.companyId !== req.user?.companyId) {
-            return res.status(404).json({ error: 'Sale not found' });
+        const userCompanyId = req.user?.companyId;
+        if (value !== undefined && (typeof value !== 'number' || value < 0)) {
+            res.status(400).json({ error: 'Valor da venda deve ser um número positivo.' });
+            return;
+        }
+        const existing = await prisma.sale.findFirst({
+            where: {
+                id,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            },
+        });
+        if (!existing) {
+            res.status(404).json({ error: 'Sale not found' });
+            return;
         }
         const updated = await prisma.sale.update({
             where: { id },
             data: {
                 value: value !== undefined ? Number(value) : undefined,
-                paymentMethod,
-                paymentStatus
+                paymentMethod: paymentMethod ? String(paymentMethod) : undefined,
+                paymentStatus: paymentStatus ? String(paymentStatus) : undefined,
             }
         });
         res.json(updated);
