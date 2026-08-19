@@ -8,6 +8,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('Segurança de SERVER_URL e Proteção contra Fallback Silencioso', () {
+    tearDown(() {
+      ApiService().updateBaseUrl(AppConfig.hasServerUrl ? AppConfig.serverUrl : '');
+    });
     test('1. AppConfig: Se SERVER_URL não for fornecida, AppConfig.serverUrl lança StateError explícito', () {
       if (!AppConfig.hasServerUrl) {
         expect(
