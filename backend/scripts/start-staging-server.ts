@@ -20,6 +20,7 @@ assertStagingSafety(databaseUrl, 'START_STAGING_SERVER');
 process.env.DATABASE_URL = databaseUrl;
 process.env.JWT_SECRET = envConfig.JWT_SECRET || 'selectphoto_staging_local_jwt_test_2026_nao_usar_em_producao';
 process.env.PORT = envConfig.PORT || '3001';
+process.env.DISABLE_CRON = 'true';
 
 // Mocks explícitos de serviços externos para homologação sem internet
 process.env.GEMINI_API_KEY = '';
@@ -28,6 +29,7 @@ process.env.B2_KEY_ID = '';
 process.env.B2_APPLICATION_KEY = '';
 process.env.B2_BUCKET_NAME = '';
 process.env.B2_ENDPOINT = '';
+process.env.FIREBASE_SERVICE_ACCOUNT = '';
 
 console.log('====================================================');
 console.log('    INICIANDO BACKEND DE STAGING (HOMOLOGAÇÃO)      ');

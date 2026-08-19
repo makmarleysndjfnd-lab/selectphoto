@@ -49,11 +49,12 @@ async function testRollbackAndReapply() {
 
     // 3. Re-aplica migration de reconciliação via prisma migrate deploy para deixar staging pronto e íntegro
     console.log('\n3. Re-aplicando migration de reconciliação via prisma migrate deploy...');
-    const result = spawnSync('npx.cmd', ['prisma', 'migrate', 'deploy'], {
+    const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const result = spawnSync(npxExecutable, ['prisma', 'migrate', 'deploy'], {
       cwd: path.resolve(__dirname, '..'),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       encoding: 'utf8',
-      shell: true,
+      shell: false,
     });
     if (result.status !== 0) {
       throw new Error(`Falha ao re-aplicar migration: ${result.stderr || result.stdout}`);

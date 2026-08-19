@@ -91,8 +91,10 @@ app.use('/api/quotes', quotesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
 app.use('/api/stats', statsRoutes);
 
-initWarrantyCron();
-initBackupCron();
+if (process.env.DISABLE_CRON !== 'true' && process.env.NODE_ENV !== 'test') {
+  initWarrantyCron();
+  initBackupCron();
+}
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

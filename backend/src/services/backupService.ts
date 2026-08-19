@@ -22,14 +22,21 @@ export const generateBackupJson = async (companyId?: string): Promise<string> =>
       if (prisma[prismaProp] && typeof prisma[prismaProp].findMany === 'function') {
         const hasCompanyIdField = model.fields.some(f => f.name === 'companyId');
         let whereClause: any = undefined;
-        if (companyId && hasCompanyIdField) {
-          whereClause = { companyId };
-        } else if (companyId && !hasCompanyIdField) {
-          // If model has no direct companyId (e.g. system configurations), skip if doing tenant-scoped backup
-          if (['User', 'Team', 'Car'].includes(modelName)) {
+        if (companyId) {
+          if (hasCompanyIdField) {
             whereClause = { companyId };
           } else {
-            continue;
+            // Suporte a tabelas filhas sem companyId direto
+            if (modelName === 'Appointment' || modelName === 'Child' || modelName === 'Evaluation') {
+              whereClause = { client: { companyId } };
+            } else if (modelName === 'CarChecklist') {
+              whereClause = { car: { companyId } };
+            } else if (modelName === 'DailyClosing' || modelName === 'PersonalAppointment' || modelName === 'SellerCoverBalance') {
+              whereClause = { seller: { companyId } };
+            } else {
+              // Modelo sem relação identificada com empresa: omitir do backup multi-tenant
+              continue;
+            }
           }
         }
 

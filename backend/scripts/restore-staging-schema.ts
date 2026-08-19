@@ -21,11 +21,12 @@ async function restoreReconciledSchema() {
     `);
 
     console.log('Executando prisma migrate deploy...');
-    const result = spawnSync('npx.cmd', ['prisma', 'migrate', 'deploy'], {
+    const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const result = spawnSync(npxExecutable, ['prisma', 'migrate', 'deploy'], {
       cwd: path.resolve(__dirname, '..'),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       encoding: 'utf8',
-      shell: true,
+      shell: false,
     });
     console.log(result.stdout);
     if (result.status !== 0) {
