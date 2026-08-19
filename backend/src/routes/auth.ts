@@ -9,8 +9,23 @@ const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 router.post('/login', async (req: Request, res: Response) => {
   const { cpf, password } = req.body;
 
+  if (!cpf || !password) {
+    res.status(400).json({ error: 'CPF and password are required' });
+    return;
+  }
+
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.trim() === '') {
+    console.error('🛑 [CRITICAL SECURITY ERROR] JWT_SECRET não está configurado.');
+    res.status(500).json({ error: 'Authentication service configuration error' });
+    return;
+  }
+
   try {
-    const user = await prisma.user.findUnique({ where: { cpf } });
+    const user = await prisma.user.findUnique({
+      where: { cpf: String(cpf).trim() },
+      include: { company: true },
+    });
 
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
@@ -19,6 +34,11 @@ router.post('/login', async (req: Request, res: Response) => {
 
     if (!user.active) {
       res.status(401).json({ error: 'User is inactive' });
+      return;
+    }
+
+    if (user.company && user.company.isActive === false) {
+      res.status(401).json({ error: 'Company account is inactive' });
       return;
     }
 
@@ -32,7 +52,7 @@ router.post('/login', async (req: Request, res: Response) => {
     // Token expires in 30 days for offline persistence
     const token = jwt.sign(
       { id: user.id, cpf: user.cpf, role: user.role, teamId: user.teamId, companyId: user.companyId },
-      process.env.JWT_SECRET as string,
+      secret,
       { expiresIn: '30d' }
     );
 

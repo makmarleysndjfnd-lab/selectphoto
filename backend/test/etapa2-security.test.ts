@@ -1,7 +1,20 @@
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
+const envPath = path.resolve(__dirname, '../.env.test.local');
+const envConfig = dotenv.parse(fs.readFileSync(envPath));
+const databaseUrl = envConfig.DATABASE_URL;
+const JWT_SECRET = envConfig.JWT_SECRET || 'selectphoto-jwt-secret-key';
+
+process.env.DATABASE_URL = databaseUrl;
+process.env.JWT_SECRET = JWT_SECRET;
+
 import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import { PrismaClient } from '@prisma/client';
 
 // Import routes
 import backupRouter from '../src/routes/backup';
@@ -9,16 +22,16 @@ import financeRoutes from '../src/routes/finance';
 import costsRoutes from '../src/routes/costs';
 import stockRoutes from '../src/routes/stock';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'selectphoto-jwt-secret-key';
+const prisma = new PrismaClient();
 
 function generateToken(payload: { id: string; role: string; companyId: string; name?: string }) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 }
 
-const tokenSuperAdmin = generateToken({ id: 'super-1', role: 'SUPER_ADMIN', companyId: 'comp-global', name: 'Super Admin' });
-const tokenAdmin = generateToken({ id: 'admin-1', role: 'ADMIN', companyId: 'comp-a', name: 'Admin Company A' });
-const tokenSeller = generateToken({ id: 'seller-1', role: 'SELLER', companyId: 'comp-a', name: 'Seller 1' });
-const tokenPhotographer = generateToken({ id: 'photo-1', role: 'PHOTOGRAPHER', companyId: 'comp-a', name: 'Photographer 1' });
+const tokenSuperAdmin = generateToken({ id: 'sec_super_1', role: 'SUPER_ADMIN', companyId: 'comp_sec_global', name: 'Super Admin' });
+const tokenAdmin = generateToken({ id: 'sec_admin_1', role: 'ADMIN', companyId: 'comp_sec_a', name: 'Admin Company A' });
+const tokenSeller = generateToken({ id: 'sec_seller_1', role: 'SELLER', companyId: 'comp_sec_a', name: 'Seller 1' });
+const tokenPhotographer = generateToken({ id: 'sec_photo_1', role: 'PHOTOGRAPHER', companyId: 'comp_sec_a', name: 'Photographer 1' });
 
 function createTestApp() {
   const app = express();
@@ -35,17 +48,40 @@ describe('Etapa 2 - Proteção de Backup, Finanças, Custos e Estoque', () => {
   let server: any;
   let baseUrl: string;
 
-  test.before((_, done) => {
-    server = app.listen(0, () => {
-      const port = (server.address() as any).port;
-      baseUrl = `http://127.0.0.1:${port}`;
-      done();
+  test.before(async () => {
+    // Seed companies and users
+    await prisma.company.upsert({ where: { id: 'comp_sec_global' }, update: { isActive: true }, create: { id: 'comp_sec_global', name: 'Global Company', isActive: true } });
+    await prisma.company.upsert({ where: { id: 'comp_sec_a' }, update: { isActive: true }, create: { id: 'comp_sec_a', name: 'Company Sec A', isActive: true } });
+
+    const usersToSeed = [
+      { id: 'sec_super_1', name: 'Super Admin', role: 'SUPER_ADMIN', companyId: 'comp_sec_global', cpf: '02020202021' },
+      { id: 'sec_admin_1', name: 'Admin Company A', role: 'ADMIN', companyId: 'comp_sec_a', cpf: '02020202022' },
+      { id: 'sec_seller_1', name: 'Seller 1', role: 'SELLER', companyId: 'comp_sec_a', cpf: '02020202023' },
+      { id: 'sec_photo_1', name: 'Photographer 1', role: 'PHOTOGRAPHER', companyId: 'comp_sec_a', cpf: '02020202024' },
+    ];
+
+    for (const u of usersToSeed) {
+      await prisma.user.upsert({
+        where: { id: u.id },
+        update: { role: u.role, companyId: u.companyId, active: true },
+        create: { id: u.id, name: u.name, role: u.role, companyId: u.companyId, cpf: u.cpf, password: 'hash', active: true }
+      });
+    }
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, () => {
+        const port = (server.address() as any).port;
+        baseUrl = `http://127.0.0.1:${port}`;
+        resolve();
+      });
     });
   });
 
-  test.after((_, done) => {
-    if (server) server.close(done);
-    else done();
+  test.after(async () => {
+    if (server) server.close();
+    await prisma.user.deleteMany({ where: { id: { in: ['sec_super_1', 'sec_admin_1', 'sec_seller_1', 'sec_photo_1'] } } });
+    await prisma.company.deleteMany({ where: { id: { in: ['comp_sec_global', 'comp_sec_a'] } } });
+    await prisma.$disconnect();
   });
 
   // ── 1. Backup e Restauração ──────────────────────────────────────────────────

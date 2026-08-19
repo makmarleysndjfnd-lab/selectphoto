@@ -1,7 +1,20 @@
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
+const envPath = path.resolve(__dirname, '../.env.test.local');
+const envConfig = dotenv.parse(fs.readFileSync(envPath));
+const databaseUrl = envConfig.DATABASE_URL;
+const JWT_SECRET = envConfig.JWT_SECRET || 'selectphoto-jwt-secret-key';
+
+process.env.DATABASE_URL = databaseUrl;
+process.env.JWT_SECRET = JWT_SECRET;
+
 import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import { PrismaClient } from '@prisma/client';
 
 // Import routes
 import editRequestsRoutes from '../src/routes/editRequests';
@@ -11,18 +24,18 @@ import notificationsRoutes from '../src/routes/notifications';
 import clientRoutes from '../src/routes/clients';
 import closingRoutes from '../src/routes/closing';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'selectphoto-jwt-secret-key';
+const prisma = new PrismaClient();
 
 function generateToken(payload: { id: string; role: string; companyId: string; name?: string }) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 }
 
 // Tokens for testing
-const tokenCompanyA_Admin = generateToken({ id: 'admin-a', role: 'ADMIN', companyId: 'comp-a', name: 'Admin A' });
-const tokenCompanyA_Seller = generateToken({ id: 'seller-a1', role: 'SELLER', companyId: 'comp-a', name: 'Seller A1' });
-const tokenCompanyA_Seller2 = generateToken({ id: 'seller-a2', role: 'SELLER', companyId: 'comp-a', name: 'Seller A2' });
-const tokenCompanyB_Admin = generateToken({ id: 'admin-b', role: 'ADMIN', companyId: 'comp-b', name: 'Admin B' });
-const tokenCompanyB_Seller = generateToken({ id: 'seller-b1', role: 'SELLER', companyId: 'comp-b', name: 'Seller B1' });
+const tokenCompanyA_Admin = generateToken({ id: 'auth_iso_admin_a', role: 'ADMIN', companyId: 'comp_auth_iso_a', name: 'Admin A' });
+const tokenCompanyA_Seller = generateToken({ id: 'auth_iso_seller_a1', role: 'SELLER', companyId: 'comp_auth_iso_a', name: 'Seller A1' });
+const tokenCompanyA_Seller2 = generateToken({ id: 'auth_iso_seller_a2', role: 'SELLER', companyId: 'comp_auth_iso_a', name: 'Seller A2' });
+const tokenCompanyB_Admin = generateToken({ id: 'auth_iso_admin_b', role: 'ADMIN', companyId: 'comp_auth_iso_b', name: 'Admin B' });
+const tokenCompanyB_Seller = generateToken({ id: 'auth_iso_seller_b1', role: 'SELLER', companyId: 'comp_auth_iso_b', name: 'Seller B1' });
 
 function createTestApp() {
   const app = express();
@@ -41,17 +54,41 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
   let server: any;
   let baseUrl: string;
 
-  test.before((_, done) => {
-    server = app.listen(0, () => {
-      const port = (server.address() as any).port;
-      baseUrl = `http://127.0.0.1:${port}`;
-      done();
+  test.before(async () => {
+    // Seed test companies and users
+    await prisma.company.upsert({ where: { id: 'comp_auth_iso_a' }, update: { isActive: true }, create: { id: 'comp_auth_iso_a', name: 'Empresa Auth Iso A', isActive: true } });
+    await prisma.company.upsert({ where: { id: 'comp_auth_iso_b' }, update: { isActive: true }, create: { id: 'comp_auth_iso_b', name: 'Empresa Auth Iso B', isActive: true } });
+
+    const usersToSeed = [
+      { id: 'auth_iso_admin_a', name: 'Admin A', role: 'ADMIN', companyId: 'comp_auth_iso_a', cpf: '01010101011' },
+      { id: 'auth_iso_seller_a1', name: 'Seller A1', role: 'SELLER', companyId: 'comp_auth_iso_a', cpf: '01010101012' },
+      { id: 'auth_iso_seller_a2', name: 'Seller A2', role: 'SELLER', companyId: 'comp_auth_iso_a', cpf: '01010101013' },
+      { id: 'auth_iso_admin_b', name: 'Admin B', role: 'ADMIN', companyId: 'comp_auth_iso_b', cpf: '01010101014' },
+      { id: 'auth_iso_seller_b1', name: 'Seller B1', role: 'SELLER', companyId: 'comp_auth_iso_b', cpf: '01010101015' },
+    ];
+
+    for (const u of usersToSeed) {
+      await prisma.user.upsert({
+        where: { id: u.id },
+        update: { role: u.role, companyId: u.companyId, active: true },
+        create: { id: u.id, name: u.name, role: u.role, companyId: u.companyId, cpf: u.cpf, password: 'hash', active: true }
+      });
+    }
+
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, () => {
+        const port = (server.address() as any).port;
+        baseUrl = `http://127.0.0.1:${port}`;
+        resolve();
+      });
     });
   });
 
-  test.after((_, done) => {
-    if (server) server.close(done);
-    else done();
+  test.after(async () => {
+    if (server) server.close();
+    await prisma.user.deleteMany({ where: { id: { in: ['auth_iso_admin_a', 'auth_iso_seller_a1', 'auth_iso_seller_a2', 'auth_iso_admin_b', 'auth_iso_seller_b1'] } } });
+    await prisma.company.deleteMany({ where: { id: { in: ['comp_auth_iso_a', 'comp_auth_iso_b'] } } });
+    await prisma.$disconnect();
   });
 
   // ── 1. editRequests ──────────────────────────────────────────────────────────
@@ -100,20 +137,20 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
       const res = await fetch(`${baseUrl}/api/appointments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sellerId: 'seller-a1', title: 'Visita', dateTime: new Date().toISOString() }),
+        body: JSON.stringify({ sellerId: 'auth_iso_seller_a1', title: 'Visita', dateTime: new Date().toISOString() }),
       });
       assert.equal(res.status, 401);
     });
 
     it('deve rejeitar vendedor tentando consultar agenda de outro vendedor com 403', async () => {
-      const res = await fetch(`${baseUrl}/api/appointments/seller/seller-a2`, {
+      const res = await fetch(`${baseUrl}/api/appointments/seller/auth_iso_seller_a2`, {
         headers: { Authorization: `Bearer ${tokenCompanyA_Seller}` },
       });
       assert.equal(res.status, 403);
     });
 
     it('deve rejeitar vendedor da empresa B tentando consultar agenda de vendedor da empresa A com 403', async () => {
-      const res = await fetch(`${baseUrl}/api/appointments/seller/seller-a1`, {
+      const res = await fetch(`${baseUrl}/api/appointments/seller/auth_iso_seller_a1`, {
         headers: { Authorization: `Bearer ${tokenCompanyB_Seller}` },
       });
       assert.equal(res.status, 403);
@@ -173,14 +210,14 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
   // ── 5. closing (Fechamento) ──────────────────────────────────────────────────
   describe('5. Isolamento Multiempresa em Fechamentos', () => {
     it('deve rejeitar vendedor tentando ver fechamento diário de outro vendedor com 403', async () => {
-      const res = await fetch(`${baseUrl}/api/closing/daily/seller-a2`, {
+      const res = await fetch(`${baseUrl}/api/closing/daily/auth_iso_seller_a2`, {
         headers: { Authorization: `Bearer ${tokenCompanyA_Seller}` },
       });
       assert.equal(res.status, 403);
     });
 
     it('deve rejeitar vendedor tentando ver fechamento de vendedor de outra empresa com 403', async () => {
-      const res = await fetch(`${baseUrl}/api/closing/daily/seller-a1`, {
+      const res = await fetch(`${baseUrl}/api/closing/daily/auth_iso_seller_a1`, {
         headers: { Authorization: `Bearer ${tokenCompanyB_Seller}` },
       });
       assert.equal(res.status, 403);
@@ -193,7 +230,7 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
           Authorization: `Bearer ${tokenCompanyA_Seller}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ sellerId: 'seller-a1', totalSalesValue: 100 }),
+        body: JSON.stringify({ sellerId: 'auth_iso_seller_a1', totalSalesValue: 100 }),
       });
       assert.equal(res.status, 403);
     });

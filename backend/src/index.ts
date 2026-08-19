@@ -5,6 +5,24 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function assertRequiredEnv() {
+  const missing: string[] = [];
+  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim() === '') {
+    missing.push('DATABASE_URL');
+  }
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
+    missing.push('JWT_SECRET');
+  }
+  if (missing.length > 0) {
+    console.error(`🛑 [FATAL STARTUP ERROR] As seguintes variáveis de ambiente obrigatórias estão ausentes: ${missing.join(', ')}`);
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(1);
+    }
+  }
+}
+
+assertRequiredEnv();
+
 const app = express();
 const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 const port = process.env.PORT || 3000;

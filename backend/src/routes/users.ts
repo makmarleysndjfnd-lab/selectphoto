@@ -1,184 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
-import { authenticateToken, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES } from '../middleware/authMiddleware';
 import { upload } from '../middleware/upload';
-import fs from 'fs';
-import path from 'path';
 
 const router = Router();
 const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
 
-// Get all users (Admin only)
-router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
-  try {
-    const users = await prisma.user.findMany({
-      where: { companyId: req.user?.companyId },
-      include: {
-        team: true,
-        currentCars: true, // Fetch assigned cars
-      },
-      orderBy: { createdAt: 'desc' }
-    });
-    
-    // Remove passwords before sending to client
-    const safeUsers = users.map(user => {
-      const { password, ...safeUser } = user;
-      return safeUser;
-    });
-    
-    res.json(safeUsers);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch users' });
-  }
-});
-
-// Create user (Admin only)
-router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
-  try {
-    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
-    
-    if (!cpf) return res.status(400).json({ error: 'CPF is required' });
-    
-    let profilePhotoUrl = null;
-    let criminalRecordUrl = null;
-
-    if (req.files) {
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-      if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
-        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
-      }
-      if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
-        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
-      }
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    let photographerCode = null;
-    if (role === 'PHOTOGRAPHER') {
-      if (providedPhotographerCode && providedPhotographerCode.trim() !== '') {
-        photographerCode = providedPhotographerCode.trim();
-      } else {
-        const lastPhotographer = await prisma.user.findFirst({
-          where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
-          orderBy: { photographerCode: 'desc' }
-        });
-        if (lastPhotographer && lastPhotographer.photographerCode) {
-          const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
-          photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
-        } else {
-          photographerCode = '0001';
-        }
-      }
-    }
-    
-    const newUser = await prisma.user.create({
-      data: { 
-        name, 
-        password: hashedPassword, 
-        role: role || 'OPERATOR', 
-        teamId: teamId || null,
-        cpf: cpf || null,
-        rg: rg || null,
-        phone: phone || null,
-        emergencyPhone: emergencyPhone || null,
-        address: address || null,
-        usesOwnCar: usesOwnCar === 'true',
-        profilePhotoUrl,
-        criminalRecordUrl,
-        photographerCode,
-        companyId: req.user?.companyId
-      }
-    });
-
-    if (carId && carId !== 'null' && carId !== '') {
-      await prisma.car.update({
-        where: { id: carId },
-        data: { currentUserId: newUser.id, status: 'IN_USE' }
-      });
-    }
-    
-    res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
-  } catch (error: any) {
-    console.error('Error creating user:', error);
-    res.status(500).json({ error: 'Failed to create user. CPF might be in use.' });
-  }
-});
-
-// Update user (Admin only)
-router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
-
-    // Fetch existing to get old URLs
-    const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
-    if (!existingUser || existingUser.companyId !== req.user?.companyId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    let profilePhotoUrl = existingUser.profilePhotoUrl;
-    let criminalRecordUrl = existingUser.criminalRecordUrl;
-
-    if (req.files) {
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-      if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
-        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
-      }
-      if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
-        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
-      }
-    }
-
-    const updateData: any = {
-      name,
-      role,
-      teamId: teamId || null,
-      cpf: cpf || null,
-      rg: rg || null,
-      phone: phone || null,
-      emergencyPhone: emergencyPhone || null,
-      address: address || null,
-      usesOwnCar: usesOwnCar === 'true',
-      profilePhotoUrl,
-      criminalRecordUrl
-    };
-    
-    if (role === 'PHOTOGRAPHER' && photographerCode !== undefined) {
-      updateData.photographerCode = photographerCode.trim() !== '' ? photographerCode.trim() : null;
-    }
-
-    if (password && password.trim() !== '') {
-      updateData.password = await bcrypt.hash(password, 10);
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id: id as string },
-      data: updateData
-    });
-
-    if (carId !== undefined) {
-      // Clear previous car assignments for this user
-      await prisma.car.updateMany({
-        where: { currentUserId: id as string },
-        data: { currentUserId: null, status: 'AVAILABLE' }
-      });
-      // Assign new car if valid
-      if (carId && carId !== 'null' && carId !== '') {
-        await prisma.car.update({
-          where: { id: carId },
-          data: { currentUserId: id as string, status: 'IN_USE' }
-        });
-      }
-    }
-
-    res.json({ id: updatedUser.id, email: updatedUser.email });
-  } catch (error: any) {
-    console.error('Error updating user:', error);
-    res.status(500).json({ error: 'Failed to update user' });
-  }
-});
+// ── ROTAS ESTÁTICAS E DE PERFIL (DEVEM FICAR ANTES DE /:id) ───────────────────
 
 // Update own profile name
 router.put('/profile', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -219,6 +48,227 @@ router.get('/company', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
+// Update FCM Token
+router.put('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    if (!req.user?.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { fcmToken: token }
+    });
+
+    res.json({ message: 'FCM Token updated' });
+  } catch (error) {
+    console.error('Error updating fcm token:', error);
+    res.status(500).json({ error: 'Failed to update fcm token' });
+  }
+});
+
+// ── ROTAS ADMINISTRATIVAS DE GESTÃO DE USUÁRIOS ──────────────────────────────
+
+// Get all users (Admin only)
+router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { companyId: req.user?.companyId },
+      include: {
+        team: true,
+        currentCars: true, // Fetch assigned cars
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    
+    // Remove passwords before sending to client
+    const safeUsers = users.map(user => {
+      const { password, ...safeUser } = user;
+      return safeUser;
+    });
+    
+    res.json(safeUsers);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Create user (Admin only)
+router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
+    
+    if (!cpf) return res.status(400).json({ error: 'CPF is required' });
+    
+    // Validação de Role e Bloqueio de Elevação de Privilégio
+    const targetRole = role || 'OPERATOR';
+    if (!VALID_ROLES.includes(targetRole)) {
+      return res.status(400).json({ error: `Invalid role. Allowed: ${VALID_ROLES.join(', ')}` });
+    }
+
+    if (targetRole === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: Only SUPER_ADMIN can create SUPER_ADMIN users' });
+    }
+    
+    let profilePhotoUrl = null;
+    let criminalRecordUrl = null;
+
+    if (req.files) {
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
+        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
+      }
+      if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
+        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
+      }
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    let photographerCode = null;
+    if (targetRole === 'PHOTOGRAPHER') {
+      if (providedPhotographerCode && providedPhotographerCode.trim() !== '') {
+        photographerCode = providedPhotographerCode.trim();
+      } else {
+        const lastPhotographer = await prisma.user.findFirst({
+          where: { role: 'PHOTOGRAPHER', photographerCode: { not: null }, companyId: req.user?.companyId },
+          orderBy: { photographerCode: 'desc' }
+        });
+        if (lastPhotographer && lastPhotographer.photographerCode) {
+          const lastCodeInt = parseInt(lastPhotographer.photographerCode, 10);
+          photographerCode = (!isNaN(lastCodeInt)) ? (lastCodeInt + 1).toString().padStart(4, '0') : '0001';
+        } else {
+          photographerCode = '0001';
+        }
+      }
+    }
+    
+    const newUser = await prisma.user.create({
+      data: { 
+        name, 
+        password: hashedPassword, 
+        role: targetRole, 
+        teamId: teamId || null,
+        cpf: cpf || null,
+        rg: rg || null,
+        phone: phone || null,
+        emergencyPhone: emergencyPhone || null,
+        address: address || null,
+        usesOwnCar: usesOwnCar === 'true',
+        profilePhotoUrl,
+        criminalRecordUrl,
+        photographerCode,
+        companyId: req.user?.companyId
+      }
+    });
+
+    if (carId && carId !== 'null' && carId !== '') {
+      await prisma.car.update({
+        where: { id: carId },
+        data: { currentUserId: newUser.id, status: 'IN_USE' }
+      });
+    }
+    
+    res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
+  } catch (error: any) {
+    console.error('Error creating user:', error);
+    res.status(500).json({ error: 'Failed to create user. CPF might be in use.' });
+  }
+});
+
+// Update user (Admin only)
+router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
+
+    // Fetch existing to get old URLs
+    const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
+    if (!existingUser || existingUser.companyId !== req.user?.companyId) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Bloqueio de auto-alteração de papel para ganho de privilégio
+    if (role && role !== existingUser.role) {
+      if (!VALID_ROLES.includes(role)) {
+        return res.status(400).json({ error: `Invalid role. Allowed: ${VALID_ROLES.join(', ')}` });
+      }
+      if (req.user?.id === id && req.user.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden: Cannot change your own role' });
+      }
+      if (role === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden: Only SUPER_ADMIN can promote to SUPER_ADMIN' });
+      }
+    }
+
+    let profilePhotoUrl = existingUser.profilePhotoUrl;
+    let criminalRecordUrl = existingUser.criminalRecordUrl;
+
+    if (req.files) {
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
+        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
+      }
+      if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
+        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
+      }
+    }
+
+    const updateData: any = {
+      name,
+      teamId: teamId || null,
+      cpf: cpf || null,
+      rg: rg || null,
+      phone: phone || null,
+      emergencyPhone: emergencyPhone || null,
+      address: address || null,
+      usesOwnCar: usesOwnCar === 'true',
+      profilePhotoUrl,
+      criminalRecordUrl
+    };
+
+    if (role) {
+      updateData.role = role;
+    }
+    
+    if (role === 'PHOTOGRAPHER' && photographerCode !== undefined) {
+      updateData.photographerCode = photographerCode.trim() !== '' ? photographerCode.trim() : null;
+    }
+
+    if (password && password.trim() !== '') {
+      updateData.password = await bcrypt.hash(password, 10);
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: id as string },
+      data: updateData
+    });
+
+    if (carId !== undefined) {
+      // Clear previous car assignments for this user
+      await prisma.car.updateMany({
+        where: { currentUserId: id as string },
+        data: { currentUserId: null, status: 'AVAILABLE' }
+      });
+      // Assign new car if valid
+      if (carId && carId !== 'null' && carId !== '') {
+        await prisma.car.update({
+          where: { id: carId },
+          data: { currentUserId: id as string, status: 'IN_USE' }
+        });
+      }
+    }
+
+    res.json({ id: updatedUser.id, email: updatedUser.email });
+  } catch (error: any) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
 // Delete user (Admin only)
 router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
@@ -235,22 +285,5 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, 
   }
 });
 
-// Update FCM Token
-router.put('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const { token } = req.body;
-    if (!token) return res.status(400).json({ error: 'Token is required' });
-
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: { fcmToken: token }
-    });
-
-    res.json({ message: 'FCM Token updated' });
-  } catch (error) {
-    console.error('Error updating fcm token:', error);
-    res.status(500).json({ error: 'Failed to update fcm token' });
-  }
-});
-
 export default router;
+
