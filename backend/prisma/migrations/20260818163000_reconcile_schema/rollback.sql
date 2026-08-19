@@ -1,42 +1,26 @@
 -- ==============================================================================
 -- PROCEDIMENTO DE ROLLBACK: 20260818163000_reconcile_schema
--- OBJETIVO: Reverter as alterações caso a migration de reconciliação precise ser desfeita
+-- OBJETIVO: Reverter estritamente as alterações adicionadas pela migration de reconciliação
 -- STATUS: ARQUIVO DE REFERÊNCIA (NÃO EXECUTAR SEM APROVAÇÃO)
 -- ==============================================================================
 
--- 1. Remoção de Foreign Keys criadas
+-- 1. Remoção de Foreign Keys criadas na reconciliação
 ALTER TABLE "Client" DROP CONSTRAINT IF EXISTS "Client_batchId_fkey";
 ALTER TABLE "Client" DROP CONSTRAINT IF EXISTS "Client_assignedSellerId_fkey";
-ALTER TABLE "TripSettings" DROP CONSTRAINT IF EXISTS "TripSettings_companyId_fkey";
-ALTER TABLE "CoverStockBatch" DROP CONSTRAINT IF EXISTS "CoverStockBatch_companyId_fkey";
-ALTER TABLE "SellerCoverTransfer" DROP CONSTRAINT IF EXISTS "SellerCoverTransfer_sellerId_fkey";
-ALTER TABLE "SellerCoverTransfer" DROP CONSTRAINT IF EXISTS "SellerCoverTransfer_adminId_fkey";
-ALTER TABLE "SellerCoverTransfer" DROP CONSTRAINT IF EXISTS "SellerCoverTransfer_companyId_fkey";
-ALTER TABLE "SellerCoverBalance" DROP CONSTRAINT IF EXISTS "SellerCoverBalance_sellerId_fkey";
-ALTER TABLE "DailyClosing" DROP CONSTRAINT IF EXISTS "DailyClosing_sellerId_fkey";
-ALTER TABLE "BookBatch" DROP CONSTRAINT IF EXISTS "BookBatch_photographerId_fkey";
-ALTER TABLE "BookBatch" DROP CONSTRAINT IF EXISTS "BookBatch_companyId_fkey";
-ALTER TABLE "Notification" DROP CONSTRAINT IF EXISTS "Notification_senderId_fkey";
-ALTER TABLE "Notification" DROP CONSTRAINT IF EXISTS "Notification_recipientId_fkey";
-ALTER TABLE "Notification" DROP CONSTRAINT IF EXISTS "Notification_companyId_fkey";
-ALTER TABLE "ClientEditRequest" DROP CONSTRAINT IF EXISTS "ClientEditRequest_clientId_fkey";
-ALTER TABLE "ClientEditRequest" DROP CONSTRAINT IF EXISTS "ClientEditRequest_photographerId_fkey";
-ALTER TABLE "ClientEditRequest" DROP CONSTRAINT IF EXISTS "ClientEditRequest_companyId_fkey";
-ALTER TABLE "PersonalAppointment" DROP CONSTRAINT IF EXISTS "PersonalAppointment_sellerId_fkey";
 
--- 2. Remoção de Tabelas criadas
-DROP TABLE IF EXISTS "PersonalAppointment";
-DROP TABLE IF EXISTS "ClientEditRequest";
-DROP TABLE IF EXISTS "Notification";
-DROP TABLE IF EXISTS "StateRadarCache";
-DROP TABLE IF EXISTS "BookBatch";
-DROP TABLE IF EXISTS "DailyClosing";
-DROP TABLE IF EXISTS "SellerCoverBalance";
-DROP TABLE IF EXISTS "SellerCoverTransfer";
-DROP TABLE IF EXISTS "CoverStockBatch";
-DROP TABLE IF EXISTS "TripSettings";
+-- 2. Remoção de Tabelas novas criadas na reconciliação com CASCADE
+DROP TABLE IF EXISTS "PersonalAppointment" CASCADE;
+DROP TABLE IF EXISTS "ClientEditRequest" CASCADE;
+DROP TABLE IF EXISTS "Notification" CASCADE;
+DROP TABLE IF EXISTS "StateRadarCache" CASCADE;
+DROP TABLE IF EXISTS "BookBatch" CASCADE;
+DROP TABLE IF EXISTS "DailyClosing" CASCADE;
+DROP TABLE IF EXISTS "SellerCoverBalance" CASCADE;
+DROP TABLE IF EXISTS "SellerCoverTransfer" CASCADE;
+DROP TABLE IF EXISTS "CoverStockBatch" CASCADE;
+DROP TABLE IF EXISTS "TripSettings" CASCADE;
 
--- 3. Remoção de Colunas Adicionadas
+-- 3. Remoção de Colunas Adicionadas na reconciliação
 ALTER TABLE "CommercialEvent"
   DROP COLUMN IF EXISTS "endDate",
   DROP COLUMN IF EXISTS "durationDays",
@@ -59,7 +43,6 @@ ALTER TABLE "CarChecklist"
 
 ALTER TABLE "Car"
   DROP COLUMN IF EXISTS "currentKm",
-  DROP COLUMN IF EXISTS "photoUrl",
   DROP COLUMN IF EXISTS "initialChecklist",
   DROP COLUMN IF EXISTS "frontPhotoUrl",
   DROP COLUMN IF EXISTS "backPhotoUrl",
@@ -70,6 +53,7 @@ ALTER TABLE "Car"
   DROP COLUMN IF EXISTS "trunkPhotoUrl";
 
 ALTER TABLE "NonSale"
+  DROP COLUMN IF EXISTS "audioUrl",
   DROP COLUMN IF EXISTS "sellerRating",
   DROP COLUMN IF EXISTS "photographerRating",
   DROP COLUMN IF EXISTS "contactRating";
@@ -77,6 +61,7 @@ ALTER TABLE "NonSale"
 ALTER TABLE "Sale"
   DROP COLUMN IF EXISTS "hasCover",
   DROP COLUMN IF EXISTS "receiptUrl",
+  DROP COLUMN IF EXISTS "audioUrl",
   DROP COLUMN IF EXISTS "sellerRating",
   DROP COLUMN IF EXISTS "photographerRating",
   DROP COLUMN IF EXISTS "contactRating";

@@ -2,9 +2,14 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 
+const String _kDefaultApiUrl = String.fromEnvironment(
+  'SERVER_URL',
+  defaultValue: 'https://selectphoto-k1ac.onrender.com/api',
+);
+
 class ApiService {
   late Dio _dio;
-  String _baseUrl = 'https://selectphoto-k1ac.onrender.com/api';
+  String _baseUrl = _kDefaultApiUrl;
   String? _token;
 
   // Singleton pattern for easy global access (optional, but good for backward compatibility)
