@@ -6,7 +6,7 @@ import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../mid
 dotenv.config();
 
 const router = express.Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Whitelist of allowed editable fields for Client
 const ALLOWED_CLIENT_FIELDS = new Set([

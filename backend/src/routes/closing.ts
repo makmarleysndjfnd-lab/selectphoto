@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Helper to verify user can view a seller's closing
 async function canAccessSellerClosing(reqUser: any, targetSellerId: string): Promise<boolean> {

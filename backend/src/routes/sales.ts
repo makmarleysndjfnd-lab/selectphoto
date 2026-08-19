@@ -10,24 +10,42 @@ const prisma = new PrismaClient();
 router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
     const { clientId, value, city, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
-    const sellerId = req.user.id;
+    const sellerId = req.user?.id;
+    const companyId = req.user?.companyId;
 
-    if (!clientId || !value || !city) {
+    if (!clientId || value === undefined || !city) {
       return res.status(400).json({ error: 'Client ID, Value, and City are required' });
+    }
+
+    const parsedValue = Number(value);
+    if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+      return res.status(400).json({ error: 'Invalid sale value: must be a positive finite number' });
+    }
+
+    // Verificar se o cliente pertence à empresa do usuário
+    const client = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        ...(companyId ? { companyId } : {}),
+      },
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found in your company' });
     }
 
     const sale = await prisma.sale.create({
       data: {
         clientId,
-        sellerId,
-        value: parseFloat(value),
-        city,
-        product: product || "Mídias fotográficas",
+        sellerId: sellerId as string,
+        value: parsedValue,
+        city: String(city).trim(),
+        product: product ? String(product).trim() : "Mídias fotográficas",
         status: status || "PRONTO",
         paymentStatus: paymentStatus || "PAID",
-        fichaNumber: fichaNumber || null,
+        fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
         paymentMethod: paymentMethod || "CASH",
-        companyId: req.user?.companyId
+        companyId,
       },
     });
 
@@ -43,21 +61,36 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
     const id = req.params.id as string;
     const { value, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
+    const companyId = req.user?.companyId;
     
     // Check if it belongs to company
-    const existing = await prisma.sale.findUnique({ where: { id } });
-    if (!existing || existing.companyId !== req.user.companyId) {
+    const existing = await prisma.sale.findFirst({
+      where: {
+        id,
+        ...(companyId ? { companyId } : {}),
+      }
+    });
+
+    if (!existing) {
       return res.status(404).json({ error: 'Sale not found' });
+    }
+
+    let parsedValue: number | undefined;
+    if (value !== undefined) {
+      parsedValue = Number(value);
+      if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+        return res.status(400).json({ error: 'Invalid sale value' });
+      }
     }
 
     const updated = await prisma.sale.update({
       where: { id },
       data: {
-        ...(value !== undefined && { value: parseFloat(value as string) }),
-        ...(product !== undefined && { product: product as string }),
+        ...(parsedValue !== undefined && { value: parsedValue }),
+        ...(product !== undefined && { product: String(product).trim() }),
         ...(status !== undefined && { status: status as string }),
         ...(paymentStatus !== undefined && { paymentStatus: paymentStatus as string }),
-        ...(fichaNumber !== undefined && { fichaNumber: fichaNumber as string }),
+        ...(fichaNumber !== undefined && { fichaNumber: String(fichaNumber).trim() }),
         ...(paymentMethod !== undefined && { paymentMethod: paymentMethod as string }),
       }
     });
@@ -73,23 +106,29 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
 router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res: any) => {
   try {
     const id = req.params.id as string;
-    const sellerId = req.user.id;
+    const sellerId = req.user?.id;
+    const companyId = req.user?.companyId;
 
     if (!req.file) {
       return res.status(400).json({ error: 'Receipt photo is required' });
     }
 
-    const sale = await prisma.sale.findUnique({ where: { id } });
+    const sale = await prisma.sale.findFirst({
+      where: {
+        id,
+        ...(companyId ? { companyId } : {}),
+      }
+    });
+
     if (!sale) {
       return res.status(404).json({ error: 'Sale not found' });
     }
 
-    if (sale.sellerId !== sellerId && req.user.role !== 'COMPANY_ADMIN' && req.user.role !== 'ADMIN') {
+    if (sale.sellerId !== sellerId && req.user?.role !== 'COMPANY_ADMIN' && req.user?.role !== 'ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'Access denied to this sale' });
     }
 
-    // A URL pública é retornada pelo multer-s3 no atributo 'location'
-    const receiptUrl = (req.file as any).location;
+    const receiptUrl = (req.file as any).location || `/uploads/${req.file.filename}`;
 
     const updatedSale = await prisma.sale.update({
       where: { id },
@@ -106,30 +145,54 @@ router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (
 // Register a Non-Sale
 router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
-    const { clientId, reason, signatureBase64 } = req.body;
-    const sellerId = req.user.id;
+    const { clientId, reason, signatureBase64, signatureUrl } = req.body;
+    const sellerId = req.user?.id;
+    const companyId = req.user?.companyId;
 
-    if (!clientId || !reason || !signatureBase64) {
+    if (!clientId || !reason || (!signatureBase64 && !signatureUrl)) {
       return res.status(400).json({ error: 'Client ID, Reason, and Signature are required' });
     }
 
-    const nonSale = await prisma.nonSale.create({
-      data: {
-        clientId,
-        sellerId,
-        reason,
-        signatureBase64,
-        companyId: req.user?.companyId
+    // Verificar se o cliente pertence à mesma empresa
+    const client = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        ...(companyId ? { companyId } : {}),
       },
     });
 
-    // Update client bookStatus
-    await prisma.client.update({
-      where: { id: clientId },
-      data: { bookStatus: 'AWAITING_RETURN' },
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found in your company' });
+    }
+
+    let finalSigUrl = signatureUrl;
+    if (signatureBase64) {
+      finalSigUrl = signatureBase64.startsWith('data:')
+        ? signatureBase64
+        : `data:image/png;base64,${signatureBase64}`;
+    }
+
+    // Transação atômica criando a Não-Venda e atualizando o status da ficha
+    const result = await prisma.$transaction(async (tx) => {
+      const nonSale = await tx.nonSale.create({
+        data: {
+          clientId,
+          sellerId: sellerId as string,
+          reason: String(reason).trim(),
+          signatureUrl: finalSigUrl,
+          companyId,
+        },
+      });
+
+      await tx.client.update({
+        where: { id: clientId },
+        data: { bookStatus: 'AWAITING_RETURN' },
+      });
+
+      return nonSale;
     });
 
-    res.status(201).json(nonSale);
+    res.status(201).json(result);
   } catch (error) {
     console.error('Create non-sale error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -191,10 +254,23 @@ router.get('/metrics', authenticateToken, async (req: AuthRequest, res: any) => 
 router.post('/appointments', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
     const { clientId, date, time, observation } = req.body;
-    const responsibleId = req.user.id;
+    const responsibleId = req.user?.id;
+    const companyId = req.user?.companyId;
 
     if (!clientId || !date || !time) {
       return res.status(400).json({ error: 'Client ID, Date, and Time are required' });
+    }
+
+    // Verificar se o cliente pertence à empresa do usuário
+    const client = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        ...(companyId ? { companyId } : {}),
+      }
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found in your company' });
     }
 
     const appointment = await prisma.appointment.create({
@@ -202,9 +278,8 @@ router.post('/appointments', authenticateToken, async (req: AuthRequest, res: an
         clientId,
         responsibleId,
         date: new Date(date),
-        time,
-        observation,
-        companyId: req.user?.companyId
+        time: String(time).trim(),
+        observation: observation ? String(observation).trim() : null,
       },
     });
 
@@ -219,22 +294,35 @@ router.post('/appointments', authenticateToken, async (req: AuthRequest, res: an
 router.post('/photos', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
     const { clientId, photoBase64 } = req.body;
-    const sellerId = req.user.id;
+    const sellerId = req.user?.id;
+    const companyId = req.user?.companyId;
 
     if (!clientId || !photoBase64) {
       return res.status(400).json({ error: 'Client ID and Photo are required' });
     }
 
+    // Verificar se o cliente pertence à empresa do usuário
+    const client = await prisma.client.findFirst({
+      where: {
+        id: clientId,
+        ...(companyId ? { companyId } : {}),
+      }
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found in your company' });
+    }
+
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 10); // Expiration in 10 days
+    expiresAt.setDate(expiresAt.getDate() + 10);
 
     const photo = await prisma.sellerPhoto.create({
       data: {
         clientId,
-        sellerId,
-        photoPath: photoBase64, // In a real app this would save to S3 and save the URL, for now using base64 column
+        sellerId: sellerId as string,
+        photoPath: photoBase64,
         expiresAt,
-        companyId: req.user?.companyId
+        companyId,
       },
     });
 

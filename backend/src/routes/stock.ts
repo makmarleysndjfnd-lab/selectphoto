@@ -5,13 +5,18 @@ import { sendPushNotification } from '../utils/firebaseConfig';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Add stock batch (Admin or Supervisor only)
 router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const { quantity } = req.body;
     const userCompanyId = req.user?.companyId;
+
+    if (!userCompanyId) {
+      res.status(400).json({ error: 'Empresa obrigatória' });
+      return;
+    }
 
     const parsedQty = parseInt(quantity, 10);
     if (isNaN(parsedQty) || parsedQty <= 0) {
@@ -36,8 +41,12 @@ router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: Auth
 router.get('/batch', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
+    if (!companyId) {
+      res.status(400).json({ error: 'Empresa obrigatória' });
+      return;
+    }
     const batches = await prisma.coverStockBatch.findMany({
-      where: companyId ? { companyId } : undefined,
+      where: { companyId },
       orderBy: { entryDate: 'asc' },
     });
     res.json(batches);
@@ -50,16 +59,20 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res: Response) => 
 router.get('/info', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const companyId = req.user?.companyId;
+        if (!companyId) {
+          res.status(400).json({ error: 'Empresa obrigatória' });
+          return;
+        }
         
         // Sum all current valid stock from admin batches
         const adminBatches = await prisma.coverStockBatch.aggregate({
-            where: companyId ? { companyId } : undefined,
+            where: { companyId },
             _sum: { quantity: true }
         });
 
         // Sum all covers transferred to sellers
         const sellerTransfers = await prisma.sellerCoverTransfer.aggregate({
-            where: companyId ? { companyId } : undefined,
+            where: { companyId },
             _sum: { quantity: true }
         });
 
@@ -71,12 +84,12 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res: Response) => {
                 role: {
                     in: ['SELLER', 'SELLER_MANAGER']
                 },
-                ...(companyId ? { companyId } : {})
+                companyId
             }
         });
 
         const sellersBalance = await prisma.sellerCoverBalance.findMany({
-            where: companyId ? { seller: { companyId } } : undefined,
+            where: { seller: { companyId } },
         });
 
         const totalWithSellers = sellersBalance.reduce((acc, curr) => acc + curr.balance, 0);

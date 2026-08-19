@@ -1,6 +1,6 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 export const generateBackupJson = async (companyId?: string): Promise<string> => {
   const models = Prisma.dmmf.datamodel.models;

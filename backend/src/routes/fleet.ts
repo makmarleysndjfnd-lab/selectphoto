@@ -167,9 +167,26 @@ router.post('/checklist', authenticateToken, upload.fields([
     const fuelLevel = req.body.fuelLevel || 'EMPTY';
     const checklistType = type || 'CHECKOUT';
 
-    const existing = await prisma.car.findUnique({ where: { id: carId } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
+    const existing = await prisma.car.findFirst({
+      where: {
+        id: carId,
+        ...(req.user?.companyId ? { companyId: req.user?.companyId } : {})
+      }
+    });
+    if (!existing) {
       return res.status(404).json({ error: 'Car not found' });
+    }
+
+    if (driverId) {
+      const driver = await prisma.user.findFirst({
+        where: {
+          id: driverId,
+          ...(req.user?.companyId ? { companyId: req.user?.companyId } : {})
+        }
+      });
+      if (!driver) {
+        return res.status(404).json({ error: 'Motorista não encontrado na sua empresa' });
+      }
     }
 
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;

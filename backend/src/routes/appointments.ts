@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Helper to check if a user is allowed to access/modify a given seller's appointments
 async function canAccessSellerAppointments(reqUser: any, targetSellerId: string): Promise<boolean> {

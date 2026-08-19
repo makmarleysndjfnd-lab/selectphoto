@@ -24,7 +24,7 @@ function assertRequiredEnv() {
 assertRequiredEnv();
 
 const app = express();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 
 import path from 'path';

@@ -4,7 +4,7 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Whitelist of allowed editable fields for Client during EDIT_REQUEST_APPROVAL
 const ALLOWED_CLIENT_FIELDS = new Set([

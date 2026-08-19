@@ -5,7 +5,7 @@ import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES } from '../mi
 import { upload } from '../middleware/upload';
 
 const router = Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // ── ROTAS ESTÁTICAS E DE PERFIL (DEVEM FICAR ANTES DE /:id) ───────────────────
 

@@ -3,12 +3,25 @@ import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 
 const router = Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
+
+// Allowed client fields for sync
+const ALLOWED_SYNC_CLIENT_FIELDS = [
+  'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'condo',
+  'block', 'apartment', 'neighborhood', 'city', 'state', 'referencePoint',
+  'houseColor', 'gateColor', 'gateObservation', 'profession', 'visitTime',
+  'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded'
+] as const;
 
 // Sync clients from mobile (batch)
 router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) => {
-  const { clients } = req.body; // Array of clients
+  const { clients } = req.body;
   const companyId = req.user?.companyId;
+
+  if (!companyId) {
+    res.status(400).json({ error: 'Company association is required for client sync' });
+    return;
+  }
 
   if (!Array.isArray(clients)) {
     res.status(400).json({ error: 'Expected an array of clients' });
@@ -19,10 +32,24 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
 
   for (const clientData of clients) {
     try {
-      const { children, appointments, signatureBase64, ...basicClientData } = clientData;
-      
-      let photographerId = basicClientData.photographerId;
-      let assignedSellerId = basicClientData.assignedSellerId;
+      if (!clientData || !clientData.sequenceNumber) {
+        results.failed++;
+        results.errors.push({ error: 'Ficha sem sequenceNumber' });
+        continue;
+      }
+
+      const seqNum = String(clientData.sequenceNumber).trim();
+
+      // Sanitizar dados aceitos
+      const sanitizedData: Record<string, any> = {};
+      for (const field of ALLOWED_SYNC_CLIENT_FIELDS) {
+        if (clientData[field] !== undefined) {
+          sanitizedData[field] = clientData[field];
+        }
+      }
+
+      let photographerId = clientData.photographerId || null;
+      let assignedSellerId = clientData.assignedSellerId || null;
 
       if (!photographerId && req.user?.role === 'PHOTOGRAPHER') {
         photographerId = req.user.id;
@@ -30,50 +57,83 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       if (!assignedSellerId && (req.user?.role === 'SELLER' || req.user?.role === 'SELLER_MANAGER')) {
         assignedSellerId = req.user.id;
       }
-      
-      let finalSignatureUrl = basicClientData.signatureUrl;
-      if (signatureBase64) {
-        // Store as a data URI in the database to keep it simple and compressed
-        finalSignatureUrl = `data:image/png;base64,${signatureBase64}`;
+
+      // Validar que fotógrafo e vendedor pertencem à mesma empresa
+      if (photographerId) {
+        const photoUser = await prisma.user.findFirst({
+          where: { id: photographerId, companyId },
+        });
+        if (!photoUser) photographerId = null;
       }
 
-      // Upsert client to avoid duplicate on resync
-      const client = await prisma.client.upsert({
-        where: { sequenceNumber: basicClientData.sequenceNumber },
-        update: {
-          ...basicClientData,
-          signatureUrl: finalSignatureUrl,
-          status: 'SYNCED',
-          companyId,
-          photographerId,
-          assignedSellerId,
-        },
-        create: {
-          ...basicClientData,
-          signatureUrl: finalSignatureUrl,
-          status: 'SYNCED',
-          companyId,
-          photographerId,
-          assignedSellerId,
-          children: children ? {
-            create: children.map((c: any) => ({ name: c.name, age: typeof c.age === 'string' ? parseInt(c.age, 10) : c.age }))
-          } : undefined,
-          appointments: appointments ? {
-            create: appointments.map((a: any) => ({
-              date: new Date(a.date),
-              time: a.time,
-              observation: a.observation,
-              responsibleId: a.responsibleId,
-              status: a.status
-            }))
-          } : undefined
-        }
+      if (assignedSellerId) {
+        const sellerUser = await prisma.user.findFirst({
+          where: { id: assignedSellerId, companyId },
+        });
+        if (!sellerUser) assignedSellerId = null;
+      }
+
+      let finalSignatureUrl = clientData.signatureUrl || null;
+      if (clientData.signatureBase64) {
+        finalSignatureUrl = `data:image/png;base64,${clientData.signatureBase64}`;
+      }
+
+      // Localizar se já existe ficha com esse sequenceNumber (mesma empresa ou outra empresa)
+      const existingGlobal = await prisma.client.findUnique({
+        where: { sequenceNumber: seqNum },
       });
+
+      if (existingGlobal) {
+        if (existingGlobal.companyId === companyId) {
+          // Pertence à mesma empresa: atualiza os dados da ficha
+          await prisma.client.update({
+            where: { id: existingGlobal.id },
+            data: {
+              ...sanitizedData,
+              ...(finalSignatureUrl ? { signatureUrl: finalSignatureUrl } : {}),
+              status: 'SYNCED',
+              ...(photographerId ? { photographerId } : {}),
+              ...(assignedSellerId ? { assignedSellerId } : {}),
+            },
+          });
+          results.success++;
+        } else {
+          // Pertence a OUTRA empresa: NUNCA sobrescrever ou alterar cliente de outra empresa
+          results.failed++;
+          results.errors.push({
+            sequenceNumber: seqNum,
+            error: 'Número de ficha já cadastrado em outra empresa',
+          });
+        }
+        continue;
+      }
+
+      await prisma.client.create({
+        data: {
+          ...sanitizedData,
+          name: sanitizedData.name || 'Cliente sem nome',
+          sequenceNumber: seqNum,
+          signatureUrl: finalSignatureUrl,
+          status: 'SYNCED',
+          companyId,
+          photographerId,
+          assignedSellerId,
+          children: Array.isArray(clientData.children)
+            ? {
+                create: clientData.children.map((c: any) => ({
+                  name: String(c.name || '').trim(),
+                  age: typeof c.age === 'string' ? parseInt(c.age, 10) : (c.age || 0),
+                })),
+              }
+            : undefined,
+        },
+      });
+
       results.success++;
     } catch (error: any) {
       console.error('Error syncing client:', error);
       results.failed++;
-      results.errors.push({ sequenceNumber: clientData.sequenceNumber, error: error.message });
+      results.errors.push({ sequenceNumber: clientData?.sequenceNumber, error: error.message });
     }
   }
 

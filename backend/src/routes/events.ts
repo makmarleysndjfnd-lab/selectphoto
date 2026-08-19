@@ -7,7 +7,7 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { enrichCityData } from '../services/ibgeService';
 
 const router = Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Initialize Gemini AI Client
 const ai = process.env.GEMINI_API_KEY 

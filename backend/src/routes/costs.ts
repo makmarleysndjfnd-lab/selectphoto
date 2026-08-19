@@ -4,7 +4,7 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = express.Router();
-const prisma = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL });
+const prisma = new PrismaClient();
 
 // Submit a new cost (via Mobile App)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -31,11 +31,20 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Validate carId format (UUID) - if it's mock, ignore it
-    let validCarId = carId;
-    if (carId && carId.startsWith('car_')) validCarId = null;
-
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) {
+      res.status(400).json({ error: 'Empresa obrigatória para lançar custo' });
+      return;
+    }
+
+    // Validate carId if provided
+    let validCarId: string | null = null;
+    if (carId && typeof carId === 'string' && !carId.startsWith('car_')) {
+      const car = await prisma.car.findFirst({
+        where: { id: carId, companyId: userCompanyId }
+      });
+      if (car) validCarId = car.id;
+    }
 
     const cost = await prisma.cost.create({
       data: {
@@ -44,12 +53,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         amount: parsedAmount,
         category: String(category).slice(0, 100),
         subcategory: subcategory ? String(subcategory).slice(0, 100) : null,
-        carId: validCarId || null,
+        carId: validCarId,
         description: description ? String(description).slice(0, 500) : '',
         paymentMethod: paymentMethod ? String(paymentMethod).slice(0, 50) : 'CASH',
         receiptUrl: receiptUrl ? String(receiptUrl).slice(0, 500) : null,
         status: 'PENDING',
-        companyId: userCompanyId || 'c1',
+        companyId: userCompanyId,
       }
     });
 
