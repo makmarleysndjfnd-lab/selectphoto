@@ -15,7 +15,7 @@ const router = Router();
 router.get('/download', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
-    const targetCompanyId = isSuperAdmin ? undefined : req.user?.companyId;
+    const targetCompanyId = isSuperAdmin ? undefined : (req.user?.companyId || undefined);
 
     const backupJsonString = await generateBackupJson(targetCompanyId);
     const dateStr = new Date().toISOString().split('T')[0];

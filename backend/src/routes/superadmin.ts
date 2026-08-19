@@ -71,8 +71,8 @@ router.post('/impersonate/:companyId', authenticateToken, requireSuperAdmin, asy
     // Generate a temporary token acting as COMPANY_ADMIN for that company
     const token = jwt.sign(
       { 
-        id: req.user.id, 
-        email: req.user.email, 
+        id: req.user?.id || 'superadmin', 
+        cpf: req.user?.cpf || null,
         role: 'COMPANY_ADMIN', // Downgraded to standard company admin view
         companyId: company.id 
       },

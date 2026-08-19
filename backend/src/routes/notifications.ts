@@ -93,7 +93,7 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
     const id = req.params.id as string;
     const { actionType } = req.body;
     const userId = req.user?.id;
-    const userRole = req.user?.role;
+    const userRole = req.user?.role || '';
     const userCompanyId = req.user?.companyId;
 
     const notification = await prisma.notification.findFirst({
@@ -351,9 +351,10 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     // CREATE FEEDBACK NOTIFICATION FOR SENDER
-    if (notification.type === 'COST_APPROVAL' && notification.senderId) {
+    if (notification.type === 'COST_APPROVAL' && notification.senderId && req.user?.id) {
+      const currentUserId = req.user.id;
       const sender = await prisma.user.findUnique({ where: { id: notification.senderId } });
-      const admin = await prisma.user.findUnique({ where: { id: req.user.id } });
+      const admin = await prisma.user.findUnique({ where: { id: currentUserId } });
       const statusStr = actionType === 'ACCEPT' ? 'APROVADA' : 'REPROVADA';
       const msg = `Sua despesa lançada foi ${statusStr} por ${admin?.name || 'Admin'}.`;
 
@@ -363,7 +364,7 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
           message: msg,
           type: 'INFO',
           status: 'UNREAD',
-          senderId: req.user.id,
+          senderId: currentUserId,
           recipientId: notification.senderId,
           companyId: notification.companyId,
         },

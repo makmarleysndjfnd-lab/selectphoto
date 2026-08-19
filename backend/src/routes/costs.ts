@@ -9,6 +9,10 @@ const prisma = new PrismaClient();
 // Submit a new cost (via Mobile App)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.user) {
+      res.status(401).json({ error: 'Não autenticado' });
+      return;
+    }
     const { 
       amount,
       category, 
@@ -120,7 +124,8 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     const { amount, category, description, paymentMethod } = req.body;
     const userCompanyId = req.user?.companyId;
     const userId = req.user?.id;
-    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(req.user?.role);
+    const userRole = req.user?.role || '';
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(userRole);
     
     // Check if cost belongs to company
     const existing = await prisma.cost.findFirst({
