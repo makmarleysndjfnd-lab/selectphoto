@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-const String _kDefaultServerUrl = String.fromEnvironment(
-  'SERVER_URL',
-  defaultValue: 'https://selectphoto-k1ac.onrender.com/api',
-);
+import '../config/app_config.dart';
 
 class SettingsProvider with ChangeNotifier {
   bool _isDarkMode = true;
-  String _serverUrl = _kDefaultServerUrl;
+  String _serverUrl = AppConfig.hasServerUrl ? AppConfig.serverUrl : '';
 
   // ROI Default Parameters
   double _hotelCostPerPersonDay = 70.0;
@@ -35,7 +31,12 @@ class SettingsProvider with ChangeNotifier {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('isDarkMode') ?? true;
-    _serverUrl = prefs.getString('serverUrl') ?? _kDefaultServerUrl;
+    final savedUrl = prefs.getString('serverUrl');
+    if (savedUrl != null && savedUrl.trim().isNotEmpty) {
+      _serverUrl = savedUrl.trim();
+    } else if (AppConfig.hasServerUrl) {
+      _serverUrl = AppConfig.serverUrl;
+    }
 
     _hotelCostPerPersonDay = prefs.getDouble('hotelCostPerPersonDay') ?? 70.0;
     _foodCostPerPersonDay = prefs.getDouble('foodCostPerPersonDay') ?? 50.0;

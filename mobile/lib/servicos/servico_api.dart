@@ -1,26 +1,27 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-
-const String _kDefaultApiUrl = String.fromEnvironment(
-  'SERVER_URL',
-  defaultValue: 'https://selectphoto-k1ac.onrender.com/api',
-);
+import '../config/app_config.dart';
 
 class ApiService {
   late Dio _dio;
-  String _baseUrl = _kDefaultApiUrl;
+  String _baseUrl = AppConfig.hasServerUrl ? AppConfig.serverUrl : '';
   String? _token;
 
   // Singleton pattern for easy global access (optional, but good for backward compatibility)
   static final ApiService _instance = ApiService._internal();
-  factory ApiService() => _instance;
+  factory ApiService({String? customBaseUrl}) {
+    if (customBaseUrl != null) {
+      _instance.updateBaseUrl(customBaseUrl);
+    }
+    return _instance;
+  }
   
   ApiService._internal() {
     _initDio();
   }
 
   Dio get dio => _dio;
+  String get baseUrl => _baseUrl;
 
   void _initDio() {
     _dio = Dio(BaseOptions(
@@ -36,6 +37,21 @@ class ApiService {
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
+        // Trava estrita: se a baseUrl estiver vazia ou for indefinida, impede a chamada imediatamente
+        if (options.baseUrl.trim().isEmpty && options.path.startsWith('http') != true) {
+          return handler.reject(
+            DioException(
+              requestOptions: options,
+              error: StateError(
+                '🛑 ERRO CRÍTICO: SERVER_URL não foi definida. '
+                'Builds debug/staging não possuem fallback para produção. '
+                'Forneça --dart-define=SERVER_URL=http://127.0.0.1:3001/api no build.',
+              ),
+              type: DioExceptionType.cancel,
+            ),
+          );
+        }
+
         if (_token != null) {
           options.headers['Authorization'] = 'Bearer $_token';
         } else {
