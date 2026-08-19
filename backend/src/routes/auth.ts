@@ -3,10 +3,12 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 
+import { loginRateLimiter } from '../middleware/securityMiddleware';
+
 const router = Router();
 const prisma = new PrismaClient();
 
-router.post('/login', async (req: Request, res: Response) => {
+router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
   const { cpf, password } = req.body;
 
   if (!cpf || !password) {

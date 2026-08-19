@@ -48,11 +48,11 @@ export function computeExactDurationDays(startDateStr?: string, endDateStr?: str
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
   console.log('--- REQUISIÇÃO RECEBIDA NA ROTA /search ---', req.body);
-  try {
-    const { city } = req.body;
+  try {    const { city } = req.body;
     
-    if (!city) {
-      res.status(400).json({ error: 'Cidade não fornecida' });
+    const sanitizedCity = String(city || '').replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
+    if (!sanitizedCity) {
+      res.status(400).json({ error: 'Cidade não fornecida ou inválida.' });
       return;
     }
 
@@ -73,66 +73,49 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const targetDateStr = targetDate.toISOString().split('T')[0];
     const maxDateStr = maxDate.toISOString().split('T')[0];
 
-    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure eventos na cidade "${city}".
+    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure eventos na cidade "${sanitizedCity}".
     Hoje é dia ${currentDateStr}.
     Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
     
     FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
-    1. Sympla (pesquise 'site:sympla.com.br ${city}' e 'sympla eventos ${city}')
-    2. Instagram e Facebook (pesquise 'site:instagram.com circo ${city}', 'site:instagram.com parque ${city}', 'site:facebook.com/events ${city}')
+    1. Sympla (pesquise 'site:sympla.com.br ${sanitizedCity}' e 'sympla eventos ${sanitizedCity}')
+    2. Instagram e Facebook (pesquise 'site:instagram.com circo ${sanitizedCity}', 'site:instagram.com parque ${sanitizedCity}', 'site:facebook.com/events ${sanitizedCity}')
     3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
-    4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${city}', 'exposição ${city}', 'festa de peão ${city}', 'aniversário da cidade ${city}')
+    4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${sanitizedCity}', 'exposição ${sanitizedCity}', 'festa de peão ${sanitizedCity}', 'aniversário da cidade ${sanitizedCity}')
     
     REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
     - O ano atual de referência é ${new Date().getFullYear()}.
     - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
     - Se não houver confirmação de data futura real, retorne "events": [].
     
-    CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
-    - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
-    - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
-    - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
-    - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
-    - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
-    
     CONTATOS E REDES (MUITO IMPORTANTE):
     - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
     - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
     
-    PÚBLICO E CATEGORIAS:
-    - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
-    - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
-    - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
-    - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
-
-    Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-    ESTRUTURA OBRIGATÓRIA do objeto JSON esperado:
+    Retorne a resposta EXCLUSIVAMENTE em formato JSON puro, sem blocos de markdown adicionais fora do JSON, seguindo esta estrutura:
     {
       "cityInfo": {
-        "rendaDomiciliarPerCapitaMedia": "N/A",
-        "rendaPerCapita": "N/A",
-        "cityAge": "N/A",
-        "economicActivities": "N/A",
-        "principaisFestasFixas": "N/A"
+        "name": "${sanitizedCity}",
+        "summary": "Breve resumo sobre o cenário de eventos da cidade neste período.",
+        "searchDate": "${currentDateStr}"
       },
       "events": [
         {
           "name": "Nome do Evento",
-          "city": "${city}",
-          "category": "AGRO",
-          "score": "HIGH",
+          "category": "Exposição Agropecuária / Show / Festa Tradicional / Circo / Parque",
           "startDate": "YYYY-MM-DD",
           "endDate": "YYYY-MM-DD",
-          "durationDays": 1,
-          "isItinerant": true,
-          "venueType": "LONA_INSTALADA",
-          "audience": "N/A",
-          "ticketPrice": "N/A",
-          "organizerContact": "N/A",
-          "socialMedia": "N/A",
-          "sourcePlatform": "Sympla",
-          "sourceUrl": "N/A",
-          "notes": "N/A"
+          "durationDays": 3,
+          "location": "Local ou Parque de Exposições",
+          "city": "${sanitizedCity}",
+          "estimatedAudience": "Público estimado",
+          "historicalData": "Histórico das edições anteriores",
+          "organizer": "Nome do Organizador",
+          "organizerContact": "(DD) 9XXXX-XXXX",
+          "socialMedia": "@perfil_instagram",
+          "website": "https://...",
+          "notes": "Observações comerciais relevantes",
+          "sources": ["Sympla", "Instagram @..."]
         }
       ]
     }`;
@@ -141,7 +124,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     let aiSource = '';
     try {
       if (!ai) throw new Error('Gemini AI not initialized');
-      const response = await ai.models.generateContent({
+      
+      const aiCallPromise = ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
         config: { 
@@ -149,12 +133,21 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           tools: [{ googleSearch: {} }] 
         }
       });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('AI_TIMEOUT')), 25000).unref();
+      });
+
+      const response: any = await Promise.race([aiCallPromise, timeoutPromise]);
       text = response.text || '';
       aiSource = 'Gemini (Google Search Grounding)';
     } catch (err: any) {
       console.error("[Gemini Search] Falhou.", err);
       if (err.status === 429 || (err.message && err.message.includes('429'))) {
-        throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
+        throw { status: 429, message: 'Limite de requisições de IA atingido. Tente novamente mais tarde.' };
+      }
+      if (err.message === 'AI_TIMEOUT') {
+        throw { status: 504, message: 'Tempo limite excedido na pesquisa de IA. Tente novamente.' };
       }
       throw err;
     }

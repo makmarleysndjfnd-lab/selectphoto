@@ -29,8 +29,11 @@ const port = process.env.PORT || 3000;
 
 import path from 'path';
 import { requestLogger } from './middleware/requestLogger';
+import { securityHeaders, generalApiLimiter, centralErrorHandler } from './middleware/securityMiddleware';
 
+app.use(securityHeaders);
 app.use(requestLogger);
+app.use(generalApiLimiter);
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increased limit for base64 signatures
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -90,6 +93,8 @@ app.use('/api/edit-requests', editRequestsRoutes);
 app.use('/api/quotes', quotesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
 app.use('/api/stats', statsRoutes);
+
+app.use(centralErrorHandler);
 
 if (process.env.DISABLE_CRON !== 'true' && process.env.NODE_ENV !== 'test') {
   initWarrantyCron();
