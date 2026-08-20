@@ -23,6 +23,23 @@ class ApiService {
   Dio get dio => _dio;
   String get baseUrl => _baseUrl;
 
+  /// Resolve URL de mídia (comprovantes, fotos de perfil, assinaturas) dinamicamente a partir do servidor configurado
+  static String resolveMediaUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return '';
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+      return url;
+    }
+    String serverBase = ApiService().baseUrl;
+    if (serverBase.endsWith('/api')) {
+      serverBase = serverBase.substring(0, serverBase.length - 4);
+    }
+    if (serverBase.endsWith('/')) {
+      serverBase = serverBase.substring(0, serverBase.length - 1);
+    }
+    final cleanPath = url.startsWith('/') ? url : '/$url';
+    return '$serverBase$cleanPath';
+  }
+
   void _initDio() {
     _dio = Dio(BaseOptions(
       baseUrl: _baseUrl,

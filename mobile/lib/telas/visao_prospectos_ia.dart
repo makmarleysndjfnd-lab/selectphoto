@@ -543,7 +543,7 @@ rows: events.map<DataRow>((evt) {
                                                            final query = Uri.encodeComponent('${evt['name'] ?? ''} ${evt['city'] ?? ''} contato telefone sympla instagram');
                                                            url = Uri.parse('https://www.google.com/search?q=$query');
                                                          }
-                                                         if (await canLaunchUrl(url!)) {
+                                                         if (await canLaunchUrl(url)) {
                                                            await launchUrl(url, mode: LaunchMode.externalApplication);
                                                          }
                                                        },

@@ -17,7 +17,6 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
   
   Map<String, dynamic> _overviewData = {};
   List<dynamic> _pendingCosts = [];
-  Map<String, dynamic> _kpis = {};
   Map<String, dynamic> _charts = {};
 
   @override
@@ -36,7 +35,6 @@ class _CashFlowAdminViewState extends State<CashFlowAdminView> {
       setState(() {
         _overviewData = overview;
         _pendingCosts = pending;
-        _kpis = health['kpis'] ?? {};
         _charts = health['charts'] ?? {};
       });
     } catch (e) {

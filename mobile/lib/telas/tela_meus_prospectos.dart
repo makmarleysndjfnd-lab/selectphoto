@@ -203,9 +203,8 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
 
     if (result == true) {
       try {
-        final api = Provider.of<ApiService>(context, listen: false);
-        // Em um app real, chamaria api.buyEvent
-        await Future.delayed(const Duration(milliseconds: 800)); // Mock
+        // Mock compra de evento
+        await Future.delayed(const Duration(milliseconds: 800));
         _loadProspects();
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evento comprado com sucesso! Despesa gerada.'), backgroundColor: Colors.green));
       } catch (e) {

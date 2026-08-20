@@ -144,7 +144,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                           leading: CircleAvatar(
                             backgroundColor: Colors.white12,
                             backgroundImage: emp['profilePhotoUrl'] != null 
-                              ? NetworkImage('http://192.168.1.6:3000${emp['profilePhotoUrl']}') 
+                              ? NetworkImage(ApiService.resolveMediaUrl(emp['profilePhotoUrl'])) 
                               : null,
                             child: emp['profilePhotoUrl'] == null ? const Icon(Icons.person, color: Colors.white54) : null,
                           ),

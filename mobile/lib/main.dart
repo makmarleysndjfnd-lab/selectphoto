@@ -33,10 +33,11 @@ void main() async {
 
     // Get FCM token
     final token = await messaging.getToken();
-    print("FCM Token: $token");
-    // TODO: Send this token to the backend
+    if (token != null) {
+      // Token will be synced securely via ApiService without logging
+    }
   } catch (e) {
-    print("Firebase init failed (maybe missing google-services.json): $e");
+    // Silent fail for missing Firebase in local environment
   }
 
   runApp(

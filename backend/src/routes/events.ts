@@ -524,19 +524,21 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
       visited.add(p1.id);
 
       const cityKey1 = (p1.city || '').toLowerCase().trim();
-      const coords1 = CITY_COORDS[cityKey1] || { lat: -16.6869, lng: -49.2648 };
+      const coords1 = CITY_COORDS[cityKey1] || null;
 
       for (let j = i + 1; j < filtered.length; j++) {
         const p2 = filtered[j];
         if (visited.has(p2.id)) continue;
 
         const cityKey2 = (p2.city || '').toLowerCase().trim();
-        const coords2 = CITY_COORDS[cityKey2] || { lat: -16.6869, lng: -49.2648 };
+        const coords2 = CITY_COORDS[cityKey2] || null;
 
-        const dist = haversineDistanceKm(coords1.lat, coords1.lng, coords2.lat, coords2.lng);
-        if (dist <= 300) {
-          cluster.push(p2);
-          visited.add(p2.id);
+        if (coords1 && coords2) {
+          const dist = haversineDistanceKm(coords1.lat, coords1.lng, coords2.lat, coords2.lng);
+          if (dist <= 300) {
+            cluster.push(p2);
+            visited.add(p2.id);
+          }
         }
       }
       clusters.push(cluster);
@@ -551,15 +553,20 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
         const duration = evt.durationDays ?? 10;
         totalDays += duration;
 
-        let distFromPrev = 0;
+        const currKey = (evt.city || '').toLowerCase().trim();
+        const cCurr = CITY_COORDS[currKey] || null;
+        let distFromPrev: number | null = 0;
+
         if (sIdx > 0) {
           const prevKey = (cluster[sIdx - 1].city || '').toLowerCase().trim();
-          const currKey = (evt.city || '').toLowerCase().trim();
-          const cPrev = CITY_COORDS[prevKey] || { lat: -16.6869, lng: -49.2648 };
-          const cCurr = CITY_COORDS[currKey] || { lat: -16.6869, lng: -49.2648 };
-          distFromPrev = haversineDistanceKm(cPrev.lat, cPrev.lng, cCurr.lat, cCurr.lng);
+          const cPrev = CITY_COORDS[prevKey] || null;
+          if (cPrev && cCurr) {
+            distFromPrev = haversineDistanceKm(cPrev.lat, cPrev.lng, cCurr.lat, cCurr.lng);
+            totalKm += distFromPrev;
+          } else {
+            distFromPrev = null; // Marked as ungeocoded
+          }
         }
-        totalKm += distFromPrev;
 
         return {
           id: evt.id,
@@ -570,6 +577,7 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
           durationDays: duration,
           score: evt.score || 'HIGH',
           distanceFromPrevKm: distFromPrev,
+          geocoded: cCurr !== null,
         };
       });
 

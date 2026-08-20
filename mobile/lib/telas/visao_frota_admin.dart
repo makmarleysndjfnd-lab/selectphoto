@@ -521,7 +521,7 @@ Future<void> _save() async {
     if (localFile != null) {
       image = FileImage(localFile);
     } else if (remoteUrl != null && remoteUrl.isNotEmpty) {
-      image = NetworkImage('http://192.168.1.6:3000$remoteUrl');
+      image = NetworkImage(ApiService.resolveMediaUrl(remoteUrl));
     }
 
     return GestureDetector(

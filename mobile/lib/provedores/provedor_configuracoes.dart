@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
@@ -32,7 +33,11 @@ class SettingsProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('isDarkMode') ?? true;
     final savedUrl = prefs.getString('serverUrl');
-    if (savedUrl != null && savedUrl.trim().isNotEmpty) {
+    
+    // Em modo release, a SERVER_URL oficial de compilação tem precedência absoluta
+    if (kReleaseMode && AppConfig.hasServerUrl) {
+      _serverUrl = AppConfig.serverUrl;
+    } else if (savedUrl != null && savedUrl.trim().isNotEmpty) {
       _serverUrl = savedUrl.trim();
     } else if (AppConfig.hasServerUrl) {
       _serverUrl = AppConfig.serverUrl;
@@ -56,6 +61,10 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<void> setServerUrl(String url) async {
+    // Permite alteração de URL personalizada apenas em modo debug
+    if (kReleaseMode && AppConfig.hasServerUrl) {
+      return;
+    }
     _serverUrl = url;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('serverUrl', url);

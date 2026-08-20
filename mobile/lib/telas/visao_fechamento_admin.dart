@@ -265,7 +265,6 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         double comissao = (data['commission'] ?? 0).toDouble();
         double percentual = (data['commissionPercentage'] ?? 0).toDouble();
         double saldoHistorico = (data['totalHistoricalDebt'] ?? 0).toDouble();
-        double repasseDebt = (data['repasseDebt'] ?? 0).toDouble();
         
         double saldoFinal = (comissao - dinheiro) + saldoHistorico;
 

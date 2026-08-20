@@ -3,15 +3,14 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:http/http.dart' as http;
 
+import '../servicos/servico_api.dart';
+
 class PdfGenerator {
   
   static Future<pw.MemoryImage?> _fetchSignature(String? urlStr) async {
-    if (urlStr == null) return null;
+    if (urlStr == null || urlStr.trim().isEmpty) return null;
     try {
-      String url = urlStr;
-      if (url.startsWith('/')) {
-          url = 'http://192.168.1.6:3000$url';
-      }
+      final url = ApiService.resolveMediaUrl(urlStr);
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
         return pw.MemoryImage(response.bodyBytes);
