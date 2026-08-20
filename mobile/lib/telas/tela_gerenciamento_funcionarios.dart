@@ -239,6 +239,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
               try {
                 final api = ApiService();
                 final newTeam = await api.createTeam({'name': nameCtrl.text.trim(), 'type': 'PRODUCTION'});
+                if (!mounted) return;
                 setState(() {
                   widget.teams.add(newTeam);
                   _teamId = newTeam['id'];
@@ -246,7 +247,9 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Equipe criada!')));
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                }
               }
             },
             style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
@@ -338,13 +341,18 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
         await _apiService.updateUser(widget.employee!['id'], formData);
       }
 
+      if (!mounted) return;
       Navigator.of(context).pop();
       widget.onSaved();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo com sucesso!'), backgroundColor: Colors.green));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      }
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 
@@ -697,6 +705,7 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
 
       await widget.apiService.submitChecklist(formData);
       
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Checklist salvo com sucesso!'), backgroundColor: Colors.green));
       
       // Reset form
@@ -709,9 +718,13 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
       widget.onSaved();
 
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+      }
     } finally {
-      setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 

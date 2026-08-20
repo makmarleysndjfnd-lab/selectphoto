@@ -94,6 +94,8 @@ class _LoginScreenState extends State<LoginScreen>
           }
         }
 
+        if (!mounted) return;
+
         if (authenticated) {
           final apiService = Provider.of<ApiService>(context, listen: false);
           apiService.setToken(token);
