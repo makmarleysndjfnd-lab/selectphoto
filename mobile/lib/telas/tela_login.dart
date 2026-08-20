@@ -220,9 +220,7 @@ class _LoginScreenState extends State<LoginScreen>
         if (fcmToken != null) {
           await apiService.updateFcmToken(fcmToken);
         }
-      } catch (e) {
-        print("Error getting/sending FCM token: $e");
-      }
+      } catch (_) {}
       
     } catch (e) {
       if (!mounted) return;
@@ -287,7 +285,7 @@ class _LoginScreenState extends State<LoginScreen>
                     children: [
                       // Logo
                       Center(
-                        child: Container(
+                        child: SizedBox(
                           width: 200,
                           height: 140,
                           child: Image.asset(

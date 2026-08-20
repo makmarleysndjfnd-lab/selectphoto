@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:convert';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import '../utils/ui_helpers.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +13,7 @@ import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
+import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
 
@@ -326,7 +326,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               const SizedBox(height: 8),
               _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
             ],
-            if (client['signatureUrl'] != null && client['signatureUrl'].toString().startsWith('data:image')) ...[
+            if (client['signatureUrl'] != null && client['signatureUrl'].toString().trim().isNotEmpty) ...[
               const SizedBox(height: 12),
               const Divider(color: Colors.white12),
               const SizedBox(height: 8),
@@ -334,13 +334,14 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               const SizedBox(height: 4),
               Container(
                 height: 80,
+                width: double.infinity,
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Image.memory(
-                  base64Decode(client['signatureUrl'].toString().split(',')[1]),
+                child: AuthenticatedImage(
+                  url: client['signatureUrl'].toString(),
                   fit: BoxFit.contain,
                 ),
               ),

@@ -1,9 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile/config/app_config.dart';
 import 'package:mobile/servicos/servico_api.dart';
 import 'package:mobile/provedores/provedor_configuracoes.dart';
+import 'package:mobile/widgets/authenticated_image.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -111,6 +113,80 @@ void main() {
         ),
       );
       expect(rateLimitErr.response?.statusCode, equals(429));
+    });
+  });
+
+  group('Segurança de Mídias Privadas e AuthenticatedImage', () {
+    test('6. ApiService resolveMediaUrl trata URLs relativas, absolutas e data URLs', () {
+      final relativeUrl = ApiService.resolveMediaUrl('/api/upload/file/comp123/foto.jpg');
+      expect(relativeUrl, contains('/api/upload/file/comp123/foto.jpg'));
+
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      expect(ApiService.resolveMediaUrl(dataUrl), equals(dataUrl));
+
+      expect(ApiService.resolveMediaUrl(null), equals(''));
+      expect(ApiService.resolveMediaUrl('   '), equals(''));
+    });
+
+    test('7. AuthenticatedImage injeta Authorization Header apenas para o host seguro', () {
+      final api = ApiService();
+      api.setToken('test_jwt_token_123');
+
+      // Para URL no host oficial
+      final officialHeaders = AuthenticatedImage.getSafeHeadersForUrl('https://selectphoto-k1ac.onrender.com/api/upload/file/c1/f.jpg');
+      expect(officialHeaders['Authorization'], equals('Bearer test_jwt_token_123'));
+
+      // Para Data URL não anexa cabeçalhos
+      final dataHeaders = AuthenticatedImage.getSafeHeadersForUrl('data:image/png;base64,AAA...');
+      expect(dataHeaders.containsKey('Authorization'), isFalse);
+    });
+
+    test('8. AuthenticatedImage.provider gera MemoryImage para data URL e NetworkImage com header para URLs remotas', () {
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+      final memoryProvider = AuthenticatedImage.provider(dataUrl);
+      expect(memoryProvider, isA<MemoryImage>());
+
+      final networkProvider = AuthenticatedImage.provider('/api/upload/file/compA/doc.jpg');
+      expect(networkProvider, isA<NetworkImage>());
+      final netImg = networkProvider as NetworkImage;
+      expect(netImg.headers?['Authorization'], equals('Bearer test_jwt_token_123'));
+
+      expect(AuthenticatedImage.provider(null), isNull);
+      expect(AuthenticatedImage.provider(''), isNull);
+    });
+
+    testWidgets('9. AuthenticatedImage widget renderiza data URL e fallback para imagem nula', (tester) async {
+      const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AuthenticatedImage(
+              url: dataUrl,
+              width: 50,
+              height: 50,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Image), findsOneWidget);
+
+      // Render com URL nula -> exibe placeholder de erro
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: AuthenticatedImage(
+              url: null,
+              width: 50,
+              height: 50,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.broken_image), findsOneWidget);
     });
   });
 }

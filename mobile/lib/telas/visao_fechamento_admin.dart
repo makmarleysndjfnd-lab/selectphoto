@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
 import 'package:flutter/services.dart';
+import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
 
@@ -353,18 +354,21 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
          const SizedBox(height: 16),
          const Text('Comprovantes de Vendas (Hoje)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
          const SizedBox(height: 12),
-         SingleChildScrollView(
-           scrollDirection: Axis.horizontal,
-           child: Row(
-             children: _mockReceipts.map((url) => Padding(
-               padding: const EdgeInsets.only(right: 12),
-               child: ClipRRect(
-                 borderRadius: BorderRadius.circular(8),
-                 child: Image.network(url, width: 100, height: 140, fit: BoxFit.cover),
-               ),
-                  )).toList(),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: _mockReceipts.map((url) => Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: AuthenticatedImage(
+                  url: url,
+                  width: 100,
+                  height: 140,
+                  fit: BoxFit.cover,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-              ),
+              )).toList(),
+            ),
+          ),
             ]
           );
       }

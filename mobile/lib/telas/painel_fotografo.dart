@@ -20,7 +20,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/km_request_dialog.dart';
 import '../utils/ui_helpers.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import '../widgets/led_button.dart';
 
 

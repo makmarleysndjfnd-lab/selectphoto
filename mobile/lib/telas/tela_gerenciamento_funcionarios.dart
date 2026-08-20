@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:signature/signature.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 
@@ -38,24 +39,31 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
       final teams = await _apiService.getTeams();
       final cars = await _apiService.getCars();
       
+      if (!mounted) return;
       setState(() {
         _employees = emps.where((u) => u['role'] != 'ADMIN').toList();
         _teams = teams;
         _cars = cars;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar: $e'), backgroundColor: Colors.red));
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   Future<void> _deleteEmployee(String id) async {
     try {
       await _apiService.deleteUser(id);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Excluído com sucesso!'), backgroundColor: Colors.green));
       _fetchData();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Erro ao excluir'), backgroundColor: Colors.red));
     }
   }
@@ -143,9 +151,7 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                         child: ListTile(
                           leading: CircleAvatar(
                             backgroundColor: Colors.white12,
-                            backgroundImage: emp['profilePhotoUrl'] != null 
-                              ? NetworkImage(ApiService.resolveMediaUrl(emp['profilePhotoUrl'])) 
-                              : null,
+                            backgroundImage: AuthenticatedImage.provider(emp['profilePhotoUrl']),
                             child: emp['profilePhotoUrl'] == null ? const Icon(Icons.person, color: Colors.white54) : null,
                           ),
                           title: Text(emp['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),

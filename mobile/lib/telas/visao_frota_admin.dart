@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
 
@@ -521,7 +522,7 @@ Future<void> _save() async {
     if (localFile != null) {
       image = FileImage(localFile);
     } else if (remoteUrl != null && remoteUrl.isNotEmpty) {
-      image = NetworkImage(ApiService.resolveMediaUrl(remoteUrl));
+      image = AuthenticatedImage.provider(remoteUrl);
     }
 
     return GestureDetector(

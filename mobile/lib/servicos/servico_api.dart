@@ -41,6 +41,17 @@ class ApiService {
     return '$serverBase$cleanPath';
   }
 
+  /// Retorna o token atual em memória
+  String? get currentToken => _token;
+
+  /// Retorna os headers de autenticação síncronos a partir do token em memória
+  Map<String, String> get currentAuthHeaders {
+    if (_token != null && _token!.isNotEmpty) {
+      return {'Authorization': 'Bearer $_token'};
+    }
+    return {};
+  }
+
   /// Retorna os cabeçalhos de autenticação para NetworkImage e requisições HTTP seguras
   Future<Map<String, String>> get authHeaders async {
     final token = _token ?? (await SharedPreferences.getInstance()).getString('jwt_token');

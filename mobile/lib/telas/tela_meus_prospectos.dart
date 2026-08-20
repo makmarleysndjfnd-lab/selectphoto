@@ -100,9 +100,11 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
       }
     );
 
+    final api = Provider.of<ApiService>(context, listen: false);
+
     if (result == true) {
+      if (!mounted) return;
       try {
-        final api = Provider.of<ApiService>(context, listen: false);
         await api.updateProspect(prospect['id'], {
           'observations': obsController.text,
           'expectedRevenue': double.tryParse(valueController.text.replaceAll(',', '.')) ?? 0.0,
@@ -116,6 +118,7 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
   }
 
   Future<void> _deleteProspect(String id) async {
+    final api = Provider.of<ApiService>(context, listen: false);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -134,8 +137,8 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
     );
 
     if (confirm == true) {
+      if (!mounted) return;
       try {
-        final api = Provider.of<ApiService>(context, listen: false);
         await api.deleteProspect(id);
         _loadProspects();
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Prospecto removido.'), backgroundColor: Colors.amber));
