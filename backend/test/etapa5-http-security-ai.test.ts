@@ -118,6 +118,51 @@ describe('ETAPA 5 — Testes de HTTP Security, Rate Limiting, Error Handling e R
       );
     });
 
+    it('deve repassar o AbortSignal e permitir que a operação simulada observe o abort e encerre', async () => {
+      let abortedObserved = false;
+      let cleanedUp = false;
+
+      await assert.rejects(
+        async () => {
+          await executeWithTimeout(async (signal) => {
+            return new Promise((resolve, reject) => {
+              const timer = setTimeout(() => resolve('tardio'), 200);
+              signal.addEventListener('abort', () => {
+                abortedObserved = true;
+                clearTimeout(timer);
+                cleanedUp = true;
+                reject(new Error('OPERATION_CANCELLED_BY_SIGNAL'));
+              });
+            });
+          }, 30);
+        },
+        (err: any) => {
+          return err.message === 'AI_TIMEOUT' || err.name === 'AbortError';
+        }
+      );
+
+      // Aguarda um pequeno ciclo para garantir que o listener de abort foi acionado e limpou os recursos
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(abortedObserved, true);
+      assert.equal(cleanedUp, true);
+    });
+
+    it('deve absorver rejeições tardias da promise em background sem disparar unhandledRejection', async () => {
+      await assert.rejects(
+        async () => {
+          await executeWithTimeout(async () => {
+            return new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('LATE_ASYNC_ERROR')), 80);
+            });
+          }, 30);
+        },
+        (err: any) => err.message === 'AI_TIMEOUT'
+      );
+
+      // Espera passar o tempo da rejeição tardia (80ms) para garantir estabilidade
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
     it('deve completar normalmente quando a chamada terminar antes do timeout', async () => {
       const result = await executeWithTimeout(async () => {
         return { data: 'ok' };

@@ -43,9 +43,18 @@ export function computeExactDurationDays(startDateStr?: string, endDateStr?: str
   return 1;
 }
 
-// Helper para execução assíncrona com cancelamento real e timeout garantido por Promise.race
+/**
+ * Executa uma operação assíncrona com timeout estrito via Promise.race e notificação via AbortSignal.
+ * 
+ * NOTA TÉCNICA SOBRE CANCELAMENTO:
+ * O SDK @google/genai atualmente não expõe suporte nativo a AbortSignal em ai.models.generateContent.
+ * Portanto, este wrapper garante o retorno com timeout rápido ao cliente HTTP (504 após timeoutMs),
+ * rate limiting e limites estritos de payload, enquanto a promise em background é monitorada
+ * com captura de erro silenciosa para evitar exceções não tratadas (unhandledRejection).
+ * Para callbacks compatíveis com AbortSignal, o signal é repassado como parâmetro.
+ */
 export async function executeWithTimeout<T>(
-  promiseFactory: (signal?: AbortSignal) => Promise<T>,
+  promiseFactory: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number = 25000
 ): Promise<T> {
   const abortController = new AbortController();
@@ -53,15 +62,21 @@ export async function executeWithTimeout<T>(
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      try { abortController.abort(); } catch (_) {}
+      try {
+        abortController.abort();
+      } catch (_) {}
       const err: any = new Error('AI_TIMEOUT');
       err.name = 'AbortError';
       reject(err);
     }, timeoutMs);
   });
 
+  const executionPromise = promiseFactory(abortController.signal);
+
+  // Trata rejeições tardias da promise em segundo plano para evitar 'unhandledRejection'
+  executionPromise.catch(() => {});
+
   try {
-    const executionPromise = promiseFactory(abortController.signal);
     return await Promise.race([executionPromise, timeoutPromise]);
   } finally {
     if (timer) {
@@ -186,7 +201,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     let text = '';
     let aiSource = '';
     try {
-      const response: any = await executeWithTimeout(async () => {
+      const response: any = await executeWithTimeout(async (signal) => {
         return await ai.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: prompt,
@@ -315,7 +330,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       Retorne APENAS JSON válido com o radar de cidades e eventos.`.slice(0, 4000);
 
       try {
-        const response: any = await executeWithTimeout(async () => {
+        const response: any = await executeWithTimeout(async (signal) => {
           return await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
