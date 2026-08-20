@@ -4,30 +4,35 @@ import fs from 'fs';
 
 const router = Router();
 
-// This endpoint returns the latest available app version and the download URL.
+const CURRENT_APP_VERSION = '1.0.3';
+const CURRENT_BUILD_NUMBER = 3;
+
+// Retorna a versão mais recente do aplicativo e a URL de download se o APK existir
 router.get('/version', (req: Request, res: Response) => {
-  // In a real production system, this could be stored in the DB or env vars.
-  // We can read from a simple config file or hardcode for now.
-  const latestVersion = '1.0.1'; // Update this whenever a new APK is uploaded
-  const apkFileName = 'app-release.apk';
-  const downloadUrl = `${req.protocol}://${req.get('host')}/api/app/download`;
+  const apkPath = path.join(__dirname, '../../public/apk/app-release.apk');
+  const apkExists = fs.existsSync(apkPath);
+  
+  const host = req.get('host') || 'selectphoto-k1ac.onrender.com';
+  const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  const downloadUrl = apkExists ? `${protocol}://${host}/api/app/download` : null;
 
   res.json({
-    version: latestVersion,
+    version: CURRENT_APP_VERSION,
+    buildNumber: CURRENT_BUILD_NUMBER,
     mandatory: false,
-    downloadUrl
+    downloadUrl: downloadUrl || '',
+    apkAvailable: apkExists
   });
 });
 
-// Endpoint to actually download the APK
+// Download do APK se disponível
 router.get('/download', (req: Request, res: Response) => {
-  // We assume the APK is placed in a "public/apk" directory in the backend
   const apkPath = path.join(__dirname, '../../public/apk/app-release.apk');
   
   if (fs.existsSync(apkPath)) {
-    res.download(apkPath);
+    res.download(apkPath, 'Lumora-release.apk');
   } else {
-    res.status(404).json({ error: 'APK not found on server' });
+    res.status(404).json({ error: 'Nenhum APK de atualização disponível no servidor no momento.' });
   }
 });
 

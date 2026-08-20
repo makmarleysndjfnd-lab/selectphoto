@@ -45,7 +45,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       'http://localhost:5173',
       'http://127.0.0.1:3000',
       'http://127.0.0.1:5173',
-      'https://selectphoto.onrender.com',
+      'https://selectphoto-k1ac.onrender.com',
     ];
 
 app.use(
@@ -70,6 +70,8 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
+    version: '1.0.3',
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || '3d1c9a8',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
     memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
