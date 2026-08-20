@@ -43,6 +43,34 @@ export function computeExactDurationDays(startDateStr?: string, endDateStr?: str
   return 1;
 }
 
+// Helper para execução assíncrona com cancelamento real e timeout garantido por Promise.race
+export async function executeWithTimeout<T>(
+  promiseFactory: (signal?: AbortSignal) => Promise<T>,
+  timeoutMs: number = 25000
+): Promise<T> {
+  const abortController = new AbortController();
+  let timer: NodeJS.Timeout | null = null;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try { abortController.abort(); } catch (_) {}
+      const err: any = new Error('AI_TIMEOUT');
+      err.name = 'AbortError';
+      reject(err);
+    }, timeoutMs);
+  });
+
+  try {
+    const executionPromise = promiseFactory(abortController.signal);
+    return await Promise.race([executionPromise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+}
+
 // In-memory rate limiter per user/company for AI queries
 const aiQueryRateMap = new Map<string, number[]>();
 function checkAiRateLimit(key: string, maxPerHour: number = 60): boolean {
@@ -153,27 +181,25 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           "sources": ["Fonte"]
         }
       ]
-    }`;
-
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), 25000);
+    }`.slice(0, 4000);
 
     let text = '';
     let aiSource = '';
     try {
-      const response: any = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { 
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }] 
-        }
-      });
-      clearTimeout(timeoutId);
-      text = response.text || '';
+      const response: any = await executeWithTimeout(async () => {
+        return await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+          config: { 
+            temperature: 0.1,
+            tools: [{ googleSearch: {} }] 
+          }
+        });
+      }, 25000);
+
+      text = (response.text || '').slice(0, 50000);
       aiSource = 'Gemini (Google Search Grounding)';
     } catch (err: any) {
-      clearTimeout(timeoutId);
       if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
         res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
         return;
@@ -286,26 +312,25 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const maxDateStr = maxDate.toISOString().split('T')[0];
 
       const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos entre ${targetDateStr} e ${maxDateStr}.
-      Retorne APENAS JSON válido com o radar de cidades e eventos.`;
-
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), 25000);
+      Retorne APENAS JSON válido com o radar de cidades e eventos.`.slice(0, 4000);
 
       try {
-        const response: any = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: prompt,
-          config: { 
-            temperature: 0.1,
-            tools: [{ googleSearch: {} }] 
-          }
-        });
-        clearTimeout(timeoutId);
-        const text = response.text || '';
+        const response: any = await executeWithTimeout(async () => {
+          return await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: { 
+              temperature: 0.1,
+              tools: [{ googleSearch: {} }] 
+            }
+          });
+        }, 25000);
+
+        const text = (response.text || '').slice(0, 50000);
         const cleanJson = extractCleanJson(text);
         resultData = JSON.parse(cleanJson);
 
-        // Salva cache apenas se o payload for estruturalmente válido e contiver dados
+        // Salva cache apenas se o payload for estruturalmente válido e contiver dados reais
         if (resultData && typeof resultData === 'object' && (Array.isArray(resultData.cities) || Array.isArray(resultData.events))) {
           await prisma.stateRadarCache.upsert({
             where: { state: stateUF },
@@ -314,7 +339,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
           });
         }
       } catch (err: any) {
-        clearTimeout(timeoutId);
+        if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
+          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+          if (fallbackCache) {
+            res.json(fallbackCache.data);
+            return;
+          }
+          res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
+          return;
+        }
         // Não substituir cache bom existente por erro
         const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
         if (fallbackCache) {

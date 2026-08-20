@@ -51,11 +51,29 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
   }
 };
 
-function createStorage() {
-  const useExternalS3 = !isExternalServicesDisabled() && !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+const diskStorage = multer.diskStorage({
+  destination: (req: any, file, cb) => {
+    const companyDir = path.join(uploadDir, req.user?.companyId || 'global');
+    if (!fs.existsSync(companyDir)) {
+      fs.mkdirSync(companyDir, { recursive: true });
+    }
+    cb(null, companyDir);
+  },
+  filename: (req: any, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    const fileId = uuidv4();
+    const companyId = req.user?.companyId || 'global';
+    const relativeKey = `${companyId}/${fileId}${ext}`;
+    // Anexa relativeKey ao objeto do arquivo para compatibilidade
+    (file as any).key = relativeKey;
+    cb(null, `${fileId}${ext}`);
+  }
+});
 
-  if (useExternalS3) {
-    return multerS3({
+let s3Storage: any = null;
+function getS3Storage() {
+  if (!s3Storage) {
+    s3Storage = multerS3({
       s3: s3,
       bucket: process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app',
       acl: 'private',
@@ -70,27 +88,22 @@ function createStorage() {
       },
     });
   }
-
-  // Local storage para staging / testes sem tráfego externo
-  return multer.diskStorage({
-    destination: (req: any, file, cb) => {
-      const companyDir = path.join(uploadDir, req.user?.companyId || 'global');
-      if (!fs.existsSync(companyDir)) {
-        fs.mkdirSync(companyDir, { recursive: true });
-      }
-      cb(null, companyDir);
-    },
-    filename: (req: any, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-      const fileId = uuidv4();
-      const companyId = req.user?.companyId || 'global';
-      const relativeKey = `${companyId}/${fileId}${ext}`;
-      // Anexa relativeKey ao objeto do arquivo para compatibilidade
-      (file as any).key = relativeKey;
-      cb(null, `${fileId}${ext}`);
-    }
-  });
+  return s3Storage;
 }
+
+// Storage dinâmico com avaliação em runtime por requisição
+const dynamicStorage: multer.StorageEngine = {
+  _handleFile(req: any, file: any, cb: any) {
+    const useExternalS3 = !isExternalServicesDisabled() && !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    const targetStorage = useExternalS3 ? getS3Storage() : diskStorage;
+    targetStorage._handleFile(req, file, cb);
+  },
+  _removeFile(req: any, file: any, cb: any) {
+    const useExternalS3 = !isExternalServicesDisabled() && !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    const targetStorage = useExternalS3 ? getS3Storage() : diskStorage;
+    targetStorage._removeFile(req, file, cb);
+  }
+};
 
 export const upload = multer({
   limits: {
@@ -98,7 +111,7 @@ export const upload = multer({
     files: 10, // Permite formulários com várias fotos (checklist, documentos, etc.)
   },
   fileFilter,
-  storage: createStorage(),
+  storage: dynamicStorage,
 });
 
 export function getUploadedFileUrl(file?: Express.Multer.File): string | null {

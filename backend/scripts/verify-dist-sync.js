@@ -1,8 +1,9 @@
-import fs from 'fs';
-import path from 'path';
+const fs = require('fs');
+const path = require('path');
 
-function getLatestMtime(dir: string): number {
+function getLatestMtime(dir) {
   let latest = 0;
+  if (!fs.existsSync(dir)) return 0;
   const files = fs.readdirSync(dir);
   for (const file of files) {
     const fullPath = path.join(dir, file);
@@ -17,7 +18,7 @@ function getLatestMtime(dir: string): number {
   return latest;
 }
 
-function getOldestDistMtime(distFile: string): number {
+function getOldestDistMtime(distFile) {
   if (!fs.existsSync(distFile)) return 0;
   return fs.statSync(distFile).mtimeMs;
 }
@@ -37,8 +38,8 @@ function verifyDistSync() {
   const latestSrcMtime = getLatestMtime(srcDir);
   const distMtime = getOldestDistMtime(distEntry);
 
-  if (latestSrcMtime > distMtime + 2000) { // tolerância de 2s para sistemas de arquivo
-    console.error(`❌ ERRO: O diretório src possui alterações mais recentes que o bundle compilado em dist.`);
+  if (latestSrcMtime > distMtime + 2000) {
+    console.error('❌ ERRO: O diretório src possui alterações mais recentes que o bundle compilado em dist.');
     console.error(`   Latest src mtime: ${new Date(latestSrcMtime).toISOString()}`);
     console.error(`   Dist entry mtime: ${new Date(distMtime).toISOString()}`);
     console.error('Execute "npm run build" para atualizar dist antes de rodar o servidor.');

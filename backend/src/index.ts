@@ -65,13 +65,11 @@ app.use(
 // Limite JSON padrão reduzido para 2MB para proteção contra DoS
 app.use(express.json({ limit: '2mb' }));
 
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     version: '1.0.3',
-    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || '3d1c9a8',
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'unknown',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
     memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),

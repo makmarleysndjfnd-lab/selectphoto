@@ -14,7 +14,26 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       return;
     }
 
-    const sales = await prisma.sale.findMany({
+    // Agregação total de vendas (entradas) de toda a empresa
+    const salesAggregate = await prisma.sale.aggregate({
+      where: { companyId: userCompanyId },
+      _sum: { value: true }
+    });
+
+    // Agregação total de custos aprovados (saídas) de toda a empresa
+    const costsAggregate = await prisma.cost.aggregate({
+      where: { status: 'APPROVED', companyId: userCompanyId },
+      _sum: { amount: true }
+    });
+
+    // Agregação total de receita prevista futura de toda a empresa
+    const prospectsAggregate = await prisma.commercialEvent.aggregate({
+      where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
+      _sum: { expectedRevenue: true }
+    });
+
+    // Listas recentes limitadas a 50 itens apenas para exibição visual
+    const recentSales = await prisma.sale.findMany({
       where: { companyId: userCompanyId },
       orderBy: { date: 'desc' },
       take: 50,
@@ -24,7 +43,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       }
     });
 
-    const costs = await prisma.cost.findMany({
+    const recentCosts = await prisma.cost.findMany({
       where: { status: 'APPROVED', companyId: userCompanyId },
       orderBy: { date: 'desc' },
       take: 50,
@@ -33,21 +52,22 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       }
     });
 
-    const prospects = await prisma.commercialEvent.findMany({
+    const recentProspects = await prisma.commercialEvent.findMany({
       where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 50
     });
 
-    const totalEntradas = sales.reduce((acc, sale) => acc + sale.value, 0);
-    const totalSaidas = costs.reduce((acc, cost) => acc + cost.amount, 0);
-    const totalFuturo = prospects.reduce((acc, p) => acc + (p.expectedRevenue || 0), 0);
+    const totalEntradas = salesAggregate._sum.value || 0;
+    const totalSaidas = costsAggregate._sum.amount || 0;
+    const totalFuturo = prospectsAggregate._sum.expectedRevenue || 0;
     const saldo = totalEntradas - totalSaidas;
 
     res.json({
       totalEntradas,
       totalSaidas,
       saldo,
-      recentSales: sales.map(s => ({
+      recentSales: recentSales.map(s => ({
         id: s.id,
         desc: `Venda - ${s.client?.name || 'Cliente'}`,
         user: s.seller?.name || 'Vendedor',
@@ -55,7 +75,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         date: s.date,
         method: s.paymentMethod
       })),
-      recentCosts: costs.map(c => ({
+      recentCosts: recentCosts.map(c => ({
         id: c.id,
         desc: `Custo - ${c.category}`,
         user: c.user?.name || 'Usuário',
@@ -63,7 +83,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         date: c.date,
         method: c.paymentMethod
       })),
-      futureEntries: prospects.map(p => ({
+      futureEntries: recentProspects.map(p => ({
         id: p.id,
         desc: `Receita Prevista - ${p.name}`,
         user: p.city,

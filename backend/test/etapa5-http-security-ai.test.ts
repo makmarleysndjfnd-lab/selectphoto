@@ -2,7 +2,7 @@ import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { securityHeaders, createRateLimiter, centralErrorHandler } from '../src/middleware/securityMiddleware';
-import { extractCleanJson, computeExactDurationDays } from '../src/routes/events';
+import { extractCleanJson, computeExactDurationDays, executeWithTimeout } from '../src/routes/events';
 
 describe('ETAPA 5 — Testes de HTTP Security, Rate Limiting, Error Handling e Resiliência de IA', { concurrency: 1 }, () => {
   describe('1. Security Headers Middleware', () => {
@@ -103,6 +103,26 @@ describe('ETAPA 5 — Testes de HTTP Security, Rate Limiting, Error Handling e R
       assert.equal(computeExactDurationDays('2026-06-01', '2026-06-20'), 20);
       assert.equal(computeExactDurationDays(undefined, undefined, 5), 5);
       assert.equal(computeExactDurationDays(undefined, undefined, undefined), 1);
+    });
+
+    it('deve abortar e rejeitar com AI_TIMEOUT quando a chamada exceder o limite', async () => {
+      await assert.rejects(
+        async () => {
+          await executeWithTimeout(async (signal) => {
+            return new Promise((resolve) => setTimeout(() => resolve('sucesso tardio'), 150));
+          }, 50); // timeout curto de 50ms
+        },
+        (err: any) => {
+          return err.message === 'AI_TIMEOUT' || err.name === 'AbortError';
+        }
+      );
+    });
+
+    it('deve completar normalmente quando a chamada terminar antes do timeout', async () => {
+      const result = await executeWithTimeout(async () => {
+        return { data: 'ok' };
+      }, 500);
+      assert.deepEqual(result, { data: 'ok' });
     });
   });
 });

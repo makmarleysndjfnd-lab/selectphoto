@@ -7,3 +7,4 @@ build/
 /generated/prisma
 firebase-adminsdk.json
 scripts/seed-local-admin.ts
+uploads/

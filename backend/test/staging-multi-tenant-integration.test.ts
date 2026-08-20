@@ -46,6 +46,7 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
 
   let clientAlphaId: string;
   let clientAlphaSeq: string;
+  let clientBetaId: string;
   let editRequestId: string;
   let appointmentId: string;
 
@@ -59,6 +60,7 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
     const stockRouter = (await import('../src/routes/stock')).default;
     const backupRouter = (await import('../src/routes/backup')).default;
     const uploadRouter = (await import('../src/routes/upload')).default;
+    const financeRouter = (await import('../src/routes/finance')).default;
 
     const app = express();
     app.use(express.json());
@@ -71,6 +73,7 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
     app.use('/api/stock', stockRouter);
     app.use('/api/backup', backupRouter);
     app.use('/api/upload', uploadRouter);
+    app.use('/api/finance', financeRouter);
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
@@ -123,10 +126,22 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
       },
     });
     clientAlphaId = cAlpha.id;
+
+    const cBeta = await prisma.client.create({
+      data: {
+        name: 'Cliente Beta Original',
+        companyId: compBetaId,
+        sequenceNumber: `SEQ_B_${uid}`,
+        phone1: '11999990002',
+        status: 'PENDING',
+      },
+    });
+    clientBetaId = cBeta.id;
   });
 
   after(async () => {
     if (server) server.close();
+    await prisma.sale.deleteMany({ where: { companyId: { in: [compAlphaId, compBetaId] } } }).catch(() => {});
     await prisma.personalAppointment.deleteMany({ where: { sellerId: { in: [userAlphaSeller.id, userBetaSeller.id] } } }).catch(() => {});
     await prisma.notification.deleteMany({ where: { companyId: { in: [compAlphaId, compBetaId] } } }).catch(() => {});
     await prisma.clientEditRequest.deleteMany({ where: { client: { companyId: { in: [compAlphaId, compBetaId] } } } }).catch(() => {});
@@ -285,5 +300,62 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
       body: JSON.stringify({ version: '1.0', data: {} }),
     });
     assert.equal(res.status, 403);
+  });
+
+  it('14. finance: overview calcula totalEntradas sobre TODOS os registros (>50) e isola empresas', async () => {
+    // Cria 60 vendas de R$ 100 para Empresa Alpha (Total esperado: R$ 6.000)
+    const salesDataAlpha = [];
+    for (let i = 0; i < 60; i++) {
+      salesDataAlpha.push({
+        id: `sale_a_${uid}_${i}`,
+        value: 100.0,
+        paymentMethod: 'PIX',
+        city: 'Goiânia',
+        companyId: compAlphaId,
+        sellerId: userAlphaSeller.id,
+        clientId: clientAlphaId,
+        date: new Date(Date.now() - i * 1000),
+      });
+    }
+    await prisma.sale.createMany({ data: salesDataAlpha });
+
+    // Cria 5 vendas de R$ 50 para Empresa Beta (Total esperado: R$ 250)
+    const salesDataBeta = [];
+    for (let i = 0; i < 5; i++) {
+      salesDataBeta.push({
+        id: `sale_b_${uid}_${i}`,
+        value: 50.0,
+        paymentMethod: 'CASH',
+        city: 'Brasília',
+        companyId: compBetaId,
+        sellerId: userBetaSeller.id,
+        clientId: clientBetaId,
+        date: new Date(Date.now() - i * 1000),
+      });
+    }
+    await prisma.sale.createMany({ data: salesDataBeta });
+
+    // Consulta overview como Admin da Empresa Alpha
+    const resAlpha = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${tokenAlphaAdmin}` },
+    });
+    assert.equal(resAlpha.status, 200);
+    const dataAlpha = await resAlpha.json();
+
+    // Valida que o total calculado no banco soma todas as 60 vendas (60 * 100 = 6000)
+    assert.equal(dataAlpha.totalEntradas, 6000);
+    // Valida que a lista visual recente continua limitada a 50 itens
+    assert.equal(dataAlpha.recentSales.length, 50);
+
+    // Consulta overview como Admin da Empresa Beta
+    const resBeta = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${tokenBetaAdmin}` },
+    });
+    assert.equal(resBeta.status, 200);
+    const dataBeta = await resBeta.json();
+
+    // Valida isolamento: Empresa Beta tem apenas seus R$ 250
+    assert.equal(dataBeta.totalEntradas, 250);
+    assert.equal(dataBeta.recentSales.length, 5);
   });
 });

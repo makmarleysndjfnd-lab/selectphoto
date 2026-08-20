@@ -5,9 +5,12 @@
   "scripts": {
     "test": "tsx --test test/**/*.test.ts",
     "dev": "tsx watch src/index.ts",
-    "build": "npx prisma generate && npx tsc",
-    "check-dist": "tsx scripts/verify-dist-sync.ts",
-    "start": "tsx scripts/verify-dist-sync.ts && node dist/index.js"
+    "build": "npx prisma generate && npx tsc && node scripts/verify-dist-sync.js",
+    "check-dist": "node scripts/verify-dist-sync.js",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "keywords": [],
   "author": "",

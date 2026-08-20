@@ -16,6 +16,8 @@ const jwtSecret = envConfig.JWT_SECRET || 'test_secret_etapa4_upload_backup';
 process.env.DATABASE_URL = databaseUrl;
 process.env.JWT_SECRET = jwtSecret;
 process.env.DISABLE_CRON = 'true';
+process.env.EXTERNAL_SERVICES_DISABLED = 'true';
+process.env.NODE_ENV = 'test';
 
 import uploadRoutes from '../src/routes/upload';
 import backupRoutes from '../src/routes/backup';
@@ -50,6 +52,7 @@ describe('ETAPA 4 — Testes de Upload Seguro, Backup Multi-Tenant e Travas de S
   let superAdminId: string;
 
   let tokenAdminA: string;
+  let tokenAdminB: string;
   let tokenSellerA: string;
   let tokenSuperAdmin: string;
 
@@ -90,6 +93,18 @@ describe('ETAPA 4 — Testes de Upload Seguro, Backup Multi-Tenant e Travas de S
       },
     });
     sellerA_Id = sellerA.id;
+
+    const adminB = await prisma.user.create({
+      data: {
+        id: `admin_b_${uid}`,
+        name: 'Admin B',
+        role: 'ADMIN',
+        companyId: compB_Id,
+        cpf: `425${Date.now().toString().slice(-8)}`,
+        password: hashedPassword,
+        active: true,
+      },
+    });
 
     const superAdmin = await prisma.user.create({
       data: {
@@ -132,6 +147,7 @@ describe('ETAPA 4 — Testes de Upload Seguro, Backup Multi-Tenant e Travas de S
     });
 
     tokenAdminA = generateToken({ id: adminA_Id, role: 'ADMIN', companyId: compA_Id, name: 'Admin A' });
+    tokenAdminB = generateToken({ id: adminB.id, role: 'ADMIN', companyId: compB_Id, name: 'Admin B' });
     tokenSellerA = generateToken({ id: sellerA_Id, role: 'SELLER', companyId: compA_Id, name: 'Seller A' });
     tokenSuperAdmin = generateToken({ id: superAdminId, role: 'SUPER_ADMIN', name: 'Super Admin' });
 
@@ -175,10 +191,10 @@ describe('ETAPA 4 — Testes de Upload Seguro, Backup Multi-Tenant e Travas de S
       assert.ok(data.error);
     });
 
-    it('deve rejeitar arquivo com tipo proibido (.exe / script) com 400', async () => {
+    it('deve aceitar upload de imagem válida e retornar URL escopada por empresa', async () => {
       const form = new FormData();
-      const blob = new Blob(['malicious executable content'], { type: 'application/x-msdownload' });
-      form.append('file', blob, 'exploit.exe');
+      const imageFile = new File([Buffer.from('fake jpeg image data')], 'foto_teste.jpg', { type: 'image/jpeg' });
+      form.append('file', imageFile);
 
       const res = await fetch(`${baseUrl}/api/upload`, {
         method: 'POST',
@@ -187,9 +203,29 @@ describe('ETAPA 4 — Testes de Upload Seguro, Backup Multi-Tenant e Travas de S
         },
         body: form,
       });
-      assert.equal(res.status, 400);
+
       const data = await res.json();
-      assert.ok(data.error.includes('não permitido'));
+      assert.equal(res.status, 200);
+      assert.ok(data.url);
+      assert.ok(data.url.includes(`/api/upload/file/${compA_Id}/`));
+      
+      const fileUrl = data.url;
+
+      // 1. Download legítimo com token da Empresa A
+      const dlResAuth = await fetch(`${baseUrl}${fileUrl}`, {
+        headers: { Authorization: `Bearer ${tokenAdminA}` },
+      });
+      assert.equal(dlResAuth.status, 200);
+
+      // 2. Download cruzado com token da Empresa B (deve retornar 403 Forbidden)
+      const dlResCross = await fetch(`${baseUrl}${fileUrl}`, {
+        headers: { Authorization: `Bearer ${tokenAdminB}` },
+      });
+      assert.equal(dlResCross.status, 403);
+
+      // 3. Download não autenticado (deve retornar 401 Unauthorized)
+      const dlResAnon = await fetch(`${baseUrl}${fileUrl}`);
+      assert.equal(dlResAnon.status, 401);
     });
   });
 
