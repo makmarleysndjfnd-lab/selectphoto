@@ -1,52 +1,68 @@
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
-  /// URL do servidor injetada em tempo de compilação via --dart-define=SERVER_URL=...
-  /// Exemplo de uso: --dart-define=SERVER_URL=https://selectphoto.onrender.com/api
-  static const String _definedServerUrl = String.fromEnvironment('SERVER_URL');
+  /// URL padrão oficial do backend de produção
+  static const String officialProductionUrl = 'https://selectphoto-k1ac.onrender.com/api';
 
   /// Host autorizado para ambiente de produção
-  static const String authorizedProductionHost = 'selectphoto.onrender.com';
+  static const String authorizedProductionHost = 'selectphoto-k1ac.onrender.com';
+
+  /// URL do servidor injetada em tempo de compilação via --dart-define=SERVER_URL=...
+  static const String _definedServerUrl = String.fromEnvironment('SERVER_URL');
+
+  /// Versão do aplicativo compilada
+  static const String appVersion = '1.0.3';
+  static const int buildNumber = 3;
+  static const String fullVersion = '$appVersion+$buildNumber';
 
   /// Retorna se a SERVER_URL foi definida em tempo de compilação.
   static bool get hasServerUrl => _definedServerUrl.trim().isNotEmpty;
 
-  /// Retorna a SERVER_URL configurada. Lança [StateError] explícito se não foi fornecida,
-  /// impedindo categoricamente qualquer fallback silencioso para produção ou hosts não autorizados.
-  static String get serverUrl {
-    if (!hasServerUrl) {
-      if (kReleaseMode) {
-        throw StateError(
-          '🛑 ERRO CRÍTICO DE CONFIGURAÇÃO (RELEASE): SERVER_URL não foi definida em tempo de compilação.\n'
-          'Você DEVE fornecer explicitamente: --dart-define=SERVER_URL=https://selectphoto.onrender.com/api',
-        );
-      }
-      throw StateError(
-        '🛑 ERRO CRÍTICO DE CONFIGURAÇÃO: SERVER_URL não foi definida em tempo de compilação.\n'
-        'Você DEVE fornecer explicitamente: --dart-define=SERVER_URL=<URL_DO_BACKEND>',
-      );
+  /// Validador estrito de URL por ambiente
+  static String validateUrl(String rawUrl, {bool isRelease = kReleaseMode}) {
+    final url = rawUrl.trim();
+    if (url.isEmpty) {
+      throw StateError('URL do servidor não pode ser vazia.');
     }
 
-    final url = _definedServerUrl.trim();
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+      throw StateError('URL do servidor com formato inválido: "$url".');
+    }
 
-    // Em modo release, validação estrita de segurança: apenas HTTPS e host autorizado
-    if (kReleaseMode) {
-      if (!url.startsWith('https://')) {
+    if (isRelease) {
+      if (uri.scheme != 'https') {
         throw StateError('🛑 SEGURANÇA: Em modo release, apenas conexões HTTPS são autorizadas.');
       }
-      final uri = Uri.tryParse(url);
-      if (uri == null || (uri.host != authorizedProductionHost && !uri.host.endsWith('.onrender.com'))) {
-        throw StateError('🛑 SEGURANÇA: Em modo release, o host "$url" não é autorizado.');
+      if (uri.host != authorizedProductionHost) {
+        throw StateError('🛑 SEGURANÇA: Em modo release, apenas o host oficial "$authorizedProductionHost" é autorizado. Recebido: "${uri.host}".');
       }
     }
 
     return url;
   }
 
-  /// Retorna a URL inicial segura para inicialização de provedores e serviços.
+  /// Retorna a SERVER_URL configurada para o aplicativo.
+  static String get serverUrl {
+    if (kReleaseMode) {
+      // Em release, se injetada por --dart-define, valida estritamente; senão, usa a URL oficial de produção
+      final target = hasServerUrl ? _definedServerUrl.trim() : officialProductionUrl;
+      return validateUrl(target, isRelease: true);
+    }
+
+    // Em debug/profile
+    if (hasServerUrl) {
+      return validateUrl(_definedServerUrl.trim(), isRelease: false);
+    }
+
+    // Fallback explícito para debug local
+    return 'http://localhost:3000/api';
+  }
+
+  /// Retorna a URL segura para inicialização de provedores e serviços.
   static String resolveUrl({String? customUrl}) {
     if (!kReleaseMode && customUrl != null && customUrl.trim().isNotEmpty) {
-      return customUrl.trim();
+      return validateUrl(customUrl, isRelease: false);
     }
     return serverUrl;
   }

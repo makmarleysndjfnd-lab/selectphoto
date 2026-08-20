@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
@@ -40,33 +41,56 @@ class ApiService {
     return '$serverBase$cleanPath';
   }
 
+  /// Retorna os cabeçalhos de autenticação para NetworkImage e requisições HTTP seguras
+  Future<Map<String, String>> get authHeaders async {
+    final token = _token ?? (await SharedPreferences.getInstance()).getString('jwt_token');
+    if (token != null && token.isNotEmpty) {
+      return {'Authorization': 'Bearer $token'};
+    }
+    return {};
+  }
+
   void _initDio() {
     _dio = Dio(BaseOptions(
       baseUrl: _baseUrl,
       headers: {
         'Content-Type': 'application/json',
         'Bypass-Tunnel-Reminder': 'true',
-        'User-Agent': 'loca.lt'
+        'User-Agent': 'selectphoto-mobile/1.0.3'
       },
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 90),
+      connectTimeout: const Duration(seconds: 25),
+      receiveTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(seconds: 30),
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
-        // Trava estrita: se a baseUrl estiver vazia ou for indefinida, impede a chamada imediatamente
-        if (options.baseUrl.trim().isEmpty && options.path.startsWith('http') != true) {
+        // Trava estrita de segurança: valida se a baseUrl é permitida no ambiente
+        if (options.baseUrl.trim().isEmpty && !options.path.startsWith('http')) {
           return handler.reject(
             DioException(
               requestOptions: options,
               error: StateError(
-                '🛑 ERRO CRÍTICO: SERVER_URL não foi definida. '
-                'Builds debug/staging não possuem fallback para produção. '
-                'Forneça --dart-define=SERVER_URL=http://127.0.0.1:3001/api no build.',
+                '🛑 ERRO CRÍTICO: SERVER_URL não configurada.',
               ),
               type: DioExceptionType.cancel,
             ),
           );
+        }
+
+        // Em release, assegura que a requisição está direcionada ao host oficial autorizado
+        if (kReleaseMode) {
+          final targetUrl = options.path.startsWith('http') ? options.path : '${options.baseUrl}/${options.path}';
+          final uri = Uri.tryParse(targetUrl);
+          if (uri != null && uri.hasAuthority && uri.host != AppConfig.authorizedProductionHost) {
+            return handler.reject(
+              DioException(
+                requestOptions: options,
+                error: StateError('🛑 SEGURANÇA: Requisição para host não autorizado bloqueada em release.'),
+                type: DioExceptionType.cancel,
+              ),
+            );
+          }
         }
 
         if (_token != null) {
@@ -82,7 +106,7 @@ class ApiService {
       },
       onError: (DioException error, handler) async {
         if (error.response?.statusCode == 401) {
-          // Token expired or invalid: clear local cached token
+          // Token expirado ou inválido: limpa o token em memória e SharedPreferences
           _token = null;
           try {
             final prefs = await SharedPreferences.getInstance();
@@ -94,11 +118,10 @@ class ApiService {
     ));
   }
 
-
-
   void updateBaseUrl(String newUrl) {
-    _baseUrl = newUrl;
-    _dio.options.baseUrl = newUrl;
+    final validated = AppConfig.validateUrl(newUrl);
+    _baseUrl = validated;
+    _dio.options.baseUrl = validated;
   }
 
   void setToken(String token) {
@@ -109,12 +132,79 @@ class ApiService {
     _token = null;
   }
 
+  /// Revalida a sessão atual com o servidor backend
+  Future<bool> revalidateSession() async {
+    try {
+      final res = await _dio.get('/users/company');
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Auth endpoints
   String _extractError(DioException e) {
-    if (e.response?.data is Map) {
-      return (e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro desconhecido na API';
+    if (e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.sendTimeout ||
+        e.type == DioExceptionType.receiveTimeout) {
+      return 'Tempo limite de conexão esgotado. Verifique sua conexão e tente novamente.';
     }
-    return e.message ?? 'Erro de conexão';
+
+    if (e.type == DioExceptionType.connectionError ||
+        e.message?.contains('SocketException') == true ||
+        e.message?.contains('Failed host lookup') == true ||
+        e.message?.contains('Connection refused') == true) {
+      return 'Sem conexão com a internet ou servidor inacessível.';
+    }
+
+    if (e.type == DioExceptionType.cancel) {
+      if (e.error is StateError) {
+        return (e.error as StateError).message;
+      }
+      return 'Requisição cancelada.';
+    }
+
+    final statusCode = e.response?.statusCode;
+    final data = e.response?.data;
+    String? apiMsg;
+    if (data is Map && data['error'] != null) {
+      apiMsg = data['error'].toString();
+    }
+
+    if (statusCode == 400) {
+      return apiMsg ?? 'Dados da requisição inválidos.';
+    }
+    if (statusCode == 401) {
+      if (apiMsg != null) {
+        if (apiMsg.contains('Invalid credentials')) {
+          return 'CPF ou senha incorretos.';
+        }
+        if (apiMsg.contains('User is inactive')) {
+          return 'Usuário inativo. Entre em contato com a administração.';
+        }
+        if (apiMsg.contains('Company account is inactive') || apiMsg.contains('Company account is missing')) {
+          return 'Conta da empresa inativa. Entre em contato com a administração.';
+        }
+      }
+      return apiMsg ?? 'Sessão expirada. Faça login novamente.';
+    }
+    if (statusCode == 403) {
+      if (apiMsg != null && apiMsg.contains('Company account is inactive')) {
+        return 'Conta da empresa inativa. Entre em contato com a administração.';
+      }
+      return apiMsg ?? 'Acesso não autorizado para esta operação.';
+    }
+    if (statusCode == 404) {
+      return apiMsg ?? 'Recurso não encontrado no servidor.';
+    }
+    if (statusCode == 429) {
+      return 'Muitas tentativas em pouco tempo. Por favor, aguarde alguns minutos e tente novamente.';
+    }
+    if (statusCode != null && statusCode >= 500) {
+      return 'Servidor temporariamente indisponível. Tente novamente mais tarde.';
+    }
+
+    return apiMsg ?? 'Falha na comunicação com o servidor.';
   }
 
   Future<Map<String, dynamic>> login(String cpf, String password) async {

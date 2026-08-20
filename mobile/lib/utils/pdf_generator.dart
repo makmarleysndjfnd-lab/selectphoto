@@ -11,12 +11,13 @@ class PdfGenerator {
     if (urlStr == null || urlStr.trim().isEmpty) return null;
     try {
       final url = ApiService.resolveMediaUrl(urlStr);
-      final response = await http.get(Uri.parse(url));
+      final headers = await ApiService().authHeaders;
+      final response = await http.get(Uri.parse(url), headers: headers);
       if (response.statusCode == 200) {
         return pw.MemoryImage(response.bodyBytes);
       }
     } catch (e) {
-      print('Erro ao carregar assinatura: $e');
+      // Ignora silenciosamente em caso de falha de carregamento de mídia
     }
     return null;
   }

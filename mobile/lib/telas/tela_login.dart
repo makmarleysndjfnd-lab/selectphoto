@@ -3,6 +3,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import '../config/app_config.dart';
 import '../servicos/servico_api.dart';
 import 'tela_inicial.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -57,6 +58,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAutoLogin();
+      _checkForUpdates();
     });
   }
 
@@ -95,7 +97,8 @@ class _LoginScreenState extends State<LoginScreen>
         if (authenticated) {
           final apiService = Provider.of<ApiService>(context, listen: false);
           apiService.setToken(token);
-          if (mounted) {
+          final isValid = await apiService.revalidateSession();
+          if (isValid && mounted) {
             Navigator.of(context).pushReplacement(
               PageRouteBuilder(
                 pageBuilder: (_, __, ___) => HomeScreen(role: role),
@@ -104,6 +107,9 @@ class _LoginScreenState extends State<LoginScreen>
                 transitionDuration: const Duration(milliseconds: 300),
               ),
             );
+          } else {
+            apiService.clearToken();
+            await prefs.remove('jwt_token');
           }
         }
       }
@@ -111,16 +117,25 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _checkForUpdates() async {
+    if (!mounted) return;
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
+      if (apiService.baseUrl.trim().isEmpty) return;
       final versionInfo = await apiService.getAppVersion();
       
-      const currentVersion = '1.0.0'; // Hardcoded for now, could use package_info_plus
-      if (versionInfo['version'] != currentVersion && versionInfo['downloadUrl'] != '') {
-        _showUpdateDialog(versionInfo['version'], versionInfo['downloadUrl'], versionInfo['mandatory'] ?? false);
+      final latestVersion = versionInfo['version']?.toString();
+      final downloadUrl = versionInfo['downloadUrl']?.toString();
+      
+      if (latestVersion != null && 
+          latestVersion != AppConfig.appVersion && 
+          downloadUrl != null && 
+          downloadUrl.startsWith('https://')) {
+        if (mounted) {
+          _showUpdateDialog(latestVersion, downloadUrl, versionInfo['mandatory'] ?? false);
+        }
       }
-    } catch (e) {
-      // Ignore if server is down or unreachable
+    } catch (_) {
+      // Ignora falhas de rede na checagem silenciosa de versão
     }
   }
 
@@ -343,6 +358,17 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                             const SizedBox(height: 28),
                             _buildLoginButton(),
+                            const SizedBox(height: 16),
+                            const Center(
+                              child: Text(
+                                'v${AppConfig.fullVersion}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white38,
+                                  letterSpacing: 0.8,
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),

@@ -5,7 +5,7 @@ import '../config/app_config.dart';
 
 class SettingsProvider with ChangeNotifier {
   bool _isDarkMode = true;
-  String _serverUrl = AppConfig.hasServerUrl ? AppConfig.serverUrl : '';
+  String _serverUrl = AppConfig.serverUrl;
 
   // ROI Default Parameters
   double _hotelCostPerPersonDay = 70.0;
@@ -33,22 +33,21 @@ class SettingsProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('isDarkMode') ?? true;
     
-    // Limpeza de chave serverUrl legada em SharedPreferences
-    if (prefs.containsKey('serverUrl')) {
-      if (kReleaseMode) {
+    // Limpeza mandatória de chave serverUrl legada em SharedPreferences em modo release
+    if (kReleaseMode) {
+      if (prefs.containsKey('serverUrl')) {
         await prefs.remove('serverUrl');
       }
-    }
-
-    if (kReleaseMode) {
-      if (AppConfig.hasServerUrl) {
-        _serverUrl = AppConfig.serverUrl;
-      }
+      _serverUrl = AppConfig.serverUrl;
     } else {
       final savedUrl = prefs.getString('serverUrl');
       if (savedUrl != null && savedUrl.trim().isNotEmpty) {
-        _serverUrl = savedUrl.trim();
-      } else if (AppConfig.hasServerUrl) {
+        try {
+          _serverUrl = AppConfig.validateUrl(savedUrl, isRelease: false);
+        } catch (_) {
+          _serverUrl = AppConfig.serverUrl;
+        }
+      } else {
         _serverUrl = AppConfig.serverUrl;
       }
     }
@@ -75,9 +74,18 @@ class SettingsProvider with ChangeNotifier {
     if (kReleaseMode) {
       return;
     }
-    _serverUrl = url;
+    final validated = AppConfig.validateUrl(url, isRelease: false);
+    _serverUrl = validated;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('serverUrl', url);
+    await prefs.setString('serverUrl', validated);
+    notifyListeners();
+  }
+
+  Future<void> resetToDefaultServerUrl() async {
+    if (kReleaseMode) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('serverUrl');
+    _serverUrl = AppConfig.serverUrl;
     notifyListeners();
   }
 
