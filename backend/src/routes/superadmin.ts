@@ -68,13 +68,24 @@ router.post('/impersonate/:companyId', authenticateToken, requireSuperAdmin, asy
       return;
     }
 
+    if (!company.isActive) {
+      res.status(400).json({ error: 'Cannot impersonate an inactive company' });
+      return;
+    }
+
+    const actorId = req.user?.id || 'superadmin';
+
     // Generate a temporary token acting as COMPANY_ADMIN for that company
     const token = jwt.sign(
       { 
-        id: req.user?.id || 'superadmin', 
+        id: actorId, 
         cpf: req.user?.cpf || null,
-        role: 'COMPANY_ADMIN', // Downgraded to standard company admin view
-        companyId: company.id 
+        actorId: actorId,
+        actorRole: 'SUPER_ADMIN',
+        role: 'COMPANY_ADMIN',
+        companyId: company.id,
+        effectiveCompanyId: company.id,
+        effectiveRole: 'COMPANY_ADMIN'
       },
       process.env.JWT_SECRET as string,
       { expiresIn: '12h' }

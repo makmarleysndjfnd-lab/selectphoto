@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import { upload } from '../middleware/upload';
+import { upload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -12,6 +12,10 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     const { clientId, value, city, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
+
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
 
     if (!clientId || value === undefined || !city) {
       return res.status(400).json({ error: 'Client ID, Value, and City are required' });
@@ -26,7 +30,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     const client = await prisma.client.findFirst({
       where: {
         id: clientId,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       },
     });
 
@@ -62,17 +66,33 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
     const id = req.params.id as string;
     const { value, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
     const companyId = req.user?.companyId;
+
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
     
     // Check if it belongs to company
     const existing = await prisma.sale.findFirst({
       where: {
         id,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       }
     });
 
     if (!existing) {
       return res.status(404).json({ error: 'Sale not found' });
+    }
+
+    // Vendedor altera apenas a própria venda; admin/supervisor/gerente pode alterar
+    const isSeller = ['SELLER', 'PHOTOGRAPHER', 'OPERATOR'].includes(req.user?.role || '');
+    const isManager = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(req.user?.role || '');
+
+    if (isSeller && existing.sellerId !== req.user?.id) {
+      return res.status(403).json({ error: 'Forbidden: Vendedor só pode alterar a própria venda' });
+    }
+
+    if (!isSeller && !isManager) {
+      return res.status(403).json({ error: 'Forbidden: Sem permissão para alterar venda' });
     }
 
     let parsedValue: number | undefined;
@@ -109,6 +129,10 @@ router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
 
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'Receipt photo is required' });
     }
@@ -116,7 +140,7 @@ router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (
     const sale = await prisma.sale.findFirst({
       where: {
         id,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       }
     });
 
@@ -124,11 +148,11 @@ router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (
       return res.status(404).json({ error: 'Sale not found' });
     }
 
-    if (sale.sellerId !== sellerId && req.user?.role !== 'COMPANY_ADMIN' && req.user?.role !== 'ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
+    if (sale.sellerId !== sellerId && !['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'].includes(req.user?.role || '')) {
       return res.status(403).json({ error: 'Access denied to this sale' });
     }
 
-    const receiptUrl = (req.file as any).location || `/uploads/${req.file.filename}`;
+    const receiptUrl = getUploadedFileUrl(req.file);
 
     const updatedSale = await prisma.sale.update({
       where: { id },
@@ -149,6 +173,10 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
 
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     if (!clientId || !reason || (!signatureBase64 && !signatureUrl)) {
       return res.status(400).json({ error: 'Client ID, Reason, and Signature are required' });
     }
@@ -157,7 +185,7 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
     const client = await prisma.client.findFirst({
       where: {
         id: clientId,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       },
     });
 
@@ -206,8 +234,11 @@ router.get('/metrics', authenticateToken, async (req: AuthRequest, res: any) => 
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    const companyId = req.user?.companyId;
+    if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const sales = await prisma.sale.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId },
       include: {
         seller: {
           select: { name: true }
@@ -257,6 +288,10 @@ router.post('/appointments', authenticateToken, async (req: AuthRequest, res: an
     const responsibleId = req.user?.id;
     const companyId = req.user?.companyId;
 
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     if (!clientId || !date || !time) {
       return res.status(400).json({ error: 'Client ID, Date, and Time are required' });
     }
@@ -265,7 +300,7 @@ router.post('/appointments', authenticateToken, async (req: AuthRequest, res: an
     const client = await prisma.client.findFirst({
       where: {
         id: clientId,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       }
     });
 
@@ -297,6 +332,10 @@ router.post('/photos', authenticateToken, async (req: AuthRequest, res: any) => 
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
 
+    if (!companyId) {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     if (!clientId || !photoBase64) {
       return res.status(400).json({ error: 'Client ID and Photo are required' });
     }
@@ -305,7 +344,7 @@ router.post('/photos', authenticateToken, async (req: AuthRequest, res: any) => 
     const client = await prisma.client.findFirst({
       where: {
         id: clientId,
-        ...(companyId ? { companyId } : {}),
+        companyId,
       }
     });
 

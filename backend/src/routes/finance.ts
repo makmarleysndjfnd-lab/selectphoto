@@ -9,6 +9,10 @@ const prisma = new PrismaClient();
 router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
 
     const sales = await prisma.sale.findMany({
       where: { companyId: userCompanyId },
@@ -78,6 +82,10 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
 router.get('/pending-costs', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
 
     const pendingCosts = await prisma.cost.findMany({
       where: { status: 'PENDING', companyId: userCompanyId },
@@ -99,6 +107,10 @@ router.put('/costs/:id/status', authenticateToken, requireAdminOrSupervisor, asy
     const id = req.params.id as string;
     const { status } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
     
     if (!['APPROVED', 'REJECTED'].includes(status)) {
       res.status(400).json({ error: 'Status inválido. Permitido apenas APPROVED ou REJECTED' });
@@ -108,7 +120,7 @@ router.put('/costs/:id/status', authenticateToken, requireAdminOrSupervisor, asy
     const existing = await prisma.cost.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -131,6 +143,10 @@ router.put('/costs/:id/status', authenticateToken, requireAdminOrSupervisor, asy
 router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
 
     const sales = await prisma.sale.findMany({
       where: { companyId: userCompanyId },
@@ -205,6 +221,10 @@ router.put('/costs/:id', authenticateToken, requireAdminOrSupervisor, async (req
     const id = req.params.id as string;
     const { amount, category, description, paymentMethod, status } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
     
     if (amount !== undefined && (typeof amount !== 'number' || amount < 0)) {
       res.status(400).json({ error: 'Valor do custo deve ser um número positivo.' });
@@ -219,7 +239,7 @@ router.put('/costs/:id', authenticateToken, requireAdminOrSupervisor, async (req
     const existing = await prisma.cost.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -251,6 +271,10 @@ router.put('/sales/:id', authenticateToken, requireAdminOrSupervisor, async (req
     const id = req.params.id as string;
     const { value, paymentMethod, paymentStatus } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
     
     if (value !== undefined && (typeof value !== 'number' || value < 0)) {
       res.status(400).json({ error: 'Valor da venda deve ser um número positivo.' });
@@ -260,7 +284,7 @@ router.put('/sales/:id', authenticateToken, requireAdminOrSupervisor, async (req
     const existing = await prisma.sale.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -285,4 +309,3 @@ router.put('/sales/:id', authenticateToken, requireAdminOrSupervisor, async (req
 });
 
 export default router;
-

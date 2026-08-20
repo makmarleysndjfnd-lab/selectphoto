@@ -31,6 +31,12 @@ async function testRollbackAndReapply() {
     for (const stmt of rollbackStatements) {
       await prisma.$executeRawUnsafe(stmt);
     }
+
+    // Remove registro de migration para permitir reaplicação limpa via Prisma
+    await prisma.$executeRawUnsafe(`
+      DELETE FROM "_prisma_migrations" WHERE migration_name = '20260818163000_reconcile_schema';
+    `);
+
     console.log('✅ rollback.sql executado com sucesso.');
 
     // 2. Verifica se tabelas foram removidas
@@ -54,12 +60,24 @@ async function testRollbackAndReapply() {
       cwd: path.resolve(__dirname, '..'),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       encoding: 'utf8',
-      shell: false,
+      shell: true,
     });
     if (result.status !== 0) {
-      throw new Error(`Falha ao re-aplicar migration: ${result.stderr || result.stdout}`);
+      throw new Error(`Falha ao re-aplicar migration (status ${result.status}): ${result.stderr || result.stdout || result.error}`);
     }
-    console.log('✅ Staging restaurado e 100% íntegro.');
+
+    // 4. Verifica se as 4 tabelas foram restauradas com sucesso
+    const restoredTables: any = await prisma.$queryRawUnsafe(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name IN ('PersonalAppointment', 'ClientEditRequest', 'DailyClosing', 'Notification');
+    `);
+    if (restoredTables.length !== 4) {
+      throw new Error(`❌ Falha na verificação pós-deploy: esperado 4 tabelas restauradas, encontrado ${restoredTables.length}`);
+    }
+
+    console.log(`✅ Staging restaurado e 100% íntegro. ${restoredTables.length}/4 tabelas ativas.`);
 
   } finally {
     await prisma.$disconnect();

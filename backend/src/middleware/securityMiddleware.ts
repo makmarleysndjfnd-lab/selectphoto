@@ -18,7 +18,7 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   next();
 }
 
-// ── 2. IN-MEMORY SLIDING WINDOW RATE LIMITER ──────────────────────────────────
+// ── 2. IN-MEMORY SLIDING WINDOW RATE LIMITER (USES TRUSTED REQ.IP) ──────────────
 interface RateLimitRecord {
   timestamps: number[];
 }
@@ -48,7 +48,8 @@ export function createRateLimiter(options: {
       return next();
     }
 
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown-ip';
+    // Usa req.ip fornecido pelo Express com base em app.set('trust proxy', 1), impedindo bypass por spoofing de X-Forwarded-For
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown-ip';
     const now = Date.now();
 
     let record = ipStore.get(clientIp);
@@ -93,8 +94,9 @@ export const generalApiLimiter = createRateLimiter({
 
 // ── 3. CENTRAL ERROR HANDLER MIDDLEWARE ────────────────────────────────────────
 export function centralErrorHandler(err: any, req: Request, res: Response, next: NextFunction): void {
-  // Log real error internally with stack trace
-  console.error(`[CENTRAL_ERROR_HANDLER] [${req.method} ${req.url}]:`, err?.stack || err);
+  // Log sanitized error internally
+  const sanitizedStack = err?.stack ? String(err.stack).replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DB_URL]') : '';
+  console.error(`[CENTRAL_ERROR_HANDLER] [${req.method} ${req.url}]:`, sanitizedStack || err?.message || err);
 
   if (res.headersSent) {
     return next(err);
@@ -126,14 +128,17 @@ export function centralErrorHandler(err: any, req: Request, res: Response, next:
       res.status(404).json({ error: 'Registro não encontrado.' });
       return;
     }
-    // Generic database error (never leak table names or constraint details)
     res.status(400).json({ error: 'Operação inválida no banco de dados.' });
     return;
   }
 
   // HTTP status codes explicit on error object
   const statusCode = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
-  const userMessage = statusCode < 500 ? (err?.message || 'Requisição inválida') : 'Erro interno do servidor. Tente novamente mais tarde.';
+  
+  // Respostas 500 NUNCA vazam error.message interna em produção/staging
+  const userMessage = statusCode < 500 
+    ? (err?.message || 'Requisição inválida') 
+    : 'Erro interno do servidor. Tente novamente mais tarde.';
 
   res.status(statusCode).json({
     error: userMessage,

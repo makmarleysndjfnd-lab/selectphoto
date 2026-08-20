@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -10,7 +10,7 @@ const ALLOWED_SYNC_CLIENT_FIELDS = [
   'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'condo',
   'block', 'apartment', 'neighborhood', 'city', 'state', 'referencePoint',
   'houseColor', 'gateColor', 'gateObservation', 'profession', 'visitTime',
-  'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded'
+  'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded', 'event'
 ] as const;
 
 // Sync clients from mobile (batch)
@@ -19,7 +19,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
   const companyId = req.user?.companyId;
 
   if (!companyId) {
-    res.status(400).json({ error: 'Company association is required for client sync' });
+    res.status(403).json({ error: 'Company association is required for client sync' });
     return;
   }
 
@@ -28,13 +28,21 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
     return;
   }
 
-  const results = { success: 0, failed: 0, errors: [] as any[] };
+  const results = {
+    success: 0,
+    failed: 0,
+    details: [] as Array<{ sequenceNumber: string; success: boolean; error?: string; id?: string }>
+  };
 
   for (const clientData of clients) {
     try {
       if (!clientData || !clientData.sequenceNumber) {
         results.failed++;
-        results.errors.push({ error: 'Ficha sem sequenceNumber' });
+        results.details.push({
+          sequenceNumber: '',
+          success: false,
+          error: 'Ficha sem sequenceNumber'
+        });
         continue;
       }
 
@@ -86,7 +94,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       if (existingGlobal) {
         if (existingGlobal.companyId === companyId) {
           // Pertence à mesma empresa: atualiza os dados da ficha
-          await prisma.client.update({
+          const updated = await prisma.client.update({
             where: { id: existingGlobal.id },
             data: {
               ...sanitizedData,
@@ -97,18 +105,24 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
             },
           });
           results.success++;
+          results.details.push({
+            sequenceNumber: seqNum,
+            success: true,
+            id: updated.id
+          });
         } else {
           // Pertence a OUTRA empresa: NUNCA sobrescrever ou alterar cliente de outra empresa
           results.failed++;
-          results.errors.push({
+          results.details.push({
             sequenceNumber: seqNum,
+            success: false,
             error: 'Número de ficha já cadastrado em outra empresa',
           });
         }
         continue;
       }
 
-      await prisma.client.create({
+      const created = await prisma.client.create({
         data: {
           ...sanitizedData,
           name: sanitizedData.name || 'Cliente sem nome',
@@ -130,21 +144,35 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       });
 
       results.success++;
+      results.details.push({
+        sequenceNumber: seqNum,
+        success: true,
+        id: created.id
+      });
     } catch (error: any) {
       console.error('Error syncing client:', error);
       results.failed++;
-      results.errors.push({ sequenceNumber: clientData?.sequenceNumber, error: error.message });
+      results.details.push({
+        sequenceNumber: String(clientData?.sequenceNumber || ''),
+        success: false,
+        error: error.message
+      });
     }
   }
 
   res.json(results);
 });
 
-// Get all clients
+// Get all clients (Admin, Supervisor or User in company)
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const clients = await prisma.client.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId },
       include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
     });
     res.json(clients);
@@ -152,9 +180,13 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: 'Failed to fetch clients' });
   }
 });
+
 // Release city for routing (sets releasedForRouting = true)
-router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/release-city', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const { city } = req.body;
     if (!city) {
       res.status(400).json({ error: 'City is required' });
@@ -163,7 +195,7 @@ router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Res
 
     const updated = await prisma.client.updateMany({
       where: {
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         city: city,
         releasedForRouting: false
       },
@@ -179,8 +211,11 @@ router.put('/release-city', authenticateToken, async (req: AuthRequest, res: Res
 });
 
 // Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK for a city
-router.put('/confirm-grafica', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.put('/confirm-grafica', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const { city } = req.body;
     if (!city) {
       res.status(400).json({ error: 'City is required' });
@@ -189,7 +224,7 @@ router.put('/confirm-grafica', authenticateToken, async (req: AuthRequest, res: 
 
     const updated = await prisma.client.updateMany({
       where: {
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         city: { equals: city, mode: 'insensitive' },
         bookStatus: 'AWAITING_RELEASE'
       },
@@ -208,11 +243,14 @@ router.put('/confirm-grafica', authenticateToken, async (req: AuthRequest, res: 
 // Get clients by city and optional bookStatus (for gráfica/estoque flow)
 router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const { city, bookStatus } = req.query as { city?: string; bookStatus?: string };
 
     const clients = await prisma.client.findMany({
       where: {
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         ...(city ? { city: { equals: city as string, mode: 'insensitive' } } : {}),
         ...(bookStatus ? { bookStatus: bookStatus as string } : {})
       },
@@ -225,13 +263,15 @@ router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
-
 // Get rebolos (clients with nonSales but no sales)
 router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const clients = await prisma.client.findMany({
       where: { 
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         nonSales: { some: {} },
         sales: { none: {} }
       },
@@ -244,10 +284,11 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
 });
 
 // Assign seller to a client/book
-router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const { sequenceNumber, sellerId } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
     if (!sequenceNumber || !sellerId) {
       res.status(400).json({ error: 'Faltam sequenceNumber ou sellerId' });
@@ -258,7 +299,7 @@ router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: R
     const seller = await prisma.user.findFirst({
       where: {
         id: sellerId,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -271,7 +312,7 @@ router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: R
     const existingClient = await prisma.client.findFirst({
       where: {
         sequenceNumber,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -293,9 +334,12 @@ router.post('/assign-seller', authenticateToken, async (req: AuthRequest, res: R
 // Get clients by photographer
 router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const clients = await prisma.client.findMany({
       where: { 
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         photographerId: req.user?.id
       },
       include: { children: true, appointments: true },
@@ -310,9 +354,12 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
 // Get clients by seller
 router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
     const clients = await prisma.client.findMany({
       where: { 
-        companyId: req.user?.companyId,
+        companyId: userCompanyId,
         assignedSellerId: req.user?.id
       },
       include: { children: true, appointments: true, assignedSeller: true, photographer: true },
@@ -325,10 +372,11 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
 });
 
 // Batch assign seller to multiple clients
-router.patch('/batch-assign', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const { clientIds, assignedSellerId } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
     if (!Array.isArray(clientIds) || clientIds.length === 0 || !assignedSellerId) {
       res.status(400).json({ error: 'Lista de fichas ou vendedor inválido' });
@@ -339,7 +387,7 @@ router.patch('/batch-assign', authenticateToken, async (req: AuthRequest, res: R
     const seller = await prisma.user.findFirst({
       where: {
         id: assignedSellerId,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -351,7 +399,7 @@ router.patch('/batch-assign', authenticateToken, async (req: AuthRequest, res: R
     const updated = await prisma.client.updateMany({
       where: {
         id: { in: clientIds },
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
       data: {
         assignedSellerId,

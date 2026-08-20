@@ -12,6 +12,9 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
         const photographerId = req.user?.id;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
         if (!photographerId) return res.status(400).json({ error: 'Missing photographer' });
 
         // Find all CREATED clients for this photographer
@@ -47,7 +50,7 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
             });
 
             await prisma.client.updateMany({
-                where: { id: { in: eventClients.map(c => c.id) } },
+                where: { id: { in: eventClients.map(c => c.id) }, companyId },
                 data: { 
                     bookStatus: 'AWAITING_RELEASE',
                     batchId: batch.id 
@@ -72,6 +75,10 @@ router.put('/batch/:id/release', authMiddleware, async (req: AuthRequest, res) =
         const { id } = req.params;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const batch = await prisma.bookBatch.update({
             where: { id: id as string, companyId },
             data: { status: 'IN_STOCK' }
@@ -94,11 +101,17 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
         const { sequenceNumber } = req.body;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({
             where: { sequenceNumber }
         });
 
-        if (!client || client.companyId !== companyId) return res.status(404).json({ error: 'Book not found' });
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN')) {
+            return res.status(404).json({ error: 'Book not found' });
+        }
         if (client.bookStatus !== 'AWAITING_RETURN') return res.status(400).json({ error: 'Book is not awaiting return' });
 
         const updated = await prisma.client.update({
@@ -119,8 +132,12 @@ router.put('/client/:id/force-send', authMiddleware, async (req: AuthRequest, re
         const photographerId = req.user?.id;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId || client.photographerId !== photographerId) {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.photographerId !== photographerId) {
             return res.status(404).json({ error: 'Client not found or unauthorized' });
         }
         if (client.bookStatus !== 'CREATED') {
@@ -172,8 +189,12 @@ router.put('/client/:id/force-release', authMiddleware, async (req: AuthRequest,
         const { id } = req.params;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId) {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN')) {
             return res.status(404).json({ error: 'Client not found' });
         }
 
@@ -211,8 +232,12 @@ router.put('/client/:id/force-return-to-stock', authMiddleware, async (req: Auth
         const { id } = req.params;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED') {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.bookStatus !== 'DISTRIBUTED') {
             return res.status(404).json({ error: 'Client not found or not distributed' });
         }
 
@@ -234,8 +259,12 @@ router.put('/client/:id/force-return', authMiddleware, async (req: AuthRequest, 
         const sellerId = req.user?.id;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED') {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.bookStatus !== 'DISTRIBUTED') {
             return res.status(404).json({ error: 'Client not found or not distributed' });
         }
 
@@ -271,8 +300,12 @@ router.put('/client/:id/force-return-rebolo-stock', authMiddleware, async (req: 
         const { id } = req.params;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
             return res.status(404).json({ error: 'Client not found or not distributed as rebolo' });
         }
 
@@ -294,14 +327,18 @@ router.put('/client/:id/force-return-rebolo', authMiddleware, async (req: AuthRe
         const sellerId = req.user?.id;
         const companyId = req.user?.companyId;
 
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const client = await prisma.client.findUnique({ where: { id: id as string } });
-        if (!client || client.companyId !== companyId || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
+        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.bookStatus !== 'DISTRIBUTED_REBOLO') {
             return res.status(404).json({ error: 'Client not found or not distributed as rebolo' });
         }
 
         const updated = await prisma.client.update({
             where: { id: client.id },
-            data: { bookStatus: 'AWAITING_RETURN' } // Returns to Admin for inspection before discarding or restocking
+            data: { bookStatus: 'AWAITING_RETURN' }
         });
 
         // Notify Admins
@@ -330,6 +367,10 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const { q } = req.query;
         const companyId = req.user?.companyId;
+
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
 
         if (!q) return res.json([]);
 
@@ -363,8 +404,12 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const companyId = req.user?.companyId;
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
         const batches = await prisma.bookBatch.findMany({
-            where: companyId ? { companyId } : undefined,
+            where: { companyId },
             include: { photographer: true },
             orderBy: { date: 'desc' }
         });

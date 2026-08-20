@@ -1,8 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
-
-import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import { upload } from '../middleware/upload';
+import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import { upload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -10,8 +9,13 @@ const prisma = new PrismaClient();
 // Get all cars with their current user and latest checklist
 router.get('/', authenticateToken, async (req: AuthRequest, res) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const cars = await prisma.car.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId: userCompanyId },
       include: {
         currentUser: {
           select: { id: true, name: true, team: { select: { prefix: true } } }
@@ -29,8 +33,8 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// Create a new car
-router.post('/', authenticateToken, upload.fields([
+// Create a new car (Admin or Supervisor only)
+router.post('/', authenticateToken, requireAdminOrSupervisor, upload.fields([
   { name: 'photo', maxCount: 1 },
   { name: 'frontPhoto', maxCount: 1 },
   { name: 'backPhoto', maxCount: 1 },
@@ -41,19 +45,24 @@ router.post('/', authenticateToken, upload.fields([
   { name: 'trunkPhoto', maxCount: 1 }
 ]), async (req: AuthRequest, res) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist, currentKm } = req.body;
     
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const getPhotoUrl = (field: string) => files?.[field]?.[0] ? (files[field][0] as any).location : null;
+    const getPhoto = (field: string) => files?.[field]?.[0] ? getUploadedFileUrl(files[field][0]) : null;
 
-    const photoUrl = getPhotoUrl('photo');
-    const frontPhotoUrl = getPhotoUrl('frontPhoto');
-    const backPhotoUrl = getPhotoUrl('backPhoto');
-    const leftPhotoUrl = getPhotoUrl('leftPhoto');
-    const rightPhotoUrl = getPhotoUrl('rightPhoto');
-    const dashboardPhotoUrl = getPhotoUrl('dashboardPhoto');
-    const enginePhotoUrl = getPhotoUrl('enginePhoto');
-    const trunkPhotoUrl = getPhotoUrl('trunkPhoto');
+    const photoUrl = getPhoto('photo');
+    const frontPhotoUrl = getPhoto('frontPhoto');
+    const backPhotoUrl = getPhoto('backPhoto');
+    const leftPhotoUrl = getPhoto('leftPhoto');
+    const rightPhotoUrl = getPhoto('rightPhoto');
+    const dashboardPhotoUrl = getPhoto('dashboardPhoto');
+    const enginePhotoUrl = getPhoto('enginePhoto');
+    const trunkPhotoUrl = getPhoto('trunkPhoto');
 
     const newCar = await prisma.car.create({
       data: {
@@ -74,7 +83,7 @@ router.post('/', authenticateToken, upload.fields([
         currentKm: (currentKm !== undefined && currentKm !== '') ? parseInt(currentKm.toString().replace(/\D/g, ''), 10) : 0,
         nextOilChangeKm: (nextOilChangeKm !== undefined && nextOilChangeKm !== '') ? parseInt(nextOilChangeKm.toString().replace(/\D/g, ''), 10) : 0,
         status: 'AVAILABLE',
-        companyId: req.user?.companyId
+        companyId: userCompanyId
       }
     });
     res.status(201).json(newCar);
@@ -83,8 +92,8 @@ router.post('/', authenticateToken, upload.fields([
   }
 });
 
-// Update a car (Admin)
-router.put('/:id', authenticateToken, upload.fields([
+// Update a car (Admin or Supervisor only)
+router.put('/:id', authenticateToken, requireAdminOrSupervisor, upload.fields([
   { name: 'photo', maxCount: 1 },
   { name: 'frontPhoto', maxCount: 1 },
   { name: 'backPhoto', maxCount: 1 },
@@ -96,15 +105,20 @@ router.put('/:id', authenticateToken, upload.fields([
 ]), async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const { plate, model, trackerLink, pendingMaintenance, warrantyParts, nextOilChangeKm, initialChecklist, currentKm } = req.body;
     
     const existing = await prisma.car.findUnique({ where: { id: id as string } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
+    if (!existing || (existing.companyId !== userCompanyId && req.user?.role !== 'SUPER_ADMIN')) {
       return res.status(404).json({ error: 'Car not found' });
     }
 
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-    const getPhotoUrl = (field: string) => files?.[field]?.[0] ? (files[field][0] as any).location : undefined;
+    const getPhoto = (field: string) => files?.[field]?.[0] ? getUploadedFileUrl(files[field][0]) : undefined;
 
     const data: any = {
       plate,
@@ -118,7 +132,7 @@ router.put('/:id', authenticateToken, upload.fields([
     };
 
     ['photo', 'frontPhoto', 'backPhoto', 'leftPhoto', 'rightPhoto', 'dashboardPhoto', 'enginePhoto', 'trunkPhoto'].forEach(f => {
-      const url = getPhotoUrl(f);
+      const url = getPhoto(f);
       if (url) data[`${f}Url`] = url;
     });
 
@@ -132,12 +146,17 @@ router.put('/:id', authenticateToken, upload.fields([
   }
 });
 
-// Delete a car (Admin)
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res) => {
+// Delete a car (Admin or Supervisor only)
+router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const existing = await prisma.car.findUnique({ where: { id: id as string } });
-    if (!existing || existing.companyId !== req.user?.companyId) {
+    if (!existing || (existing.companyId !== userCompanyId && req.user?.role !== 'SUPER_ADMIN')) {
       return res.status(404).json({ error: 'Car not found' });
     }
     await prisma.car.delete({ where: { id: id as string } });
@@ -159,6 +178,11 @@ router.post('/checklist', authenticateToken, upload.fields([
   { name: 'signature', maxCount: 1 }
 ]), async (req: AuthRequest, res) => {
   try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const { 
       carId, driverId, type, damageReport, reuseInitialPhotos
     } = req.body;
@@ -170,7 +194,7 @@ router.post('/checklist', authenticateToken, upload.fields([
     const existing = await prisma.car.findFirst({
       where: {
         id: carId,
-        ...(req.user?.companyId ? { companyId: req.user?.companyId } : {})
+        companyId: userCompanyId,
       }
     });
     if (!existing) {
@@ -181,7 +205,7 @@ router.post('/checklist', authenticateToken, upload.fields([
       const driver = await prisma.user.findFirst({
         where: {
           id: driverId,
-          ...(req.user?.companyId ? { companyId: req.user?.companyId } : {})
+          companyId: userCompanyId,
         }
       });
       if (!driver) {
@@ -192,7 +216,7 @@ router.post('/checklist', authenticateToken, upload.fields([
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
     const getPhotoUrl = (fieldName: string) => {
       if (files && files[fieldName] && files[fieldName].length > 0) {
-        return (files[fieldName][0] as any).location;
+        return getUploadedFileUrl(files[fieldName][0]);
       }
       return null;
     };
@@ -202,7 +226,7 @@ router.post('/checklist', authenticateToken, upload.fields([
       data: {
         type: checklistType,
         carId,
-        driverId,
+        driverId: driverId || req.user?.id,
         mileage,
         fuelLevel,
         damageReport,
@@ -222,7 +246,7 @@ router.post('/checklist', authenticateToken, upload.fields([
       where: { id: carId },
       data: {
         status: checklistType === 'CHECKOUT' ? 'IN_USE' : 'AVAILABLE',
-        currentUserId: checklistType === 'CHECKOUT' ? driverId : null,
+        currentUserId: checklistType === 'CHECKOUT' ? (driverId || req.user?.id) : null,
         currentKm: mileage > 0 ? mileage : undefined
       }
     });

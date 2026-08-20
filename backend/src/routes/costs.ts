@@ -36,8 +36,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     }
 
     const userCompanyId = req.user?.companyId;
-    if (!userCompanyId) {
-      res.status(400).json({ error: 'Empresa obrigatória para lançar custo' });
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa obrigatória para lançar custo' });
       return;
     }
 
@@ -62,22 +62,18 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         paymentMethod: paymentMethod ? String(paymentMethod).slice(0, 50) : 'CASH',
         receiptUrl: receiptUrl ? String(receiptUrl).slice(0, 500) : null,
         status: 'PENDING',
+        companyId: userCompanyId!,
+      }
+    });
+
+    const admins = await prisma.user.findMany({
+      where: { 
+        role: { in: ['ADMIN', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'SUPERVISOR', 'SELLER_MANAGER'] },
         companyId: userCompanyId,
       }
     });
 
-
-
-    const admins = await prisma.user.findMany({
-      where: { 
-        role: { in: ['ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN', 'SUPERVISOR'] },
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
-      }
-    });
-
-    
     const user = await prisma.user.findUnique({ where: { id: req.user.id }});
-
     const adminTokens = admins.map(a => a.fcmToken).filter(t => t != null) as string[];
 
     for (const admin of admins) {
@@ -96,7 +92,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
           actionData: actionData,
           senderId: req.user.id,
           recipientId: admin.id,
-          companyId: req.user.companyId,
+          companyId: userCompanyId,
         }
       });
     }
@@ -123,15 +119,19 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
     const id = req.params.id as string;
     const { amount, category, description, paymentMethod } = req.body;
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa obrigatória' });
+      return;
+    }
     const userId = req.user?.id;
     const userRole = req.user?.role || '';
-    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(userRole);
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(userRole);
     
     // Check if cost belongs to company
     const existing = await prisma.cost.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -179,4 +179,3 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) =>
 });
 
 export default router;
-

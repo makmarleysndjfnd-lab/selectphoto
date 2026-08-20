@@ -49,6 +49,11 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   const userCompanyId = req.user?.companyId;
   const userId = req.user?.id;
 
+  if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada' });
+    return;
+  }
+
   if (!clientId || !proposedData) {
     res.status(400).json({ error: 'clientId e proposedData são obrigatórios' });
     return;
@@ -59,7 +64,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const client = await prisma.client.findFirst({
       where: {
         id: clientId,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -78,7 +83,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       data: {
         clientId,
         photographerId: userId,
-        companyId: client.companyId || userCompanyId,
+        companyId: client.companyId || userCompanyId!,
         proposedData: sanitizedData,
         reason: typeof reason === 'string' ? reason.slice(0, 500) : undefined,
         status: 'PENDING',
@@ -89,8 +94,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     // Notify company admins
     const admins = await prisma.user.findMany({
       where: {
-        companyId: client.companyId || userCompanyId || undefined,
-        role: { in: ['ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN', 'SUPERVISOR'] },
+        companyId: client.companyId || userCompanyId!,
+        role: { in: ['ADMIN', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'SUPERVISOR', 'SELLER_MANAGER'] },
       },
     });
 
@@ -106,7 +111,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
           status: 'UNREAD',
           recipientId: admin.id,
           senderId: userId,
-          companyId: client.companyId || userCompanyId,
+          companyId: client.companyId || userCompanyId!,
           actionData: { editRequestId: editRequest.id, proposedData: sanitizedData },
         },
       });
@@ -123,11 +128,15 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 router.get('/pending', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
 
     const requests = await prisma.clientEditRequest.findMany({
       where: {
         status: 'PENDING',
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
       include: {
         client: true,
@@ -150,11 +159,16 @@ router.post('/:id/approve', authenticateToken, requireAdminOrSupervisor, async (
   const id = req.params.id as string;
   const userCompanyId = req.user?.companyId;
 
+  if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada' });
+    return;
+  }
+
   try {
     const editRequest = await prisma.clientEditRequest.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -193,11 +207,16 @@ router.post('/:id/reject', authenticateToken, requireAdminOrSupervisor, async (r
   const id = req.params.id as string;
   const userCompanyId = req.user?.companyId;
 
+  if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada' });
+    return;
+  }
+
   try {
     const editRequest = await prisma.clientEditRequest.findFirst({
       where: {
         id,
-        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        companyId: userCompanyId,
       },
     });
 
@@ -224,5 +243,3 @@ router.post('/:id/reject', authenticateToken, requireAdminOrSupervisor, async (r
 });
 
 export default router;
-
-

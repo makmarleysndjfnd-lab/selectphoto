@@ -8,18 +8,16 @@ const prisma = new PrismaClient();
 // Helper to check if a user is allowed to access/modify a given seller's appointments
 async function canAccessSellerAppointments(reqUser: any, targetSellerId: string): Promise<boolean> {
   if (!reqUser) return false;
-  // If the user is the seller themselves
   if (reqUser.id === targetSellerId) return true;
 
-  // If the user is an admin or supervisor in the same company
-  const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
+  const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
   if (isAdminOrSupervisor) {
     if (reqUser.role === 'SUPER_ADMIN') return true;
     const seller = await prisma.user.findUnique({
       where: { id: targetSellerId },
       select: { companyId: true },
     });
-    return !!seller && seller.companyId === reqUser.companyId;
+    return !!seller && !!reqUser.companyId && seller.companyId === reqUser.companyId;
   }
 
   return false;
@@ -171,6 +169,4 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
   }
 });
 
-
 export default router;
-

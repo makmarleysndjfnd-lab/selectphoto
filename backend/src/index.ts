@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import path from 'path';
 
 dotenv.config();
 
@@ -24,18 +24,47 @@ function assertRequiredEnv() {
 assertRequiredEnv();
 
 const app = express();
-const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 
-import path from 'path';
+// Configurar trust proxy para Render/Reverse Proxies (permite obter IP real do cliente com segurança)
+app.set('trust proxy', 1);
+
 import { requestLogger } from './middleware/requestLogger';
 import { securityHeaders, generalApiLimiter, centralErrorHandler } from './middleware/securityMiddleware';
+import { isExternalServicesDisabled } from './utils/externalServices';
 
 app.use(securityHeaders);
 app.use(requestLogger);
 app.use(generalApiLimiter);
-app.use(cors());
-app.use(express.json({ limit: '50mb' })); // Increased limit for base64 signatures
+
+// Configuração de CORS por allowlist
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+      'https://selectphoto.onrender.com',
+    ];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Requisições mobile nativas, curl ou server-to-server não possuem cabeçalho Origin
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin) || (process.env.NODE_ENV !== 'production' && origin.startsWith('http://localhost:'))) {
+        return callback(null, true);
+      }
+      return callback(new Error('Bloqueado por CORS: Origem não autorizada.'));
+    },
+    credentials: true,
+  })
+);
+
+// Limite JSON padrão reduzido para 2MB para proteção contra DoS
+app.use(express.json({ limit: '2mb' }));
+
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.get('/health', (req, res) => {
@@ -44,9 +73,9 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
     memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    externalServicesDisabled: isExternalServicesDisabled(),
   });
 });
-
 
 import authRoutes from './routes/auth';
 import teamRoutes from './routes/teams';
@@ -72,11 +101,13 @@ import statsRoutes from './routes/stats';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 
+// Limite JSON aumentado (50MB) especificamente para rotas que transmitem lotes de fichas / assinaturas base64
+app.use('/api/clients', express.json({ limit: '50mb' }), clientRoutes);
+app.use('/api/sales', express.json({ limit: '50mb' }), salesRoutes);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/clients', clientRoutes);
-app.use('/api/sales', salesRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/fleet', fleetRoutes);
 app.use('/api/finance', financeRoutes);
@@ -96,11 +127,23 @@ app.use('/api/stats', statsRoutes);
 
 app.use(centralErrorHandler);
 
-if (process.env.DISABLE_CRON !== 'true' && process.env.NODE_ENV !== 'test') {
+// Desativar cron jobs em modo de teste ou quando serviços externos estiverem desabilitados
+if (
+  process.env.DISABLE_CRON !== 'true' &&
+  process.env.NODE_ENV !== 'test' &&
+  !isExternalServicesDisabled()
+) {
   initWarrantyCron();
   initBackupCron();
 }
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+// Bind exclusivo em 127.0.0.1 quando em staging/testes ou host padrão
+const host = isExternalServicesDisabled() ? '127.0.0.1' : (process.env.HOST || '0.0.0.0');
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(Number(port), host, () => {
+    console.log(`Server running on http://${host}:${port}`);
+  });
+}
+
+export default app;

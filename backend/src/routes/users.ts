@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
-import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES } from '../middleware/authMiddleware';
-import { upload } from '../middleware/upload';
+import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
+import { upload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -32,6 +32,10 @@ router.put('/profile', authenticateToken, async (req: AuthRequest, res: Response
 // Get all users in the same company (accessible by any logged in user)
 router.get('/company', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.user?.companyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const users = await prisma.user.findMany({
       where: { companyId: req.user?.companyId },
       select: {
@@ -75,6 +79,10 @@ router.put('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Res
 // Get all users (Admin only)
 router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
+    if (!req.user?.companyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
     const users = await prisma.user.findMany({
       where: { companyId: req.user?.companyId },
       include: {
@@ -102,15 +110,45 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
     const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
     
     if (!cpf) return res.status(400).json({ error: 'CPF is required' });
+    if (!password) return res.status(400).json({ error: 'Password is required' });
     
+    const callerRole = req.user?.role || '';
+    const callerRank = ROLE_RANK[callerRole] || 0;
+
     // Validação de Role e Bloqueio de Elevação de Privilégio
     const targetRole = role || 'OPERATOR';
     if (!VALID_ROLES.includes(targetRole)) {
       return res.status(400).json({ error: `Invalid role. Allowed: ${VALID_ROLES.join(', ')}` });
     }
 
-    if (targetRole === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Forbidden: Only SUPER_ADMIN can create SUPER_ADMIN users' });
+    const targetRank = ROLE_RANK[targetRole] || 0;
+
+    if (callerRole === 'COMPANY_ADMIN' && targetRole === 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: COMPANY_ADMIN cannot create SUPER_ADMIN' });
+    }
+
+    if (callerRole === 'ADMIN' && targetRank >= ROLE_RANK.ADMIN) {
+      return res.status(403).json({ error: 'Forbidden: ADMIN cannot create ADMIN, COMPANY_ADMIN or SUPER_ADMIN' });
+    }
+
+    // Validação de teamId pertencente à mesma empresa
+    if (teamId && teamId !== 'null' && teamId !== '') {
+      const team = await prisma.team.findFirst({
+        where: { id: teamId, companyId: req.user?.companyId }
+      });
+      if (!team) {
+        return res.status(400).json({ error: 'Time não pertence à sua empresa' });
+      }
+    }
+
+    // Validação de carId pertencente à mesma empresa
+    if (carId && carId !== 'null' && carId !== '') {
+      const car = await prisma.car.findFirst({
+        where: { id: carId, companyId: req.user?.companyId }
+      });
+      if (!car) {
+        return res.status(400).json({ error: 'Veículo não pertence à sua empresa' });
+      }
     }
     
     let profilePhotoUrl = null;
@@ -119,10 +157,10 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
     if (req.files) {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
       if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
-        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
+        profilePhotoUrl = getUploadedFileUrl(files['profilePhoto'][0]);
       }
       if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
-        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
+        criminalRecordUrl = getUploadedFileUrl(files['criminalRecord'][0]);
       }
     }
 
@@ -157,7 +195,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
         phone: phone || null,
         emergencyPhone: emergencyPhone || null,
         address: address || null,
-        usesOwnCar: usesOwnCar === 'true',
+        usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
         profilePhotoUrl,
         criminalRecordUrl,
         photographerCode,
@@ -185,10 +223,25 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
     const { id } = req.params;
     const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
 
-    // Fetch existing to get old URLs
+    const callerRole = req.user?.role || '';
+    const callerRank = ROLE_RANK[callerRole] || 0;
+
+    // Fetch existing user to verify permissions
     const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
-    if (!existingUser || existingUser.companyId !== req.user?.companyId) {
+    if (!existingUser || (existingUser.companyId !== req.user?.companyId && req.user?.role !== 'SUPER_ADMIN')) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    const existingRank = ROLE_RANK[existingUser.role] || 0;
+
+    // ADMIN não pode alterar usuário com papel igual ou superior
+    if (callerRole === 'ADMIN' && existingRank >= ROLE_RANK.ADMIN && req.user?.id !== id) {
+      return res.status(403).json({ error: 'Forbidden: ADMIN cannot modify users with role ADMIN or above' });
+    }
+
+    // COMPANY_ADMIN não pode alterar SUPER_ADMIN
+    if (callerRole === 'COMPANY_ADMIN' && existingUser.role === 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: COMPANY_ADMIN cannot modify SUPER_ADMIN' });
     }
 
     // Bloqueio de auto-alteração de papel para ganho de privilégio
@@ -202,6 +255,33 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
       if (role === 'SUPER_ADMIN' && req.user?.role !== 'SUPER_ADMIN') {
         return res.status(403).json({ error: 'Forbidden: Only SUPER_ADMIN can promote to SUPER_ADMIN' });
       }
+      const newRank = ROLE_RANK[role] || 0;
+      if (callerRole === 'ADMIN' && newRank >= ROLE_RANK.ADMIN) {
+        return res.status(403).json({ error: 'Forbidden: ADMIN cannot promote to ADMIN or above' });
+      }
+      if (callerRole === 'COMPANY_ADMIN' && role === 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden: COMPANY_ADMIN cannot promote to SUPER_ADMIN' });
+      }
+    }
+
+    // Validação de teamId
+    if (teamId && teamId !== 'null' && teamId !== '') {
+      const team = await prisma.team.findFirst({
+        where: { id: teamId, companyId: req.user?.companyId }
+      });
+      if (!team) {
+        return res.status(400).json({ error: 'Time não pertence à sua empresa' });
+      }
+    }
+
+    // Validação de carId
+    if (carId && carId !== 'null' && carId !== '') {
+      const car = await prisma.car.findFirst({
+        where: { id: carId, companyId: req.user?.companyId }
+      });
+      if (!car) {
+        return res.status(400).json({ error: 'Veículo não pertence à sua empresa' });
+      }
     }
 
     let profilePhotoUrl = existingUser.profilePhotoUrl;
@@ -210,10 +290,10 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
     if (req.files) {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
       if (files['profilePhoto'] && files['profilePhoto'].length > 0) {
-        profilePhotoUrl = `/uploads/${files['profilePhoto'][0].filename}`;
+        profilePhotoUrl = getUploadedFileUrl(files['profilePhoto'][0]);
       }
       if (files['criminalRecord'] && files['criminalRecord'].length > 0) {
-        criminalRecordUrl = `/uploads/${files['criminalRecord'][0].filename}`;
+        criminalRecordUrl = getUploadedFileUrl(files['criminalRecord'][0]);
       }
     }
 
@@ -225,7 +305,7 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
       phone: phone || null,
       emergencyPhone: emergencyPhone || null,
       address: address || null,
-      usesOwnCar: usesOwnCar === 'true',
+      usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
       profilePhotoUrl,
       criminalRecordUrl
     };
@@ -235,7 +315,7 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
     }
     
     if (role === 'PHOTOGRAPHER' && photographerCode !== undefined) {
-      updateData.photographerCode = photographerCode.trim() !== '' ? photographerCode.trim() : null;
+      updateData.photographerCode = photographerCode && photographerCode.trim() !== '' ? photographerCode.trim() : null;
     }
 
     if (password && password.trim() !== '') {
@@ -273,9 +353,24 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
 router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    
+    if (req.user?.id === id) {
+      return res.status(400).json({ error: 'Cannot delete your own account' });
+    }
+
+    const callerRole = req.user?.role || '';
     const existingUser = await prisma.user.findUnique({ where: { id: id as string } });
-    if (!existingUser || existingUser.companyId !== req.user?.companyId) {
+    if (!existingUser || (existingUser.companyId !== req.user?.companyId && req.user?.role !== 'SUPER_ADMIN')) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    const existingRank = ROLE_RANK[existingUser.role] || 0;
+    if (callerRole === 'ADMIN' && existingRank >= ROLE_RANK.ADMIN) {
+      return res.status(403).json({ error: 'Forbidden: ADMIN cannot delete users with role ADMIN or above' });
+    }
+
+    if (callerRole === 'COMPANY_ADMIN' && existingUser.role === 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: COMPANY_ADMIN cannot delete SUPER_ADMIN' });
     }
     
     await prisma.user.delete({ where: { id: id as string } });
@@ -286,4 +381,3 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, 
 });
 
 export default router;
-

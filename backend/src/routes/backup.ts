@@ -35,6 +35,12 @@ router.get('/download', authenticateToken, requireAdmin, async (req: AuthRequest
 // Restauração de Banco Integral - Restrita EXCLUSIVAMENTE a SUPER_ADMIN
 router.post('/restore', authenticateToken, requireSuperAdmin, uploadMem.single('file'), async (req: AuthRequest, res: Response) => {
   try {
+    // Desabilitar restore HTTP em produção por padrão, exigindo ativação explícita
+    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_HTTP_RESTORE !== 'true') {
+      res.status(403).json({ error: 'Restauração HTTP está desabilitada em produção. Defina ENABLE_HTTP_RESTORE=true para habilitar.' });
+      return;
+    }
+
     if (!req.file) {
       res.status(400).json({ error: 'Nenhum arquivo enviado.' });
       return;
@@ -75,11 +81,10 @@ router.post('/restore', authenticateToken, requireSuperAdmin, uploadMem.single('
 
     await restoreBackupJson(backupData);
     res.json({ message: 'Backup restaurado com sucesso!' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Erro ao restaurar backup:', error);
-    res.status(500).json({ error: 'Erro ao processar o arquivo de backup.' });
+    res.status(500).json({ error: error.message || 'Erro ao processar o arquivo de backup.' });
   }
 });
 
 export default router;
-

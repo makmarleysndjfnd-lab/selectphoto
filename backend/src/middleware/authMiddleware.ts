@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
+
 let _prisma: PrismaClient | null = null;
 function getPrisma(): PrismaClient {
   if (!_prisma) {
@@ -18,6 +19,10 @@ export interface AuthRequest extends Request {
     teamId?: string | null;
     name?: string | null;
     photographerCode?: string | null;
+    actorId?: string;
+    actorRole?: string;
+    effectiveCompanyId?: string;
+    effectiveRole?: string;
   };
 }
 
@@ -26,12 +31,26 @@ export const VALID_ROLES = [
   'COMPANY_ADMIN',
   'ADMIN',
   'SUPERVISOR',
+  'SELLER_MANAGER',
   'SELLER',
   'PHOTOGRAPHER',
+  'DRIVER',
   'OPERATOR',
 ] as const;
 
 export type UserRole = (typeof VALID_ROLES)[number];
+
+export const ROLE_RANK: Record<string, number> = {
+  SUPER_ADMIN: 100,
+  COMPANY_ADMIN: 80,
+  ADMIN: 60,
+  SUPERVISOR: 40,
+  SELLER_MANAGER: 40,
+  SELLER: 20,
+  PHOTOGRAPHER: 20,
+  DRIVER: 20,
+  OPERATOR: 20,
+};
 
 export const authenticateToken = async (
   req: AuthRequest,
@@ -61,7 +80,51 @@ export const authenticateToken = async (
       return;
     }
 
-    // Revalidação em tempo real no banco de dados
+    // Suporte a Impersonação por SUPER_ADMIN revalidado em tempo real
+    if (decoded.actorId && decoded.actorRole === 'SUPER_ADMIN') {
+      const actor = await getPrisma().user.findUnique({
+        where: { id: decoded.actorId },
+      });
+
+      if (!actor || !actor.active || actor.role !== 'SUPER_ADMIN') {
+        res.status(403).json({ error: 'Impersonation actor is invalid or inactive' });
+        return;
+      }
+
+      const targetCompanyId = decoded.effectiveCompanyId || decoded.companyId;
+      if (!targetCompanyId) {
+        res.status(403).json({ error: 'Impersonation companyId is missing' });
+        return;
+      }
+
+      const targetCompany = await getPrisma().company.findUnique({
+        where: { id: targetCompanyId },
+      });
+
+      if (!targetCompany || targetCompany.isActive === false) {
+        res.status(403).json({ error: 'Impersonated company is invalid or inactive' });
+        return;
+      }
+
+      req.user = {
+        id: actor.id,
+        cpf: actor.cpf,
+        role: decoded.effectiveRole || 'COMPANY_ADMIN',
+        companyId: targetCompany.id,
+        teamId: null,
+        name: actor.name,
+        photographerCode: null,
+        actorId: actor.id,
+        actorRole: 'SUPER_ADMIN',
+        effectiveCompanyId: targetCompany.id,
+        effectiveRole: decoded.effectiveRole || 'COMPANY_ADMIN',
+      };
+
+      next();
+      return;
+    }
+
+    // Revalidação padrão em tempo real no banco de dados
     const user = await getPrisma().user.findUnique({
       where: { id: decoded.id },
       include: { company: true },
@@ -77,9 +140,12 @@ export const authenticateToken = async (
       return;
     }
 
-    if (user.company && user.company.isActive === false) {
-      res.status(403).json({ error: 'Company account is inactive' });
-      return;
+    // Para qualquer papel que não seja SUPER_ADMIN, exige empresa existente e ativa
+    if (user.role !== 'SUPER_ADMIN') {
+      if (!user.companyId || !user.company || user.company.isActive === false) {
+        res.status(403).json({ error: 'Company account is inactive' });
+        return;
+      }
     }
 
     // O papel e a empresa vêm EXCLUSIVAMENTE do banco de dados, ignorando claims antigas ou adulteradas
@@ -95,7 +161,7 @@ export const authenticateToken = async (
 
     next();
   } catch (err: any) {
-    console.error('authMiddleware error details:', err);
+    console.error('authMiddleware error details:', err?.message || err);
     res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
@@ -115,10 +181,10 @@ export const requireRoles = (allowedRoles: string[], customErrorMessage?: string
   };
 };
 
-// Middleware to check if user has Admin or Supervisor role
+// Middlewares de papéis
 export const requireAdminOrSupervisor = requireRoles(
-  ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'],
-  'Forbidden: Requires Admin or Supervisor role'
+  ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'],
+  'Forbidden: Requires Admin, Supervisor, Seller Manager or Company Admin role'
 );
 
 export const requireAdmin = requireRoles(
@@ -135,4 +201,3 @@ export const requireSuperAdmin = requireRoles(
   ['SUPER_ADMIN'],
   'Forbidden: Requires Super Admin role'
 );
-

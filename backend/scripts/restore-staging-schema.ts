@@ -26,12 +26,17 @@ async function restoreReconciledSchema() {
       cwd: path.resolve(__dirname, '..'),
       env: { ...process.env, DATABASE_URL: databaseUrl },
       encoding: 'utf8',
-      shell: false,
+      shell: true,
     });
-    console.log(result.stdout);
+    
+    if (result.stdout) console.log(result.stdout);
+    
     if (result.status !== 0) {
-      console.error(result.stderr);
+      console.error('❌ Erro no prisma migrate deploy:', result.stderr || result.stdout);
+      process.exit(result.status || 1);
     }
+
+    console.log('✅ Schema de staging restaurado com sucesso.');
   } finally {
     await prisma.$disconnect();
   }

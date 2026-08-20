@@ -10,7 +10,7 @@ async function canAccessSellerClosing(reqUser: any, targetSellerId: string): Pro
   if (!reqUser) return false;
   if (reqUser.id === targetSellerId) return true;
 
-  const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
+  const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(reqUser.role);
   if (isAdminOrSupervisor) {
     if (reqUser.role === 'SUPER_ADMIN') return true;
     const seller = await prisma.user.findUnique({
@@ -28,6 +28,9 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res: Res
     try {
         const sellerId = req.params.sellerId as string;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
         const dateParam = req.query.date as string;
 
         const hasAccess = await canAccessSellerClosing(req.user, sellerId);
@@ -52,7 +55,7 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res: Res
         const sales = await prisma.sale.findMany({
             where: {
                 sellerId: sellerId as string,
-                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                companyId: userCompanyId,
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -65,7 +68,7 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res: Res
         const nonSales = await prisma.nonSale.findMany({
             where: {
                 sellerId: sellerId as string,
-                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                companyId: userCompanyId,
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -90,7 +93,10 @@ router.get('/daily/:sellerId', authMiddleware, async (req: AuthRequest, res: Res
 
         // Also fetch previous unpaid repasses (historical)
         const previousClosings = await prisma.dailyClosing.findMany({
-            where: { sellerId: sellerId as string }
+            where: { 
+              sellerId: sellerId as string,
+              ...(userCompanyId ? { seller: { companyId: userCompanyId } } : {})
+            }
         });
         const totalHistoricalDebt = previousClosings.reduce((acc, curr) => acc + curr.repasseDebt, 0);
 
@@ -121,12 +127,15 @@ router.post('/daily', authMiddleware, requireAdminOrSupervisor, async (req: Auth
     try {
         const { sellerId, totalSalesValue, cashValue, pixValue, debitValue, creditValue, commission, repasseDebt } = req.body;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
 
         // Verify seller belongs to company
         const seller = await prisma.user.findFirst({
             where: {
                 id: sellerId,
-                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                companyId: userCompanyId,
             },
         });
 
@@ -159,11 +168,14 @@ router.post('/pay-repasse', authMiddleware, requireAdminOrSupervisor, async (req
     try {
         const { sellerId, amount, commissionToLog } = req.body;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
 
         const seller = await prisma.user.findFirst({
             where: {
                 id: sellerId,
-                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                companyId: userCompanyId,
             },
         });
 
@@ -188,7 +200,7 @@ router.post('/pay-repasse', authMiddleware, requireAdminOrSupervisor, async (req
         if (commissionToLog && parseFloat(commissionToLog) > 0) {
             await prisma.cost.create({
                 data: {
-                    companyId: seller.companyId || userCompanyId || 'c1',
+                    companyId: seller.companyId || userCompanyId,
                     userId: sellerId,
                     amount: parseFloat(commissionToLog),
                     category: 'COMMISSION',
@@ -211,6 +223,9 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
     try {
         const photographerId = req.params.photographerId as string;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
         const dateParam = req.query.date as string;
 
         const hasAccess = await canAccessSellerClosing(req.user, photographerId);
@@ -233,7 +248,7 @@ router.get('/photographer/:photographerId', authMiddleware, async (req: AuthRequ
         const books = await prisma.bookBatch.findMany({
             where: {
                 photographerId: photographerId as string,
-                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                companyId: userCompanyId,
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -258,12 +273,15 @@ router.get('/custom', authMiddleware, async (req: AuthRequest, res: Response) =>
         const endDateParam = req.query.endDate as string;
         const cityParam = req.query.city as string;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
 
         let whereSale: any = {
-            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            companyId: userCompanyId,
         };
         let whereNonSale: any = {
-            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            companyId: userCompanyId,
         };
 
         if (sellerIdsStr) {
@@ -312,14 +330,17 @@ router.get('/city/:city', authMiddleware, async (req: AuthRequest, res: Response
         const sellerIdsStr = req.query.sellerIds as string;
         const dateParam = req.query.date as string;
         const userCompanyId = req.user?.companyId;
+        if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Empresa não identificada' });
+        }
 
         let whereSale: any = {
             city,
-            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            companyId: userCompanyId,
         };
         let whereNonSale: any = {
             client: { city },
-            ...(userCompanyId ? { companyId: userCompanyId } : {}),
+            companyId: userCompanyId,
         };
 
         if (sellerIdsStr) {
@@ -358,4 +379,3 @@ router.get('/city/:city', authMiddleware, async (req: AuthRequest, res: Response
 });
 
 export default router;
-

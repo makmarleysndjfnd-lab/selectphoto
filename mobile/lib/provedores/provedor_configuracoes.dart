@@ -32,15 +32,25 @@ class SettingsProvider with ChangeNotifier {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     _isDarkMode = prefs.getBool('isDarkMode') ?? true;
-    final savedUrl = prefs.getString('serverUrl');
     
-    // Em modo release, a SERVER_URL oficial de compilação tem precedência absoluta
-    if (kReleaseMode && AppConfig.hasServerUrl) {
-      _serverUrl = AppConfig.serverUrl;
-    } else if (savedUrl != null && savedUrl.trim().isNotEmpty) {
-      _serverUrl = savedUrl.trim();
-    } else if (AppConfig.hasServerUrl) {
-      _serverUrl = AppConfig.serverUrl;
+    // Limpeza de chave serverUrl legada em SharedPreferences
+    if (prefs.containsKey('serverUrl')) {
+      if (kReleaseMode) {
+        await prefs.remove('serverUrl');
+      }
+    }
+
+    if (kReleaseMode) {
+      if (AppConfig.hasServerUrl) {
+        _serverUrl = AppConfig.serverUrl;
+      }
+    } else {
+      final savedUrl = prefs.getString('serverUrl');
+      if (savedUrl != null && savedUrl.trim().isNotEmpty) {
+        _serverUrl = savedUrl.trim();
+      } else if (AppConfig.hasServerUrl) {
+        _serverUrl = AppConfig.serverUrl;
+      }
     }
 
     _hotelCostPerPersonDay = prefs.getDouble('hotelCostPerPersonDay') ?? 70.0;
@@ -61,8 +71,8 @@ class SettingsProvider with ChangeNotifier {
   }
 
   Future<void> setServerUrl(String url) async {
-    // Permite alteração de URL personalizada apenas em modo debug
-    if (kReleaseMode && AppConfig.hasServerUrl) {
+    // Bloqueia qualquer alteração em release mode
+    if (kReleaseMode) {
       return;
     }
     _serverUrl = url;
@@ -97,4 +107,3 @@ class SettingsProvider with ChangeNotifier {
     notifyListeners();
   }
 }
-

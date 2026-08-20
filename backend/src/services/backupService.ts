@@ -8,7 +8,8 @@ export const generateBackupJson = async (companyId?: string): Promise<string> =>
   const backupData: Record<string, any> = {
     _metadata: {
       timestamp: new Date().toISOString(),
-      companyId: companyId || 'GLOBAL',
+      companyId: companyId || null,
+      scope: companyId ? 'COMPANY' : 'GLOBAL',
       version: '1.0',
     }
   };
@@ -17,35 +18,40 @@ export const generateBackupJson = async (companyId?: string): Promise<string> =>
     const modelName = model.name;
     const prismaProp = modelName.charAt(0).toLowerCase() + modelName.slice(1);
     
-    try {
-      // @ts-ignore
-      if (prisma[prismaProp] && typeof prisma[prismaProp].findMany === 'function') {
-        const hasCompanyIdField = model.fields.some(f => f.name === 'companyId');
-        let whereClause: any = undefined;
-        if (companyId) {
-          if (hasCompanyIdField) {
-            whereClause = { companyId };
+    // @ts-ignore
+    if (prisma[prismaProp] && typeof prisma[prismaProp].findMany === 'function') {
+      const hasCompanyIdField = model.fields.some(f => f.name === 'companyId');
+      let whereClause: any = undefined;
+      if (companyId) {
+        if (hasCompanyIdField) {
+          whereClause = { companyId };
+        } else {
+          // Suporte a tabelas filhas sem companyId direto
+          if (modelName === 'Appointment' || modelName === 'Child' || modelName === 'Evaluation') {
+            whereClause = { client: { companyId } };
+          } else if (modelName === 'CarChecklist') {
+            whereClause = { car: { companyId } };
+          } else if (modelName === 'DailyClosing' || modelName === 'PersonalAppointment' || modelName === 'SellerCoverBalance') {
+            whereClause = { seller: { companyId } };
           } else {
-            // Suporte a tabelas filhas sem companyId direto
-            if (modelName === 'Appointment' || modelName === 'Child' || modelName === 'Evaluation') {
-              whereClause = { client: { companyId } };
-            } else if (modelName === 'CarChecklist') {
-              whereClause = { car: { companyId } };
-            } else if (modelName === 'DailyClosing' || modelName === 'PersonalAppointment' || modelName === 'SellerCoverBalance') {
-              whereClause = { seller: { companyId } };
-            } else {
-              // Modelo sem relação identificada com empresa: omitir do backup multi-tenant
-              continue;
-            }
+            // Modelo sem relação identificada com empresa: omitir do backup multi-tenant
+            continue;
           }
         }
+      }
 
-        // @ts-ignore
-        const rows = await prisma[prismaProp].findMany(whereClause ? { where: whereClause } : undefined);
+      // @ts-ignore
+      const rows = await prisma[prismaProp].findMany(whereClause ? { where: whereClause } : undefined);
+      
+      // Remover hashes de senha e tokens em backups de empresa
+      if (companyId && modelName === 'User') {
+        backupData[modelName] = rows.map((u: any) => {
+          const { password, fcmToken, ...safeUser } = u;
+          return safeUser;
+        });
+      } else {
         backupData[modelName] = rows;
       }
-    } catch (error) {
-      console.error(`Erro ao fazer backup da tabela ${modelName}:`, error);
     }
   }
 
@@ -55,6 +61,18 @@ export const generateBackupJson = async (companyId?: string): Promise<string> =>
 export const restoreBackupJson = async (backupData: Record<string, any>) => {
   if (!backupData || typeof backupData !== 'object' || !backupData._metadata) {
     throw new Error('Formato de arquivo de backup inválido.');
+  }
+
+  if (backupData._metadata.scope !== 'GLOBAL') {
+    throw new Error('Restauração global rejeitada: o arquivo fornecido é um backup de empresa (COMPANY), não um backup global.');
+  }
+
+  // Validação do conjunto obrigatório de tabelas para restore global seguro
+  const REQUIRED_CORE_TABLES = ['Company', 'User', 'Client'];
+  for (const table of REQUIRED_CORE_TABLES) {
+    if (!Array.isArray(backupData[table])) {
+      throw new Error(`Arquivo de backup corrompido ou incompleto: tabela obrigatória '${table}' ausente.`);
+    }
   }
 
   await prisma.$transaction(async (tx) => {
@@ -86,4 +104,3 @@ export const restoreBackupJson = async (backupData: Record<string, any>) => {
     timeout: 60000
   });
 };
-

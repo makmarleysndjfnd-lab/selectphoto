@@ -1,16 +1,15 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { GoogleGenAI } from '@google/genai';
-import fs from 'fs';
 import path from 'path';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import { enrichCityData } from '../services/ibgeService';
+import { isExternalServicesDisabled } from '../utils/externalServices';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 // Initialize Gemini AI Client
-const ai = process.env.GEMINI_API_KEY 
+const ai = (!isExternalServicesDisabled() && process.env.GEMINI_API_KEY) 
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 
@@ -33,7 +32,7 @@ export function computeExactDurationDays(startDateStr?: string, endDateStr?: str
     const e = new Date(endDateStr.split('T')[0]);
     if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
       const diffMs = e.getTime() - s.getTime();
-      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1; // +1 to count both start and end days inclusive
+      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1;
       if (diffDays >= 1) return diffDays;
     }
   }
@@ -44,27 +43,78 @@ export function computeExactDurationDays(startDateStr?: string, endDateStr?: str
   return 1;
 }
 
+// In-memory rate limiter per user/company for AI queries
+const aiQueryRateMap = new Map<string, number[]>();
+function checkAiRateLimit(key: string, maxPerHour: number = 60): boolean {
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const timestamps = (aiQueryRateMap.get(key) || []).filter(t => t > oneHourAgo);
+  if (timestamps.length >= maxPerHour) {
+    return false;
+  }
+  timestamps.push(now);
+  aiQueryRateMap.set(key, timestamps);
+  return true;
+}
 
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
-  console.log('--- REQUISIÇÃO RECEBIDA NA ROTA /search ---', req.body);
-  try {    const { city } = req.body;
-    
+  try {
+    const { city } = req.body;
+    const companyId = req.user?.companyId;
+
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
     const sanitizedCity = String(city || '').replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
     if (!sanitizedCity) {
       res.status(400).json({ error: 'Cidade não fornecida ou inválida.' });
       return;
     }
 
-    if (!ai) {
-      return res.status(503).json({ 
-        error: 'Chaves de IA não configuradas. Contate o suporte.' 
-      });
+    const rateKey = `${req.user?.id || 'unknown'}_${companyId || 'global'}`;
+    if (!checkAiRateLimit(rateKey, 60)) {
+      res.status(429).json({ error: 'Limite de consultas de IA por hora excedido. Aguarde antes de tentar novamente.' });
+      return;
+    }
+
+    // Retorno mockado quando serviços externos estão desabilitados
+    if (isExternalServicesDisabled() || !ai) {
+      const mockResult = {
+        cityInfo: {
+          name: sanitizedCity,
+          summary: `Pesquisa comercial simulada para ${sanitizedCity}.`,
+          searchDate: new Date().toISOString().split('T')[0],
+          aiSource: 'Mock AI Service (External Services Disabled)'
+        },
+        events: [
+          {
+            name: `Exposição Comercial de ${sanitizedCity}`,
+            category: 'Exposição Agropecuária',
+            startDate: '2026-09-10',
+            endDate: '2026-09-13',
+            durationDays: 4,
+            location: 'Parque de Exposições',
+            city: sanitizedCity,
+            estimatedAudience: '15.000 pessoas',
+            historicalData: 'Evento anual consolidado',
+            organizer: 'Sindicato Rural',
+            organizerContact: '(62) 99999-0000',
+            socialMedia: '@expo_evento',
+            website: 'https://exemplo.com',
+            notes: 'Excelente oportunidade de vendas fotográficas',
+            sources: ['Mock Local Fixture']
+          }
+        ]
+      };
+      res.json(mockResult);
+      return;
     }
 
     const currentDate = new Date();
     const targetDate = new Date();
-    // Inicia a pesquisa a partir de hoje
     targetDate.setDate(currentDate.getDate());
     const maxDate = new Date();
     maxDate.setDate(currentDate.getDate() + 380);
@@ -77,22 +127,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     Hoje é dia ${currentDateStr}.
     Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
     
-    FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
-    1. Sympla (pesquise 'site:sympla.com.br ${sanitizedCity}' e 'sympla eventos ${sanitizedCity}')
-    2. Instagram e Facebook (pesquise 'site:instagram.com circo ${sanitizedCity}', 'site:instagram.com parque ${sanitizedCity}', 'site:facebook.com/events ${sanitizedCity}')
-    3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
-    4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${sanitizedCity}', 'exposição ${sanitizedCity}', 'festa de peão ${sanitizedCity}', 'aniversário da cidade ${sanitizedCity}')
-    
-    REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
-    - O ano atual de referência é ${new Date().getFullYear()}.
-    - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
-    - Se não houver confirmação de data futura real, retorne "events": [].
-    
-    CONTATOS E REDES (MUITO IMPORTANTE):
-    - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
-    - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
-    
-    Retorne a resposta EXCLUSIVAMENTE em formato JSON puro, sem blocos de markdown adicionais fora do JSON, seguindo esta estrutura:
+    Retorne a resposta EXCLUSIVAMENTE em formato JSON puro:
     {
       "cityInfo": {
         "name": "${sanitizedCity}",
@@ -106,26 +141,27 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           "startDate": "YYYY-MM-DD",
           "endDate": "YYYY-MM-DD",
           "durationDays": 3,
-          "location": "Local ou Parque de Exposições",
+          "location": "Local",
           "city": "${sanitizedCity}",
           "estimatedAudience": "Público estimado",
-          "historicalData": "Histórico das edições anteriores",
-          "organizer": "Nome do Organizador",
+          "historicalData": "Histórico",
+          "organizer": "Organizador",
           "organizerContact": "(DD) 9XXXX-XXXX",
-          "socialMedia": "@perfil_instagram",
+          "socialMedia": "@perfil",
           "website": "https://...",
-          "notes": "Observações comerciais relevantes",
-          "sources": ["Sympla", "Instagram @..."]
+          "notes": "Observações comerciais",
+          "sources": ["Fonte"]
         }
       ]
     }`;
 
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), 25000);
+
     let text = '';
     let aiSource = '';
     try {
-      if (!ai) throw new Error('Gemini AI not initialized');
-      
-      const aiCallPromise = ai.models.generateContent({
+      const response: any = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: prompt,
         config: { 
@@ -133,53 +169,48 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           tools: [{ googleSearch: {} }] 
         }
       });
-
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('AI_TIMEOUT')), 25000).unref();
-      });
-
-      const response: any = await Promise.race([aiCallPromise, timeoutPromise]);
+      clearTimeout(timeoutId);
       text = response.text || '';
       aiSource = 'Gemini (Google Search Grounding)';
     } catch (err: any) {
-      console.error("[Gemini Search] Falhou.", err);
-      if (err.status === 429 || (err.message && err.message.includes('429'))) {
-        throw { status: 429, message: 'Limite de requisições de IA atingido. Tente novamente mais tarde.' };
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
+        res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
+        return;
       }
-      if (err.message === 'AI_TIMEOUT') {
-        throw { status: 504, message: 'Tempo limite excedido na pesquisa de IA. Tente novamente.' };
+      if (err.status === 429 || (err.message && err.message.includes('429'))) {
+        res.status(429).json({ error: 'Limite de requisições de IA atingido. Tente novamente mais tarde.' });
+        return;
       }
       throw err;
     }
 
     const cleanJson = extractCleanJson(text);
-    let result;
+    let result: any;
     try {
       result = JSON.parse(cleanJson);
-      if (result && result.events && Array.isArray(result.events)) {
+      if (result && Array.isArray(result.events)) {
+        // Limita a quantidade máxima para evitar estouro de memória
+        result.events = result.events.slice(0, 30);
         for (let ev of result.events) {
           ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
         }
+      } else {
+        result = { cityInfo: { name: sanitizedCity }, events: [] };
       }
     } catch (parseError) {
-      console.warn("JSON Parse Failed, defaulting to empty result:", text);
-      result = { cityInfo: {}, events: [] };
+      result = { cityInfo: { name: sanitizedCity }, events: [] };
     }
 
-    
-    // Inject the AI source into the response
     if (result.cityInfo) {
       result.cityInfo.aiSource = aiSource;
     }
 
     res.json(result);
   } catch (error: any) {
-    console.error('Erro na IA de Eventos:', error);
-    if (error.status === 429) {
-      return res.status(429).json({ error: error.message });
-    }
-    return res.status(503).json({ 
-      error: 'Servidor das IAs (Google/Groq) sobrecarregado ou chaves inválidas. Aguarde um pouco e tente novamente.' 
+    console.error('Erro na IA de Eventos:', error?.message || error);
+    res.status(503).json({ 
+      error: 'Servidor das IAs sobrecarregado ou indisponível. Aguarde um momento e tente novamente.' 
     });
   }
 });
@@ -188,18 +219,19 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { state } = req.query;
+    const companyId = req.user?.companyId;
+
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
     if (!state || typeof state !== 'string') {
       res.status(400).json({ error: 'Estado não fornecido. Use ?state=UF' });
       return;
     }
 
-    const stateUF = state.toUpperCase();
-    const cachePath = path.join(__dirname, `../../radar_cache_${stateUF}.json`);
-
-    const existingProspects = await prisma.commercialEvent.findMany({
-      where: { isProspect: true, companyId: req.user?.companyId }
-    });
-    const existingKeys = new Set(existingProspects.map(p => `${p.city.toLowerCase()}-${p.name.toLowerCase()}`));
+    const stateUF = state.toUpperCase().trim().slice(0, 2);
 
     let resultData: any = null;
     const forceRefresh = req.query.force === 'true';
@@ -217,14 +249,34 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     if (!resultData) {
-      if (!ai) {
-        res.status(503).json({ error: 'Chave de API do Gemini não configurada.' });
+      if (isExternalServicesDisabled() || !ai) {
+        const mockRadar = {
+          state: stateUF,
+          updatedAt: new Date().toISOString(),
+          cities: [
+            {
+              city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
+              eventsCount: 3,
+              events: [
+                {
+                  name: `Festa Regional de ${stateUF}`,
+                  category: 'Festival Cultural',
+                  startDate: '2026-09-15',
+                  endDate: '2026-09-18',
+                  durationDays: 4,
+                  city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
+                  score: 'HIGH'
+                }
+              ]
+            }
+          ]
+        };
+        res.json(mockRadar);
         return;
       }
 
       const currentDate = new Date();
       const targetDate = new Date();
-      // Inicia a pesquisa a partir de hoje
       targetDate.setDate(currentDate.getDate());
       const maxDate = new Date();
       maxDate.setDate(currentDate.getDate() + 380);
@@ -233,210 +285,55 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const targetDateStr = targetDate.toISOString().split('T')[0];
       const maxDateStr = maxDate.toISOString().split('T')[0];
 
-      const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos.
-      Hoje é dia ${currentDateStr}.
-      Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
-      
-      FONTES OBRIGATÓRIAS DE PESQUISA (PENTE FINO):
-      1. Sympla (pesquise 'site:sympla.com.br ${stateUF}' e 'sympla eventos ${stateUF}')
-      2. Instagram e Facebook (pesquise 'site:instagram.com circo ${stateUF}', 'site:instagram.com parque ${stateUF}', 'site:facebook.com/events ${stateUF}')
-      3. Plataformas de Ingressos (Bilheteria Digital, Ingresse, Ticket360, Blueticket, Guichê Web, BaladAPP)
-      4. Notícias Locais, G1 e Portais de Prefeituras municipais (pesquise 'agenda cultural ${stateUF}', 'exposição agropecuária ${stateUF}', 'festa de peão ${stateUF}')
-      
-      REGRA DE OURO ANTI-ALUCINAÇÃO DE DATAS E ANOS:
-      - O ano atual de referência é ${new Date().getFullYear()}.
-      - NUNCA altere o ano de um evento antigo para parecer futuro (ex: se o cartaz no Instagram/Sympla for de 2025 e NÃO houver anúncio da edição 2026, NÃO invente data de 2026).
-      - Se o evento já passou ou não há confirmação de data futura real, NÃO o inclua.
-      
-      CÁLCULO ESTRITO DE DATAS E DURAÇÃO (CONTAGEM INCLUSIVA REAL):
-      - Se o evento for em um ÚNICO DIA (ex: domingo dia 19/10), "startDate" e "endDate" são "2026-10-19" e "durationDays": 1.
-      - Se o evento for de 2 DIAS (ex: "25 e 26 de agosto"), "startDate" é "2026-08-25", "endDate" é "2026-08-26" e "durationDays": 2.
-      - Se o evento for de 3 DIAS (ex: "10 a 12 de maio"), "startDate" é "2026-05-10", "endDate" é "2026-05-12" e "durationDays": 3.
-      - Se for circo/parque de temporada (ex: "01 a 20 de junho"), "startDate" é "2026-06-01", "endDate" é "2026-06-20" e "durationDays": 20.
-      - NUNCA invente 10 ou 20 dias para eventos de 1 ou 2 dias.
-      
-      CONTATOS E REDES (MUITO IMPORTANTE):
-      - Se houver telefone ou WhatsApp no anúncio/Sympla (ex: '(67) 99876-6156'), preencha em 'organizerContact'.
-      - Se houver perfil do Instagram (ex: '@agro.summit_ms2026'), preencha em 'socialMedia'.
-      
-      PÚBLICO E CATEGORIAS:
-      - Foco principal: INFANTIL / FAMILIAR / REGIONAL (Livre até 14 anos).
-      - Circos, Parques de Diversões, Festas de Peão, Exposições Agropecuárias, Festas das Crianças, Festivais Gastronômicos, Teatros Infantis, Summits Agro.
-      - Permita eventos de Curta Duração (1 a 5 dias), Média Duração (6 a 14 dias) e Longa Duração (15 a 30+ dias).
-      - EXCLUA shows 100% adultos, festas universitárias open bar ou eventos para maiores de 18 anos.
-      
-      Retorne EXCLUSIVAMENTE um objeto JSON puro. Não use crases, markdown, explicações ou blocos de código.
-      Formato esperado:
-      {
-        "events": [
-          {
-            "city": "Nome da Cidade",
-            "name": "Nome do Evento",
-            "startDate": "YYYY-MM-DD",
-            "endDate": "YYYY-MM-DD",
-            "durationDays": 1,
-            "isItinerant": true,
-            "venueType": "LONA_INSTALADA",
-            "population": "N/A",
-            "perCapitaIncome": "N/A",
-            "gdp": "N/A",
-            "score": "HIGH",
-            "category": "AGRO",
-            "audience": "N/A",
-            "ticketPrice": "N/A",
-            "organizerContact": "N/A",
-            "socialMedia": "N/A",
-            "sourcePlatform": "Sympla",
-            "sourceUrl": "N/A",
-            "notes": "N/A"
-          }
-        ]
-      }`;
-      
-      let text = '';
+      const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos entre ${targetDateStr} e ${maxDateStr}.
+      Retorne APENAS JSON válido com o radar de cidades e eventos.`;
+
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), 25000);
+
       try {
-        const response = await ai.models.generateContent({ 
-          model: 'gemini-2.5-flash', 
-          contents: prompt, 
+        const response: any = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
           config: { 
             temperature: 0.1,
             tools: [{ googleSearch: {} }] 
-          } 
+          }
         });
-        text = response.text || '';
-      } catch (err: any) {
-        console.error("[Gemini State-Radar] Falhou.", err);
-        if (err.status === 429 || (err.message && err.message.includes('429'))) {
-          throw { status: 429, message: 'Acabou seus requisitos, retorne depois de 12 hrs para fazer nosso melhor e encontrar os melhores eventos' };
-        }
-        text = '{"events":[]}'; 
-      }
-      
-      const cleanJson = extractCleanJson(text);
-      try {
+        clearTimeout(timeoutId);
+        const text = response.text || '';
+        const cleanJson = extractCleanJson(text);
         resultData = JSON.parse(cleanJson);
 
-        
-        // Enrich data with IBGE and compute exact duration
-        if (resultData && resultData.events && Array.isArray(resultData.events)) {
-          for (let ev of resultData.events) {
-            ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
-            if (ev.city) {
-              const ibgeData = await enrichCityData(stateUF, ev.city);
-              ev.population = ibgeData.population;
-              ev.gdp = ibgeData.gdp;
-              ev.perCapitaIncome = ibgeData.perCapitaIncome;
-            }
-          }
+        // Salva cache apenas se o payload for estruturalmente válido e contiver dados
+        if (resultData && typeof resultData === 'object' && (Array.isArray(resultData.cities) || Array.isArray(resultData.events))) {
+          await prisma.stateRadarCache.upsert({
+            where: { state: stateUF },
+            update: { data: resultData, updatedAt: new Date() },
+            create: { state: stateUF, data: resultData }
+          });
         }
-        
-      } catch (e) {
-        console.warn("[Gemini State-Radar] JSON Parse Failed, defaulting to empty:", cleanJson);
-        resultData = { events: [] };
-      }
-      // Sempre salvar o cache, mesmo que seja vazio, para não ficar travado no dado antigo
-      try {
-        await prisma.stateRadarCache.upsert({
-          where: { state: stateUF },
-          update: { data: resultData },
-          create: { state: stateUF, data: resultData }
-        });
-      } catch (e) {
-        console.error("Erro ao salvar cache no DB", e);
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        // Não substituir cache bom existente por erro
+        const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+        if (fallbackCache) {
+          res.json(fallbackCache.data);
+          return;
+        }
+        res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });
+        return;
       }
     }
 
-    if (resultData && resultData.events) {
-      for (let ev of resultData.events) {
-        ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
-      }
-      resultData.events = resultData.events.filter((e: any) => !existingKeys.has(`${e.city.toLowerCase()}-${e.name.toLowerCase()}`));
-    }
-    res.json(resultData);
+    res.json(resultData || { state: stateUF, cities: [] });
   } catch (error: any) {
-    if (error.status === 429) {
-      return res.status(429).json({ error: error.message });
-    }
-    res.status(500).json({ error: 'Erro ao buscar dados.' });
+    console.error('Erro no radar estadual:', error?.message || error);
+    res.status(500).json({ error: 'Erro interno ao processar radar de eventos' });
   }
 });
 
-
-// GET /api/events/upcoming
-router.get('/upcoming', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const today = new Date();
-    const limitDate = new Date();
-    limitDate.setDate(today.getDate() + 5);
-
-    const upcomingEvents = await prisma.commercialEvent.findMany({
-      where: {
-        isFavorite: true,
-        companyId: req.user?.companyId,
-        startDate: { gte: today, lte: limitDate }
-      },
-      orderBy: { startDate: 'asc' }
-    });
-
-    res.json(upcomingEvents);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar eventos próximos.' });
-  }
-});
-
-// GET /api/events
-router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const events = await prisma.commercialEvent.findMany({
-      where: { companyId: req.user?.companyId },
-      include: { costs: true },
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json(events);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao buscar prospects.' });
-  }
-});
-
-// POST /api/events
-router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const { 
-      name, city, category, score, audience, organizerContact, socialMedia, 
-      notes, isFavorite, isProspect, startDate, endDate, durationDays, isItinerant,
-      venueType, ticketPrice, observations, expectedRevenue,
-      cityAge, cityIncome, cityPerCapita, cityEconomy 
-    } = req.body;
-    
-    if (!name || !city || !category || !score) {
-      res.status(400).json({ error: 'Faltam campos obrigatórios' });
-      return;
-    }
-
-    const event = await prisma.commercialEvent.create({
-      data: {
-        name, city, category, score, audience, organizerContact, socialMedia, notes,
-        isFavorite: isFavorite || false, isProspect: isProspect || false,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
-        durationDays: durationDays ? parseInt(durationDays.toString()) : null,
-        isItinerant: isItinerant !== undefined ? Boolean(isItinerant) : false,
-        venueType,
-        ticketPrice,
-        observations,
-        expectedRevenue: expectedRevenue ? parseFloat(expectedRevenue.toString()) : 0,
-        cityAge, cityIncome, cityPerCapita, cityEconomy,
-        companyId: req.user?.companyId
-      }
-    });
-
-    res.status(201).json(event);
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao salvar evento' });
-  }
-});
-
-// Helper for Smart Route distance
+// Coordenadas conhecidas (Cidades-polo)
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   'goiania': { lat: -16.6869, lng: -49.2648 },
   'aparecida de goiania': { lat: -16.8228, lng: -49.2469 },
@@ -485,15 +382,17 @@ function haversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: num
 router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
 
-    // Fetch prospects
     let prospects = await prisma.commercialEvent.findMany({
       where: { companyId, isProspect: true },
       orderBy: { startDate: 'asc' }
     });
 
     if (prospects.length === 0) {
-      // Fallback: try fetching all saved commercial events
       prospects = await prisma.commercialEvent.findMany({
         where: { companyId },
         orderBy: { startDate: 'asc' }
@@ -508,11 +407,9 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
       return;
     }
 
-    // Filter prospects with duration >= 6 days (or fallback to all if none)
     let filtered = prospects.filter(p => (p.durationDays ?? 10) >= 6);
     if (filtered.length === 0) filtered = prospects;
 
-    // Group into clusters within 300km radius
     const clusters: any[][] = [];
     const visited = new Set<string>();
 
@@ -544,7 +441,6 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
       clusters.push(cluster);
     }
 
-    // Process clusters into routes
     const routes = clusters.map((cluster, idx) => {
       let totalKm = 0;
       let totalDays = 0;
@@ -564,7 +460,7 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
             distFromPrev = haversineDistanceKm(cPrev.lat, cPrev.lng, cCurr.lat, cCurr.lng);
             totalKm += distFromPrev;
           } else {
-            distFromPrev = null; // Marked as ungeocoded
+            distFromPrev = null; // Cidade sem coordenadas não inventa distância
           }
         }
 
@@ -595,128 +491,124 @@ router.get('/smart-route', authenticateToken, async (req: AuthRequest, res: Resp
     res.json({ routes, message: 'Roteiros gerados com sucesso.' });
   } catch (error: any) {
     console.error('Erro ao gerar roteiros inteligentes:', error?.message || error);
-    console.error('Stack:', error?.stack);
-    res.status(500).json({ error: `Erro ao gerar roteiros inteligentes: ${error?.message || 'Erro interno'}` });
+    res.status(500).json({ error: 'Erro ao gerar roteiros inteligentes' });
   }
 });
 
-// PATCH /api/events/:id/approve-roi - Approve ROI and send cost to Cash Flow as PREVISTO
-router.patch('/:id/approve-roi', authenticateToken, async (req: AuthRequest, res: Response) => {
+// GET /api/events
+router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { id } = req.params;
-    const { totalCost, expectedRevenue } = req.body;
-
-    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: String(id) } });
-    if (!existingEvent) {
-      res.status(404).json({ error: 'Evento não encontrado' });
+    const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
       return;
     }
 
-    if (existingEvent.companyId && req.user?.companyId && existingEvent.companyId !== req.user.companyId) {
-      res.status(403).json({ error: 'Acesso negado a este evento' });
+    const events = await prisma.commercialEvent.findMany({
+      where: { companyId },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(events);
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar eventos' });
+  }
+});
+
+// POST /api/events
+router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
       return;
     }
 
-    const updated = await prisma.commercialEvent.update({
-      where: { id: String(id) },
+    const { 
+      name, city, category, score, audience, organizerContact, socialMedia, 
+      notes, isFavorite, isProspect, startDate, endDate, durationDays, isItinerant,
+      venueType, ticketPrice, observations, expectedRevenue,
+      cityAge, cityIncome, cityPerCapita, cityEconomy 
+    } = req.body;
+    
+    if (!name || !city || !category || !score) {
+      res.status(400).json({ error: 'Faltam campos obrigatórios' });
+      return;
+    }
+
+    const event = await prisma.commercialEvent.create({
       data: {
-        roiApproved: true,
-        roiApprovedAt: new Date(),
-        expectedRevenue: expectedRevenue !== undefined ? parseFloat(expectedRevenue.toString()) : existingEvent.expectedRevenue
+        name, city, category, score, audience, organizerContact, socialMedia, notes,
+        isFavorite: isFavorite || false, isProspect: isProspect || false,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
+        durationDays: durationDays ? parseInt(durationDays.toString()) : null,
+        isItinerant: isItinerant !== undefined ? Boolean(isItinerant) : false,
+        venueType,
+        ticketPrice,
+        observations,
+        expectedRevenue: expectedRevenue ? parseFloat(expectedRevenue.toString()) : 0,
+        cityAge, cityIncome, cityPerCapita, cityEconomy,
+        companyId: companyId!
       }
     });
 
-    if (totalCost && parseFloat(totalCost.toString()) > 0) {
-      const userCompId = req.user?.companyId || existingEvent.companyId || undefined;
-      await prisma.cost.create({
-        data: {
-          description: `Viagem Aprovada: ${existingEvent.name} (${existingEvent.city})`,
-          amount: parseFloat(totalCost.toString()),
-          category: 'VIAGEM_EVENTO',
-          date: existingEvent.startDate || new Date(),
-          status: 'PREVISTO',
-          eventId: existingEvent.id,
-          userId: req.user?.id || '',
-          companyId: userCompId
-        }
-      });
-    }
-
-    res.json(updated);
+    res.status(201).json(event);
   } catch (error) {
-    console.error("Erro ao aprovar ROI do evento:", error);
-    res.status(500).json({ error: 'Erro ao aprovar ROI do evento' });
+    res.status(500).json({ error: 'Erro ao salvar evento' });
   }
 });
 
-// PUT /api/events/:id
-router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+// PUT /api/events/:id/favorite
+router.put('/:id/favorite', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { 
-      observations, expectedRevenue, isProspect, isFavorite, name, city, category, score, 
-      audience, organizerContact, socialMedia, startDate, endDate, durationDays, isItinerant, 
-      venueType, ticketPrice, notes, estimatedFichasPerDay, estimatedTicketValue, 
-      estimatedSpaceCost, estimatedTeamSize, distanceFromBaseKm, roiApproved
-    } = req.body;
+    const { isFavorite } = req.body;
+    const companyId = req.user?.companyId;
 
-    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: id as string } });
-    if (!existingEvent || existingEvent.companyId !== req.user?.companyId) {
+    const existing = await prisma.commercialEvent.findFirst({
+      where: { id: id as string, ...(companyId ? { companyId } : {}) }
+    });
+
+    if (!existing) {
       res.status(404).json({ error: 'Evento não encontrado' });
       return;
     }
-
-    let dataToUpdate: any = {};
-    if (observations !== undefined) dataToUpdate.observations = observations;
-    if (expectedRevenue !== undefined) dataToUpdate.expectedRevenue = parseFloat(expectedRevenue.toString());
-    if (isProspect !== undefined) dataToUpdate.isProspect = isProspect;
-    if (isFavorite !== undefined) dataToUpdate.isFavorite = isFavorite;
-    if (name !== undefined) dataToUpdate.name = name;
-    if (city !== undefined) dataToUpdate.city = city;
-    if (category !== undefined) dataToUpdate.category = category;
-    if (score !== undefined) dataToUpdate.score = score;
-    if (audience !== undefined) dataToUpdate.audience = audience;
-    if (organizerContact !== undefined) dataToUpdate.organizerContact = organizerContact;
-    if (socialMedia !== undefined) dataToUpdate.socialMedia = socialMedia;
-    if (notes !== undefined) dataToUpdate.notes = notes;
-    if (startDate !== undefined) dataToUpdate.startDate = startDate ? new Date(startDate) : null;
-    if (endDate !== undefined) dataToUpdate.endDate = endDate ? new Date(endDate) : null;
-    if (durationDays !== undefined) dataToUpdate.durationDays = parseInt(durationDays.toString());
-    if (isItinerant !== undefined) dataToUpdate.isItinerant = Boolean(isItinerant);
-    if (venueType !== undefined) dataToUpdate.venueType = venueType;
-    if (ticketPrice !== undefined) dataToUpdate.ticketPrice = ticketPrice;
-    if (estimatedFichasPerDay !== undefined) dataToUpdate.estimatedFichasPerDay = parseInt(estimatedFichasPerDay.toString());
-    if (estimatedTicketValue !== undefined) dataToUpdate.estimatedTicketValue = parseFloat(estimatedTicketValue.toString());
-    if (estimatedSpaceCost !== undefined) dataToUpdate.estimatedSpaceCost = parseFloat(estimatedSpaceCost.toString());
-    if (estimatedTeamSize !== undefined) dataToUpdate.estimatedTeamSize = parseInt(estimatedTeamSize.toString());
-    if (distanceFromBaseKm !== undefined) dataToUpdate.distanceFromBaseKm = parseFloat(distanceFromBaseKm.toString());
-    if (roiApproved !== undefined) dataToUpdate.roiApproved = Boolean(roiApproved);
 
     const updated = await prisma.commercialEvent.update({
       where: { id: id as string },
-      data: dataToUpdate
+      data: { isFavorite }
     });
+
     res.json(updated);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao atualizar evento' });
+    res.status(500).json({ error: 'Erro ao atualizar favorito' });
   }
 });
 
-
-// DELETE /api/events/:id
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+// PUT /api/events/:id/prospect
+router.put('/:id/prospect', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const existingEvent = await prisma.commercialEvent.findUnique({ where: { id: id as string } });
-    if (!existingEvent || existingEvent.companyId !== req.user?.companyId) {
+    const { isProspect } = req.body;
+    const companyId = req.user?.companyId;
+
+    const existing = await prisma.commercialEvent.findFirst({
+      where: { id: id as string, ...(companyId ? { companyId } : {}) }
+    });
+
+    if (!existing) {
       res.status(404).json({ error: 'Evento não encontrado' });
       return;
     }
 
-    await prisma.commercialEvent.delete({ where: { id: id as string } });
-    res.json({ success: true });
+    const updated = await prisma.commercialEvent.update({
+      where: { id: id as string },
+      data: { isProspect }
+    });
+
+    res.json(updated);
   } catch (error) {
-    res.status(500).json({ error: 'Erro ao deletar evento' });
+    res.status(500).json({ error: 'Erro ao atualizar prospecto' });
   }
 });
 

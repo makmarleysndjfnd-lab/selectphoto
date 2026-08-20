@@ -6,7 +6,8 @@
     "test": "tsx --test test/**/*.test.ts",
     "dev": "tsx watch src/index.ts",
     "build": "npx prisma generate && npx tsc",
-    "start": "node dist/index.js"
+    "check-dist": "tsx scripts/verify-dist-sync.ts",
+    "start": "tsx scripts/verify-dist-sync.ts && node dist/index.js"
   },
   "keywords": [],
   "author": "",

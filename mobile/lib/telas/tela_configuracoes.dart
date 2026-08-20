@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -135,46 +136,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
           
-          // Server URL Settings
-          LedCard(
-            color: const Color(0xFF1A1A2E),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('IP / URL do Servidor', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _urlController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      filled: true,
-                      fillColor: Color(0xFF161625),
-                      border: OutlineInputBorder(),
-                      hintText: 'https://seuservidor.com/api',
-                      hintStyle: TextStyle(color: Colors.white30),
+          // Server URL Settings (Apenas em ambiente de desenvolvimento / debug)
+          if (!kReleaseMode) ...[
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('IP / URL do Servidor (Debug)', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _urlController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        filled: true,
+                        fillColor: Color(0xFF161625),
+                        border: OutlineInputBorder(),
+                        hintText: 'https://seuservidor.com/api',
+                        hintStyle: TextStyle(color: Colors.white30),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: LedButton(
-                      style: LedButton.styleFrom(backgroundColor: const Color(0xFF0288D1)),
-                      onPressed: () {
-                        settings.setServerUrl(_urlController.text.trim());
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('URL salva com sucesso!'), backgroundColor: Colors.green),
-                        );
-                      },
-                      child: const Text('Salvar Servidor', style: TextStyle(color: Colors.white)),
-                    ),
-                  )
-                ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: LedButton(
+                        style: LedButton.styleFrom(backgroundColor: const Color(0xFF0288D1)),
+                        onPressed: () {
+                          settings.setServerUrl(_urlController.text.trim());
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('URL salva com sucesso!'), backgroundColor: Colors.green),
+                          );
+                        },
+                        child: const Text('Salvar Servidor', style: TextStyle(color: Colors.white)),
+                      ),
+                    )
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
 
           if (!widget.isFotografo) ...[
             LedCard(
