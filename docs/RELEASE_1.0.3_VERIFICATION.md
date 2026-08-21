@@ -63,15 +63,18 @@
 | Propriedade | Valor Auditado |
 |---|---|
 | **Caminho do Arquivo** | `mobile/build/app/outputs/flutter-apk/app-release.apk` |
-| **Tamanho do Arquivo** | `85.148.971 bytes` (~81,2 MB) |
+| **Tamanho do Arquivo** | `85.148.946 bytes` (~81,2 MB) |
 | **Package Name** | `com.example.mobile` |
-| **Version Code** | `3` |
-| **Version Name** | `1.0.3` |
+| **Version Code** | `4` |
+| **Version Name** | `1.0.3` (`1.0.3+4`) |
 | **Application Label** | `Lumora` |
 | **Launchable Activity** | `com.example.mobile.MainActivity` |
-| **Modo de Compilação** | `Release (Não debuggable / android:debuggable ausente)` |
+| **Classe de Aplicação (`android:name`)** | `android.app.Application` (classe nativa do SO Android; `io.flutter.app.FlutterMultiDexApplication` ausente) |
+| **Modo de Compilação** | `Release (Não debuggable — flag application-debuggable ausente)` |
 | **URL Compilada** | `https://selectphoto-k1ac.onrender.com/api` |
-| **SHA-256 do APK** | `C9AA8D1C6CCC7C93308F3EE3B7D6CBE5B653A40DE989AB1E036BD0B050ED105C` |
+| **Google Maps API Key** | `Ausente no ambiente local de build (Google Maps não afirmado como validado)` |
+| **Script de Auditoria Automatizada** | `node mobile/scripts/verify-apk-manifest.js` (executado com sucesso) |
+| **SHA-256 do APK** | `42028FC822060C89FEF83A2BAE9955E5AB3493615BADFC3F9826C8AD983488F2` |
 | **Certificado de Assinatura** | `C=US, O=Android, CN=Android Debug` |
 | **SHA-256 da Chave** | `96:E2:48:4C:24:E0:88:CA:FD:95:7F:02:85:FF:D4:8B:0B:56:BA:3C:31:26:1B:83:C9:65:99:F6:A2:01:88:60` |
 | **Compatibilidade de Update** | **PENDENTE DE TESTE NO APARELHO** |
