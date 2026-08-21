@@ -34,32 +34,77 @@ class AuthenticatedImage extends StatelessWidget {
     this.customHeaders,
   });
 
+  /// Determina com precisão e segurança se a URL informada tem autorização para receber cabeçalho JWT
+  static bool shouldAttachAuth(String url, {bool? isRelease}) {
+    if (url.trim().isEmpty) return false;
+    final trimmed = url.trim();
+
+    if (trimmed.startsWith('data:')) {
+      return false;
+    }
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || uri.host.isEmpty) return false;
+
+    final releaseMode = isRelease ?? kReleaseMode;
+
+    if (releaseMode) {
+      // Em modo release: exige estritamente HTTPS e host oficial exato
+      if (uri.scheme.toLowerCase() != 'https') {
+        return false;
+      }
+      final host = uri.host.toLowerCase();
+      if (host != AppConfig.authorizedProductionHost) {
+        return false;
+      }
+      return true;
+    } else {
+      // Em modo debug: permite host oficial ou servidores locais de desenvolvimento
+      final host = uri.host.toLowerCase();
+      if (host == AppConfig.authorizedProductionHost) {
+        return true;
+      }
+      if (host == 'localhost' ||
+          host == '127.0.0.1' ||
+          host == '10.0.2.2' ||
+          host.startsWith('192.168.') ||
+          host.startsWith('10.')) {
+        return true;
+      }
+      return false;
+    }
+  }
+
   /// Retorna os headers de autenticação seguros para a URL especificada
-  static Map<String, String> getSafeHeadersForUrl(String url, {Map<String, String>? extraHeaders}) {
+  static Map<String, String> getSafeHeadersForUrl(
+    String url, {
+    Map<String, String>? extraHeaders,
+    bool? isRelease,
+  }) {
     final headers = <String, String>{};
     if (extraHeaders != null) {
       headers.addAll(extraHeaders);
     }
 
-    if (url.startsWith('data:')) {
-      return headers;
+    final canReceiveAuth = shouldAttachAuth(url, isRelease: isRelease);
+
+    if (canReceiveAuth) {
+      final apiAuth = ApiService().currentAuthHeaders;
+      headers.addAll(apiAuth);
+    } else {
+      // Garante que nenhum header Authorization vaze para hosts não autorizados
+      headers.removeWhere((key, _) => key.toLowerCase() == 'authorization');
     }
 
-    // Em modo release, só envia token se o host corresponder ao oficial
-    if (kReleaseMode) {
-      final uri = Uri.tryParse(url);
-      if (uri != null && uri.host.isNotEmpty && uri.host != AppConfig.authorizedProductionHost) {
-        return headers; // Não envia token para domínios de terceiros
-      }
-    }
-
-    final apiAuth = ApiService().currentAuthHeaders;
-    headers.addAll(apiAuth);
     return headers;
   }
 
   /// Retorna um ImageProvider autenticado para uso em CircleAvatar, DecorationImage, etc.
-  static ImageProvider? provider(String? rawUrl, {Map<String, String>? customHeaders}) {
+  static ImageProvider? provider(
+    String? rawUrl, {
+    Map<String, String>? customHeaders,
+    bool? isRelease,
+  }) {
     if (rawUrl == null || rawUrl.trim().isEmpty) return null;
     final trimmed = rawUrl.trim();
 
@@ -78,7 +123,7 @@ class AuthenticatedImage extends StatelessWidget {
     final resolved = ApiService.resolveMediaUrl(trimmed);
     if (resolved.isEmpty) return null;
 
-    final headers = getSafeHeadersForUrl(resolved, extraHeaders: customHeaders);
+    final headers = getSafeHeadersForUrl(resolved, extraHeaders: customHeaders, isRelease: isRelease);
     return NetworkImage(resolved, headers: headers.isNotEmpty ? headers : null);
   }
 

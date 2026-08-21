@@ -5,7 +5,7 @@ import '../config/app_config.dart';
 
 class ApiService {
   late Dio _dio;
-  String _baseUrl = AppConfig.hasServerUrl ? AppConfig.serverUrl : '';
+  String _baseUrl = AppConfig.serverUrl;
   String? _token;
 
   // Singleton pattern for easy global access (optional, but good for backward compatibility)
@@ -25,12 +25,12 @@ class ApiService {
   String get baseUrl => _baseUrl;
 
   /// Resolve URL de mídia (comprovantes, fotos de perfil, assinaturas) dinamicamente a partir do servidor configurado
-  static String resolveMediaUrl(String? url) {
+  static String resolveMediaUrl(String? url, {String? customBaseUrl}) {
     if (url == null || url.trim().isEmpty) return '';
     if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
       return url;
     }
-    String serverBase = ApiService().baseUrl;
+    String serverBase = customBaseUrl ?? (_instance._baseUrl.isNotEmpty ? _instance._baseUrl : AppConfig.serverUrl);
     if (serverBase.endsWith('/api')) {
       serverBase = serverBase.substring(0, serverBase.length - 4);
     }

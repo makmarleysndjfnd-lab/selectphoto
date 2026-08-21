@@ -13,10 +13,12 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     ApiService().clearToken();
+    ApiService().updateBaseUrl(AppConfig.officialProductionUrl);
   });
 
   tearDown(() {
     ApiService().clearToken();
+    ApiService().updateBaseUrl(AppConfig.officialProductionUrl);
   });
 
   group('Validação Centralizada de URLs e Segurança do AppConfig', () {
@@ -179,13 +181,54 @@ void main() {
       expect(netImg.headers, isNull);
     });
 
-    test('10. Host externo e data URL nunca recebem cabeçalho Authorization', () {
+    test('10. Host oficial, hosts externos, spoofing e data URLs com isRelease: true', () {
       final api = ApiService();
       api.setToken('token_secreto_confidencial');
 
-      // Data URL
-      final dataHeaders = AuthenticatedImage.getSafeHeadersForUrl('data:image/png;base64,AAA...');
+      // 1. Host oficial HTTPS recebe Authorization
+      const officialUrl = 'https://selectphoto-k1ac.onrender.com/api/upload/file/c1/foto.jpg';
+      expect(AuthenticatedImage.shouldAttachAuth(officialUrl, isRelease: true), isTrue);
+      final officialHeaders = AuthenticatedImage.getSafeHeadersForUrl(officialUrl, isRelease: true);
+      expect(officialHeaders['Authorization'], equals('Bearer token_secreto_confidencial'));
+
+      // 2. URL relativa resolvida para o host oficial recebe Authorization
+      final relativeResolved = ApiService.resolveMediaUrl('/api/upload/file/c1/foto.jpg');
+      expect(AuthenticatedImage.shouldAttachAuth(relativeResolved, isRelease: true), isTrue);
+      final relHeaders = AuthenticatedImage.getSafeHeadersForUrl(relativeResolved, isRelease: true);
+      expect(relHeaders['Authorization'], equals('Bearer token_secreto_confidencial'));
+
+      // 3. Host externo (ex: example.com) NÃO recebe Authorization
+      const externalUrl = 'https://example.com/imagem.jpg';
+      expect(AuthenticatedImage.shouldAttachAuth(externalUrl, isRelease: true), isFalse);
+      final extHeaders = AuthenticatedImage.getSafeHeadersForUrl(externalUrl, isRelease: true);
+      expect(extHeaders.containsKey('Authorization'), isFalse);
+
+      // 4. Host visualmente parecido / spoofing (evil subdomain) NÃO recebe Authorization
+      const spoofUrl = 'https://selectphoto-k1ac.onrender.com.evil.example/malicious.jpg';
+      expect(AuthenticatedImage.shouldAttachAuth(spoofUrl, isRelease: true), isFalse);
+      final spoofHeaders = AuthenticatedImage.getSafeHeadersForUrl(spoofUrl, isRelease: true);
+      expect(spoofHeaders.containsKey('Authorization'), isFalse);
+
+      // 5. Host oficial via HTTP (inseguro) NÃO recebe Authorization em release
+      const httpOfficialUrl = 'http://selectphoto-k1ac.onrender.com/api/upload/file/c1/foto.jpg';
+      expect(AuthenticatedImage.shouldAttachAuth(httpOfficialUrl, isRelease: true), isFalse);
+      final httpHeaders = AuthenticatedImage.getSafeHeadersForUrl(httpOfficialUrl, isRelease: true);
+      expect(httpHeaders.containsKey('Authorization'), isFalse);
+
+      // 6. Data URL não recebe Authorization
+      const dataUrl = 'data:image/png;base64,AAA...';
+      expect(AuthenticatedImage.shouldAttachAuth(dataUrl, isRelease: true), isFalse);
+      final dataHeaders = AuthenticatedImage.getSafeHeadersForUrl(dataUrl, isRelease: true);
       expect(dataHeaders.containsKey('Authorization'), isFalse);
+
+      // 7. customHeaders contendo Authorization é removido para host externo
+      final strippedHeaders = AuthenticatedImage.getSafeHeadersForUrl(
+        'https://external-cdn.com/asset.png',
+        extraHeaders: {'Authorization': 'Bearer leaked_token', 'Custom-Header': 'keep_me'},
+        isRelease: true,
+      );
+      expect(strippedHeaders.containsKey('Authorization'), isFalse);
+      expect(strippedHeaders['Custom-Header'], equals('keep_me'));
     });
 
     test('11. AuthenticatedImage.provider gera MemoryImage para data URL e null para URLs vazias', () {
