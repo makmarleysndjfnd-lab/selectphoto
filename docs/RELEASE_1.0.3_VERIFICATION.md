@@ -128,16 +128,23 @@ Antes de qualquer intervenção no banco de produção:
 
 ### 4.2 Mobile (Flutter 3.29.3)
 - **Comando**: `flutter test`
-  - **Total de Testes**: **14 / 14 aprovados (100% de sucesso)**
-  - **Áreas Cobertas**: AppConfig URL oficial, validação HTTPS, rejeição de localhost em release, isolamento SharedPreferences, tratamento de erros Dio, `AuthenticatedImage` (injetor de JWT, bloqueio de host não autorizado, renderização de memory/data URLs e fallbacks).
+  - **Total de Testes**: **17 / 17 aprovados (100% de sucesso)**
+  - **Áreas Cobertas**:
+    - AppConfig URL oficial, validação HTTPS, rejeição de localhost em release;
+    - Isolamento SharedPreferences e persistência segura;
+    - Tratamento granular de erros de conexão e Dio;
+    - `AuthenticatedImage` (injetor de JWT, bloqueio de host não autorizado, renderização de memory/data URLs e fallbacks);
+    - **Primeiro Login Imediato**: Validação de que o token JWT é disponibilizado instantaneamente na memória (`apiService.setToken(...)`), permitindo que `AuthenticatedImage.provider` anexe o cabeçalho `Authorization` sem necessidade de reiniciar o aplicativo;
+    - **Logout / 401**: Limpeza completa do token em memória e armazenamento local com remoção imediata dos cabeçalhos.
 - **Comando**: `flutter analyze`
   - **Erros**: 0
-  - **Warnings**: 17 (campos/variáveis privadas declaradas e não lidas em telas legadas)
-  - **Infos de Linter**: 133 (regras estilísticas como `prefer_const_constructors`, `use_super_parameters`)
-  - **Total de Diagnósticos**: 150 issues (nenhum erro bloqueador)
+  - **Warnings**: 16 (campos/variáveis privadas legadas não utilizadas em telas de produto)
+  - **Infos de Linter**: 132 (regras estilísticas como `prefer_const_constructors`, `use_super_parameters`)
+  - **Exit Code**: 1 (decorrente das regras informativas de linter ativas)
+  - **Total de Diagnósticos**: 148 issues
 
 ### 4.3 Registro de Dívida Técnica (Warnings Restantes)
-Os 17 warnings restantes no Flutter Analyze correspondem a variáveis privadas não utilizadas em telas administrativas e de vendedor legadas (ex: `_sellerRating`, `_photoRating`, `_isLoadingClients` em `tela_detalhes_cliente_vendedor.dart` e `painel_vendedor.dart`). Foram mantidos intencionalmente para evitar refatoração estrutural ou alterações de comportamento de produto não autorizadas neste ciclo de estabilização.
+Os 16 warnings restantes no Flutter Analyze correspondem a variáveis privadas não utilizadas em telas administrativas e de vendedor legadas (ex: `_sellerRating`, `_photoRating`, `_isLoadingClients` em `tela_detalhes_cliente_vendedor.dart` e `painel_vendedor.dart`). Foram mantidos intencionalmente para evitar refatoração estrutural ou alterações de comportamento de produto não autorizadas neste ciclo de estabilização.
 
 ---
 

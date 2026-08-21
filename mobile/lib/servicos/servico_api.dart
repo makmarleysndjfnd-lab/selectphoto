@@ -135,12 +135,19 @@ class ApiService {
     _dio.options.baseUrl = validated;
   }
 
-  void setToken(String token) {
-    _token = token;
+  void setToken(String? token) {
+    if (token == null || token.trim().isEmpty) {
+      _token = null;
+    } else {
+      _token = token.trim();
+    }
   }
 
   void clearToken() {
     _token = null;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('jwt_token');
+    }).catchError((_) {});
   }
 
   /// Revalida a sessão atual com o servidor backend

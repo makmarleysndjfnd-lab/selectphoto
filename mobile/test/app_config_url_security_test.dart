@@ -12,6 +12,11 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    ApiService().clearToken();
+  });
+
+  tearDown(() {
+    ApiService().clearToken();
   });
 
   group('Validação Centralizada de URLs e Segurança do AppConfig', () {
@@ -128,34 +133,72 @@ void main() {
       expect(ApiService.resolveMediaUrl('   '), equals(''));
     });
 
-    test('7. AuthenticatedImage injeta Authorization Header apenas para o host seguro', () {
+    test('7. Estado inicial sem login: cabeçalhos de autenticação vazios', () {
       final api = ApiService();
-      api.setToken('test_jwt_token_123');
+      expect(api.currentToken, isNull);
+      expect(api.currentAuthHeaders, isEmpty);
 
-      // Para URL no host oficial
-      final officialHeaders = AuthenticatedImage.getSafeHeadersForUrl('https://selectphoto-k1ac.onrender.com/api/upload/file/c1/f.jpg');
-      expect(officialHeaders['Authorization'], equals('Bearer test_jwt_token_123'));
+      final headers = AuthenticatedImage.getSafeHeadersForUrl('https://selectphoto-k1ac.onrender.com/api/upload/file/c1/f.jpg');
+      expect(headers.containsKey('Authorization'), isFalse);
+    });
 
-      // Para Data URL não anexa cabeçalhos
+    test('8. Primeiro Login: token disponível imediatamente na memória e incluído no AuthenticatedImage.provider sem reiniciar app', () {
+      final api = ApiService();
+      const firstLoginToken = 'jwt_fresh_first_login_abc123';
+
+      // Simula o callback imediato de login
+      api.setToken(firstLoginToken);
+
+      expect(api.currentToken, equals(firstLoginToken));
+      expect(api.currentAuthHeaders['Authorization'], equals('Bearer $firstLoginToken'));
+
+      // Sem reiniciar o app, AuthenticatedImage.provider já gera NetworkImage com cabeçalho
+      final provider = AuthenticatedImage.provider('/api/upload/file/comp1/foto_vendedor.jpg');
+      expect(provider, isA<NetworkImage>());
+      final netImg = provider as NetworkImage;
+      expect(netImg.headers?['Authorization'], equals('Bearer $firstLoginToken'));
+    });
+
+    test('9. Logout / 401 limpa token da memória e remove cabeçalho Authorization', () {
+      final api = ApiService();
+      api.setToken('token_temporario_ativo');
+      expect(api.currentToken, isNotNull);
+
+      // Executa logout
+      api.clearToken();
+
+      expect(api.currentToken, isNull);
+      expect(api.currentAuthHeaders, isEmpty);
+
+      final headers = AuthenticatedImage.getSafeHeadersForUrl('https://selectphoto-k1ac.onrender.com/api/upload/file/c1/f.jpg');
+      expect(headers.containsKey('Authorization'), isFalse);
+
+      final provider = AuthenticatedImage.provider('/api/upload/file/comp1/doc.jpg');
+      expect(provider, isA<NetworkImage>());
+      final netImg = provider as NetworkImage;
+      expect(netImg.headers, isNull);
+    });
+
+    test('10. Host externo e data URL nunca recebem cabeçalho Authorization', () {
+      final api = ApiService();
+      api.setToken('token_secreto_confidencial');
+
+      // Data URL
       final dataHeaders = AuthenticatedImage.getSafeHeadersForUrl('data:image/png;base64,AAA...');
       expect(dataHeaders.containsKey('Authorization'), isFalse);
     });
 
-    test('8. AuthenticatedImage.provider gera MemoryImage para data URL e NetworkImage com header para URLs remotas', () {
+    test('11. AuthenticatedImage.provider gera MemoryImage para data URL e null para URLs vazias', () {
       const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
       final memoryProvider = AuthenticatedImage.provider(dataUrl);
       expect(memoryProvider, isA<MemoryImage>());
 
-      final networkProvider = AuthenticatedImage.provider('/api/upload/file/compA/doc.jpg');
-      expect(networkProvider, isA<NetworkImage>());
-      final netImg = networkProvider as NetworkImage;
-      expect(netImg.headers?['Authorization'], equals('Bearer test_jwt_token_123'));
-
       expect(AuthenticatedImage.provider(null), isNull);
       expect(AuthenticatedImage.provider(''), isNull);
+      expect(AuthenticatedImage.provider('   '), isNull);
     });
 
-    testWidgets('9. AuthenticatedImage widget renderiza data URL e fallback para imagem nula', (tester) async {
+    testWidgets('12. AuthenticatedImage widget renderiza data URL e fallback para imagem nula', (tester) async {
       const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
       await tester.pumpWidget(

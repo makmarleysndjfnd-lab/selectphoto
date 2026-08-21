@@ -195,24 +195,31 @@ class _LoginScreenState extends State<LoginScreen>
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.login(cpf, password);
       
-      final token = response['token'];
+      final token = response['token']?.toString();
       final user = response['user'];
-      role = user['role'];
+      role = user?['role']?.toString();
 
-      if (token != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('jwt_token', token);
-        await prefs.setString('user_role', role ?? '');
-        await prefs.setString('user_cpf', cpf);
-        if (user['id'] != null) {
-          await prefs.setString('user_id', user['id']);
-        }
-        if (user['name'] != null) {
-          await prefs.setString('user_name', user['name']);
-        }
-        if (user['photographerCode'] != null) {
-          await prefs.setString('photographer_code', user['photographerCode']);
-        }
+      if (token == null || token.trim().isEmpty) {
+        throw Exception('Token não retornado pelo servidor.');
+      }
+
+      // Disponibiliza o token imediatamente em memória
+      apiService.setToken(token.trim());
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('jwt_token', token.trim());
+      if (role != null && role.isNotEmpty) {
+        await prefs.setString('user_role', role);
+      }
+      await prefs.setString('user_cpf', cpf);
+      if (user?['id'] != null) {
+        await prefs.setString('user_id', user['id'].toString());
+      }
+      if (user?['name'] != null) {
+        await prefs.setString('user_name', user['name'].toString());
+      }
+      if (user?['photographerCode'] != null) {
+        await prefs.setString('photographer_code', user['photographerCode'].toString());
       }
       
       try {
