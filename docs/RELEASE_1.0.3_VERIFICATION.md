@@ -63,13 +63,15 @@
 | Propriedade | Valor Auditado |
 |---|---|
 | **Caminho do Arquivo** | `mobile/build/app/outputs/flutter-apk/app-release.apk` |
-| **Tamanho do Arquivo** | `85.148.970 bytes` (~81,2 MB) |
+| **Tamanho do Arquivo** | `85.148.971 bytes` (~81,2 MB) |
 | **Package Name** | `com.example.mobile` |
 | **Version Code** | `3` |
 | **Version Name** | `1.0.3` |
 | **Application Label** | `Lumora` |
 | **Launchable Activity** | `com.example.mobile.MainActivity` |
-| **SHA-256 do APK** | `12AA223F18DB7823EE90EB5FBE21A40325D76E247287CEF420ACCAE32FE103C3` |
+| **Modo de Compilação** | `Release (Não debuggable / android:debuggable ausente)` |
+| **URL Compilada** | `https://selectphoto-k1ac.onrender.com/api` |
+| **SHA-256 do APK** | `C9AA8D1C6CCC7C93308F3EE3B7D6CBE5B653A40DE989AB1E036BD0B050ED105C` |
 | **Certificado de Assinatura** | `C=US, O=Android, CN=Android Debug` |
 | **SHA-256 da Chave** | `96:E2:48:4C:24:E0:88:CA:FD:95:7F:02:85:FF:D4:8B:0B:56:BA:3C:31:26:1B:83:C9:65:99:F6:A2:01:88:60` |
 | **Compatibilidade de Update** | **PENDENTE DE TESTE NO APARELHO** |
