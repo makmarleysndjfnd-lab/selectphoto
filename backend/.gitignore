@@ -8,3 +8,5 @@ build/
 firebase-adminsdk.json
 scripts/seed-local-admin.ts
 uploads/
+public/apk/
+public/apk/*.apk

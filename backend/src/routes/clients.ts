@@ -210,24 +210,37 @@ router.put('/release-city', authenticateToken, requireAdminOrSupervisor, async (
   }
 });
 
-// Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK for a city
+// Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK scoped by exact clientIds or eventName + city
 router.put('/confirm-grafica', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
-    const { city } = req.body;
-    if (!city) {
-      res.status(400).json({ error: 'City is required' });
-      return;
+    const { city, event, eventName, clientIds } = req.body;
+    const targetEvent = event || eventName;
+
+    const whereClause: any = {
+      companyId: userCompanyId,
+      bookStatus: 'AWAITING_RELEASE'
+    };
+
+    if (Array.isArray(clientIds) && clientIds.length > 0) {
+      const sanitizedIds = Array.from(new Set(clientIds.map((id: any) => String(id).trim()))).filter(Boolean);
+      whereClause.id = { in: sanitizedIds };
+    } else {
+      if (!city && !targetEvent) {
+        return res.status(400).json({ error: 'É necessário informar clientIds, ou evento e cidade para confirmar a chegada da gráfica.' });
+      }
+      if (city) {
+        whereClause.city = { equals: String(city).trim(), mode: 'insensitive' };
+      }
+      if (targetEvent) {
+        whereClause.event = { equals: String(targetEvent).trim(), mode: 'insensitive' };
+      }
     }
 
     const updated = await prisma.client.updateMany({
-      where: {
-        companyId: userCompanyId,
-        city: { equals: city, mode: 'insensitive' },
-        bookStatus: 'AWAITING_RELEASE'
-      },
+      where: whereClause,
       data: {
         bookStatus: 'IN_STOCK'
       }
@@ -383,7 +396,19 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
       return;
     }
 
-    // Verify seller belongs to user's company
+    // Deduplicate clientIds
+    const uniqueClientIds = Array.from(new Set(clientIds.map((id: any) => String(id).trim()))).filter(Boolean);
+    if (uniqueClientIds.length === 0) {
+      res.status(400).json({ error: 'Nenhum identificador de ficha válido fornecido.' });
+      return;
+    }
+
+    if (uniqueClientIds.length > 500) {
+      res.status(400).json({ error: 'Limite máximo de 500 fichas por lote excedido.' });
+      return;
+    }
+
+    // Verify seller belongs to user's company, is active, and has real selling role
     const seller = await prisma.user.findFirst({
       where: {
         id: assignedSellerId,
@@ -396,19 +421,66 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
       return;
     }
 
-    const updated = await prisma.client.updateMany({
-      where: {
-        id: { in: clientIds },
-        companyId: userCompanyId,
-      },
-      data: {
-        assignedSellerId,
-        bookStatus: 'DISTRIBUTED'
+    if (!seller.active) {
+      res.status(400).json({ error: 'O vendedor selecionado está inativo no sistema' });
+      return;
+    }
+
+    const allowedRoles = ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'];
+    if (!allowedRoles.includes(seller.role)) {
+      res.status(400).json({ error: 'O usuário selecionado não possui permissão/função de vendedor' });
+      return;
+    }
+
+    // Transactional validation and atomic update
+    const updatedCount = await prisma.$transaction(async (tx) => {
+      // Fetch all requested clients for the company that are in stock
+      const clientsInStock = await tx.client.findMany({
+        where: {
+          id: { in: uniqueClientIds },
+          companyId: userCompanyId,
+          bookStatus: { in: ['IN_STOCK', 'IN_STOCK_REBOLO'] }
+        },
+        select: { id: true, bookStatus: true }
+      });
+
+      if (clientsInStock.length !== uniqueClientIds.length) {
+        const foundIds = new Set(clientsInStock.map(c => c.id));
+        const invalidCount = uniqueClientIds.length - clientsInStock.length;
+        throw {
+          status: 400,
+          error: `Uma ou mais fichas não estão disponíveis em estoque para distribuição (${invalidCount} indisponível(is) ou de outra empresa).`
+        };
       }
+
+      // Conditional atomic update
+      const updateResult = await tx.client.updateMany({
+        where: {
+          id: { in: uniqueClientIds },
+          companyId: userCompanyId,
+          bookStatus: { in: ['IN_STOCK', 'IN_STOCK_REBOLO'] }
+        },
+        data: {
+          assignedSellerId,
+          bookStatus: 'DISTRIBUTED'
+        }
+      });
+
+      if (updateResult.count !== uniqueClientIds.length) {
+        throw {
+          status: 409,
+          error: 'Conflito de concorrência: algumas fichas foram alteradas por outra operação durante a distribuição.'
+        };
+      }
+
+      return updateResult.count;
     });
 
-    res.json({ success: true, count: updated.count });
-  } catch (error) {
+    res.json({ success: true, requested: uniqueClientIds.length, count: updatedCount });
+  } catch (error: any) {
+    if (error && typeof error === 'object' && error.status && error.error) {
+      return res.status(error.status).json({ error: error.error });
+    }
     console.error("Erro ao atribuir lote de fichas:", error);
     res.status(500).json({ error: 'Erro ao atribuir lote de fichas' });
   }

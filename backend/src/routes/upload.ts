@@ -1,9 +1,8 @@
 import express, { Response } from 'express';
-import { upload, getUploadedFileUrl, s3 } from '../middleware/upload';
+import { upload, safeUpload, getUploadedFileUrl, s3 } from '../middleware/upload';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { isExternalServicesDisabled } from '../utils/externalServices';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
-import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 
@@ -11,38 +10,24 @@ const router = express.Router();
 const uploadDir = path.resolve(__dirname, '../../uploads');
 
 // Upload de arquivo único
-router.post('/', authenticateToken, (req: AuthRequest, res: Response) => {
+router.post('/', authenticateToken, (req: AuthRequest, res: Response, next) => {
   if (!req.user?.companyId && req.user?.role !== 'SUPER_ADMIN') {
     res.status(403).json({ error: 'Upload não permitido: empresa não identificada.' });
     return;
   }
+  next();
+}, safeUpload(upload.single('file')), (req: AuthRequest, res: Response) => {
+  if (!req.file) {
+    res.status(400).json({ error: 'Nenhum arquivo enviado.' });
+    return;
+  }
 
-  upload.single('file')(req, res, (err: any) => {
-    if (err) {
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          res.status(400).json({ error: 'Arquivo muito grande. O limite máximo é 15MB.' });
-          return;
-        }
-        res.status(400).json({ error: `Erro no upload: ${err.message}` });
-        return;
-      }
-      res.status(400).json({ error: err.message || 'Erro ao processar arquivo' });
-      return;
-    }
+  const fileKey = (req.file as any).key || (req.file.filename ? `${req.user?.companyId || 'global'}/${req.file.filename}` : null);
+  const fileUrl = getUploadedFileUrl(req.file) || (fileKey ? `/api/upload/file/${fileKey}` : null);
 
-    if (!req.file) {
-      res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-      return;
-    }
-
-    const fileKey = (req.file as any).key || (req.file.filename ? `${req.user?.companyId || 'global'}/${req.file.filename}` : null);
-    const fileUrl = getUploadedFileUrl(req.file) || (fileKey ? `/api/upload/file/${fileKey}` : null);
-
-    res.json({ 
-      url: fileUrl,
-      key: fileKey
-    });
+  res.json({ 
+    url: fileUrl,
+    key: fileKey
   });
 });
 

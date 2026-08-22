@@ -2,3 +2,5 @@
 scratch/
 *.json
 firebase-adminsdk.json
+backend/public/apk/
+*.apk

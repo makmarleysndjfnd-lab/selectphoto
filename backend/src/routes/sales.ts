@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import { upload, getUploadedFileUrl } from '../middleware/upload';
+import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -123,7 +123,7 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
 });
 
 // Upload a receipt for a Sale
-router.post('/:id/receipt', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res: any) => {
+router.post('/:id/receipt', authenticateToken, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
   try {
     const id = req.params.id as string;
     const sellerId = req.user?.id;

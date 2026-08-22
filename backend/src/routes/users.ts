@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
-import { upload, getUploadedFileUrl } from '../middleware/upload';
+import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -105,9 +105,9 @@ router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: R
 });
 
 // Create user (Admin only)
-router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
+router.post('/', authenticateToken, requireAdmin, safeUpload(upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }])), async (req: AuthRequest, res: Response) => {
   try {
-    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode } = req.body;
+    const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode, salesType } = req.body;
     
     if (!cpf) return res.status(400).json({ error: 'CPF is required' });
     if (!password) return res.status(400).json({ error: 'Password is required' });
@@ -196,6 +196,7 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
         emergencyPhone: emergencyPhone || null,
         address: address || null,
         usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
+        salesType: salesType ? salesType.trim() : null,
         profilePhotoUrl,
         criminalRecordUrl,
         photographerCode,
@@ -218,10 +219,10 @@ router.post('/', authenticateToken, requireAdmin, upload.fields([{ name: 'profil
 });
 
 // Update user (Admin only)
-router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }]), async (req: AuthRequest, res: Response) => {
+router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }])), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode } = req.body;
+    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode, salesType } = req.body;
 
     const callerRole = req.user?.role || '';
     const callerRank = ROLE_RANK[callerRole] || 0;
@@ -306,6 +307,7 @@ router.put('/:id', authenticateToken, requireAdmin, upload.fields([{ name: 'prof
       emergencyPhone: emergencyPhone || null,
       address: address || null,
       usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
+      salesType: salesType !== undefined ? (salesType && salesType.trim() !== '' ? salesType.trim() : null) : existingUser.salesType,
       profilePhotoUrl,
       criminalRecordUrl
     };

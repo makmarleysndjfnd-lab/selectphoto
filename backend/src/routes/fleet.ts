@@ -1,7 +1,7 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
-import { upload, getUploadedFileUrl } from '../middleware/upload';
+import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -34,7 +34,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
 });
 
 // Create a new car (Admin or Supervisor only)
-router.post('/', authenticateToken, requireAdminOrSupervisor, upload.fields([
+router.post('/', authenticateToken, requireAdminOrSupervisor, safeUpload(upload.fields([
   { name: 'photo', maxCount: 1 },
   { name: 'frontPhoto', maxCount: 1 },
   { name: 'backPhoto', maxCount: 1 },
@@ -43,7 +43,7 @@ router.post('/', authenticateToken, requireAdminOrSupervisor, upload.fields([
   { name: 'dashboardPhoto', maxCount: 1 },
   { name: 'enginePhoto', maxCount: 1 },
   { name: 'trunkPhoto', maxCount: 1 }
-]), async (req: AuthRequest, res) => {
+])), async (req: AuthRequest, res) => {
   try {
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
@@ -93,7 +93,7 @@ router.post('/', authenticateToken, requireAdminOrSupervisor, upload.fields([
 });
 
 // Update a car (Admin or Supervisor only)
-router.put('/:id', authenticateToken, requireAdminOrSupervisor, upload.fields([
+router.put('/:id', authenticateToken, requireAdminOrSupervisor, safeUpload(upload.fields([
   { name: 'photo', maxCount: 1 },
   { name: 'frontPhoto', maxCount: 1 },
   { name: 'backPhoto', maxCount: 1 },
@@ -102,7 +102,7 @@ router.put('/:id', authenticateToken, requireAdminOrSupervisor, upload.fields([
   { name: 'dashboardPhoto', maxCount: 1 },
   { name: 'enginePhoto', maxCount: 1 },
   { name: 'trunkPhoto', maxCount: 1 }
-]), async (req: AuthRequest, res) => {
+])), async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     const userCompanyId = req.user?.companyId;
@@ -167,7 +167,7 @@ router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: A
 });
 
 // Submit a checklist (Driver/Seller or Admin)
-router.post('/checklist', authenticateToken, upload.fields([
+router.post('/checklist', authenticateToken, safeUpload(upload.fields([
   { name: 'frontPhoto', maxCount: 1 },
   { name: 'backPhoto', maxCount: 1 },
   { name: 'leftPhoto', maxCount: 1 },
@@ -176,7 +176,7 @@ router.post('/checklist', authenticateToken, upload.fields([
   { name: 'enginePhoto', maxCount: 1 },
   { name: 'trunkPhoto', maxCount: 1 },
   { name: 'signature', maxCount: 1 }
-]), async (req: AuthRequest, res) => {
+])), async (req: AuthRequest, res) => {
   try {
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
