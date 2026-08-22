@@ -126,10 +126,12 @@ class _LoginScreenState extends State<LoginScreen>
       final versionInfo = await apiService.getAppVersion();
       
       final latestVersion = versionInfo['version']?.toString();
+      final latestBuildNumber = versionInfo['buildNumber'];
       final downloadUrl = versionInfo['downloadUrl']?.toString();
-      
+
       if (AppConfig.shouldPromptUpdate(
         remoteVersion: latestVersion,
+        remoteBuildNumber: latestBuildNumber,
         downloadUrl: downloadUrl,
       )) {
         if (mounted && latestVersion != null && downloadUrl != null) {

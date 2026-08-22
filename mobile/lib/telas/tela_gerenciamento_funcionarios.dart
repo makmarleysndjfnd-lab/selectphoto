@@ -419,7 +419,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                           const Text('(Somente Câmera)', style: TextStyle(color: Colors.white38, fontSize: 9)),
                         ],
                       ),
-                      
+
                       // Antecedentes (Câmera ou Galeria/PDF)
                       Column(
                         children: [
@@ -448,9 +448,9 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 16),
-                
+
                 // ── Campos de Dados Pessoais
                 TextFormField(
                   controller: _nameCtrl,
@@ -486,7 +486,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   validator: (v) => ((v == null || v.isEmpty) && widget.employee == null) ? 'Obrigatório para novo funcionário' : null,
                 ),
                 const SizedBox(height: 10),
-                
+
                 TextFormField(
                   controller: _rgCtrl,
                   style: const TextStyle(color: Colors.white),
@@ -497,7 +497,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                
+
                 if (isNarrow) ...[
                   TextFormField(
                     controller: _phoneCtrl,
@@ -547,7 +547,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     ],
                   ),
                 ],
-                
+
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _addressCtrl,
@@ -558,11 +558,11 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   ),
                 ),
-                
+
                 const SizedBox(height: 20),
                 const Text('Função e Vínculos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                 const SizedBox(height: 10),
-                
+
                 DropdownButtonFormField<String>(
                   value: _role,
                   isExpanded: true,
@@ -581,7 +581,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                   ],
                   onChanged: (v) => setState(() => _role = v!),
                 ),
-                
+
                 if (_role != 'PHOTOGRAPHER' && _role != 'CONTACT') ...[
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
@@ -601,7 +601,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     onChanged: (v) => setState(() => _salesType = v!),
                   ),
                 ],
-                
+
                 if (_role == 'PHOTOGRAPHER') ...[
                   const SizedBox(height: 10),
                   TextFormField(
@@ -615,7 +615,7 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                     keyboardType: TextInputType.number,
                   ),
                 ],
-                
+
                 if (!_usesOwnCar) ...[
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(

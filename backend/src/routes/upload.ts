@@ -25,7 +25,7 @@ router.post('/', authenticateToken, (req: AuthRequest, res: Response, next) => {
   const fileKey = (req.file as any).key || (req.file.filename ? `${req.user?.companyId || 'global'}/${req.file.filename}` : null);
   const fileUrl = getUploadedFileUrl(req.file) || (fileKey ? `/api/upload/file/${fileKey}` : null);
 
-  res.json({ 
+  res.json({
     url: fileUrl,
     key: fileKey
   });
