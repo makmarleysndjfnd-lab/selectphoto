@@ -128,11 +128,11 @@ class _LoginScreenState extends State<LoginScreen>
       final latestVersion = versionInfo['version']?.toString();
       final downloadUrl = versionInfo['downloadUrl']?.toString();
       
-      if (latestVersion != null && 
-          latestVersion != AppConfig.appVersion && 
-          downloadUrl != null && 
-          downloadUrl.startsWith('https://')) {
-        if (mounted) {
+      if (AppConfig.shouldPromptUpdate(
+        remoteVersion: latestVersion,
+        downloadUrl: downloadUrl,
+      )) {
+        if (mounted && latestVersion != null && downloadUrl != null) {
           _showUpdateDialog(latestVersion, downloadUrl, versionInfo['mandatory'] ?? false);
         }
       }

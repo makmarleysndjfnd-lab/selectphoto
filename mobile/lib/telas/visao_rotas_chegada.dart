@@ -35,8 +35,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         _api.getCompanyUsers(),
       ]);
 
-      final clients = results[0] as List<dynamic>;
-      final users = results[1] as List<dynamic>;
+      final clients = results[0];
+      final users = results[1];
 
       final sellers = users.where((u) {
         final role = (u['role'] ?? '').toString().toUpperCase();
@@ -97,7 +97,14 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
-  Future<void> _confirmarChegadaGrafica(String city) async {
+  final Set<String> _distribuindo = {};
+
+  Future<void> _confirmarChegadaGrafica(
+    String groupKey,
+    String city,
+    String eventName,
+    List<dynamic> awaitingClients,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -105,7 +112,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Confirmar Chegada', style: TextStyle(color: Colors.white)),
         content: Text(
-          'Confirmar que as fichas de $city chegaram da gráfica?\n\nElas serão movidas para o ESTOQUE.',
+          'Confirmar que as fichas de "$eventName" ($city) chegaram da gráfica?\n\nElas serão movidas para o ESTOQUE.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -129,29 +136,36 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
 
     if (confirmed != true) return;
 
-    setState(() => _confirmando.add(city));
+    setState(() => _confirmando.add(groupKey));
     try {
-      final result = await _api.confirmGrafica(city);
-      final count = result['count'] ?? 0;
+      final clientIds = awaitingClients.map((c) => c['id'].toString()).toList();
+      final result = await _api.confirmGrafica(
+        city: city,
+        eventName: eventName,
+        clientIds: clientIds,
+      );
+      final count = result['count'] ?? awaitingClients.length;
 
       if (mounted) {
-        final awaiting = List<dynamic>.from(_dadosPorEvento[city]?['awaiting'] ?? []);
+        final awaiting = List<dynamic>.from(_dadosPorEvento[groupKey]?['awaiting'] ?? []);
         setState(() {
-          _dadosPorEvento[city]!['inStock']!.addAll(awaiting);
-          _dadosPorEvento[city]!['awaiting']!.clear();
-          _confirmadas.add(city);
-          _confirmando.remove(city);
+          if (_dadosPorEvento.containsKey(groupKey)) {
+            _dadosPorEvento[groupKey]!['inStock']!.addAll(awaiting);
+            _dadosPorEvento[groupKey]!['awaiting']!.clear();
+          }
+          _confirmadas.add(groupKey);
+          _confirmando.remove(groupKey);
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF00C853),
-            content: Text('✅ $count fichas de $city movidas para o Estoque!'),
+            content: Text('✅ $count fichas de "$eventName" ($city) movidas para o Estoque!'),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _confirmando.remove(city));
+        setState(() => _confirmando.remove(groupKey));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: Colors.red,
@@ -162,9 +176,17 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
-  Future<void> _distribuirParaVendedor(String city) async {
-    final inStockClients = List<dynamic>.from(_dadosPorEvento[city]?['inStock'] ?? []);
-    if (inStockClients.isEmpty) return;
+  Future<void> _distribuirParaVendedor(String groupKey, String city) async {
+    final inStockClients = List<dynamic>.from(_dadosPorEvento[groupKey]?['inStock'] ?? []);
+    if (inStockClients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.orange,
+          content: Text('Nenhuma ficha disponível no estoque para distribuição.'),
+        ),
+      );
+      return;
+    }
 
     String? selectedSellerId;
     String? selectedSellerName;
@@ -299,6 +321,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                           : () async {
                               Navigator.pop(ctx2);
                               await _executarDistribuicao(
+                                groupKey,
                                 city,
                                 inStockClients,
                                 selectedSellerId!,
@@ -317,36 +340,43 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
   }
 
   Future<void> _executarDistribuicao(
+    String groupKey,
     String city,
     List<dynamic> clients,
     String sellerId,
     String sellerName,
   ) async {
+    setState(() => _distribuindo.add(groupKey));
     try {
       final ids = clients.map((c) => c['id'].toString()).toList();
-      await _api.batchAssignSeller(ids, sellerId);
+      final res = await _api.batchAssignSeller(ids, sellerId);
+      final count = (res['count'] != null) ? res['count'] : clients.length;
+
       if (mounted) {
         setState(() {
-          _dadosPorEvento.remove(city);
-          _confirmadas.remove(city);
+          _distribuindo.remove(groupKey);
+          _dadosPorEvento.remove(groupKey);
+          _confirmadas.remove(groupKey);
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFFCE93D8),
             content: Text(
-              '🚀 ${clients.length} fichas de $city distribuídas para $sellerName!',
+              '🚀 $count fichas de $city distribuídas para $sellerName!',
             ),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _distribuindo.remove(groupKey));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: Colors.red,
             content: Text('Erro ao distribuir: $e'),
           ),
         );
+        _loadData();
       }
     }
   }
@@ -374,15 +404,15 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
             ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
             : _dadosPorEvento.isEmpty
                 ? ListView(
-                    children: [
-                      const SizedBox(height: 80),
+                    children: const [
+                      SizedBox(height: 80),
                       Center(
                         child: Column(
                           children: [
-                            const Icon(Icons.check_circle_outline,
+                            Icon(Icons.check_circle_outline,
                                 color: Color(0xFF00C853), size: 64),
-                            const SizedBox(height: 16),
-                            const Text(
+                            SizedBox(height: 16),
+                            Text(
                               'Nenhuma ficha aguardando\na gráfica ou no estoque!',
                               textAlign: TextAlign.center,
                               style: TextStyle(color: Colors.white54, fontSize: 16),
@@ -452,6 +482,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                     children: [
                       Text(
                         eventName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 17,
@@ -463,9 +495,13 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                         children: [
                           const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 13),
                           const SizedBox(width: 2),
-                          Text(
-                            city,
-                            style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 12, fontWeight: FontWeight.w600),
+                          Expanded(
+                            child: Text(
+                              city,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
                           ),
                         ],
                       ),
@@ -491,16 +527,16 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
           // ── Status badges
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
               children: [
-                if (awaiting.isNotEmpty) ...[
+                if (awaiting.isNotEmpty)
                   _statusBadge(
                     icon: Icons.local_print_shop,
                     label: '${awaiting.length} na Gráfica',
                     color: Colors.orange,
                   ),
-                  const SizedBox(width: 8),
-                ],
                 if (inStock.isNotEmpty)
                   _statusBadge(
                     icon: Icons.inventory_2,
@@ -582,9 +618,11 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                       isConfirmando
                           ? 'Confirmando...'
                           : '✅ Confirmar Chegada da Gráfica (${awaiting.length} fichas)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     onPressed:
-                        isConfirmando ? null : () => _confirmarChegadaGrafica(city),
+                        isConfirmando ? null : () => _confirmarChegadaGrafica(groupKey, city, eventName, awaiting),
                   ),
                 if (awaiting.isNotEmpty && inStock.isNotEmpty)
                   const SizedBox(height: 8),
@@ -597,11 +635,26 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    icon: const Icon(Icons.send),
+                    icon: _distribuindo.contains(groupKey)
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.send),
                     label: Text(
-                      '🚀 Distribuir ${inStock.length} Fichas para Vendedor',
+                      _distribuindo.contains(groupKey)
+                          ? 'Distribuindo...'
+                          : '🚀 Distribuir ${inStock.length} Fichas para Vendedor',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    onPressed: () => _distribuirParaVendedor(city),
+                    onPressed: _distribuindo.contains(groupKey)
+                        ? null
+                        : () => _distribuirParaVendedor(groupKey, city),
                   ),
               ],
             ),
@@ -628,10 +681,13 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         children: [
           Icon(icon, color: color, size: 14),
           const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-                color: color, fontSize: 12, fontWeight: FontWeight.bold),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                  color: color, fontSize: 12, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
@@ -662,6 +718,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
           Text(
             label,
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 10,
               color: done ? color : Colors.white38,

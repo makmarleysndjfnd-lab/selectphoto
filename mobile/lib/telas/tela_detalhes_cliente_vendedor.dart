@@ -7,11 +7,11 @@ import 'package:signature/signature.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
+import '../servicos/servico_midia.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
@@ -540,7 +540,6 @@ class _SaleTabState extends State<_SaleTab> {
 
   bool _saleFinalized = false;
   File? _receiptPhoto;
-  final ImagePicker _picker = ImagePicker();
 
   String? _saleId;
 
@@ -593,12 +592,9 @@ class _SaleTabState extends State<_SaleTab> {
   }
 
   void _takeReceiptPhoto() async {
-    final XFile? photo = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 50, // Compress to save bandwidth
-    );
-    if (photo != null) {
-      setState(() => _receiptPhoto = File(photo.path));
+    final result = await MediaPickerService().pickSaleEvidencePhoto(context);
+    if (result != null) {
+      setState(() => _receiptPhoto = result.file);
     }
   }
 
@@ -1259,15 +1255,11 @@ class _PhotosTab extends StatefulWidget {
 class _PhotosTabState extends State<_PhotosTab> {
   File? _photoFile;
   bool _isUploading = false;
-  final ImagePicker _picker = ImagePicker();
 
   void _capturePhoto() async {
-    final XFile? photo = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 60,
-    );
-    if (photo != null) {
-      setState(() => _photoFile = File(photo.path));
+    final result = await MediaPickerService().pickSaleEvidencePhoto(context);
+    if (result != null) {
+      setState(() => _photoFile = result.file);
     }
   }
 

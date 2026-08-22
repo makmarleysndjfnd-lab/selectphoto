@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../servicos/ajudante_bd.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_midia.dart';
 import '../widgets/led_button.dart';
 
 
@@ -29,17 +29,15 @@ class _FleetChecklistScreenState extends State<FleetChecklistScreen> {
   File? _rightPhoto;
   File? _dashboardPhoto;
 
-  final ImagePicker _picker = ImagePicker();
-
   Future<void> _takePhoto(String type) async {
-    final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 70);
-    if (photo != null) {
+    final result = await MediaPickerService().pickGeneralAttachment(context, title: 'Foto da Vistoria ($type)');
+    if (result != null) {
       setState(() {
-        if (type == 'front') _frontPhoto = File(photo.path);
-        if (type == 'back') _backPhoto = File(photo.path);
-        if (type == 'left') _leftPhoto = File(photo.path);
-        if (type == 'right') _rightPhoto = File(photo.path);
-        if (type == 'dash') _dashboardPhoto = File(photo.path);
+        if (type == 'front') _frontPhoto = result.file;
+        if (type == 'back') _backPhoto = result.file;
+        if (type == 'left') _leftPhoto = result.file;
+        if (type == 'right') _rightPhoto = result.file;
+        if (type == 'dash') _dashboardPhoto = result.file;
       });
     }
   }

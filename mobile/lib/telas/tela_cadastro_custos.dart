@@ -1,10 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
+import '../servicos/servico_midia.dart';
 import '../servicos/ajudante_bd.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/led_button.dart';
@@ -26,7 +26,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
   String _paymentMethod = 'Dinheiro';
 
   File? _receiptPhoto;
-  final ImagePicker _picker = ImagePicker();
 
   final List<String> _categories = [
     'Produção',
@@ -69,10 +68,10 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
   }
 
   Future<void> _takePhoto() async {
-    final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 70);
-    if (photo != null) {
+    final result = await MediaPickerService().pickDocumentOrImage(context, title: 'Comprovante de Despesa');
+    if (result != null) {
       setState(() {
-        _receiptPhoto = File(photo.path);
+        _receiptPhoto = result.file;
       });
     }
   }

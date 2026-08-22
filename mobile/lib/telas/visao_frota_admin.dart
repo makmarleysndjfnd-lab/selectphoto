@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_midia.dart';
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
@@ -70,8 +70,11 @@ class _FleetAdminViewState extends State<FleetAdminView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
             children: [
               const Text(
                 'Gestão da Frota',
@@ -109,10 +112,6 @@ class _FleetAdminViewState extends State<FleetAdminView> {
     final int nextOil = (car['nextOilChangeKm'] as num?)?.toInt() ?? 0;
     final int currentKm = (car['currentKm'] as num?)?.toInt() ?? 0;
     
-    // Logic for color statuses
-    // GREEN: OK
-    // YELLOW: Close to oil change (less than 1000km)
-    // RED: Passed oil change OR has pending maintenance
     Color statusColor = Colors.green;
     String statusText = 'Manutenção em Dia';
     IconData statusIcon = Icons.check_circle_rounded;
@@ -139,7 +138,7 @@ class _FleetAdminViewState extends State<FleetAdminView> {
     final userLabel = teamPrefix.isNotEmpty ? '$userName ($teamPrefix)' : userName;
 
     return Container(
-      width: 320,
+      constraints: const BoxConstraints(minWidth: 280, maxWidth: 360),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
@@ -152,40 +151,27 @@ class _FleetAdminViewState extends State<FleetAdminView> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                car['plate'],
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              Expanded(
+                child: Text(
+                  car['plate'] ?? 'SEM PLACA',
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(statusIcon, color: statusColor, size: 14),
-                        const SizedBox(width: 4),
-                        Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                   IconButton(
                     icon: const Icon(Icons.edit, color: Colors.blueAccent, size: 20),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                     onPressed: () => _showCarFormDialog(car),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   IconButton(
                     icon: const Icon(Icons.delete, color: Colors.redAccent, size: 20),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                     onPressed: () {
                       showDialog(
                         context: context,
@@ -212,9 +198,32 @@ class _FleetAdminViewState extends State<FleetAdminView> {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            car['model'],
-            style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 13),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              Text(
+                car['model'] ?? '',
+                style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 13),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(statusIcon, color: statusColor, size: 14),
+                    const SizedBox(width: 4),
+                    Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           _infoRow(Icons.speed_rounded, 'KM Atual: $currentKm km'),
@@ -311,7 +320,6 @@ class _CarFormDialogState extends State<_CarFormDialog> {
   File? _enginePhoto;
   File? _trunkPhoto;
 
-  final ImagePicker _picker = ImagePicker();
   bool _isSaving = false;
 
   @override
@@ -328,25 +336,25 @@ class _CarFormDialogState extends State<_CarFormDialog> {
   }
 
 Future<void> _pickImage(String type) async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
-    if (pickedFile != null) {
+    final result = await MediaPickerService().pickGeneralAttachment(context, title: 'Foto do Veículo ($type)');
+    if (result != null) {
       setState(() {
         if (type == 'photo') {
-          _photo = File(pickedFile.path);
+          _photo = result.file;
         } else if (type == 'frontPhoto') {
-          _frontPhoto = File(pickedFile.path);
+          _frontPhoto = result.file;
         } else if (type == 'backPhoto') {
-          _backPhoto = File(pickedFile.path);
+          _backPhoto = result.file;
         } else if (type == 'leftPhoto') {
-          _leftPhoto = File(pickedFile.path);
+          _leftPhoto = result.file;
         } else if (type == 'rightPhoto') {
-          _rightPhoto = File(pickedFile.path);
+          _rightPhoto = result.file;
         } else if (type == 'dashboardPhoto') {
-          _dashboardPhoto = File(pickedFile.path);
+          _dashboardPhoto = result.file;
         } else if (type == 'enginePhoto') {
-          _enginePhoto = File(pickedFile.path);
+          _enginePhoto = result.file;
         } else if (type == 'trunkPhoto') {
-          _trunkPhoto = File(pickedFile.path);
+          _trunkPhoto = result.file;
         }
       });
     }

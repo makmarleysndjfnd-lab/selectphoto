@@ -886,7 +886,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -895,11 +895,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 38,
-                        height: 38,
+                        width: 36,
+                        height: 36,
                         decoration: BoxDecoration(
                           color: _accentPurple.withOpacity(0.3),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(10),
                           border: Border.all(color: _accentPurple.withOpacity(0.5), width: 1.2),
                           boxShadow: [
                             BoxShadow(
@@ -913,19 +913,18 @@ class _AdminDashboardState extends State<AdminDashboard>
                             color: Colors.white, size: 20),
                       ),
                       if (!isDesktop) ...[
-                        const SizedBox(height: 4),
-                        InkWell(
-                          onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                          borderRadius: BorderRadius.circular(8),
-                          child: const Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.menu, color: Colors.white, size: 22),
-                          ),
+                        const SizedBox(height: 2),
+                        IconButton(
+                          constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                          padding: EdgeInsets.zero,
+                          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                          icon: const Icon(Icons.menu, color: Colors.white, size: 24),
+                          tooltip: 'Abrir Menu',
                         ),
                       ],
                     ],
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   // Centro: Boas vindas com nome ampliado + subtítulo + versículo
                   Expanded(
                     child: InkWell(
@@ -938,20 +937,17 @@ class _AdminDashboardState extends State<AdminDashboard>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Flexible(
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      '$_greeting, $_userName',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 0.2,
-                                      ),
+                                Expanded(
+                                  child: Text(
+                                    '$_greeting, $_userName',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.2,
                                     ),
                                   ),
                                 ),
@@ -960,28 +956,40 @@ class _AdminDashboardState extends State<AdminDashboard>
                               ],
                             ),
                             const SizedBox(height: 2),
-                            const Text('Painel Administrativo',
-                                style: TextStyle(
-                                    color: Color(0xFF90CAF9), fontSize: 13, fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 4),
-                            Text(_verse,
-                                style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 11,
-                                    fontStyle: FontStyle.italic)),
+                            const Text(
+                              'Painel Administrativo',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Color(0xFF90CAF9),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _verse,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
                           ],
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
                   // Direita: Notificação (topo) + Configuração (baixo)
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                        padding: EdgeInsets.zero,
                         onPressed: () {
                           _showNotificacoesDialog();
                         },
@@ -995,8 +1003,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       ),
                       const SizedBox(height: 2),
                       IconButton(
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                        padding: EdgeInsets.zero,
                         onPressed: () {
                           Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
                         },

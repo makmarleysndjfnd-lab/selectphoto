@@ -140,21 +140,26 @@ class _LedButtonState extends State<LedButton> {
                       const SizedBox(width: 8),
                     ],
                     if (widget.child != null) 
-                      DefaultTextStyle(
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.1,
+                      Flexible(
+                        child: DefaultTextStyle(
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                          child: widget.child!,
                         ),
-                        child: widget.child!,
                       )
                     else if (widget.text != null)
-                      Text(
-                        widget.text!,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.1,
+                      Flexible(
+                        child: Text(
+                          widget.text!,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                   ],

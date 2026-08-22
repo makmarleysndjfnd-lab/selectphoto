@@ -226,6 +226,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           const Text('Selecione um vendedor:', style: TextStyle(color: Colors.white70)),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             dropdownColor: const Color(0xFF2A2A3E),
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
@@ -478,6 +479,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
 
               return DropdownButtonFormField<String>(
                 value: _selectedCityCustom,
+                isExpanded: true,
                 dropdownColor: const Color(0xFF1E1E2C),
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(

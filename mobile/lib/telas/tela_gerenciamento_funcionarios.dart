@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:signature/signature.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_midia.dart';
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
@@ -218,7 +218,6 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   
   File? _profilePhoto;
   File? _criminalRecord;
-  final ImagePicker _picker = ImagePicker();
   
   bool _isSaving = false;
 
@@ -291,16 +290,17 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
   }
 
   Future<void> _pickImage(bool isProfile) async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        if (isProfile) {
-          _profilePhoto = File(pickedFile.path);
-        } else {
-          _criminalRecord = File(pickedFile.path);
-        }
-      });
-    }
+    final result = isProfile
+        ? await MediaPickerService().pickProfilePhoto(context)
+        : await MediaPickerService().pickDocumentOrImage(context, title: 'Antecedentes Criminais / Documento');
+    if (!mounted || result == null) return;
+    setState(() {
+      if (isProfile) {
+        _profilePhoto = result.file;
+      } else {
+        _criminalRecord = result.file;
+      }
+    });
   }
 
   Future<void> _save() async {
@@ -309,27 +309,27 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
 
     try {
       String finalSalesType = _salesType;
-        String finalTeamId = _teamId ?? '';
+      String finalTeamId = _teamId ?? '';
         
-        if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
-          finalSalesType = '';
-        }
+      if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
+        finalSalesType = '';
+      }
 
-        final formData = FormData.fromMap({
-          'name': _nameCtrl.text,
-          'password': _passwordCtrl.text,
-          'role': _role,
-          'salesType': finalSalesType,
-          'cpf': _cpfCtrl.text,
-          'rg': _rgCtrl.text,
-          'phone': _phoneCtrl.text,
-          'emergencyPhone': _emergencyCtrl.text,
-          'address': _addressCtrl.text,
-          'teamId': finalTeamId,
-          'carId': _carId ?? '',
-          'usesOwnCar': _usesOwnCar.toString(),
-          'photographerCode': _photographerCodeCtrl.text,
-        });
+      final formData = FormData.fromMap({
+        'name': _nameCtrl.text.trim(),
+        'password': _passwordCtrl.text.trim(),
+        'role': _role,
+        'salesType': finalSalesType,
+        'cpf': _cpfCtrl.text.trim(),
+        'rg': _rgCtrl.text.trim(),
+        'phone': _phoneCtrl.text.trim(),
+        'emergencyPhone': _emergencyCtrl.text.trim(),
+        'address': _addressCtrl.text.trim(),
+        'teamId': finalTeamId,
+        'carId': _carId ?? '',
+        'usesOwnCar': _usesOwnCar.toString(),
+        'photographerCode': _photographerCodeCtrl.text.trim(),
+      });
 
       if (_profilePhoto != null) {
         formData.files.add(MapEntry('profilePhoto', await MultipartFile.fromFile(_profilePhoto!.path)));
@@ -364,125 +364,312 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isNarrow = screenWidth < 600;
+    final dialogWidth = isNarrow ? screenWidth * 0.94 : 600.0;
+
     return Dialog(
       backgroundColor: const Color(0xFF1A1A2E),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: 600,
-        padding: const EdgeInsets.all(24),
+        width: dialogWidth,
+        padding: EdgeInsets.all(isNarrow ? 16 : 24),
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(widget.employee == null ? 'Novo Funcionário' : 'Editar Funcionário', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 20),
+                Text(
+                  widget.employee == null ? 'Novo Funcionário' : 'Editar Funcionário',
+                  style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
                 
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Coluna de Imagens
-                    Column(
-                      children: [
-                        GestureDetector(
-                          onTap: () => _pickImage(true),
-                          child: CircleAvatar(
-                            radius: 50,
-                            backgroundColor: Colors.white12,
-                            backgroundImage: _profilePhoto != null ? FileImage(_profilePhoto!) : null,
-                            child: _profilePhoto == null ? const Icon(Icons.camera_alt, color: Colors.white54, size: 40) : null,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text('book Perfil', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                        
-                        const SizedBox(height: 20),
-                        
-                        GestureDetector(
-                          onTap: () => _pickImage(false),
-                          child: Container(
-                            width: 100, height: 100,
-                            decoration: BoxDecoration(
-                              color: Colors.white12,
-                              borderRadius: BorderRadius.circular(8),
-                              image: _criminalRecord != null ? DecorationImage(image: FileImage(_criminalRecord!), fit: BoxFit.cover) : null,
-                            ),
-                            child: _criminalRecord == null ? const Icon(Icons.document_scanner, color: Colors.white54, size: 40) : null,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text('Antecedentes', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                      ],
-                    ),
-                    const SizedBox(width: 24),
-                    
-                    // Coluna de Dados
-                    Expanded(
-                      child: Column(
+                // ── Bloco de Fotos (Perfil somente câmera | Antecedentes câmera ou galeria)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF121224),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Perfil (Câmera obrigatória)
+                      Column(
                         children: [
-                          TextFormField(
-                            controller: _nameCtrl,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'Nome Completo', labelStyle: TextStyle(color: Colors.white54)),
-                            validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                          GestureDetector(
+                            onTap: () => _pickImage(true),
+                            child: CircleAvatar(
+                              radius: 42,
+                              backgroundColor: Colors.white12,
+                              backgroundImage: _profilePhoto != null ? FileImage(_profilePhoto!) : null,
+                              child: _profilePhoto == null
+                                  ? const Icon(Icons.camera_alt, color: Color(0xFFCE93D8), size: 32)
+                                  : null,
+                            ),
                           ),
-                          TextFormField(
-                            controller: _cpfCtrl,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'CPF (Login)', labelStyle: TextStyle(color: Colors.white54)),
-                            validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
-                          ),
-                          TextFormField(
-                            controller: _passwordCtrl,
-                            obscureText: true,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'Senha de Acesso', labelStyle: TextStyle(color: Colors.white54)),
-                            validator: (v) => (v!.isEmpty && widget.employee == null) ? 'Obrigatório para novo funcionário' : null,
-                          ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _rgCtrl,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(labelText: 'RG', labelStyle: TextStyle(color: Colors.white54)),
-                                ),
+                          const SizedBox(height: 6),
+                          const Text('Foto de Perfil', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+                          const Text('(Somente Câmera)', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                        ],
+                      ),
+                      
+                      // Antecedentes (Câmera ou Galeria/PDF)
+                      Column(
+                        children: [
+                          GestureDetector(
+                            onTap: () => _pickImage(false),
+                            child: Container(
+                              width: 84,
+                              height: 84,
+                              decoration: BoxDecoration(
+                                color: Colors.white12,
+                                borderRadius: BorderRadius.circular(8),
+                                image: _criminalRecord != null
+                                    ? DecorationImage(image: FileImage(_criminalRecord!), fit: BoxFit.cover)
+                                    : null,
                               ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _rgCtrl,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(labelText: 'RG', labelStyle: TextStyle(color: Colors.white54)),
-                                ),
-                              ),
-                            ],
+                              child: _criminalRecord == null
+                                  ? const Icon(Icons.document_scanner, color: Color(0xFF90CAF9), size: 32)
+                                  : null,
+                            ),
                           ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _phoneCtrl,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(labelText: 'Telefone', labelStyle: TextStyle(color: Colors.white54)),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _emergencyCtrl,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: const InputDecoration(labelText: 'Tel. Emergência', labelStyle: TextStyle(color: Colors.white54)),
-                                ),
-                              ),
-                            ],
+                          const SizedBox(height: 6),
+                          const Text('Antecedentes', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+                          const Text('(Foto ou Documento)', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // ── Campos de Dados Pessoais
+                TextFormField(
+                  controller: _nameCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Nome Completo',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Obrigatório' : null,
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _cpfCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'CPF (Login)',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Obrigatório' : null,
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _passwordCtrl,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: widget.employee == null ? 'Senha de Acesso' : 'Nova Senha (deixe vazio para manter)',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  validator: (v) => ((v == null || v.isEmpty) && widget.employee == null) ? 'Obrigatório para novo funcionário' : null,
+                ),
+                const SizedBox(height: 10),
+                
+                TextFormField(
+                  controller: _rgCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'RG',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                
+                if (isNarrow) ...[
+                  TextFormField(
+                    controller: _phoneCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Telefone',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _emergencyCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Tel. Emergência',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                  ),
+                ] else ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _phoneCtrl,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            labelText: 'Telefone',
+                            labelStyle: TextStyle(color: Colors.white54),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                           ),
-                          TextFormField(
-                            controller: _addressCtrl,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(labelText: 'Endereço Completo', labelStyle: TextStyle(color: Colors.white54)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _emergencyCtrl,
+                          style: const TextStyle(color: Colors.white),
+                          decoration: const InputDecoration(
+                            labelText: 'Tel. Emergência',
+                            labelStyle: TextStyle(color: Colors.white54),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _addressCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Endereço Completo',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                ),
+                
+                const SizedBox(height: 20),
+                const Text('Função e Vínculos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 10),
+                
+                DropdownButtonFormField<String>(
+                  value: _role,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF111122),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Cargo',
+                    labelStyle: TextStyle(color: Colors.white54),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'SELLER', child: Text('Vendedor')),
+                    DropdownMenuItem(value: 'SELLER_MANAGER', child: Text('Vendedor Gerente (Distribuição)')),
+                    DropdownMenuItem(value: 'PHOTOGRAPHER', child: Text('Fotógrafo')),
+                    DropdownMenuItem(value: 'CONTACT', child: Text('Contato (Assistente)')),
+                  ],
+                  onChanged: (v) => setState(() => _role = v!),
+                ),
+                
+                if (_role != 'PHOTOGRAPHER' && _role != 'CONTACT') ...[
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: _salesType,
+                    isExpanded: true,
+                    dropdownColor: const Color(0xFF111122),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Tipo de Venda',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'BOOK', child: Text('Book')),
+                      DropdownMenuItem(value: 'REBOLO', child: Text('Rebolo')),
+                    ],
+                    onChanged: (v) => setState(() => _salesType = v!),
+                  ),
+                ],
+                
+                if (_role == 'PHOTOGRAPHER') ...[
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _photographerCodeCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Código do Fotógrafo (ex: 0001)',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ],
+                
+                if (!_usesOwnCar) ...[
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: _carId,
+                    isExpanded: true,
+                    dropdownColor: const Color(0xFF1A1A2E),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Veículo Vinculado (Opcional)',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Nenhum Veículo')),
+                      ...widget.cars
+                        .where((c) => c['status'] == 'AVAILABLE' || c['id'] == _carId)
+                        .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['plate']} - ${c['model']}'))),
+                    ],
+                    onChanged: (v) => setState(() => _carId = v),
+                  ),
+                ],
+                
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Text('Usa carro próprio?', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: RadioListTile<bool>(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Sim', style: TextStyle(color: Colors.white, fontSize: 13)),
+                              value: true,
+                              groupValue: _usesOwnCar,
+                              activeColor: const Color(0xFFCE93D8),
+                              onChanged: (v) {
+                                setState(() {
+                                  _usesOwnCar = v!;
+                                  _carId = null;
+                                });
+                              },
+                            ),
+                          ),
+                          Expanded(
+                            child: RadioListTile<bool>(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Não', style: TextStyle(color: Colors.white, fontSize: 13)),
+                              value: false,
+                              groupValue: _usesOwnCar,
+                              activeColor: const Color(0xFFCE93D8),
+                              onChanged: (v) => setState(() => _usesOwnCar = v!),
+                            ),
                           ),
                         ],
                       ),
@@ -491,121 +678,27 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                 ),
                 
                 const SizedBox(height: 24),
-                const Text('Função e Vínculos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _role,
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF111122),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(labelText: 'Cargo', labelStyle: TextStyle(color: Colors.white54)),
-                        items: const [
-                          DropdownMenuItem(value: 'SELLER', child: Text('Vendedor')),
-                          DropdownMenuItem(value: 'SELLER_MANAGER', child: Text('Vendedor Gerente (Distribuição)')),
-                          DropdownMenuItem(value: 'PHOTOGRAPHER', child: Text('Fotógrafo')),
-                          DropdownMenuItem(value: 'CONTACT', child: Text('Contato (Assistente)')),
-                        ],
-                        onChanged: (v) => setState(() => _role = v!),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    if (_role != 'PHOTOGRAPHER' && _role != 'CONTACT')
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _salesType,
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF111122),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(labelText: 'Tipo de Venda', labelStyle: TextStyle(color: Colors.white54)),
-                        items: const [
-                          DropdownMenuItem(value: 'BOOK', child: Text('Book')),
-                          DropdownMenuItem(value: 'REBOLO', child: Text('Rebolo')),
-                        ],
-                        onChanged: (v) => setState(() => _salesType = v!),
-                      ),
-                    ),
-                    if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT')
-                      const Expanded(child: SizedBox()),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                if (_role == 'PHOTOGRAPHER') ...[
-                  TextFormField(
-                    controller: _photographerCodeCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(labelText: 'Código do Fotógrafo (ex: 0001)', labelStyle: TextStyle(color: Colors.white54)),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (!_usesOwnCar)
-                  DropdownButtonFormField<String>(
-                  value: _carId,
-                  dropdownColor: const Color(0xFF1A1A2E),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Veículo Vinculado (Opcional)',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF0D0D1A),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                  ),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('Nenhum Veículo')),
-                    ...widget.cars
-                      .where((c) => c['status'] == 'AVAILABLE' || c['id'] == _carId)
-                      .map((c) => DropdownMenuItem(value: c['id'] as String, child: Text('${c['plate']} - ${c['model']}'))),
-                  ],
-                  onChanged: (v) => setState(() => _carId = v),
-                ),
-                const SizedBox(height: 12),
-                
-                const Text('Usa carro próprio?', style: TextStyle(color: Colors.white)),
-                Row(
-                  children: [
-                    Expanded(
-                      child: RadioListTile<bool>(
-                        title: const Text('Sim', style: TextStyle(color: Colors.white)),
-                        value: true,
-                        groupValue: _usesOwnCar,
-                        activeColor: const Color(0xFFCE93D8),
-                        onChanged: (v) {
-                          setState(() {
-                            _usesOwnCar = v!;
-                            _carId = null; // reset if they use own car
-                          });
-                        },
-                      ),
-                    ),
-                    Expanded(
-                      child: RadioListTile<bool>(
-                        title: const Text('Não', style: TextStyle(color: Colors.white)),
-                        value: false,
-                        groupValue: _usesOwnCar,
-                        activeColor: const Color(0xFFCE93D8),
-                        onChanged: (v) => setState(() => _usesOwnCar = v!),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 32),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                        minimumSize: const Size(80, 48),
+                      ),
+                      onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
                       child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                     ),
-                    const SizedBox(width: 16),
-                    LedButton(
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFCE93D8),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                        minimumSize: const Size(110, 48),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
                       onPressed: _isSaving ? null : _save,
-                      style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
                       child: _isSaving 
                         ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                         : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -662,10 +755,9 @@ class _FleetChecklistTabState extends State<_FleetChecklistTab> {
   bool _isSaving = false;
 
   Future<void> _pickPhoto(String key) async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.camera, imageQuality: 50);
-    if (picked != null) {
-      setState(() => _photos[key] = File(picked.path));
+    final result = await MediaPickerService().pickGeneralAttachment(context, title: 'Foto da Vistoria ($key)');
+    if (result != null) {
+      setState(() => _photos[key] = result.file);
     }
   }
 
