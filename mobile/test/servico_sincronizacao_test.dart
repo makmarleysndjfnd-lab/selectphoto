@@ -1,9 +1,38 @@
+import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile/servicos/servico_api.dart';
 import 'package:mobile/servicos/servico_sincronizacao.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class FakeApiService extends ApiService {
+  int registerSaleCalls = 0;
+  bool shouldFail = false;
+  Completer<void>? inFlightCompleter;
+
+  FakeApiService() : super.testInstance();
+
+  @override
+  Future<String> registerSale(Map<String, dynamic> data) async {
+    registerSaleCalls++;
+    if (inFlightCompleter != null) {
+      await inFlightCompleter!.future;
+    }
+    if (shouldFail) {
+      throw Exception('Network timeout test');
+    }
+    return 'sale-1';
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  late FakeApiService fakeApi;
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    fakeApi = FakeApiService();
+  });
 
   group('SyncRequest Model Tests', () {
     test('deve instanciar SyncRequest com valores padrão de retryCount = 0', () {
@@ -53,22 +82,140 @@ void main() {
     });
   });
 
-  group('Sync Queue Storage and Resiliency', () {
-    setUp(() {
-      SharedPreferences.setMockInitialValues({});
+  group('SyncService - Fila, Conectividade, Bateria e Backoff Exponencial', () {
+    test('1. Fila vazia não cria timer de retry (economia de bateria)', () async {
+      final service = SyncService(fakeApi, initialOnline: true);
+      expect(service.pendingRequests, isEmpty);
+      expect(service.retryTimer, isNull);
+      service.dispose();
     });
 
-    test('deve respeitar maxRetries = 5 e não travar o loop de sincronização', () {
-      final req = SyncRequest(
-        id: '789',
+    test('2. Nova pendência online sincroniza imediatamente', () async {
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 100.0});
+
+      expect(fakeApi.registerSaleCalls, 1);
+      expect(service.pendingRequests, isEmpty);
+      expect(service.retryTimer, isNull);
+      service.dispose();
+    });
+
+    test('3. Pendência offline aguarda reconexão sem chamar API imediatamente', () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 150.0});
+
+      expect(fakeApi.registerSaleCalls, 0);
+      expect(service.pendingRequests.length, 1);
+      expect(service.retryTimer, isNull); // Offline não cria timer; aguarda reconexão
+      service.dispose();
+    });
+
+    test('4. Reconexão de rede dispara sincronização de pendências', () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 200.0});
+      expect(fakeApi.registerSaleCalls, 0);
+
+      // Simular reconexão de rede
+      await service.setOnlineForTesting(true);
+
+      // Sincronização executada automaticamente
+      expect(fakeApi.registerSaleCalls, 1);
+      expect(service.pendingRequests, isEmpty);
+      service.dispose();
+    });
+
+    test('5. Falha cria backoff exponencial (15s, 30s, 60s, max 120s)', () async {
+      expect(SyncService.calculateBackoff(0), 15);
+      expect(SyncService.calculateBackoff(1), 30);
+      expect(SyncService.calculateBackoff(2), 60);
+      expect(SyncService.calculateBackoff(3), 120);
+      expect(SyncService.calculateBackoff(4), 120);
+      expect(SyncService.calculateBackoff(10), 120);
+
+      fakeApi.shouldFail = true;
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 250.0});
+
+      expect(fakeApi.registerSaleCalls, 1);
+      expect(service.pendingRequests.length, 1);
+      expect(service.pendingRequests.first.retryCount, 1);
+      expect(service.retryTimer, isNotNull);
+
+      service.dispose();
+    });
+
+    test('6. Fila vazia cancela timer e removePendingRequest limpa timer', () async {
+      fakeApi.shouldFail = true;
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 300.0});
+      expect(service.retryTimer, isNotNull);
+
+      final reqId = service.pendingRequests.first.id;
+      await service.removePendingRequest(reqId);
+
+      expect(service.pendingRequests, isEmpty);
+      expect(service.retryTimer, isNull);
+      service.dispose();
+    });
+
+    test('7. Dispose cancela timer e recursos', () async {
+      fakeApi.shouldFail = true;
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      await service.addPendingRequest('REGISTER_SALE', {'value': 350.0});
+      expect(service.retryTimer, isNotNull);
+
+      service.dispose();
+      expect(service.retryTimer, isNull);
+    });
+
+    test('8. Bloqueio contra execuções concorrentes simultâneas', () async {
+      fakeApi.inFlightCompleter = Completer<void>();
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      final future1 = service.addPendingRequest('REGISTER_SALE', {'value': 400.0});
+      // Tenta chamar syncAllPending enquanto a primeira ainda está em voo
+      final future2 = service.syncAllPending();
+
+      expect(service.isSyncing, isTrue);
+
+      // Conclui a chamada da API
+      fakeApi.inFlightCompleter!.complete();
+      await future1;
+      await future2;
+
+      expect(service.isSyncing, isFalse);
+      expect(fakeApi.registerSaleCalls, 1);
+      service.dispose();
+    });
+
+    test('9. Item com maxRetries permanece visível como falha definitiva sem loop infinito', () async {
+      fakeApi.shouldFail = true;
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      // Adiciona item que já atingiu maxRetries
+      final reqExceeded = SyncRequest(
+        id: 'exceeded-1',
         type: 'REGISTER_SALE',
-        payload: {'value': 200.0},
+        payload: {'value': 500.0},
         createdAt: DateTime.now(),
         retryCount: 5,
-        lastError: 'Fatal error',
+        lastError: 'Permanent failure',
       );
+      service.pendingRequests.add(reqExceeded);
 
-      expect(req.retryCount >= SyncService.maxRetries, isTrue);
+      await service.syncAllPending();
+
+      // Chamadas à API não devem ser feitas para item com retryCount >= 5
+      expect(fakeApi.registerSaleCalls, 0);
+      expect(service.pendingRequests.length, 1);
+      expect(service.retryTimer, isNull); // Nenhum timer agendado
+      service.dispose();
     });
   });
 }

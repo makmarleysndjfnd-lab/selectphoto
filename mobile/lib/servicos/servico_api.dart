@@ -21,6 +21,12 @@ class ApiService {
     _initDio();
   }
 
+  @visibleForTesting
+  ApiService.testInstance() {
+    _baseUrl = 'http://localhost:3000/api';
+    _initDio();
+  }
+
   Dio get dio => _dio;
   String get baseUrl => _baseUrl;
 
@@ -311,10 +317,19 @@ class ApiService {
     }
   }
 
-  // Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK for a city
-  Future<Map<String, dynamic>> confirmGrafica(String city) async {
+  // Confirm arrival from gráfica — moves AWAITING_RELEASE → IN_STOCK
+  Future<Map<String, dynamic>> confirmGrafica({
+    String? city,
+    String? eventName,
+    List<String>? clientIds,
+  }) async {
     try {
-      final response = await _dio.put('/clients/confirm-grafica', data: {'city': city});
+      final Map<String, dynamic> data = {};
+      if (city != null) data['city'] = city;
+      if (eventName != null) data['eventName'] = eventName;
+      if (clientIds != null) data['clientIds'] = clientIds;
+
+      final response = await _dio.put('/clients/confirm-grafica', data: data);
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
       throw Exception(_extractError(e));

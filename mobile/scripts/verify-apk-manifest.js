@@ -66,8 +66,8 @@ function verifyApk() {
   console.log(`🏷️  Package: ${packageName}`);
   console.log(`🏷️  Version: ${versionName} (code ${versionCode})`);
 
-  if (versionName !== '1.0.3' || versionCode !== '4') {
-    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.3', versionCode='4'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
+  if (versionName !== '1.0.4' || versionCode !== '5') {
+    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.4', versionCode='5'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
     process.exit(1);
   }
 

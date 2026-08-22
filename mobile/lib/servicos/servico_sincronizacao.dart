@@ -46,19 +46,48 @@ class SyncRequest {
 class SyncService extends ChangeNotifier {
   final ApiService apiService;
   List<SyncRequest> _pendingRequests = [];
-  Timer? _timer;
+  Timer? _retryTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
-  bool _isAutoSyncRunning = false;
   bool _isOnline = true;
   static const int maxRetries = 5;
 
   List<SyncRequest> get pendingRequests => _pendingRequests;
   bool get isOnline => _isOnline;
 
-  SyncService(this.apiService) {
+  bool _isDisposed = false;
+
+  @visibleForTesting
+  Timer? get retryTimer => _retryTimer;
+
+  @visibleForTesting
+  bool get isSyncing => _isSyncing;
+
+  @visibleForTesting
+  Future<void> setOnlineForTesting(bool online) async {
+    final wasOffline = !_isOnline;
+    _isOnline = online;
+    _safeNotifyListeners();
+
+    if (wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
+      await syncAllPending();
+    }
+  }
+
+  void _safeNotifyListeners() {
+    if (!_isDisposed) {
+      notifyListeners();
+    }
+  }
+
+  @visibleForTesting
+  static int calculateBackoff(int retryLevel) {
+    return (15 * (1 << (retryLevel > 3 ? 3 : retryLevel))).clamp(15, 120);
+  }
+
+  SyncService(this.apiService, {bool? initialOnline}) {
+    if (initialOnline != null) _isOnline = initialOnline;
     _initConnectivityListener();
     _loadPendingRequests();
-    startAutoSync();
   }
 
   void _initConnectivityListener() {
@@ -66,12 +95,12 @@ class SyncService extends ChangeNotifier {
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
       final wasOffline = !_isOnline;
       _isOnline = hasConnection;
-      notifyListeners();
+      _safeNotifyListeners();
 
-      // Dispara sincronização imediatamente ao recuperar conectividade
-      if (wasOffline && _isOnline) {
+      // Dispara sincronização imediatamente ao recuperar conectividade caso haja pendências
+      if (wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
         if (kDebugMode) {
-          print('[SyncService] Conexão restabelecida! Iniciando sincronização da fila.');
+          print('[SyncService] Conexão restabelecida com ${_pendingRequests.length} pendências! Iniciando sincronização.');
         }
         syncAllPending();
       }
@@ -80,16 +109,37 @@ class SyncService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _isDisposed = true;
+    _cancelRetryTimer();
     _connectivitySubscription?.cancel();
     super.dispose();
   }
 
-  void startAutoSync() {
-    if (_isAutoSyncRunning) return;
-    _isAutoSyncRunning = true;
-    _timer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (_isOnline) {
+  void _cancelRetryTimer() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+  }
+
+  void _scheduleNextRetry() {
+    _cancelRetryTimer();
+    if (_pendingRequests.isEmpty || !_isOnline) return;
+
+    // Calcula backoff baseado no maior número de retentativas dos itens pendentes
+    int maxRetryLevel = 0;
+    for (var req in _pendingRequests) {
+      if (req.retryCount > maxRetryLevel) maxRetryLevel = req.retryCount;
+    }
+
+    // Intervalo progressivo: 15s, 30s, 60s, até 120s no máximo
+    final delaySeconds = (15 * (1 << (maxRetryLevel > 3 ? 3 : maxRetryLevel))).clamp(15, 120);
+
+    if (kDebugMode) {
+      print('[SyncService] Agendando próxima tentativa de sync para daqui a ${delaySeconds}s');
+    }
+
+    _retryTimer = Timer(Duration(seconds: delaySeconds), () {
+      _retryTimer = null;
+      if (_isOnline && _pendingRequests.isNotEmpty) {
         syncAllPending();
       }
     });
@@ -102,7 +152,10 @@ class SyncService extends ChangeNotifier {
       if (data != null) {
         final List<dynamic> decoded = json.decode(data);
         _pendingRequests = decoded.map((e) => SyncRequest.fromJson(e)).toList();
-        notifyListeners();
+        _safeNotifyListeners();
+        if (_pendingRequests.isNotEmpty && _isOnline) {
+          syncAllPending();
+        }
       }
     } catch (e) {
       if (kDebugMode) {
@@ -116,7 +169,7 @@ class SyncService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final String encoded = json.encode(_pendingRequests.map((e) => e.toJson()).toList());
       await prefs.setString('offline_backups', encoded);
-      notifyListeners();
+      _safeNotifyListeners();
     } catch (e) {
       if (kDebugMode) {
         print('[SyncService] Erro ao salvar fila de sync: $e');
@@ -141,13 +194,18 @@ class SyncService extends ChangeNotifier {
     } catch (_) {}
 
     if (_isOnline) {
-      syncAllPending();
+      await syncAllPending();
+    } else {
+      _scheduleNextRetry();
     }
   }
 
   Future<void> removePendingRequest(String id) async {
     _pendingRequests.removeWhere((e) => e.id == id);
     await _savePendingRequests();
+    if (_pendingRequests.isEmpty) {
+      _cancelRetryTimer();
+    }
   }
 
   bool _isSyncing = false;
@@ -159,9 +217,10 @@ class SyncService extends ChangeNotifier {
     try {
       final requestsToSync = List<SyncRequest>.from(_pendingRequests);
       bool hasChanges = false;
+      bool hasErrors = false;
 
       for (var req in requestsToSync) {
-        // Se excedeu o número máximo de tentativas, ignora para não sobrecarregar
+        // Se excedeu o número máximo de tentativas, ignora
         if (req.retryCount >= maxRetries) continue;
         if (req.isSyncing) continue;
 
@@ -187,6 +246,7 @@ class SyncService extends ChangeNotifier {
             success = true;
           }
         } catch (e) {
+          hasErrors = true;
           failureError = e.toString();
           if (kDebugMode) {
             print('[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
@@ -203,6 +263,12 @@ class SyncService extends ChangeNotifier {
           req.lastError = failureError;
           hasChanges = true;
         }
+      }
+
+      if (_pendingRequests.isEmpty) {
+        _cancelRetryTimer();
+      } else if (hasErrors) {
+        _scheduleNextRetry();
       }
 
       if (hasChanges) {
