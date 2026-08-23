@@ -995,7 +995,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     subtitle: const Text('Configurar impressora bluetooth e parâmetros', style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
                       Navigator.pop(ctx);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: true)));
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen(canManageRoi: false, isFotografo: true)));
                     },
                   ),
                   const SizedBox(height: 12),

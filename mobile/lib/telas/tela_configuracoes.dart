@@ -15,8 +15,21 @@ import '../widgets/led_card.dart';
 
 
 class SettingsScreen extends StatefulWidget {
+  /// Somente administradores devem receber [canManageRoi] = true.
+  /// O padrão é false (fechado) para garantir que vendedores e fotógrafos
+  /// não visualizem nem alterem os parâmetros de ROI por engano.
+  final bool canManageRoi;
+
+  /// [isFotografo] controla funcionalidades exclusivas do fotógrafo:
+  /// impresora bluetooth visível somente para fotógrafos,
+  /// download de backup visível somente para não-fotógrafos.
   final bool isFotografo;
-  const SettingsScreen({super.key, this.isFotografo = false});
+
+  const SettingsScreen({
+    super.key,
+    this.canManageRoi = false,
+    this.isFotografo = false,
+  });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -179,7 +192,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
           ],
 
-          if (!widget.isFotografo) ...[
+          if (widget.canManageRoi) ...[
             LedCard(
               color: const Color(0xFF1A1A2E),
               child: Padding(

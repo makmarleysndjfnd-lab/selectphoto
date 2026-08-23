@@ -1006,7 +1006,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                         constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
                         padding: EdgeInsets.zero,
                         onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(isFotografo: false)));
+                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(canManageRoi: true)));
                         },
                         icon: const Icon(Icons.settings, color: Color(0xFFCE93D8), size: 22),
                         tooltip: 'Configurações',
