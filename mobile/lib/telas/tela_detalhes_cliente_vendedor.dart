@@ -72,16 +72,77 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
   @override
   Widget build(BuildContext context) {
     final client = widget.clientData;
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final isKeyboardOpen = keyboardHeight > 100;
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF0F1923),
       body: Column(
         children: [
-          _buildHeader(client),
-          _buildClientInfo(client),
+          // Quando teclado está aberto, exibe barra compacta em vez do cabeçalho completo
+          if (isKeyboardOpen)
+            _buildCompactHeader(client)
+          else
+            _buildHeader(client),
+          if (!isKeyboardOpen) _buildClientInfo(client),
           if (!widget.isFotografo) _buildTabBar(),
           if (!widget.isFotografo) Expanded(child: _buildTabView(client)),
         ],
+      ),
+    );
+  }
+
+  /// Barra compacta exibida quando o teclado está aberto
+  Widget _buildCompactHeader(Map<String, dynamic> client) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF0D1B2A), Color(0xFF0D3B6E)],
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 16, 6),
+          child: Row(
+            children: [
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_ios_rounded,
+                    color: Color(0xFF4FC3F7)),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      client['name'] ?? 'Cliente',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (client['sequenceNumber'] != null)
+                      Text(
+                        client['sequenceNumber'].toString(),
+                        style: const TextStyle(
+                            color: Color(0xFF4FC3F7),
+                            fontSize: 11,
+                            fontFamily: 'monospace'),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -314,11 +375,14 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   ),
                   const SizedBox(width: 16),
                 ],
-                if (client['visitTime'] != null) ...[
-                  Expanded(child: _infoRow(Icons.access_time, "Visita: ${client['visitTime']}")),
-                ],
+                // Profissão e Horário em linhas separadas (evita espremimento)
                 if (client['profession'] != null && client['profession'].toString().isNotEmpty) ...[
-                  Expanded(child: _infoRow(Icons.work, client['profession'].toString())),
+                  const SizedBox(height: 6),
+                  _infoRow(Icons.work, client['profession'].toString()),
+                ],
+                if (client['visitTime'] != null) ...[
+                  const SizedBox(height: 4),
+                  _infoRow(Icons.access_time, "Visita: ${client['visitTime']}"),
                 ],
               ],
             ),
@@ -628,8 +692,10 @@ class _SaleTabState extends State<_SaleTab> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardPadding = MediaQuery.of(context).viewInsets.bottom;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + keyboardPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -644,13 +710,23 @@ class _SaleTabState extends State<_SaleTab> {
               style:
                   const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           const SizedBox(height: 20),
-          
-          TextField(
-            controller: _valorVendaController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [CurrencyTextInputFormatter.currency(locale: 'pt_BR', symbol: 'R\$')],
-            style: const TextStyle(color: Colors.white),
-            decoration: _fieldDecoration(r'Valor da Venda (R$)', Icons.attach_money_rounded),
+
+          // Campo de valor — fonte maior e altura mínima de 56px para
+          // ficar visível mesmo com o teclado numérico aberto
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 56),
+            child: TextField(
+              controller: _valorVendaController,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                CurrencyTextInputFormatter.currency(
+                    locale: 'pt_BR', symbol: r'R$')
+              ],
+              style: const TextStyle(color: Colors.white, fontSize: 18),
+              decoration:
+                  _fieldDecoration(r'Valor da Venda (R$)', Icons.attach_money_rounded),
+            ),
           ),
           const SizedBox(height: 16),
 
