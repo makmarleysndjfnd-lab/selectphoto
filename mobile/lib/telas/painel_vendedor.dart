@@ -49,6 +49,7 @@ class _SellerDashboardState extends State<SellerDashboard>
   final DateTime _selectedDate = DateTime.now();
 
   int _unreadNotifs = 0;
+  bool _isQuickMenuOpen = false; // Proteção contra duplo clique no menu de ações
 
   @override
   void initState() {
@@ -607,96 +608,270 @@ class _SellerDashboardState extends State<SellerDashboard>
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                      colors: [Color(0xFF4FC3F7), Color(0xFF0288D1)]),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                        color: const Color(0xFF0288D1).withOpacity(0.4),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4)),
-                  ],
-                ),
-                child: const Icon(Icons.sell_rounded,
-                    color: Colors.white, size: 22),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text('$_greeting, $_userName',
+              // Linha superior: ícone + saudação + botão de ações
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                          colors: [Color(0xFF4FC3F7), Color(0xFF0288D1)]),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                            color: const Color(0xFF0288D1).withOpacity(0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4)),
+                      ],
+                    ),
+                    child: const Icon(Icons.sell_rounded,
+                        color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$_greeting, $_userName',
                           style: const TextStyle(
                               color: Colors.white,
                               fontSize: 15,
-                              fontWeight: FontWeight.bold)),
+                              fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                        const Text('Painel do Vendedor',
+                            style: TextStyle(
+                                color: Color(0xFF90CAF9), fontSize: 12)),
+                      ],
                     ),
-                    const Text('Painel do Vendedor',
-                        style: TextStyle(
-                            color: Color(0xFF90CAF9), fontSize: 12)),
-                    const SizedBox(height: 4),
-                    Text(_verse,
-                        style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 11,
-                            fontStyle: FontStyle.italic)),
-                  ],
+                  ),
+                  // Botão de Ações rápidas
+                  Semantics(
+                    label: 'Ações rápidas',
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: _isQuickMenuOpen ? null : _showQuickActionsMenu,
+                      child: Container(
+                        constraints: const BoxConstraints(
+                            minWidth: 48, minHeight: 48),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_unreadNotifs > 0)
+                              Badge(
+                                label: Text(_unreadNotifs.toString()),
+                                child: const Icon(Icons.bolt_rounded,
+                                    color: Colors.white, size: 18),
+                              )
+                            else
+                              const Icon(Icons.bolt_rounded,
+                                  color: Colors.white, size: 18),
+                            const SizedBox(width: 4),
+                            const Text('Ações',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              // Frase motivacional — máx 2 linhas com reticências
+              if (_verse.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _verse,
+                  style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-
-              IconButton(
-                onPressed: () {
-                  _showNotificacoesVendedorDialog();
-                },
-                icon: _unreadNotifs > 0 
-                  ? Badge(
-                      label: Text(_unreadNotifs.toString()),
-                      child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent),
-                    )
-                  : const Icon(Icons.notifications_none_rounded, color: Colors.white54),
-                tooltip: 'Notificações',
-              ),
-              IconButton(
-                onPressed: () => _showTransferStockDialog('COVER'),
-                icon: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
-                tooltip: 'Transferir Capas',
-              ),
-              IconButton(
-                onPressed: () => _showTransferStockDialog('BOOK'),
-                icon: const Icon(Icons.menu_book_rounded, color: Colors.lightGreenAccent),
-                tooltip: 'Transferir Books',
-              ),
-              IconButton(
-                onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => const CostEntryScreen(),
-                  ));
-                },
-                icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
-                tooltip: 'Lançar Despesa',
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings, color: Colors.white70),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const SettingsScreen(isFotografo: false),
-                    ),
-                  );
-                },
-              ),
+              ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// Menu de ações rápidas — BottomSheet vertical com um item por linha.
+  /// Cada item mantém exatamente a função original do IconButton correspondente.
+  void _showQuickActionsMenu() {
+    if (_isQuickMenuOpen) return;
+    setState(() => _isQuickMenuOpen = true);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF0D1B2A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Handle visual
+                Container(
+                  width: 36, height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.flash_on_rounded,
+                          color: Color(0xFF4FC3F7), size: 18),
+                      SizedBox(width: 8),
+                      Text('Ações Rápidas',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15)),
+                    ],
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 4),
+                // 1. Notificações
+                _quickActionItem(
+                  ctx: ctx,
+                  icon: _unreadNotifs > 0
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_none_rounded,
+                  iconColor: _unreadNotifs > 0
+                      ? Colors.orangeAccent
+                      : Colors.white54,
+                  label: 'Notificações',
+                  badge: _unreadNotifs > 0 ? _unreadNotifs.toString() : null,
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showNotificacoesVendedorDialog();
+                  },
+                ),
+                // 2. Transferir Capas
+                _quickActionItem(
+                  ctx: ctx,
+                  icon: Icons.assignment_return_rounded,
+                  iconColor: Colors.orangeAccent,
+                  label: 'Transferir / Dividir Capas',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showTransferStockDialog('COVER');
+                  },
+                ),
+                // 3. Transferir Books
+                _quickActionItem(
+                  ctx: ctx,
+                  icon: Icons.menu_book_rounded,
+                  iconColor: Colors.lightGreenAccent,
+                  label: 'Transferir / Dividir Books',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showTransferStockDialog('BOOK');
+                  },
+                ),
+                // 4. Lançar Despesa
+                _quickActionItem(
+                  ctx: ctx,
+                  icon: Icons.receipt_long_rounded,
+                  iconColor: const Color(0xFFCE93D8),
+                  label: 'Lançar Despesa',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => const CostEntryScreen(),
+                    ));
+                  },
+                ),
+                // 5. Configurações
+                _quickActionItem(
+                  ctx: ctx,
+                  icon: Icons.settings_rounded,
+                  iconColor: Colors.white70,
+                  label: 'Configurações',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => const SettingsScreen(canManageRoi: false),
+                    ));
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    ).whenComplete(() {
+      if (mounted) setState(() => _isQuickMenuOpen = false);
+    });
+  }
+
+  /// Item de ação rápida com ícone, texto e toque mínimo de 48px.
+  Widget _quickActionItem({
+    required BuildContext ctx,
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    String? badge,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 32,
+              child: badge != null
+                  ? Badge(
+                      label: Text(badge),
+                      child: Icon(icon, color: iconColor, size: 22),
+                    )
+                  : Icon(icon, color: iconColor, size: 22),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 15),
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Colors.white24, size: 20),
+          ],
         ),
       ),
     );
