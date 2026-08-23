@@ -337,55 +337,57 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
           if (parsedHouseColor != null || parsedGateColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty)) ...[
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (parsedHouseColor != null) ...[
-                  Column(
-                    children: [
-                      const Text('Cor da Casa', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                      const SizedBox(height: 4),
-                      Container(
-                        width: 24, height: 24,
-                        decoration: BoxDecoration(
-                          color: parsedHouseColor,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white30),
-                        ),
-                      )
-                    ],
-                  ),
-                  const SizedBox(width: 16),
+            if (parsedHouseColor != null || parsedGateColor != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (parsedHouseColor != null) ...[
+                    Column(
+                      children: [
+                        const Text('Cor da Casa', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        const SizedBox(height: 4),
+                        Container(
+                          width: 24, height: 24,
+                          decoration: BoxDecoration(
+                            color: parsedHouseColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white30),
+                          ),
+                        )
+                      ],
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  if (parsedGateColor != null) ...[
+                    Column(
+                      children: [
+                        const Text('Cor do Portão', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        const SizedBox(height: 4),
+                        Container(
+                          width: 24, height: 24,
+                          decoration: BoxDecoration(
+                            color: parsedGateColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white30),
+                          ),
+                        )
+                      ],
+                    ),
+                    const SizedBox(width: 16),
+                  ],
                 ],
-                if (parsedGateColor != null) ...[
-                  Column(
-                    children: [
-                      const Text('Cor do Portão', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                      const SizedBox(height: 4),
-                      Container(
-                        width: 24, height: 24,
-                        decoration: BoxDecoration(
-                          color: parsedGateColor,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white30),
-                        ),
-                      )
-                    ],
-                  ),
-                  const SizedBox(width: 16),
-                ],
-                // Profissão e Horário em linhas separadas (evita espremimento)
-                if (client['profession'] != null && client['profession'].toString().isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  _infoRow(Icons.work, client['profession'].toString()),
-                ],
-                if (client['visitTime'] != null) ...[
-                  const SizedBox(height: 4),
-                  _infoRow(Icons.access_time, "Visita: ${client['visitTime']}"),
-                ],
-              ],
-            ),
+              ),
+            ],
+            // Profissão e Horário em linhas separadas (evita espremimento e overflow)
+            if (client['profession'] != null && client['profession'].toString().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _infoRow(Icons.work, client['profession'].toString()),
+            ],
+            if (client['visitTime'] != null) ...[
+              const SizedBox(height: 4),
+              _infoRow(Icons.access_time, "Visita: ${client['visitTime']}"),
+            ],
             if (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty) ...[
               const SizedBox(height: 8),
               _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
@@ -855,6 +857,7 @@ class _SaleTabState extends State<_SaleTab> {
 
   Widget _buildDropdown(String label, String value, List<String> items, void Function(String?) onChanged) {
     return DropdownButtonFormField<String>(
+      isExpanded: true,
       value: value,
       dropdownColor: const Color(0xFF1A1A2E),
       style: const TextStyle(color: Colors.white),
@@ -866,7 +869,7 @@ class _SaleTabState extends State<_SaleTab> {
         enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.15), width: 1)),
         focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5)),
       ),
-      items: items.map((i) => DropdownMenuItem(value: i, child: Text(i))).toList(),
+      items: items.map((i) => DropdownMenuItem(value: i, child: Text(i, overflow: TextOverflow.ellipsis))).toList(),
       onChanged: onChanged,
     );
   }
@@ -969,12 +972,13 @@ class _NonSaleTabState extends State<_NonSaleTab> {
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 20),
           DropdownButtonFormField<String>(
+            isExpanded: true,
             value: _selectedReason,
-            dropdownColor: const Color(0xFF1A2535),
+            dropdownColor: const Color(0xFF1A1A2E),
             style: const TextStyle(color: Colors.white),
             decoration: _fieldDecoration('Motivo da recusa', Icons.cancel_rounded),
             items: _reasons
-                .map((r) => DropdownMenuItem(value: r, child: Text(r)))
+                .map((r) => DropdownMenuItem(value: r, child: Text(r, overflow: TextOverflow.ellipsis)))
                 .toList(),
             onChanged: (v) => setState(() => _selectedReason = v),
           ),

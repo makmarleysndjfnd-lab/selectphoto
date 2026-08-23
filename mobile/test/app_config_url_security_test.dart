@@ -25,9 +25,9 @@ void main() {
     test('1. Host de produção oficial é estritamente selectphoto-k1ac.onrender.com', () {
       expect(AppConfig.authorizedProductionHost, equals('selectphoto-k1ac.onrender.com'));
       expect(AppConfig.officialProductionUrl, equals('https://selectphoto-k1ac.onrender.com/api'));
-      expect(AppConfig.appVersion, equals('1.0.4'));
-      expect(AppConfig.buildNumber, equals(5));
-      expect(AppConfig.fullVersion, equals('1.0.4+5'));
+      expect(AppConfig.appVersion, equals('1.0.5'));
+      expect(AppConfig.buildNumber, equals(6));
+      expect(AppConfig.fullVersion, equals('1.0.5+6'));
     });
 
     test('2. Validador em release aceita apenas HTTPS e host oficial', () {

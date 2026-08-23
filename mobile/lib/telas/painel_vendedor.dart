@@ -751,11 +751,14 @@ class _SellerDashboardState extends State<SellerDashboard>
                       Icon(Icons.flash_on_rounded,
                           color: Color(0xFF4FC3F7), size: 18),
                       SizedBox(width: 8),
-                      Text('Ações Rápidas',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15)),
+                      Expanded(
+                        child: Text('Ações Rápidas',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15),
+                            overflow: TextOverflow.ellipsis),
+                      ),
                     ],
                   ),
                 ),
@@ -952,10 +955,14 @@ class _SellerDashboardState extends State<SellerDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
             children: [
-              const Text('Distribuição entre Vendedores', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text('Distribuição entre Vendedores',
+                  style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
@@ -967,13 +974,14 @@ class _SellerDashboardState extends State<SellerDashboard>
           const Text('Atribua os books da sua rota para os vendedores da sua equipe.', style: TextStyle(color: Colors.white70, fontSize: 13)),
           const SizedBox(height: 16),
           DropdownButtonFormField<Map<String, dynamic>>(
+            isExpanded: true,
             value: _selectedSellerForTransfer,
-            hint: const Text('Selecione o vendedor da empresa', style: TextStyle(color: Colors.white54)),
+            hint: const Text('Selecione o vendedor da empresa', style: TextStyle(color: Colors.white54), overflow: TextOverflow.ellipsis),
             dropdownColor: const Color(0xFF1A1A2E),
             items: _companySellers.map((seller) {
               return DropdownMenuItem<Map<String, dynamic>>(
                 value: seller,
-                child: Text(seller['name'] ?? 'Vendedor', style: const TextStyle(color: Colors.white)),
+                child: Text(seller['name'] ?? 'Vendedor', style: const TextStyle(color: Colors.white), overflow: TextOverflow.ellipsis),
               );
             }).toList(),
             onChanged: (val) {
@@ -1022,16 +1030,21 @@ class _SellerDashboardState extends State<SellerDashboard>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Row(children: [
-                Icon(Icons.qr_code_scanner_rounded,
-                    color: Color(0xFF4FC3F7), size: 20),
-                SizedBox(width: 8),
-                Text('Buscar por código da ficha',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14)),
-              ]),
+              const Expanded(
+                child: Row(children: [
+                  Icon(Icons.qr_code_scanner_rounded,
+                      color: Color(0xFF4FC3F7), size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Buscar por código da ficha',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                ]),
+              ),
               IconButton(
                 onPressed: _openQRScanner,
                 icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
@@ -1130,8 +1143,11 @@ class _SellerDashboardState extends State<SellerDashboard>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 4,
           children: [
             const Text('Clientes do Dia',
                 style: TextStyle(
@@ -1238,15 +1254,15 @@ class _SellerDashboardState extends State<SellerDashboard>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.event_note_rounded, color: Colors.white),
-                    SizedBox(width: 8),
-                    Text('Abrir Agenda Completa', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
+                Icon(Icons.event_note_rounded, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Abrir Agenda Completa',
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis),
                 ),
+                SizedBox(width: 8),
                 Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
               ],
             ),

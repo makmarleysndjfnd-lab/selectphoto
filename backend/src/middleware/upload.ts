@@ -32,29 +32,41 @@ function validateB2Config(): void {
 validateB2Config();
 
 // ── Extrair região do endpoint como fallback seguro ────────────────────────────
-function resolveB2Region(): string {
-  const fromEnv = process.env.B2_REGION;
-  if (fromEnv) return fromEnv;
+export function resolveB2Region(endpointOverride?: string, regionOverride?: string): string {
+  const fromEnv = regionOverride !== undefined ? regionOverride : process.env.B2_REGION;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
   // Formato B2: https://s3.<region>.backblazeb2.com
-  const endpoint = process.env.B2_ENDPOINT || '';
+  const endpoint = endpointOverride !== undefined ? endpointOverride : (process.env.B2_ENDPOINT || '');
   const match = endpoint.match(/s3\.([^.]+)\.backblazeb2\.com/);
   if (match) return match[1];
   return 'us-east-005'; // fallback conservador
 }
 
-// ── Configuração do cliente S3 para o Backblaze B2 ────────────────────────────
+// ── Fábrica de configuração do cliente S3 para o Backblaze B2 ─────────────────
 // requestChecksumCalculation: 'WHEN_REQUIRED' evita envio automático de CRC32
 // que o B2 S3-compatible não suporta (retornaria NotImplemented).
-export const s3 = new S3Client({
-  endpoint: process.env.B2_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
-  region: resolveB2Region(),
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID || '',
-    secretAccessKey: process.env.B2_APPLICATION_KEY || '',
-  },
-  requestChecksumCalculation: 'WHEN_REQUIRED',
-  responseChecksumValidation: 'WHEN_REQUIRED',
-});
+export function createB2S3Client(options?: {
+  endpoint?: string;
+  region?: string;
+  credentials?: { accessKeyId: string; secretAccessKey: string };
+  forcePathStyle?: boolean;
+}): S3Client {
+  const endpoint = options?.endpoint || process.env.B2_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com';
+  const region = options?.region || resolveB2Region(options?.endpoint, options?.region);
+  return new S3Client({
+    endpoint,
+    region,
+    credentials: options?.credentials || {
+      accessKeyId: process.env.B2_KEY_ID || '',
+      secretAccessKey: process.env.B2_APPLICATION_KEY || '',
+    },
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
+    forcePathStyle: options?.forcePathStyle ?? true,
+  });
+}
+
+export const s3 = createB2S3Client();
 
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -161,7 +173,18 @@ function anonymizeRequestId(requestId?: string): string {
   return requestId.length > 8 ? `${requestId.substring(0, 8)}...` : requestId;
 }
 
-export function handleUploadError(err: any, res: Response, correlationId?: string): boolean {
+export interface UploadFileMetadata {
+  fieldname?: string;
+  mimetype?: string;
+  size?: number;
+}
+
+export function handleUploadError(
+  err: any,
+  res: Response,
+  correlationId?: string,
+  fileMeta?: UploadFileMetadata
+): boolean {
   if (!err) return false;
 
   const corrId = correlationId || uuidv4().substring(0, 8);
@@ -208,11 +231,16 @@ export function handleUploadError(err: any, res: Response, correlationId?: strin
   }
 
   // 3. Falhas do S3/Backblaze B2, checksum e rede -> HTTP 503 amigável e seguro
-  const isStorageOrNetworkError =
-    // Credenciais e acesso
+  const isAuthError =
     errName === 'InvalidAccessKeyId' ||
     errName === 'SignatureDoesNotMatch' ||
     errName === 'AccessDenied' ||
+    lowerMsg.includes('invalidaccesskeyid') ||
+    lowerMsg.includes('signaturedoesnotmatch') ||
+    lowerMsg.includes('accessdenied');
+
+  const isStorageOrNetworkError =
+    isAuthError ||
     errName === 'NoSuchBucket' ||
     // Checksum e compatibilidade B2 (incluídos na 1.0.5)
     errName === 'NotImplemented' ||
@@ -233,9 +261,6 @@ export function handleUploadError(err: any, res: Response, correlationId?: strin
     lowerCode === 'enotfound' ||
     lowerCode === 'esockettimedout' ||
     // Mensagem como fallback
-    lowerMsg.includes('invalidaccesskeyid') ||
-    lowerMsg.includes('signaturedoesnotmatch') ||
-    lowerMsg.includes('accessdenied') ||
     lowerMsg.includes('nosuchbucket') ||
     lowerMsg.includes('notimplemented') ||
     lowerMsg.includes('invalidargument') ||
@@ -249,15 +274,27 @@ export function handleUploadError(err: any, res: Response, correlationId?: strin
     lowerMsg.includes('econnreset') ||
     lowerMsg.includes('etimedout');
 
+  // Metadados seguros do arquivo (quando disponíveis)
+  const safeFileMeta = {
+    fieldname: fileMeta?.fieldname || 'n/a',
+    mimetype: fileMeta?.mimetype || 'n/a',
+    sizeBytes: fileMeta?.size !== undefined ? fileMeta.size : 'n/a',
+  };
+
   if (isStorageOrNetworkError) {
-    // Log seguro e sanitizado — nunca imprimir token, chave, URL assinada ou conteúdo
+    // Para erros de autenticação, evita mensagem bruta para prevenir vazamento
+    const sanitizedMsg = isAuthError
+      ? 'Falha de autenticação/autorização no serviço de armazenamento externo'
+      : sanitizeErrorMessage(errMsg);
+
     console.error('🚨 [SAFE_UPLOAD] Falha no serviço de armazenamento externo:', {
       correlationId: corrId,
       name: errName,
       code: errCode,
       httpStatus: httpStatus ?? 'n/a',
       requestId: anonymizeRequestId(rawRequestId),
-      message: sanitizeErrorMessage(errMsg),
+      ...safeFileMeta,
+      message: sanitizedMsg,
     });
     res.status(503).json({
       error: 'Armazenamento temporariamente indisponível. Tente novamente mais tarde.',
@@ -273,6 +310,7 @@ export function handleUploadError(err: any, res: Response, correlationId?: strin
     code: errCode,
     httpStatus: httpStatus ?? 'n/a',
     requestId: anonymizeRequestId(rawRequestId),
+    ...safeFileMeta,
   });
   res.status(503).json({
     error: 'Não foi possível processar o envio do arquivo. Tente novamente mais tarde.',
@@ -291,7 +329,12 @@ export function safeUpload(multerMiddleware: any): RequestHandler {
     const correlationId = uuidv4().substring(0, 8);
     multerMiddleware(req, res, (err: any) => {
       if (err) {
-        return handleUploadError(err, res, correlationId);
+        const fileMeta: UploadFileMetadata = {
+          fieldname: req.file?.fieldname ?? (Array.isArray(req.files) ? req.files[0]?.fieldname : undefined),
+          mimetype: req.file?.mimetype ?? (Array.isArray(req.files) ? req.files[0]?.mimetype : undefined),
+          size: req.file?.size ?? (Array.isArray(req.files) ? req.files[0]?.size : undefined),
+        };
+        return handleUploadError(err, res, correlationId, fileMeta);
       }
       next();
     });
