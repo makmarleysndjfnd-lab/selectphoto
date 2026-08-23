@@ -12,14 +12,48 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configuração do cliente S3 para o Backblaze B2
+// ── Validação de variáveis B2 na inicialização (sem imprimir valores) ─────────
+function validateB2Config(): void {
+  const required = ['B2_ENDPOINT', 'B2_BUCKET_NAME', 'B2_KEY_ID', 'B2_APPLICATION_KEY'];
+  const missing = required.filter(k => !process.env[k]);
+  if (missing.length > 0 && !isExternalServicesDisabled()) {
+    console.warn(
+      `[UPLOAD] Variáveis B2 ausentes: ${missing.join(', ')}. ` +
+      'Upload externo ficará indisponível até que sejam configuradas.'
+    );
+  }
+  // Coerência endpoint × região (aviso seguro, sem imprimir valores)
+  const endpoint = process.env.B2_ENDPOINT || '';
+  const region = process.env.B2_REGION || '';
+  if (endpoint && region && !endpoint.includes(region)) {
+    console.warn('[UPLOAD] B2_REGION pode não corresponder ao endpoint configurado. Verifique a consistência.');
+  }
+}
+validateB2Config();
+
+// ── Extrair região do endpoint como fallback seguro ────────────────────────────
+function resolveB2Region(): string {
+  const fromEnv = process.env.B2_REGION;
+  if (fromEnv) return fromEnv;
+  // Formato B2: https://s3.<region>.backblazeb2.com
+  const endpoint = process.env.B2_ENDPOINT || '';
+  const match = endpoint.match(/s3\.([^.]+)\.backblazeb2\.com/);
+  if (match) return match[1];
+  return 'us-east-005'; // fallback conservador
+}
+
+// ── Configuração do cliente S3 para o Backblaze B2 ────────────────────────────
+// requestChecksumCalculation: 'WHEN_REQUIRED' evita envio automático de CRC32
+// que o B2 S3-compatible não suporta (retornaria NotImplemented).
 export const s3 = new S3Client({
   endpoint: process.env.B2_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
-  region: 'us-east-005',
+  region: resolveB2Region(),
   credentials: {
     accessKeyId: process.env.B2_KEY_ID || '',
     secretAccessKey: process.env.B2_APPLICATION_KEY || '',
   },
+  requestChecksumCalculation: 'WHEN_REQUIRED',
+  responseChecksumValidation: 'WHEN_REQUIRED',
 });
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -113,8 +147,24 @@ export const upload = multer({
   storage: dynamicStorage,
 });
 
-export function handleUploadError(err: any, res: Response): boolean {
+// ── Sanitizador de mensagem de erro (sem vazar segredos) ──────────────────────
+function sanitizeErrorMessage(msg: string): string {
+  return msg
+    .replace(/(keyId|secret|token|password|auth|authorization|key|credential)=([^\s&"']+)/gi, '$1=***')
+    .replace(/https?:\/\/[^@\s]+@[^\s"']+/gi, 'https://***@***')
+    .substring(0, 300);
+}
+
+// ── Anonimizar requestId (manter apenas prefixo para correlação) ──────────────
+function anonymizeRequestId(requestId?: string): string {
+  if (!requestId) return 'n/a';
+  return requestId.length > 8 ? `${requestId.substring(0, 8)}...` : requestId;
+}
+
+export function handleUploadError(err: any, res: Response, correlationId?: string): boolean {
   if (!err) return false;
+
+  const corrId = correlationId || uuidv4().substring(0, 8);
 
   // 1. Erros do próprio Multer (tamanho, limite de arquivos, campos inesperados)
   if (err instanceof multer.MulterError) {
@@ -141,6 +191,10 @@ export function handleUploadError(err: any, res: Response): boolean {
   const lowerName = errName.toLowerCase();
   const lowerCode = errCode.toLowerCase();
 
+  // Metadados S3 seguros para log
+  const httpStatus = err.$metadata?.httpStatusCode;
+  const rawRequestId = err.$metadata?.requestId || err.requestId;
+
   // 2. Erros de validação de negócio/MIME/Empresa -> HTTP 400
   if (
     lowerMsg.includes('tipo de arquivo') ||
@@ -153,26 +207,40 @@ export function handleUploadError(err: any, res: Response): boolean {
     return true;
   }
 
-  // 3. Falhas do S3/Backblaze B2 e erros de rede -> HTTP 503 amigável e seguro
+  // 3. Falhas do S3/Backblaze B2, checksum e rede -> HTTP 503 amigável e seguro
   const isStorageOrNetworkError =
+    // Credenciais e acesso
     errName === 'InvalidAccessKeyId' ||
     errName === 'SignatureDoesNotMatch' ||
     errName === 'AccessDenied' ||
     errName === 'NoSuchBucket' ||
+    // Checksum e compatibilidade B2 (incluídos na 1.0.5)
+    errName === 'NotImplemented' ||
+    errName === 'InvalidArgument' ||
+    errName === 'BadDigest' ||
+    errName === 'ChecksumMismatch' ||
+    errName === 'XAmzContentSHA256Mismatch' ||
+    // Disponibilidade
     errName === 'ServiceUnavailable' ||
     errName === 'TimeoutError' ||
     errName === 'NetworkingError' ||
     lowerName.includes('s3') ||
     lowerName.includes('storage') ||
+    // Códigos de rede
     lowerCode === 'econnreset' ||
     lowerCode === 'econnrefused' ||
     lowerCode === 'etimedout' ||
     lowerCode === 'enotfound' ||
     lowerCode === 'esockettimedout' ||
+    // Mensagem como fallback
     lowerMsg.includes('invalidaccesskeyid') ||
     lowerMsg.includes('signaturedoesnotmatch') ||
     lowerMsg.includes('accessdenied') ||
     lowerMsg.includes('nosuchbucket') ||
+    lowerMsg.includes('notimplemented') ||
+    lowerMsg.includes('invalidargument') ||
+    lowerMsg.includes('baddigest') ||
+    lowerMsg.includes('checksum') ||
     lowerMsg.includes('serviceunavailable') ||
     lowerMsg.includes('networking') ||
     lowerMsg.includes('timeout') ||
@@ -182,33 +250,48 @@ export function handleUploadError(err: any, res: Response): boolean {
     lowerMsg.includes('etimedout');
 
   if (isStorageOrNetworkError) {
+    // Log seguro e sanitizado — nunca imprimir token, chave, URL assinada ou conteúdo
     console.error('🚨 [SAFE_UPLOAD] Falha no serviço de armazenamento externo:', {
+      correlationId: corrId,
       name: errName,
       code: errCode,
-      message: errMsg.replace(/(keyId|secret|token|password|auth|authorization)=([^\s&]+)/gi, '$1=***')
+      httpStatus: httpStatus ?? 'n/a',
+      requestId: anonymizeRequestId(rawRequestId),
+      message: sanitizeErrorMessage(errMsg),
     });
-    res.status(503).json({ error: 'Armazenamento temporariamente indisponível. Tente novamente mais tarde.' });
+    res.status(503).json({
+      error: 'Armazenamento temporariamente indisponível. Tente novamente mais tarde.',
+      supportCode: corrId,
+    });
     return true;
   }
 
   // 4. Fallback seguro para qualquer outra falha de upload -> HTTP 503 sem vazar stack trace
   console.error('🚨 [SAFE_UPLOAD] Erro inesperado no processamento de mídia:', {
+    correlationId: corrId,
     name: errName,
-    code: errCode
+    code: errCode,
+    httpStatus: httpStatus ?? 'n/a',
+    requestId: anonymizeRequestId(rawRequestId),
   });
-  res.status(503).json({ error: 'Não foi possível processar o envio do arquivo. Tente novamente mais tarde.' });
+  res.status(503).json({
+    error: 'Não foi possível processar o envio do arquivo. Tente novamente mais tarde.',
+    supportCode: corrId,
+  });
   return true;
 }
 
 /**
  * Middleware wrapper que captura erros de upload do Multer/S3
  * e retorna respostas padronizadas com tratamento granular sem stack traces.
+ * Gera um correlationId único por requisição para rastreabilidade segura.
  */
 export function safeUpload(multerMiddleware: any): RequestHandler {
   return (req: any, res: any, next: any) => {
+    const correlationId = uuidv4().substring(0, 8);
     multerMiddleware(req, res, (err: any) => {
       if (err) {
-        return handleUploadError(err, res);
+        return handleUploadError(err, res, correlationId);
       }
       next();
     });
