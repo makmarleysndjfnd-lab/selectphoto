@@ -75,8 +75,21 @@ function verifyApk() {
   console.log(`🏷️  Package: ${packageName}`);
   console.log(`🏷️  Version: ${versionName} (code ${versionCode})`);
 
-  if (versionName !== '1.0.4' || versionCode !== '5') {
-    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.4', versionCode='5'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
+  // Obter versão esperada dinamicamente do pubspec.yaml
+  const pubspecPath = path.resolve(__dirname, '../mobile/pubspec.yaml');
+  let expectedVersion = '1.0.5';
+  let expectedBuild = '6';
+  if (fs.existsSync(pubspecPath)) {
+    const pubspecContent = fs.readFileSync(pubspecPath, 'utf-8');
+    const vMatch = pubspecContent.match(/^version:\s*([^\s+]+)\+(\d+)/m);
+    if (vMatch) {
+      expectedVersion = vMatch[1];
+      expectedBuild = vMatch[2];
+    }
+  }
+
+  if (versionName !== expectedVersion || versionCode !== expectedBuild) {
+    console.error(`❌ Versão incorreta! Esperado: versionName='${expectedVersion}', versionCode='${expectedBuild}'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
     process.exit(1);
   }
 
