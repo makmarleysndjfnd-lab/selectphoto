@@ -257,7 +257,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const existingClosing = await prisma.dailyClosing.findFirst({
             where: {
                 sellerId: sellerId as string,
-                createdAt: {
+                date: {
                     gte: startDate,
                     lte: endDate
                 }
