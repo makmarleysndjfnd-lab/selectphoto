@@ -1,4 +1,4 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
@@ -10,62 +10,85 @@ import appRoutes, {
   CURRENT_APP_VERSION,
   CURRENT_BUILD_NUMBER,
   EXPECTED_APK_SHA256,
+  PUBLIC_APP_BASE_URL,
+  RELEASE_APK,
+  ApkReleaseDescriptor,
+  createAppRouter,
 } from '../src/routes/app';
 
-describe('VALscore & CRIPTOGRAFIA DO APK — Endpoint de Atualização e Download (1.0.6+7)', () => {
-  const tmpDir = path.join(__dirname, 'tmp_apk_test_' + Date.now());
+describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.6+7)', { concurrency: 1 }, () => {
+  const tmpDir = path.join(__dirname, `tmp_apk_test_${Date.now()}`);
   let server: http.Server;
   let baseUrl: string;
   const originalStorageEnv = process.env.APK_STORAGE_PATH;
-  const originalShaEnv = process.env.EXPECTED_APK_SHA256;
 
   before(async () => {
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir, { recursive: true });
-    }
+    await fs.promises.mkdir(tmpDir, { recursive: true });
 
     const app = express();
     app.use('/api/app', appRoutes);
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
-        const addr = server.address() as any;
+        const addr = server.address() as { port: number };
         baseUrl = `http://127.0.0.1:${addr.port}/api/app`;
         resolve();
       });
     });
   });
 
+  afterEach(() => {
+    if (originalStorageEnv === undefined) {
+      delete process.env.APK_STORAGE_PATH;
+    } else {
+      process.env.APK_STORAGE_PATH = originalStorageEnv;
+    }
+  });
+
   after(async () => {
     if (server) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    if (fs.existsSync(tmpDir)) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-    process.env.APK_STORAGE_PATH = originalStorageEnv;
-    process.env.EXPECTED_APK_SHA256 = originalShaEnv;
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeRequest(urlPath: string): Promise<{ status: number; body: any; headers: any }> {
+  function sha256(content: Buffer): string {
+    return crypto.createHash('sha256').update(content).digest('hex').toUpperCase();
+  }
+
+  function descriptorFor(content: Buffer): ApkReleaseDescriptor {
+    return {
+      ...RELEASE_APK,
+      sha256: sha256(content),
+    };
+  }
+
+  function makeRequest(
+    urlPath: string,
+    targetBaseUrl = baseUrl
+  ): Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }> {
     return new Promise((resolve, reject) => {
-      http.get(`${baseUrl}${urlPath}`, (res) => {
-        let rawData = '';
-        res.on('data', (chunk) => (rawData += chunk));
-        res.on('end', () => {
-          let body = rawData;
-          try {
-            body = JSON.parse(rawData);
-          } catch {}
-          resolve({ status: res.statusCode || 0, body, headers: res.headers });
-        });
-      }).on('error', reject);
+      http
+        .get(`${targetBaseUrl}${urlPath}`, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          res.on('end', () => {
+            const rawData = Buffer.concat(chunks);
+            let body: unknown = rawData;
+            try {
+              body = JSON.parse(rawData.toString('utf8'));
+            } catch {
+              // Download válido permanece como Buffer.
+            }
+            resolve({ status: res.statusCode || 0, body, headers: res.headers });
+          });
+        })
+        .on('error', reject);
     });
   }
 
-  it('1. Arquivo ausente: getApkValidationStatus retorna valid: false com reason APK_NOT_FOUND', () => {
-    const fakePath = path.join(tmpDir, 'inexistente.apk');
-    const result = getApkValidationStatus(fakePath);
+  it('1. Arquivo ausente: validação falha com APK_NOT_FOUND', async () => {
+    const result = await getApkValidationStatus(path.join(tmpDir, 'inexistente.apk'));
 
     assert.equal(result.valid, false);
     assert.equal(result.reason, 'APK_NOT_FOUND');
@@ -74,88 +97,156 @@ describe('VALscore & CRIPTOGRAFIA DO APK — Endpoint de Atualização e Downloa
     assert.equal(result.expectedSha256, EXPECTED_APK_SHA256);
   });
 
-  it('2. Arquivo ausente: /version retorna apkAvailable: false e downloadUrl vazio', async () => {
+  it('2. Arquivo ausente: /version não anuncia e /download bloqueia', async () => {
     process.env.APK_STORAGE_PATH = path.join(tmpDir, 'inexistente.apk');
-
-    const res = await makeRequest('/version');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.version, '1.0.6');
-    assert.equal(res.body.buildNumber, 7);
-    assert.equal(res.body.apkAvailable, false);
-    assert.equal(res.body.downloadUrl, '');
-  });
-
-  it('3. Arquivo ausente: /download retorna 404 controlado', async () => {
-    process.env.APK_STORAGE_PATH = path.join(tmpDir, 'inexistente.apk');
-
-    const res = await makeRequest('/download');
-    assert.equal(res.status, 404);
-    assert.equal(res.body.reason, 'APK_NOT_FOUND');
-  });
-
-  it('4. Arquivo antigo / Hash divergente: getApkValidationStatus retorna SHA256_MISMATCH', () => {
-    const oldApkPath = path.join(tmpDir, 'old-app-release.apk');
-    const oldContent = Buffer.from('CONTEUDO_DO_APK_ANTIGO_LEGADO_VERSAO_1.0.5');
-    fs.writeFileSync(oldApkPath, oldContent);
-
-    const oldHash = crypto.createHash('sha256').update(oldContent).digest('hex').toUpperCase();
-
-    const result = getApkValidationStatus(oldApkPath);
-    assert.equal(result.valid, false);
-    assert.equal(result.reason, 'SHA256_MISMATCH');
-    assert.equal(result.foundSha256, oldHash);
-    assert.notEqual(result.foundSha256, EXPECTED_APK_SHA256);
-  });
-
-  it('5. APK antigo em disco: /version NÃO declara apkAvailable e /download bloqueia com 404', async () => {
-    const oldApkPath = path.join(tmpDir, 'old-app-release.apk');
-    process.env.APK_STORAGE_PATH = oldApkPath;
 
     const versionRes = await makeRequest('/version');
     assert.equal(versionRes.status, 200);
-    assert.equal(versionRes.body.apkAvailable, false);
-    assert.equal(versionRes.body.downloadUrl, '');
+    assert.deepEqual(versionRes.body, {
+      version: '1.0.6',
+      buildNumber: 7,
+      mandatory: false,
+      downloadUrl: '',
+      apkAvailable: false,
+      sha256: EXPECTED_APK_SHA256,
+    });
 
     const downloadRes = await makeRequest('/download');
     assert.equal(downloadRes.status, 404);
-    assert.equal(downloadRes.body.reason, 'SHA256_MISMATCH');
+    assert.equal((downloadRes.body as { reason: string }).reason, 'APK_NOT_FOUND');
   });
 
-  it('6. APK com hash correto: getApkValidationStatus retorna valid: true', () => {
-    const dummyApkContent = Buffer.from('CONTEUDO_MOCKADO_PARA_TESTE_DE_HASH_ESPECIFICO');
-    const dummyHash = crypto.createHash('sha256').update(dummyApkContent).digest('hex').toUpperCase();
-    const validMockPath = path.join(tmpDir, 'mock-valid-release.apk');
-    fs.writeFileSync(validMockPath, dummyApkContent);
+  it('3. APK antigo ou com hash incorreto não é aceito', async () => {
+    const oldApkPath = path.join(tmpDir, 'old-app-release.apk');
+    const oldContent = Buffer.from('CONTEUDO_DO_APK_ANTIGO_LEGADO_VERSAO_1.0.5');
+    await fs.promises.writeFile(oldApkPath, oldContent);
 
-    const result = getApkValidationStatus(validMockPath, dummyHash);
+    const result = await getApkValidationStatus(oldApkPath);
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, 'SHA256_MISMATCH');
+    assert.equal(result.foundSha256, sha256(oldContent));
+    assert.notEqual(result.foundSha256, EXPECTED_APK_SHA256);
+  });
+
+  it('4. Versão divergente do release atual é rejeitada antes do hash', async () => {
+    const content = Buffer.from('APK_COM_VERSAO_DIVERGENTE');
+    const apkPath = path.join(tmpDir, 'wrong-version.apk');
+    await fs.promises.writeFile(apkPath, content);
+
+    const result = await getApkValidationStatus(apkPath, {
+      ...descriptorFor(content),
+      version: '1.0.5',
+    });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, 'RELEASE_METADATA_MISMATCH');
+  });
+
+  it('5. Build divergente do release atual é rejeitado antes do hash', async () => {
+    const content = Buffer.from('APK_COM_BUILD_DIVERGENTE');
+    const apkPath = path.join(tmpDir, 'wrong-build.apk');
+    await fs.promises.writeFile(apkPath, content);
+
+    const result = await getApkValidationStatus(apkPath, {
+      ...descriptorFor(content),
+      buildNumber: 6,
+    });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, 'RELEASE_METADATA_MISMATCH');
+  });
+
+  it('6. Hash esperado inválido é rejeitado', async () => {
+    const content = Buffer.from('APK_COM_HASH_ESPERADO_INVALIDO');
+    const apkPath = path.join(tmpDir, 'invalid-expected-hash.apk');
+    await fs.promises.writeFile(apkPath, content);
+
+    const result = await getApkValidationStatus(apkPath, {
+      ...RELEASE_APK,
+      sha256: 'HASH_INVALIDO',
+    });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, 'INVALID_EXPECTED_SHA256');
+  });
+
+  it('7. Arquivo vinculado a versão, build, pacote e hash corretos é aceito', async () => {
+    const content = Buffer.from('CONTEUDO_MOCKADO_DO_ARTEFATO_AUDITADO');
+    const validPath = path.join(tmpDir, 'validated-release.apk');
+    await fs.promises.writeFile(validPath, content);
+
+    const result = await getApkValidationStatus(validPath, descriptorFor(content));
     assert.equal(result.valid, true);
-    assert.equal(result.foundSha256, dummyHash);
-    assert.equal(result.apkPath, validMockPath);
+    assert.equal(result.version, '1.0.6');
+    assert.equal(result.buildNumber, 7);
+    assert.equal(result.packageName, 'com.example.mobile');
+    assert.equal(result.foundSha256, sha256(content));
   });
 
-  it('7. APK com hash correto: /version retorna apkAvailable: true e downloadUrl ativo', async () => {
-    const dummyApkContent = Buffer.from('CONTEUDO_MOCKADO_PARA_TESTE_DE_HASH_ESPECIFICO_2');
-    const dummyHash = crypto.createHash('sha256').update(dummyApkContent).digest('hex').toUpperCase();
-    const validMockPath = path.join(tmpDir, 'mock-valid-release-2.apk');
-    fs.writeFileSync(validMockPath, dummyApkContent);
+  it('8. APK correto é anunciado e servido pelo endpoint protegido', async () => {
+    const content = Buffer.from('CONTEUDO_MOCKADO_SERVIDO_PELO_ENDPOINT_VALIDADO');
+    const validPath = path.join(tmpDir, 'endpoint-valid-release.apk');
+    await fs.promises.writeFile(validPath, content);
 
-    process.env.APK_STORAGE_PATH = validMockPath;
-    process.env.EXPECTED_APK_SHA256 = dummyHash;
+    const isolatedApp = express();
+    isolatedApp.use(
+      '/api/app',
+      createAppRouter({
+        apkPath: validPath,
+        release: descriptorFor(content),
+        publicBaseUrl: PUBLIC_APP_BASE_URL,
+      })
+    );
+    const isolatedServer = await new Promise<http.Server>((resolve) => {
+      const startedServer = isolatedApp.listen(0, '127.0.0.1', () => resolve(startedServer));
+    });
+
+    try {
+      const addr = isolatedServer.address() as { port: number };
+      const isolatedBaseUrl = `http://127.0.0.1:${addr.port}/api/app`;
+      const versionRes = await makeRequest('/version', isolatedBaseUrl);
+      const versionBody = versionRes.body as {
+        apkAvailable: boolean;
+        downloadUrl: string;
+        sha256: string;
+      };
+      assert.equal(versionBody.apkAvailable, true);
+      assert.equal(versionBody.downloadUrl, `${PUBLIC_APP_BASE_URL}/api/app/download`);
+      assert.equal(versionBody.sha256, sha256(content));
+
+      const downloadRes = await makeRequest('/download', isolatedBaseUrl);
+      assert.equal(downloadRes.status, 200);
+      assert.deepEqual(downloadRes.body, content);
+    } finally {
+      await new Promise<void>((resolve) => isolatedServer.close(() => resolve()));
+    }
+  });
+
+  it('9. APK antigo em disco não é anunciado nem servido', async () => {
+    const oldApkPath = path.join(tmpDir, 'old-server-app-release.apk');
+    await fs.promises.writeFile(oldApkPath, Buffer.from('APK_ANTIGO_NO_SERVIDOR'));
+    process.env.APK_STORAGE_PATH = oldApkPath;
 
     const versionRes = await makeRequest('/version');
-    assert.equal(versionRes.status, 200);
-    assert.equal(versionRes.body.apkAvailable, true);
-    assert.ok(versionRes.body.downloadUrl.includes('/api/app/download'));
+    const versionBody = versionRes.body as { apkAvailable: boolean; downloadUrl: string };
+    assert.equal(versionBody.apkAvailable, false);
+    assert.equal(versionBody.downloadUrl, '');
 
     const downloadRes = await makeRequest('/download');
-    assert.equal(downloadRes.status, 200);
-    assert.equal(downloadRes.body, dummyApkContent.toString());
+    assert.equal(downloadRes.status, 404);
+    assert.equal((downloadRes.body as { reason: string }).reason, 'SHA256_MISMATCH');
   });
 
-  it('8. APK real 1.0.6+7: Hash esperado é exatamente B6F42E5F7BC3B9FEE115D7285187855A4344B4142EC56A0B9235FFB3B6BF74F9', () => {
-    assert.equal(
-      EXPECTED_APK_SHA256,
-      'B6F42E5F7BC3B9FEE115D7285187855A4344B4142EC56A0B9235FFB3B6BF74F9'
-    );
+  it('10. Manifesto confiável da release possui versão, build, pacote e hash auditados', () => {
+    assert.deepEqual(RELEASE_APK, {
+      version: '1.0.6',
+      buildNumber: 7,
+      sha256: 'B6F42E5F7BC3B9FEE115D7285187855A4344B4142EC56A0B9235FFB3B6BF74F9',
+      packageName: 'com.example.mobile',
+    });
+  });
+
+  it('11. URL de download publicada é canônica e não depende do Host recebido', () => {
+    assert.equal(PUBLIC_APP_BASE_URL, 'https://selectphoto-k1ac.onrender.com');
   });
 });
