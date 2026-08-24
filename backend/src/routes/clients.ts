@@ -375,7 +375,19 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
         companyId: userCompanyId,
         assignedSellerId: req.user?.id
       },
-      include: { children: true, appointments: true, assignedSeller: true, photographer: true },
+      include: {
+        children: true,
+        appointments: true,
+        assignedSeller: true,
+        photographer: true,
+        sales: {
+          orderBy: { date: 'desc' },
+        },
+        nonSales: {
+          where: { supersededAt: null },
+          orderBy: { date: 'desc' },
+        },
+      },
       orderBy: { createdAt: 'desc' }
     });
     res.json(clients);

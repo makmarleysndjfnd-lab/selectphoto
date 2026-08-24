@@ -86,6 +86,7 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
 
   test.after(async () => {
     if (server) server.close();
+    await prisma.dailyClosing.deleteMany({ where: { sellerId: { in: ['auth_iso_admin_a', 'auth_iso_seller_a1', 'auth_iso_seller_a2', 'auth_iso_admin_b', 'auth_iso_seller_b1'] } } });
     await prisma.user.deleteMany({ where: { id: { in: ['auth_iso_admin_a', 'auth_iso_seller_a1', 'auth_iso_seller_a2', 'auth_iso_admin_b', 'auth_iso_seller_b1'] } } });
     await prisma.company.deleteMany({ where: { id: { in: ['comp_auth_iso_a', 'comp_auth_iso_b'] } } });
     await prisma.$disconnect();
@@ -224,13 +225,13 @@ describe('Etapa 1 - Segurança, Autenticação e Isolamento Multiempresa', () =>
     });
 
     it('deve rejeitar vendedor comum tentando registrar repasse com 403', async () => {
-      const res = await fetch(`${baseUrl}/api/closing/daily`, {
+      const res = await fetch(`${baseUrl}/api/closing/pay-repasse`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${tokenCompanyA_Seller}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ sellerId: 'auth_iso_seller_a1', totalSalesValue: 100 }),
+        body: JSON.stringify({ sellerId: 'auth_iso_seller_a1', amount: 100 }),
       });
       assert.equal(res.status, 403);
     });

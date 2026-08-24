@@ -59,7 +59,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 router.get('/seller/:sellerId', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const sellerId = req.params.sellerId as string;
-    const { date, month, year } = req.query;
+    const { date, month, year, from } = req.query;
 
     const hasAccess = await canAccessSellerAppointments(req.user, sellerId);
     if (!hasAccess) {
@@ -69,7 +69,14 @@ router.get('/seller/:sellerId', authenticateToken, async (req: AuthRequest, res:
 
     let whereClause: any = { sellerId };
 
-    if (date) {
+    if (from) {
+      const fromDate = new Date(from as string);
+      if (!isNaN(fromDate.getTime())) {
+        whereClause.dateTime = {
+          gte: fromDate,
+        };
+      }
+    } else if (date) {
       const startOfDay = new Date(date as string);
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(date as string);
@@ -98,6 +105,123 @@ router.get('/seller/:sellerId', authenticateToken, async (req: AuthRequest, res:
   } catch (error) {
     console.error('Error fetching appointments:', error);
     res.status(500).json({ error: 'Failed to fetch appointments' });
+  }
+});
+
+// Endpoint unificado de Agenda (Compromissos Pessoais + Agendamentos de Clientes/Fichas)
+router.get('/unified/:sellerId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const sellerId = req.params.sellerId as string;
+    const { from } = req.query;
+    const userCompanyId = req.user?.companyId;
+
+    const hasAccess = await canAccessSellerAppointments(req.user, sellerId);
+    if (!hasAccess) {
+      res.status(403).json({ error: 'Forbidden: Sem permissão para consultar a agenda deste vendedor' });
+      return;
+    }
+
+    // Janela padrão: 4 dias anteriores ao dia atual em diante (início do dia)
+    let windowStart: Date;
+    if (from) {
+      const parsedFrom = new Date(from as string);
+      windowStart = !isNaN(parsedFrom.getTime()) ? parsedFrom : new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+    } else {
+      windowStart = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+      windowStart.setHours(0, 0, 0, 0);
+    }
+
+    // 1. Buscar compromissos pessoais
+    const personalApps = await prisma.personalAppointment.findMany({
+      where: {
+        sellerId,
+        dateTime: { gte: windowStart },
+      },
+      orderBy: { dateTime: 'asc' },
+    });
+
+    // 2. Buscar agendamentos de fichas/clientes associados ao vendedor
+    const clientWhere: any = {
+      OR: [
+        { responsibleId: sellerId },
+        { client: { assignedSellerId: sellerId, ...(userCompanyId ? { companyId: userCompanyId } : {}) } },
+      ],
+      date: { gte: windowStart },
+    };
+
+    const clientApps = await prisma.appointment.findMany({
+      where: clientWhere,
+      include: {
+        client: {
+          select: {
+            id: true,
+            name: true,
+            sequenceNumber: true,
+            city: true,
+          },
+        },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    // 3. Normalizar em DTOs unificados
+    const unifiedList: Array<{
+      id: string;
+      type: 'PERSONAL' | 'CLIENT';
+      title: string;
+      description?: string | null;
+      dateTime: string;
+      clientId?: string | null;
+      clientName?: string | null;
+      sequenceNumber?: string | null;
+      city?: string | null;
+    }> = [];
+
+    for (const p of personalApps) {
+      unifiedList.push({
+        id: p.id,
+        type: 'PERSONAL',
+        title: p.title,
+        description: p.description,
+        dateTime: p.dateTime.toISOString(),
+        clientId: null,
+        clientName: null,
+        sequenceNumber: null,
+        city: null,
+      });
+    }
+
+    for (const c of clientApps) {
+      const appDateTime = new Date(c.date);
+      if (c.time && c.time.includes(':')) {
+        const [h, m] = c.time.split(':').map(Number);
+        if (!isNaN(h) && !isNaN(m)) {
+          appDateTime.setHours(h, m, 0, 0);
+        }
+      }
+
+      unifiedList.push({
+        id: c.id,
+        type: 'CLIENT',
+        title: c.client ? `Visita: ${c.client.name}` : 'Visita de Ficha',
+        description: c.observation,
+        dateTime: appDateTime.toISOString(),
+        clientId: c.client?.id ?? c.clientId,
+        clientName: c.client?.name ?? null,
+        sequenceNumber: c.client?.sequenceNumber ?? null,
+        city: c.client?.city ?? null,
+      });
+    }
+
+    // 4. Filtrar estritamente eventos a partir da janela de 4 dias e ordenar por data/hora asc
+    const filteredUnified = unifiedList
+      .filter((item) => new Date(item.dateTime).getTime() >= windowStart.getTime())
+      .sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+
+    res.json(filteredUnified);
+  } catch (error) {
+    console.error('Error fetching unified appointments:', error);
+    res.status(500).json({ error: 'Failed to fetch unified appointments' });
   }
 });
 

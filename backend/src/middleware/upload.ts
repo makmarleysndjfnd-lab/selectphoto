@@ -139,12 +139,25 @@ function getS3Storage() {
 // Storage dinâmico com avaliação em runtime por requisição
 const dynamicStorage: multer.StorageEngine = {
   _handleFile(req: any, file: any, cb: any) {
-    const useExternalS3 = !isExternalServicesDisabled() && !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    const isProd = process.env.NODE_ENV === 'production';
+    const hasB2 = !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    if (isProd && !hasB2) {
+      const err: any = new Error('Armazenamento em nuvem B2 não configurado no ambiente de produção.');
+      err.name = 'StorageNotConfiguredError';
+      err.code = 'B2_NOT_CONFIGURED';
+      return cb(err);
+    }
+    const useExternalS3 = !isExternalServicesDisabled() && hasB2;
     const targetStorage = useExternalS3 ? getS3Storage() : diskStorage;
     targetStorage._handleFile(req, file, cb);
   },
   _removeFile(req: any, file: any, cb: any) {
-    const useExternalS3 = !isExternalServicesDisabled() && !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    const isProd = process.env.NODE_ENV === 'production';
+    const hasB2 = !!process.env.B2_KEY_ID && !!process.env.B2_APPLICATION_KEY;
+    if (isProd && !hasB2) {
+      return cb(null);
+    }
+    const useExternalS3 = !isExternalServicesDisabled() && hasB2;
     const targetStorage = useExternalS3 ? getS3Storage() : diskStorage;
     targetStorage._removeFile(req, file, cb);
   }
@@ -217,6 +230,19 @@ export function handleUploadError(
   // Metadados S3 seguros para log
   const httpStatus = err.$metadata?.httpStatusCode;
   const rawRequestId = err.$metadata?.requestId || err.requestId;
+
+  // 1.5. Configuração ausente em produção -> HTTP 503 seguro
+  if (err.code === 'B2_NOT_CONFIGURED' || err.name === 'StorageNotConfiguredError') {
+    console.error('🚨 [SAFE_UPLOAD] Armazenamento B2 não configurado em produção:', {
+      correlationId: corrId,
+      code: 'B2_NOT_CONFIGURED',
+    });
+    res.status(503).json({
+      error: 'Armazenamento em nuvem temporariamente indisponível. Contate o suporte.',
+      supportCode: corrId,
+    });
+    return true;
+  }
 
   // 2. Erros de validação de negócio/MIME/Empresa -> HTTP 400
   if (

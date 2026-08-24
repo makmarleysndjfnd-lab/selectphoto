@@ -4,8 +4,8 @@ import fs from 'fs';
 
 const router = Router();
 
-const CURRENT_APP_VERSION = '1.0.5';
-const CURRENT_BUILD_NUMBER = 6;
+const CURRENT_APP_VERSION = '1.0.6';
+const CURRENT_BUILD_NUMBER = 7;
 
 // Retorna a versão mais recente do aplicativo e a URL de download se o APK existir
 router.get('/version', (req: Request, res: Response) => {

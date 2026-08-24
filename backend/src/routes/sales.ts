@@ -26,35 +26,78 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       return res.status(400).json({ error: 'Invalid sale value: must be a positive finite number' });
     }
 
-    // Verificar se o cliente pertence à empresa do usuário
-    const client = await prisma.client.findFirst({
-      where: {
-        id: clientId,
-        companyId,
-      },
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Confirmar ficha e empresa
+      const client = await tx.client.findFirst({
+        where: {
+          id: clientId,
+          companyId,
+        },
+      });
+
+      if (!client) {
+        throw { status: 404, message: 'Client not found in your company' };
+      }
+
+      // 2. Confirmar que a cidade não está fechada
+      if (client.cityClosedAt) {
+        throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
+      }
+
+      // 3. Rejeitar se já estiver vendida (evitar duplicação)
+      if (client.outcomeStatus === 'SOLD') {
+        throw { status: 409, message: 'Venda já registrada para esta ficha' };
+      }
+
+      // 4. Criar a venda
+      const sale = await tx.sale.create({
+        data: {
+          clientId,
+          sellerId: sellerId as string,
+          value: parsedValue,
+          city: String(city).trim(),
+          product: product ? String(product).trim() : "Mídias fotográficas",
+          status: status || "PRONTO",
+          paymentStatus: paymentStatus || "PAID",
+          fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
+          paymentMethod: paymentMethod || "CASH",
+          companyId,
+        },
+      });
+
+      // 5. Se o status anterior era NON_SALE, marcar a não-venda ativa como superada
+      if (client.outcomeStatus === 'NON_SALE') {
+        await tx.nonSale.updateMany({
+          where: {
+            clientId,
+            companyId,
+            supersededAt: null,
+          },
+          data: {
+            supersededAt: sale.date,
+            supersededBySaleId: sale.id,
+          },
+        });
+      }
+
+      // 6. Atualizar o Client
+      const updatedClient = await tx.client.update({
+        where: { id: clientId },
+        data: {
+          outcomeStatus: 'SOLD',
+          outcomeUpdatedAt: sale.date,
+          bookStatus: 'SOLD',
+        },
+      });
+
+      return { sale, client: updatedClient };
     });
 
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found in your company' });
+    res.status(201).json(result.sale);
+  } catch (error: any) {
+    if (error && error.status && error.message) {
+      return res.status(error.status).json({ error: error.message });
     }
-
-    const sale = await prisma.sale.create({
-      data: {
-        clientId,
-        sellerId: sellerId as string,
-        value: parsedValue,
-        city: String(city).trim(),
-        product: product ? String(product).trim() : "Mídias fotográficas",
-        status: status || "PRONTO",
-        paymentStatus: paymentStatus || "PAID",
-        fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
-        paymentMethod: paymentMethod || "CASH",
-        companyId,
-      },
-    });
-
-    res.status(201).json(sale);
-  } catch (error) {
     console.error('Create sale error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -181,18 +224,6 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
       return res.status(400).json({ error: 'Client ID, Reason, and Signature are required' });
     }
 
-    // Verificar se o cliente pertence à mesma empresa
-    const client = await prisma.client.findFirst({
-      where: {
-        id: clientId,
-        companyId,
-      },
-    });
-
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found in your company' });
-    }
-
     let finalSigUrl = signatureUrl;
     if (signatureBase64) {
       finalSigUrl = signatureBase64.startsWith('data:')
@@ -202,6 +233,41 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
 
     // Transação atômica criando a Não-Venda e atualizando o status da ficha
     const result = await prisma.$transaction(async (tx) => {
+      // 1. Confirmar cliente e empresa
+      const client = await tx.client.findFirst({
+        where: {
+          id: clientId,
+          companyId,
+        },
+      });
+
+      if (!client) {
+        throw { status: 404, message: 'Client not found in your company' };
+      }
+
+      // 2. Confirmar que a cidade não está fechada
+      if (client.cityClosedAt) {
+        throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
+      }
+
+      // 3. Rejeitar se já estiver vendida
+      if (client.outcomeStatus === 'SOLD') {
+        throw { status: 409, message: 'Não é possível registrar não-venda para ficha já vendida' };
+      }
+
+      // 4. Superar não-vendas anteriores ativas para esta ficha (evitar duplicidade ativa)
+      await tx.nonSale.updateMany({
+        where: {
+          clientId,
+          companyId,
+          supersededAt: null,
+        },
+        data: {
+          supersededAt: new Date(),
+        },
+      });
+
+      // 5. Criar a nova Não-Venda
       const nonSale = await tx.nonSale.create({
         data: {
           clientId,
@@ -212,16 +278,24 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
-      await tx.client.update({
+      // 6. Atualizar Client
+      const updatedClient = await tx.client.update({
         where: { id: clientId },
-        data: { bookStatus: 'AWAITING_RETURN' },
+        data: {
+          outcomeStatus: 'NON_SALE',
+          outcomeUpdatedAt: nonSale.date,
+          bookStatus: 'AWAITING_RETURN',
+        },
       });
 
-      return nonSale;
+      return { nonSale, client: updatedClient };
     });
 
-    res.status(201).json(result);
-  } catch (error) {
+    res.status(201).json(result.nonSale);
+  } catch (error: any) {
+    if (error && error.status && error.message) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('Create non-sale error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }

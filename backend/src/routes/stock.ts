@@ -5,7 +5,7 @@ import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervi
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Add stock batch (Admin or Supervisor only)
+// Add stock batch (Admin or Supervisor only) - ADD_ADMIN_STOCK
 router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const { quantity } = req.body;
@@ -18,7 +18,7 @@ router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: Auth
 
     const parsedQty = parseInt(quantity, 10);
     if (isNaN(parsedQty) || parsedQty <= 0) {
-      res.status(400).json({ error: 'A quantidade do lote deve ser um número inteiro positivo.' });
+      res.status(400).json({ error: 'A quantidade do lote deve ser um número inteiro positivo (> 0).' });
       return;
     }
 
@@ -32,6 +32,59 @@ router.post('/batch', authMiddleware, requireAdminOrSupervisor, async (req: Auth
     res.status(201).json(batch);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Erro ao adicionar lote de estoque' });
+  }
+});
+
+// Remove stock from central admin - REMOVE_ADMIN_STOCK
+router.post('/remove-admin-stock', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const { quantity, reason } = req.body;
+    const companyId = req.user?.companyId;
+
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa obrigatória' });
+      return;
+    }
+
+    const parsedQty = parseInt(quantity, 10);
+    if (isNaN(parsedQty) || parsedQty <= 0) {
+      res.status(400).json({ error: 'A quantidade deve ser um número inteiro positivo (> 0).' });
+      return;
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const adminBatches = await tx.coverStockBatch.aggregate({
+        where: { companyId },
+        _sum: { quantity: true },
+      });
+      const sellerTransfers = await tx.sellerCoverTransfer.aggregate({
+        where: { companyId },
+        _sum: { quantity: true },
+      });
+
+      const totalInAdmin = (adminBatches._sum.quantity || 0) - (sellerTransfers._sum.quantity || 0);
+
+      if (totalInAdmin < parsedQty) {
+        throw new Error('Saldo insuficiente no estoque central da empresa');
+      }
+
+      const batch = await tx.coverStockBatch.create({
+        data: {
+          quantity: -parsedQty,
+          companyId: companyId!,
+        },
+      });
+
+      return { success: true, removed: parsedQty, batchId: batch.id, remaining: totalInAdmin - parsedQty, reason: reason || 'Baixa manual' };
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    if (error.message?.includes('Saldo insuficiente')) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Erro ao remover capas do estoque central' });
   }
 });
 

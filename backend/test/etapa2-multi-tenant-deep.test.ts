@@ -352,6 +352,18 @@ describe('Etapa 2 e 3 — Isolamento Multiempresa Profundo e Correções Funcion
     });
 
     it('deve registrar não-venda com signatureUrl e atualizar bookStatus atomicamente', async () => {
+      const clientForNonSale = await prisma.client.create({
+        data: {
+          id: `cl_a2_ns_${uid}`,
+          name: 'Cliente Nao Venda A2',
+          sequenceNumber: `SEQ-NS-${uid}`,
+          city: 'Goiânia',
+          state: 'GO',
+          companyId: compA_Id,
+          assignedSellerId: sellerA_Id,
+        },
+      });
+
       const res = await fetch(`${baseUrl}/api/sales/non-sale`, {
         method: 'POST',
         headers: {
@@ -359,7 +371,7 @@ describe('Etapa 2 e 3 — Isolamento Multiempresa Profundo e Correções Funcion
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          clientId: clientA1_Id,
+          clientId: clientForNonSale.id,
           reason: 'Sem interesse no momento',
           signatureBase64: 'iVBORw0KGgoAAAANSUhEUg==',
         }),
@@ -372,7 +384,7 @@ describe('Etapa 2 e 3 — Isolamento Multiempresa Profundo e Correções Funcion
 
       // Verify client bookStatus was updated to AWAITING_RETURN
       const updatedClient = await prisma.client.findUnique({
-        where: { id: clientA1_Id }
+        where: { id: clientForNonSale.id }
       });
       assert.equal(updatedClient?.bookStatus, 'AWAITING_RETURN');
     });

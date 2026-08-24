@@ -1,9 +1,9 @@
 {
   "name": "backend",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "tsx --test --test-concurrency=1 test/**/*.test.ts",
     "dev": "tsx watch src/index.ts",
     "build": "npx prisma generate && npx tsc && node scripts/verify-dist-sync.js",
     "check-dist": "node scripts/verify-dist-sync.js",
