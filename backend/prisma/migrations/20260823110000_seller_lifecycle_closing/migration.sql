@@ -100,12 +100,12 @@ WHERE c."id" = ns."clientId"
 -- 5.3. Fichas com histórico de Não-Venda seguida de Venda: marcar Não-Venda como superada
 UPDATE "NonSale" ns
 SET 
-  "supersededAt" = s."date",
+  "supersededAt" = COALESCE(ns."supersededAt", s."date"),
   "supersededBySaleId" = s."id"
 FROM "Sale" s
 WHERE ns."clientId" = s."clientId"
   AND ns."date" <= s."date"
-  AND ns."supersededAt" IS NULL;
+  AND (ns."supersededBySaleId" IS NULL OR ns."supersededAt" IS NULL);
 
 -- 5.4. Fichas sem qualquer atendimento permanecem como PENDING
 -- (default já definido na coluna, outcomeUpdatedAt = NULL, cityClosedAt = NULL)
