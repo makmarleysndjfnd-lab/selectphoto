@@ -23,9 +23,9 @@ ALTER TABLE "NonSale"
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'NonSale_supersededBySaleId_fkey') THEN
-    ALTER TABLE "NonSale" 
-      ADD CONSTRAINT "NonSale_supersededBySaleId_fkey" 
-      FOREIGN KEY ("supersededBySaleId") REFERENCES "Sale"("id") 
+    ALTER TABLE "NonSale"
+      ADD CONSTRAINT "NonSale_supersededBySaleId_fkey"
+      FOREIGN KEY ("supersededBySaleId") REFERENCES "Sale"("id")
       ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
 END $$;
@@ -52,15 +52,15 @@ CREATE INDEX IF NOT EXISTS "SellerCityClosing_closedAt_idx" ON "SellerCityClosin
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'SellerCityClosing_companyId_fkey') THEN
-    ALTER TABLE "SellerCityClosing" 
-      ADD CONSTRAINT "SellerCityClosing_companyId_fkey" 
-      FOREIGN KEY ("companyId") REFERENCES "Company"("id") 
+    ALTER TABLE "SellerCityClosing"
+      ADD CONSTRAINT "SellerCityClosing_companyId_fkey"
+      FOREIGN KEY ("companyId") REFERENCES "Company"("id")
       ON DELETE RESTRICT ON UPDATE CASCADE;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'SellerCityClosing_sellerId_fkey') THEN
-    ALTER TABLE "SellerCityClosing" 
-      ADD CONSTRAINT "SellerCityClosing_sellerId_fkey" 
-      FOREIGN KEY ("sellerId") REFERENCES "User"("id") 
+    ALTER TABLE "SellerCityClosing"
+      ADD CONSTRAINT "SellerCityClosing_sellerId_fkey"
+      FOREIGN KEY ("sellerId") REFERENCES "User"("id")
       ON DELETE RESTRICT ON UPDATE CASCADE;
   END IF;
 END $$;
@@ -74,7 +74,7 @@ CREATE INDEX IF NOT EXISTS "PersonalAppointment_sellerId_dateTime_idx" ON "Perso
 
 -- 5.1. Fichas que possuem Venda registrada passam a SOLD
 UPDATE "Client" c
-SET 
+SET
   "outcomeStatus" = 'SOLD',
   "outcomeUpdatedAt" = s."latestDate"
 FROM (
@@ -86,7 +86,7 @@ WHERE c."id" = s."clientId";
 
 -- 5.2. Fichas sem Venda que possuem Não-Venda passam a NON_SALE
 UPDATE "Client" c
-SET 
+SET
   "outcomeStatus" = 'NON_SALE',
   "outcomeUpdatedAt" = ns."latestDate"
 FROM (
@@ -99,7 +99,7 @@ WHERE c."id" = ns."clientId"
 
 -- 5.3. Fichas com histórico de Não-Venda seguida de Venda: marcar Não-Venda como superada
 UPDATE "NonSale" ns
-SET 
+SET
   "supersededAt" = COALESCE(ns."supersededAt", s."date"),
   "supersededBySaleId" = s."id"
 FROM "Sale" s
