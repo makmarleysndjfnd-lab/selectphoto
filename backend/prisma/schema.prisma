@@ -31,6 +31,7 @@ model Company {
   notifications        Notification[]
   clientEditRequests   ClientEditRequest[]
   tripSettings         TripSettings?
+  sellerCityClosings   SellerCityClosing[]
 }
 
 model Team {
@@ -91,6 +92,7 @@ model User {
   notificationsSent       Notification[]        @relation("NotificationsSent")
   notificationsReceived   Notification[]        @relation("NotificationsReceived")
   clientEditRequests      ClientEditRequest[]
+  sellerCityClosings      SellerCityClosing[]
 }
 
 model Client {
@@ -126,6 +128,9 @@ model Client {
   longitude       Float?
   status          String        @default("PENDING")
   bookStatus      String        @default("CREATED") // CREATED, AWAITING_RELEASE, IN_STOCK, DISTRIBUTED, SOLD, AWAITING_RETURN, IN_STOCK_REBOLO, DISTRIBUTED_REBOLO, REBOLO_SOLD, DISCARDED
+  outcomeStatus   String        @default("PENDING") // PENDING, NON_SALE, SOLD
+  outcomeUpdatedAt DateTime?
+  cityClosedAt    DateTime?
   batchId         String?
   releasedForRouting Boolean    @default(false)
   photographerId  String?
@@ -146,6 +151,10 @@ model Client {
   sales           Sale[]
   sellerPhotos    SellerPhoto[]
   editRequests    ClientEditRequest[]
+
+  @@index([companyId, assignedSellerId, city])
+  @@index([outcomeStatus])
+  @@index([cityClosedAt])
 }
 
 model Child {
@@ -190,6 +199,7 @@ model Sale {
   company       Company? @relation(fields: [companyId], references: [id])
   client        Client   @relation(fields: [clientId], references: [id])
   seller        User     @relation(fields: [sellerId], references: [id])
+  supersededNonSales NonSale[] @relation("SupersededNonSales")
 }
 
 model NonSale {
@@ -203,9 +213,13 @@ model NonSale {
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?
+  supersededAt DateTime?
+  supersededBySaleId String?
+
   company      Company? @relation(fields: [companyId], references: [id])
   client       Client   @relation(fields: [clientId], references: [id])
   seller       User     @relation(fields: [sellerId], references: [id])
+  supersededBySale Sale? @relation("SupersededNonSales", fields: [supersededBySaleId], references: [id])
 }
 
 model SellerPhoto {
@@ -453,4 +467,25 @@ model PersonalAppointment {
   updatedAt   DateTime @updatedAt
 
   seller      User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, dateTime])
+}
+
+model SellerCityClosing {
+  id              String   @id @default(uuid())
+  companyId       String
+  sellerId        String
+  city            String
+  event           String?
+  closedAt        DateTime @default(now())
+  pendingCount    Int
+  nonSaleCount    Int
+  soldCount       Int
+  totalSalesValue Float
+
+  company         Company  @relation(fields: [companyId], references: [id])
+  seller          User     @relation(fields: [sellerId], references: [id])
+
+  @@index([companyId, sellerId, city])
+  @@index([closedAt])
 }
