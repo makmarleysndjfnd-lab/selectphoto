@@ -233,8 +233,28 @@ class SyncService extends ChangeNotifier {
             await apiService.syncClients([req.payload]);
             success = true;
           } else if (req.type == 'REGISTER_SALE') {
-            await apiService.registerSale(req.payload);
+            final saleId = await apiService.registerSale(req.payload);
             success = true;
+            final pendingReceiptPath = req.payload['pendingReceiptPath'] as String?;
+            if (pendingReceiptPath != null && pendingReceiptPath.isNotEmpty && !saleId.startsWith('offline_')) {
+              try {
+                await apiService.uploadSaleReceipt(saleId, pendingReceiptPath);
+              } catch (_) {
+                await addPendingRequest('UPLOAD_RECEIPT', {
+                  'saleId': saleId,
+                  'filePath': pendingReceiptPath,
+                });
+              }
+            }
+          } else if (req.type == 'UPLOAD_RECEIPT') {
+            final saleId = req.payload['saleId']?.toString();
+            final filePath = req.payload['filePath']?.toString();
+            if (saleId != null && filePath != null && !saleId.startsWith('offline_')) {
+              await apiService.uploadSaleReceipt(saleId, filePath);
+              success = true;
+            } else {
+              success = true; // ID inválido, descarta
+            }
           } else if (req.type == 'REGISTER_NONSALE') {
             await apiService.registerNonSale(req.payload);
             success = true;

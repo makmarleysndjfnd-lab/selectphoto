@@ -447,6 +447,30 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 ),
               ),
             ],
+            if (client['cityClosedAt'] != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.amberAccent.withOpacity(0.6)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.lock_rounded, color: Colors.amberAccent, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Cidade Encerrada: O registro de novas vendas e não-vendas está bloqueado para esta ficha.',
+                        style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ]
         ],
       ),
@@ -487,9 +511,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       physics: const NeverScrollableScrollPhysics(),
       controller: _tabController,
       children: [
-        _SaleTab(clientId: client['id'], city: client['city'] ?? '',
-            onSuccess: _showSuccess),
-        _NonSaleTab(clientId: client['id'], onSuccess: _showSuccess),
+        _SaleTab(client: client, onSuccess: _showSuccess),
+        _NonSaleTab(client: client, onSuccess: _showSuccess),
         _ScheduleTab(client: client, onSuccess: _showSuccess),
         _PhotosTab(clientId: client['id'], onSuccess: _showSuccess),
       ],
@@ -580,13 +603,12 @@ Widget _confirmButton(
 }
 
 class _SaleTab extends StatefulWidget {
-  final String clientId;
-  final String city;
+  final Map<String, dynamic> client;
   final void Function(String) onSuccess;
-  const _SaleTab(
-      {required this.clientId,
-      required this.city,
-      required this.onSuccess});
+  const _SaleTab({
+    required this.client,
+    required this.onSuccess,
+  });
 
   @override
   State<_SaleTab> createState() => _SaleTabState();
@@ -606,7 +628,6 @@ class _SaleTabState extends State<_SaleTab> {
 
   bool _saleFinalized = false;
   File? _receiptPhoto;
-
   String? _saleId;
 
   void _submit() async {
@@ -620,8 +641,8 @@ class _SaleTabState extends State<_SaleTab> {
       final syncService = Provider.of<SyncService>(context, listen: false);
       
       final payload = {
-        'clientId': widget.clientId,
-        'city': widget.city,
+        'clientId': widget.client['id'],
+        'city': widget.client['city'] ?? '',
         'value': valor,
         'product': _product,
         'status': 'PRONTO',
@@ -636,7 +657,6 @@ class _SaleTabState extends State<_SaleTab> {
       } catch (e) {
         await syncService.addPendingRequest('REGISTER_SALE', payload);
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
-        // Se falhou, vamos deixar o saleId nulo ou "offline" e não forçar upload de foto do recibo online
         finalSaleId = 'offline_${DateTime.now().millisecondsSinceEpoch}';
       }
 
@@ -646,21 +666,46 @@ class _SaleTabState extends State<_SaleTab> {
         _saleFinalized = true;
         _saleId = finalSaleId;
       });
-      widget.onSuccess('Venda registrada (ou no backup)!');
+      widget.onSuccess('Venda registrada com sucesso!');
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro interno ao registrar venda: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Erro ao registrar venda: $e'), backgroundColor: Colors.red),
         );
       }
     }
   }
 
-  void _takeReceiptPhoto() async {
+  void _takeReceiptPhoto({String? targetSaleId}) async {
     final result = await MediaPickerService().pickSaleEvidencePhoto(context);
     if (result != null) {
       setState(() => _receiptPhoto = result.file);
+      if (targetSaleId != null) {
+        _sendReceiptForExistingSale(targetSaleId);
+      }
+    }
+  }
+
+  void _sendReceiptForExistingSale(String targetSaleId) async {
+    if (_receiptPhoto == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final apiService = Provider.of<ApiService>(context, listen: false);
+      await apiService.uploadSaleReceipt(targetSaleId, _receiptPhoto!.path);
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _receiptPhoto = null;
+      });
+      widget.onSuccess('Comprovante anexado com sucesso!');
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao anexar comprovante: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -694,7 +739,143 @@ class _SaleTabState extends State<_SaleTab> {
 
   @override
   Widget build(BuildContext context) {
+    final client = widget.client;
+    final isSold = client['outcomeStatus'] == 'SOLD' || (client['sales'] != null && (client['sales'] as List).isNotEmpty);
+    final isCityClosed = client['cityClosedAt'] != null;
+    final List sales = (client['sales'] is List) ? (client['sales'] as List) : [];
+    final Map<String, dynamic>? activeSale = sales.isNotEmpty ? Map<String, dynamic>.from(sales.first) : null;
+
     final keyboardPadding = MediaQuery.of(context).viewInsets.bottom;
+
+    if (isSold && activeSale != null) {
+      final receiptUrl = activeSale['receiptUrl']?.toString();
+      final hasReceipt = receiptUrl != null && receiptUrl.trim().isNotEmpty;
+      final saleVal = activeSale['value'] != null ? activeSale['value'].toString() : '---';
+      final saleProd = activeSale['product']?.toString() ?? 'Book';
+      final saleDate = activeSale['date'] != null ? activeSale['date'].toString().split('T')[0] : '';
+      final salePay = activeSale['paymentMethod']?.toString() ?? '';
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B2E24),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF00E676).withOpacity(0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.check_circle_rounded, color: Color(0xFF00E676), size: 28),
+                  SizedBox(width: 10),
+                  Text('Venda Já Registrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 12),
+              _buildDetailRow('Valor da Venda', 'R\$ $saleVal', highlight: true),
+              const SizedBox(height: 8),
+              _buildDetailRow('Produto', saleProd),
+              const SizedBox(height: 8),
+              _buildDetailRow('Data', saleDate),
+              const SizedBox(height: 8),
+              _buildDetailRow('Forma de Pagamento', salePay),
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 12),
+              const Text('Comprovante de Pagamento:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              if (hasReceipt) ...[
+                Container(
+                  height: 180,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AuthenticatedImage(url: receiptUrl, fit: BoxFit.cover),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
+                  icon: const Icon(Icons.refresh, color: Color(0xFF4FC3F7), size: 18),
+                  label: const Text('Substituir Comprovante', style: TextStyle(color: Color(0xFF4FC3F7))),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF4FC3F7)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orangeAccent.withOpacity(0.4)),
+                  ),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text('Nenhum comprovante anexado a esta venda.', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
+                  icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+                  label: const Text('Anexar Comprovante Agora', style: TextStyle(color: Color(0xFF4FC3F7))),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF4FC3F7)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (isCityClosed) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.amber.withOpacity(0.4)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.lock_outline_rounded, color: Colors.amberAccent, size: 48),
+              SizedBox(height: 12),
+              Text('Cidade Encerrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              SizedBox(height: 8),
+              Text(
+                'Esta cidade foi encerrada no Fechamento de Cidade. O registro de novas vendas está bloqueado para estas fichas.',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + keyboardPadding),
@@ -708,13 +889,11 @@ class _SaleTabState extends State<_SaleTab> {
                   fontSize: 18,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text('Cliente: ${widget.clientId} · Cidade: ${widget.city}',
+          Text('Cliente: ${widget.client['name'] ?? widget.client['id']} · Cidade: ${widget.client['city'] ?? ''}',
               style:
                   const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           const SizedBox(height: 20),
 
-          // Campo de valor — fonte maior e altura mínima de 56px para
-          // ficar visível mesmo com o teclado numérico aberto
           ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 56),
             child: TextField(
@@ -855,6 +1034,23 @@ class _SaleTabState extends State<_SaleTab> {
     );
   }
 
+  Widget _buildDetailRow(String label, String value, {bool highlight = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        Text(
+          value,
+          style: TextStyle(
+            color: highlight ? const Color(0xFF00E676) : Colors.white,
+            fontSize: highlight ? 16 : 13,
+            fontWeight: highlight ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildDropdown(String label, String value, List<String> items, void Function(String?) onChanged) {
     return DropdownButtonFormField<String>(
       isExpanded: true,
@@ -877,12 +1073,11 @@ class _SaleTabState extends State<_SaleTab> {
 
 // ── ABA NÃO VENDA ─────────────────────────────────────────────────────────────
 class _NonSaleTab extends StatefulWidget {
-  final String clientId;
+  final Map<String, dynamic> client;
   final void Function(String) onSuccess;
-  const _NonSaleTab({required this.clientId, required this.onSuccess});
+  const _NonSaleTab({required this.client, required this.onSuccess});
 
   @override
-  // ignore: library_private_types_in_public_api
   State<_NonSaleTab> createState() => _NonSaleTabState();
 }
 
@@ -927,7 +1122,7 @@ class _NonSaleTabState extends State<_NonSaleTab> {
       final syncService = Provider.of<SyncService>(context, listen: false);
       
       final payload = {
-        'clientId': widget.clientId,
+        'clientId': widget.client['id'],
         'reason': reasonToSubmit,
         'signatureBase64': 'fictitious_signature',
       };
@@ -959,13 +1154,73 @@ class _NonSaleTabState extends State<_NonSaleTab> {
 
   @override
   Widget build(BuildContext context) {
+    final client = widget.client;
+    final isSold = client['outcomeStatus'] == 'SOLD' || (client['sales'] != null && (client['sales'] as List).isNotEmpty);
+    final isCityClosed = client['cityClosedAt'] != null;
+
+    if (isSold) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF00E676).withOpacity(0.3)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.check_circle_outline_rounded, color: Color(0xFF00E676), size: 48),
+              SizedBox(height: 12),
+              Text('Ficha Já Vendida', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              SizedBox(height: 8),
+              Text(
+                'Esta ficha já possui venda confirmada. Não é possível registrar não-venda.',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (isCityClosed) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.amber.withOpacity(0.4)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.lock_outline_rounded, color: Colors.amberAccent, size: 48),
+              SizedBox(height: 12),
+              Text('Cidade Encerrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              SizedBox(height: 8),
+              Text(
+                'Esta cidade foi encerrada no Fechamento de Cidade. O registro de não-venda está bloqueado.',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: 4),
-          const Text('Registrar Não Venda',
+          const Text('Registrar Recusa (Não Venda)',
               style: TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -976,7 +1231,8 @@ class _NonSaleTabState extends State<_NonSaleTab> {
             value: _selectedReason,
             dropdownColor: const Color(0xFF1A1A2E),
             style: const TextStyle(color: Colors.white),
-            decoration: _fieldDecoration('Motivo da recusa', Icons.cancel_rounded),
+            decoration: _fieldDecoration(
+                'Motivo da Recusa', Icons.report_problem_rounded),
             items: _reasons
                 .map((r) => DropdownMenuItem(value: r, child: Text(r, overflow: TextOverflow.ellipsis)))
                 .toList(),

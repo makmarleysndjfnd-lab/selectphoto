@@ -75,35 +75,25 @@ class _TelaAgendaState extends State<TelaAgenda> {
     setState(() => _isLoading = true);
     try {
       final api = ApiService();
-      final clients = await api.getClientsBySeller();
-      
+      final now = DateTime.now();
+      final startOfToday = DateTime(now.year, now.month, now.day);
+      final fromWindow = startOfToday.subtract(const Duration(days: 4));
       final userId = await UIHelpers.getUserId();
-      final List<dynamic> appointments = userId != null ? await api.getPersonalAppointments(userId) : [];
+
+      final List<dynamic> appointments = userId != null
+          ? await api.getUnifiedAppointments(userId, from: fromWindow)
+          : [];
 
       final newEvents = <DateTime, List<dynamic>>{};
-
-      for (var client in clients) {
-        if (client['scheduleDate'] != null) {
-          final date = DateTime.parse(client['scheduleDate']).toLocal();
-          final dayKey = DateTime(date.year, date.month, date.day);
-          
-          if (newEvents[dayKey] == null) newEvents[dayKey] = [];
-          newEvents[dayKey]!.add({
-            'type': 'client',
-            'data': client,
-            'time': date,
-          });
-        }
-      }
 
       for (var appt in appointments) {
         if (appt['dateTime'] != null) {
           final date = DateTime.parse(appt['dateTime']).toLocal();
           final dayKey = DateTime(date.year, date.month, date.day);
-          
+
           if (newEvents[dayKey] == null) newEvents[dayKey] = [];
           newEvents[dayKey]!.add({
-            'type': 'personal',
+            'type': appt['type'] == 'CLIENT' ? 'client' : 'personal',
             'data': appt,
             'time': date,
           });
@@ -187,30 +177,42 @@ class _TelaAgendaState extends State<TelaAgenda> {
                 ),
                 ElevatedButton(
                   onPressed: () async {
+                    final title = titleCtrl.text.trim();
+                    if (title.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Por favor, informe o título.')));
+                      return;
+                    }
+
                     final userId = await UIHelpers.getUserId();
                     if (userId == null) return;
                     
+                    final baseDate = _selectedDay ?? DateTime.now();
                     final dt = DateTime(
-                      _selectedDay!.year, _selectedDay!.month, _selectedDay!.day,
+                      baseDate.year, baseDate.month, baseDate.day,
                       selectedTime.hour, selectedTime.minute,
                     );
 
                     try {
                       final api = ApiService();
-                      // Para brevidade, usando Dio direto aqui, ou podemos adicionar createPersonalAppointment no ApiService
-                      await api.dio.post('/appointments', data: {
-                        'sellerId': userId,
-                        'title': titleCtrl.text,
-                        'description': descCtrl.text,
-                        'dateTime': dt.toIso8601String(),
-                      });
+                      await api.createPersonalAppointment(
+                        sellerId: userId,
+                        title: title,
+                        description: descCtrl.text.trim().isNotEmpty ? descCtrl.text.trim() : null,
+                        dateTime: dt,
+                      );
                       
-                      _scheduleNotification(titleCtrl.text, descCtrl.text, dt);
-                      Navigator.pop(context);
-                      _fetchAgenda(); // Recarrega
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Agendado com sucesso!')));
+                      _scheduleNotification(title, descCtrl.text, dt);
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                      }
+                      _fetchAgenda(); // Recarrega imediatamente
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Agendado com sucesso!'), backgroundColor: Colors.green));
+                      }
                     } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao salvar agendamento: $e')));
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao salvar agendamento: $e'), backgroundColor: Colors.red));
+                      }
                     }
                   },
                   child: const Text('Salvar'),
@@ -302,20 +304,22 @@ class _TelaAgendaState extends State<TelaAgenda> {
                             final event = selectedEvents[index];
                             final time = event['time'] as DateTime;
                             final timeString = DateFormat('HH:mm').format(time);
+                            final data = event['data'];
                             
                             if (event['type'] == 'client') {
-                              final data = event['data'];
                               return ListTile(
                                 leading: Text(timeString, style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontSize: 16)),
-                                title: Text(data['name'] ?? 'Sem Nome', style: const TextStyle(color: Colors.white)),
-                                subtitle: Text('Ficha ${data['sequenceNumber']} - ${data['city'] ?? ''}', style: const TextStyle(color: Colors.white70)),
-                                trailing: const Icon(Icons.business_center, color: Colors.white54),
+                                title: Text(data['title'] ?? data['clientName'] ?? 'Visita de Ficha', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                subtitle: Text(
+                                  'Ficha ${data['sequenceNumber'] ?? ''} - ${data['city'] ?? ''}${data['description'] != null && data['description'].toString().trim().isNotEmpty ? '\n${data['description']}' : ''}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                                trailing: const Icon(Icons.business_center, color: Color(0xFF00E5FF)),
                               );
                             } else {
-                              final data = event['data'];
                               return ListTile(
                                 leading: Text(timeString, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
-                                title: Text(data['title'] ?? 'Compromisso', style: const TextStyle(color: Colors.white)),
+                                title: Text(data['title'] ?? 'Compromisso Pessoal', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                                 subtitle: Text(data['description'] ?? '', style: const TextStyle(color: Colors.white70)),
                                 trailing: const Icon(Icons.person, color: Colors.amber),
                               );

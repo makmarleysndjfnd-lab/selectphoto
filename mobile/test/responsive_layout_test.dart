@@ -104,6 +104,7 @@ void main() {
       providers: [
         Provider<ApiService>.value(value: testApi),
         ChangeNotifierProvider<SyncService>.value(value: testSync),
+        ChangeNotifierProvider<SettingsProvider>(create: (_) => SettingsProvider()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -226,20 +227,14 @@ void main() {
       await tester.pumpAndSettle(const Duration(milliseconds: 100));
       expect(tester.takeException(), isNull);
 
-      // Botão "Ações" deve estar visível no cabeçalho
-      expect(find.text('Ações'), findsOneWidget);
+      // 2 botões verticais independentes no cabeçalho (Notificações e Configurações)
+      expect(find.byIcon(Icons.notifications_none_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
 
-      // Tocar no botão de Ações Rápidas
-      await tester.tap(find.text('Ações'));
+      // Tocar no botão de Configurações
+      await tester.tap(find.byIcon(Icons.settings_outlined));
       await tester.pumpAndSettle();
 
-      // Menu vertical abre exibindo todas as 5 opções em lista
-      expect(find.text('Ações Rápidas'), findsOneWidget);
-      expect(find.text('Notificações'), findsOneWidget);
-      expect(find.text('Transferir / Dividir Capas'), findsOneWidget);
-      expect(find.text('Transferir / Dividir Books'), findsOneWidget);
-      expect(find.text('Lançar Despesa'), findsOneWidget);
-      expect(find.text('Configurações'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

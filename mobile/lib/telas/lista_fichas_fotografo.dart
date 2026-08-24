@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
 import 'package:intl/intl.dart';
 import '../utils/pdf_generator.dart';
 import 'solicitar_correcao_ficha.dart';
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'tela_detalhes_cliente_vendedor.dart' as import_tela_detalhes;
 import '../widgets/led_card.dart';
-
 
 class ListaFichasFotografo extends StatefulWidget {
   const ListaFichasFotografo({super.key});
@@ -28,15 +29,65 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
   Future<void> _carregarFichas() async {
     setState(() => _isLoading = true);
     try {
-      final fichas = await ApiService().getClientsByPhotographer();
-      final pendingFichas = (fichas as List).where((f) => f['bookStatus'] == 'CREATED').toList();
-      setState(() {
-        _fichas = pendingFichas;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      List<dynamic> serverFichas = [];
+      try {
+        final fichas = await ApiService().getClientsByPhotographer();
+        serverFichas = (fichas as List).toList();
+      } catch (e) {
+        debugPrint('Erro ao buscar fichas online do fotógrafo: $e');
+      }
+
+      // Buscar fichas offline pendentes na fila do SyncService
+      final offlineRequests = syncService.pendingRequests
+          .where((req) => req.type == 'REGISTER_CLIENT' || req.type == 'CREATE_CLIENT' || req.type == 'SYNC_CLIENTS')
+          .toList();
+
+      final offlineFichas = <Map<String, dynamic>>[];
+      for (final req in offlineRequests) {
+        final payload = Map<String, dynamic>.from(req.payload);
+        if (payload.containsKey('clients') && payload['clients'] is List) {
+          for (final item in (payload['clients'] as List)) {
+            if (item is Map) {
+              final clientItem = Map<String, dynamic>.from(item);
+              clientItem['isOfflinePending'] = true;
+              clientItem['bookStatus'] ??= 'CREATED';
+              clientItem['name'] ??= clientItem['clientName'] ?? 'Ficha Offline Pendente';
+              offlineFichas.add(clientItem);
+            }
+          }
+        } else {
+          payload['isOfflinePending'] = true;
+          payload['bookStatus'] ??= 'CREATED';
+          payload['name'] ??= payload['clientName'] ?? 'Ficha Offline Pendente';
+          offlineFichas.add(payload);
+        }
+      }
+
+      // Mesclar sem duplicidade de sequenceNumber ou id
+      final Map<String, dynamic> mergedMap = {};
+      for (final sf in serverFichas) {
+        final key = sf['id']?.toString() ?? sf['sequenceNumber']?.toString() ?? UniqueKey().toString();
+        mergedMap[key] = sf;
+      }
+      for (final of in offlineFichas) {
+        final key = of['id']?.toString() ?? of['sequenceNumber']?.toString() ?? UniqueKey().toString();
+        if (!mergedMap.containsKey(key)) {
+          mergedMap[key] = of;
+        }
+      }
+
+      final allFichas = mergedMap.values.toList();
+
       if (mounted) {
+        setState(() {
+          _fichas = allFichas;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Erro ao carregar fichas: $e'), backgroundColor: Colors.red),
         );
@@ -77,11 +128,13 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                     itemBuilder: (context, index) {
                       final ficha = _fichas[index];
                       final eventDate = ficha['eventDate'] != null ? DateTime.tryParse(ficha['eventDate']) : null;
+                      final isOffline = ficha['isOfflinePending'] == true;
+
                       return LedCard(
                         color: Colors.black26,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          side: const BorderSide(color: Colors.white24, width: 1),
+                          side: BorderSide(color: isOffline ? Colors.amberAccent : Colors.white24, width: 1),
                         ),
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(
@@ -103,9 +156,17 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 ),
                               const SizedBox(height: 4),
                               Text(
-                                ficha['bookStatus'] == 'CREATED' ? '⚠️ Pendente de Envio' : '✅ Enviada / Em Rota',
+                                isOffline
+                                    ? '⚠️ Offline (Pendente de Envio)'
+                                    : (ficha['bookStatus'] == 'CREATED'
+                                        ? '⚠️ Na Câmera / Pendente Liberação'
+                                        : '✅ Enviada / Em Rota'),
                                 style: TextStyle(
-                                  color: ficha['bookStatus'] == 'CREATED' ? Colors.orangeAccent : Colors.greenAccent,
+                                  color: isOffline
+                                      ? Colors.amberAccent
+                                      : (ficha['bookStatus'] == 'CREATED'
+                                          ? Colors.orangeAccent
+                                          : Colors.greenAccent),
                                   fontWeight: FontWeight.bold,
                                   fontSize: 12,
                                 ),

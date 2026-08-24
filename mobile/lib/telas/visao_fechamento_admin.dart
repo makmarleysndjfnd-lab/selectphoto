@@ -264,11 +264,21 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
         double pix = (data['pixValue'] ?? 0).toDouble();
         double credito = (data['creditValue'] ?? 0).toDouble();
         double debito = (data['debitValue'] ?? 0).toDouble();
-        double comissao = (data['commission'] ?? 0).toDouble();
-        double percentual = (data['commissionPercentage'] ?? 0).toDouble();
-        double saldoHistorico = (data['totalHistoricalDebt'] ?? 0).toDouble();
         
-        double saldoFinal = (comissao - dinheiro) + saldoHistorico;
+        // Contrato financeiro unificado backend/mobile
+        double comissao = (data['commissionAmount'] ?? data['commission'] ?? data['calculatedCommission'] ?? 0).toDouble();
+        double taxaComissao = (data['commissionRate'] != null)
+            ? (data['commissionRate'] as num).toDouble()
+            : ((data['commissionPercentage'] ?? 15) / 100.0);
+        double percentual = taxaComissao <= 1.0 ? taxaComissao * 100 : taxaComissao;
+        double saldoHistorico = (data['historicalBalance'] ?? data['totalHistoricalDebt'] ?? 0).toDouble();
+        double sellerOwes = (data['sellerOwesCompany'] ?? 0).toDouble();
+        double companyOwes = (data['companyOwesSeller'] ?? 0).toDouble();
+
+        final direction = data['finalDirection']?.toString() ?? (dinheiro > comissao ? 'SELLER_PAYS_COMPANY' : (comissao > dinheiro ? 'COMPANY_PAYS_SELLER' : 'SETTLED'));
+        double saldoFinal = (data['finalAmount'] != null)
+            ? (data['finalAmount'] as num).toDouble()
+            : (sellerOwes > 0 ? sellerOwes : (companyOwes > 0 ? companyOwes : ((comissao - dinheiro) + saldoHistorico).abs()));
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -281,28 +291,28 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
              _infoRow('Débito', 'R\$ ${debito.toStringAsFixed(2)}'),
              const Divider(color: Colors.white24, height: 24),
              _infoRow('Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
-             _infoRow('Comissão do Dia (${(percentual * 100).toInt()}%)', 'R\$ ${comissao.toStringAsFixed(2)}'),
+             _infoRow('Comissão do Dia (${percentual.toInt()}%)', 'R\$ ${comissao.toStringAsFixed(2)}'),
              if (saldoHistorico != 0)
-                _infoRow('Dívida Acumulada', 'R\$ ${saldoHistorico.toStringAsFixed(2)}', color: Colors.redAccent),
+                _infoRow('Saldo Histórico Acumulado', 'R\$ ${saldoHistorico.toStringAsFixed(2)}', color: saldoHistorico > 0 ? Colors.redAccent : Colors.greenAccent),
              const Divider(color: Colors.white24, height: 24),
              
-             if (saldoFinal > 0) ...[
-               _infoRow('Comissão a Pagar (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
-               const SizedBox(height: 16),
-               LedButton(
-                  onPressed: () async {
-                    try {
-                      await ApiService().payRepasse(_selectedSeller!, saldoFinal, commissionToLog: comissao);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagamento registrado com sucesso!')));
-                      setState(() {});
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                    }
-                  },
-                  style: LedButton.styleFrom(backgroundColor: Colors.green),
-                  child: const Text('Registrar Pagamento')
-               ),
-             ] else if (saldoFinal < 0) ...[
+             if (direction == 'COMPANY_PAYS_SELLER' && saldoFinal > 0) ...[
+                _infoRow('Comissão a Pagar ao Vendedor (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
+                const SizedBox(height: 16),
+                LedButton(
+                   onPressed: () async {
+                     try {
+                       await ApiService().payRepasse(_selectedSeller!, saldoFinal, commissionToLog: comissao);
+                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagamento registrado com sucesso!')));
+                       setState(() {});
+                     } catch (e) {
+                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                     }
+                   },
+                   style: LedButton.styleFrom(backgroundColor: Colors.green),
+                   child: const Text('Registrar Pagamento')
+                ),
+             ] else if (direction == 'SELLER_PAYS_COMPANY' && saldoFinal > 0) ...[
                Row(
                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                  children: [

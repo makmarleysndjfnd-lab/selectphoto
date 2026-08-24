@@ -5,7 +5,6 @@ import '../widgets/led_choice_chip.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../widgets/led_card.dart';
 
-
 class VisaoEstoqueAdmin extends StatefulWidget {
   const VisaoEstoqueAdmin({super.key});
 
@@ -56,7 +55,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             return AlertDialog(
               backgroundColor: const Color(0xFF1E1E2C),
               title: Text(
-                seller != null ? 'Gerenciar Capas: ${seller['seller']['name']}' : 'Nova Transferência',
+                seller != null ? 'Gerenciar Capas: ${seller['seller']?['name'] ?? 'Vendedor'}' : 'Nova Transferência',
                 style: const TextStyle(color: Colors.white),
               ),
               content: Column(
@@ -74,8 +73,8 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                       ),
                       items: _sellers.map((s) {
                         return DropdownMenuItem<String>(
-                          value: s['seller']['id'],
-                          child: Text(s['name']),
+                          value: s['seller']?['id'],
+                          child: Text(s['seller']?['name'] ?? 'Sem Nome'),
                         );
                       }).toList(),
                       onChanged: (val) {},
@@ -236,7 +235,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                 Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text('Gestão de Capas', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
@@ -300,9 +299,9 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                 style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.redAccent)),
               ),
             ],
-          )
+          ),
         ],
-      )
+      ),
     );
   }
 
@@ -326,8 +325,9 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
     }
     maxY += (maxY * 0.2); // 20% margin top
 
+    final chartWidth = (_sellers.length * 64.0).clamp(MediaQuery.of(context).size.width - 72, double.infinity);
+
     return Container(
-      height: 300,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
@@ -338,78 +338,85 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text('Capas por Vendedor', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 24),
-          Expanded(
-            child: BarChart(
-              BarChartData(
-                alignment: BarChartAlignment.spaceAround,
-                maxY: maxY,
-                barTouchData: BarTouchData(
-                  touchTooltipData: BarTouchTooltipData(
-                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                      String name = _sellers[groupIndex]['seller']['name'] ?? 'Sem Nome';
-                      return BarTooltipItem(
-                        '$name\n${rod.toY.round()} capas',
-                        const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 220,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: chartWidth,
+                child: BarChart(
+                  BarChartData(
+                    alignment: BarChartAlignment.spaceAround,
+                    maxY: maxY,
+                    barTouchData: BarTouchData(
+                      touchTooltipData: BarTouchTooltipData(
+                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          String name = _sellers[groupIndex]['seller']?['name'] ?? 'Sem Nome';
+                          return BarTooltipItem(
+                            '$name\n${rod.toY.round()} capas',
+                            const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          );
+                        },
+                      ),
+                    ),
+                    titlesData: FlTitlesData(
+                      show: true,
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          getTitlesWidget: (double value, TitleMeta meta) {
+                            final index = value.toInt();
+                            if (index < 0 || index >= _sellers.length) return const SizedBox.shrink();
+                            String name = _sellers[index]['seller']?['name'] ?? 'Vendedor';
+                            if (name.contains(' ')) {
+                              name = name.split(' ')[0];
+                            }
+                            if (name.length > 9) name = name.substring(0, 9);
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                            );
+                          },
+                          reservedSize: 28,
+                        ),
+                      ),
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 36,
+                          getTitlesWidget: (value, meta) {
+                            if (value == maxY) return const SizedBox.shrink();
+                            return Text(value.toInt().toString(), style: const TextStyle(color: Colors.white54, fontSize: 11));
+                          },
+                        ),
+                      ),
+                      rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    ),
+                    gridData: FlGridData(
+                      show: true,
+                      drawVerticalLine: false,
+                      getDrawingHorizontalLine: (value) => FlLine(color: Colors.white12, strokeWidth: 1),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    barGroups: List.generate(_sellers.length, (i) {
+                      final s = _sellers[i];
+                      final covers = (s['balance'] ?? 0).toDouble();
+                      return BarChartGroupData(
+                        x: i,
+                        barRods: [
+                          BarChartRodData(
+                            toY: covers,
+                            color: const Color(0xFFCE93D8),
+                            width: 18,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                          )
+                        ],
                       );
-                    },
+                    }),
                   ),
                 ),
-                titlesData: FlTitlesData(
-                  show: true,
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (double value, TitleMeta meta) {
-                        final index = value.toInt();
-                        if (index < 0 || index >= _sellers.length) return const SizedBox.shrink();
-                        String name = _sellers[index]['seller']['name'] ?? 'Vendedor';
-                        if (name.contains(' ')) {
-                          name = name.split(' ')[0];
-                        }
-                        if (name.length > 8) name = name.substring(0, 8);
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                        );
-                      },
-                      reservedSize: 28,
-                    ),
-                  ),
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 40,
-                      getTitlesWidget: (value, meta) {
-                        if (value == maxY) return const SizedBox.shrink();
-                        return Text(value.toInt().toString(), style: const TextStyle(color: Colors.white54, fontSize: 12));
-                      },
-                    ),
-                  ),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                ),
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  getDrawingHorizontalLine: (value) => FlLine(color: Colors.white12, strokeWidth: 1),
-                ),
-                borderData: FlBorderData(show: false),
-                barGroups: List.generate(_sellers.length, (i) {
-                  final s = _sellers[i];
-                  final covers = (s['balance'] ?? 0).toDouble();
-                  return BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: covers,
-                        color: const Color(0xFFCE93D8),
-                        width: 16,
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                      )
-                    ],
-                  );
-                }),
               ),
             ),
           ),
@@ -429,28 +436,69 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Vendedores', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Vendedores e Saldo em Posse', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           if (_sellers.isEmpty)
             const Text('Nenhum vendedor encontrado.', style: TextStyle(color: Colors.white54)),
           ..._sellers.map((s) {
-            final name = (s['seller'] != null ? s['seller']['name'] : 'Sem Nome');
+            final sellerData = s['seller'] ?? {};
+            final name = sellerData['name'] ?? 'Sem Nome';
+            final email = sellerData['email'] ?? '';
             final covers = s['balance'] ?? 0;
+            final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : 'V';
 
             return LedCard(
               color: Colors.white.withOpacity(0.05),
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.person, color: Colors.white),
-                ),
-                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text('Possui $covers capas', style: const TextStyle(color: Colors.white70)),
-                trailing: LedButton(
-                  text: 'Editar / Transferir',
-                  color: Colors.white,
-                  onPressed: () => _showTransferDialog(s),
+              margin: const EdgeInsets.only(bottom: 10),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: const Color(0xFFCE93D8).withOpacity(0.2),
+                      child: Text(initial, style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                          if (email.isNotEmpty)
+                            Text(
+                              email,
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00E676).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF00E676).withOpacity(0.4)),
+                      ),
+                      child: Text(
+                        '$covers capas',
+                        style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.swap_horiz_rounded, color: Color(0xFF4FC3F7)),
+                      tooltip: 'Gerenciar / Transferir',
+                      onPressed: () => _showTransferDialog(s),
+                    ),
+                  ],
                 ),
               ),
             );

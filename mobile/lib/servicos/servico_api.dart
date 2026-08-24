@@ -218,14 +218,23 @@ class ApiService {
       }
       return apiMsg ?? 'Acesso não autorizado para esta operação.';
     }
-    if (statusCode == 404) {
-      return apiMsg ?? 'Recurso não encontrado no servidor.';
-    }
-    if (statusCode == 429) {
-      return 'Muitas tentativas em pouco tempo. Por favor, aguarde alguns minutos e tente novamente.';
+    final supportCode = (data is Map && data['supportCode'] != null) ? data['supportCode'].toString() : null;
+
+    if (statusCode == 503) {
+      if (supportCode != null && supportCode.isNotEmpty) {
+        return apiMsg != null ? '$apiMsg (Código de suporte: $supportCode)' : 'Armazenamento temporariamente indisponível. (Código de suporte: $supportCode)';
+      }
+      return apiMsg ?? 'Serviço temporariamente indisponível. Tente novamente mais tarde.';
     }
     if (statusCode != null && statusCode >= 500) {
+      if (supportCode != null && supportCode.isNotEmpty) {
+        return 'Servidor temporariamente indisponível. (Código de suporte: $supportCode)';
+      }
       return 'Servidor temporariamente indisponível. Tente novamente mais tarde.';
+    }
+
+    if (supportCode != null && supportCode.isNotEmpty && apiMsg != null) {
+      return '$apiMsg (Código de suporte: $supportCode)';
     }
 
     return apiMsg ?? 'Falha na comunicação com o servidor.';
@@ -396,7 +405,7 @@ class ApiService {
       });
       await _dio.post('/sales/$saleId/receipt', data: formData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload do comprovante');
+      throw Exception(_extractError(e));
     }
   }
 
@@ -405,7 +414,7 @@ class ApiService {
     try {
       await _dio.post('/sales/non-sale', data: nonSaleData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar não-venda');
+      throw Exception(_extractError(e));
     }
   }
 
@@ -414,7 +423,7 @@ class ApiService {
     try {
       await _dio.post('/sales/appointments', data: appointmentData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar agendamento');
+      throw Exception(_extractError(e));
     }
   }
 
@@ -423,7 +432,7 @@ class ApiService {
     try {
       await _dio.post('/sales/photos', data: photoData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload da book');
+      throw Exception(_extractError(e));
     }
   }
 
@@ -966,7 +975,7 @@ class ApiService {
       final response = await _dio.post('/upload', data: formData);
       return response.data['url'];
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fazer upload do arquivo');
+      throw Exception(_extractError(e));
     }
   }
 
@@ -1079,12 +1088,78 @@ class ApiService {
     }
   }
 
-  Future<List<dynamic>> getPersonalAppointments(String sellerId) async {
+  Future<List<dynamic>> getPersonalAppointments(String sellerId, {DateTime? from}) async {
     try {
-      final response = await _dio.get('/appointments/seller/$sellerId');
+      final queryParams = <String, dynamic>{};
+      if (from != null) {
+        queryParams['from'] = from.toUtc().toIso8601String();
+      }
+      final response = await _dio.get(
+        '/appointments/seller/$sellerId',
+        queryParameters: queryParams.isEmpty ? null : queryParams,
+      );
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar agendamentos pessoais');
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<List<dynamic>> getUnifiedAppointments(String sellerId, {DateTime? from}) async {
+    try {
+      final queryParams = <String, dynamic>{};
+      if (from != null) {
+        queryParams['from'] = from.toUtc().toIso8601String();
+      }
+      final response = await _dio.get(
+        '/appointments/unified/$sellerId',
+        queryParameters: queryParams.isEmpty ? null : queryParams,
+      );
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> createPersonalAppointment({
+    required String sellerId,
+    required String title,
+    String? description,
+    required DateTime dateTime,
+  }) async {
+    try {
+      final response = await _dio.post('/appointments', data: {
+        'sellerId': sellerId,
+        'title': title,
+        'description': description,
+        'dateTime': dateTime.toUtc().toIso8601String(),
+      });
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getCityClosingPreview(String city) async {
+    try {
+      final response = await _dio.get(
+        '/closing/city/preview',
+        queryParameters: {'city': city},
+      );
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar prévia de fechamento');
+    }
+  }
+
+  Future<Map<String, dynamic>> closeCity(String city, {String? event}) async {
+    try {
+      final response = await _dio.post('/closing/city', data: {
+        'city': city,
+        if (event != null && event.trim().isNotEmpty) 'event': event.trim(),
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao realizar fechamento de cidade');
     }
   }
 

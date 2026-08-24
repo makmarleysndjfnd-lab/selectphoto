@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'tela_configuracoes.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/ui_helpers.dart';
+import '../servicos/servico_sincronizacao.dart';
 
 import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -50,6 +52,7 @@ class _SellerDashboardState extends State<SellerDashboard>
 
   int _unreadNotifs = 0;
   bool _isQuickMenuOpen = false; // Proteção contra duplo clique no menu de ações
+  bool _atendidasExpanded = false; // Controle da seção recolhida de fichas atendidas
 
   @override
   void initState() {
@@ -104,7 +107,10 @@ class _SellerDashboardState extends State<SellerDashboard>
     try {
       final clients = await ApiService().getClientsBySeller();
       final userId = await UIHelpers.getUserId();
-      final appointments = userId != null ? await ApiService().getPersonalAppointments(userId) : [];
+      final now = DateTime.now();
+      final startOfToday = DateTime(now.year, now.month, now.day);
+      final fromWindow = startOfToday.subtract(const Duration(days: 4));
+      final appointments = userId != null ? await ApiService().getUnifiedAppointments(userId, from: fromWindow) : [];
       if (mounted) {
         setState(() {
           _sellerClients = List<Map<String, dynamic>>.from(clients);
@@ -241,66 +247,291 @@ class _SellerDashboardState extends State<SellerDashboard>
     }).toList();
   }
 
-  void _showFechamentoCidadeDialog() {
-    showDialog(
+  void _showFechamentoCidadeDialog() async {
+    // 1. Verificar conectividade e fila offline pendente
+    final syncService = Provider.of<SyncService>(context, listen: false);
+    if (syncService.pendingRequests.isNotEmpty) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.sync_problem_rounded, color: Colors.orangeAccent),
+              SizedBox(width: 8),
+              Text('Operações Pendentes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+            ],
+          ),
+          content: Text(
+            'Você possui ${syncService.pendingRequests.length} operação(ões) offline pendente(s) na fila. '
+            'Por favor, sincronize seus dados antes de realizar o fechamento da cidade.',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK', style: TextStyle(color: Color(0xFF4FC3F7))),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final cities = _sellerClients
+        .map((c) => (c['city'] as String?)?.trim())
+        .where((c) => c != null && c.isNotEmpty)
+        .cast<String>()
+        .toSet()
+        .toList();
+
+    if (cities.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nenhuma cidade encontrada nas suas fichas.')),
+      );
+      return;
+    }
+
+    String selectedCity = cities.first;
+    bool isLoadingPreview = true;
+    bool isSubmitting = false;
+    Map<String, dynamic>? previewData;
+    String? previewError;
+
+    await showDialog(
       context: context,
-      builder: (context) {
-        String selectedSeller = 'João Vendedor';
-        final List<String> sellers = ['João Vendedor', 'Maria Vendedora', 'Carlos Vendedor'];
+      barrierDismissible: false,
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setState) {
+          builder: (context, setDialogState) {
+            void loadPreview(String city) async {
+              setDialogState(() {
+                isLoadingPreview = true;
+                previewError = null;
+              });
+              try {
+                final preview = await ApiService().getCityClosingPreview(city);
+                if (context.mounted) {
+                  setDialogState(() {
+                    previewData = preview;
+                    isLoadingPreview = false;
+                  });
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  setDialogState(() {
+                    previewError = e.toString().replaceAll('Exception: ', '');
+                    isLoadingPreview = false;
+                  });
+                }
+              }
+            }
+
+            if (isLoadingPreview && previewData == null && previewError == null) {
+              loadPreview(selectedCity);
+            }
+
+            final pendingCount = previewData?['pendingCount'] ?? 0;
+            final nonSaleCount = previewData?['nonSaleCount'] ?? 0;
+            final soldCount = previewData?['soldCount'] ?? 0;
+            final totalCount = previewData?['totalCount'] ?? 0;
+            final totalSalesVal = (previewData?['totalSalesValue'] is num)
+                ? (previewData!['totalSalesValue'] as num).toDouble()
+                : (double.tryParse(previewData?['totalSalesValue']?.toString() ?? '0') ?? 0.0);
+            final pendingReceipts = previewData?['pendingReceiptsCount'] ?? 0;
+            final isAlreadyClosed = previewData?['isAlreadyClosed'] == true;
+            final hasUnresolved = (pendingCount + nonSaleCount) > 0;
+
             return AlertDialog(
               backgroundColor: const Color(0xFF1A2535),
-              title: const Text('Fechamento de Cidade', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
                 children: [
-                  const Text('Estatísticas do dia:', style: TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 12),
-                  const Text('Total de Vendas: 0', style: TextStyle(color: Colors.white)),
-                  const Text('Total Recebido (R\$): 0.00', style: TextStyle(color: Colors.white)),
-                  const SizedBox(height: 16),
-                  const Text('Vendedor Responsável:', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 4),
-                  DropdownButtonFormField<String>(
-                    value: selectedSeller,
-                    dropdownColor: const Color(0xFF1A2535),
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  Icon(Icons.location_city_rounded, color: Color(0xFF4FC3F7)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Fechamento de Cidade',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                     ),
-                    items: sellers.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                    onChanged: (val) {
-                      if (val != null) setState(() => selectedSeller = val);
-                    },
                   ),
-                  const SizedBox(height: 16),
-                  const Text('Atenção: Ao confirmar o fechamento, as fichas desta cidade serão bloqueadas e o relatório será enviado ao Admin.',
-                      style: TextStyle(color: Colors.redAccent, fontSize: 12)),
                 ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Selecione a cidade:', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      value: selectedCity,
+                      dropdownColor: const Color(0xFF1A2535),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.05),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                      ),
+                      items: cities.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                      onChanged: isSubmitting ? null : (val) {
+                        if (val != null && val != selectedCity) {
+                          selectedCity = val;
+                          loadPreview(val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    if (isLoadingPreview) ...[
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(color: Color(0xFF4FC3F7)),
+                        ),
+                      ),
+                    ] else if (previewError != null) ...[
+                      Text('Erro ao carregar prévia: $previewError', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                    ] else ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildStatRow('Total de Fichas:', '$totalCount'),
+                            const SizedBox(height: 6),
+                            _buildStatRow('Fichas Pendentes:', '$pendingCount', color: pendingCount > 0 ? const Color(0xFF40C4FF) : Colors.white70),
+                            const SizedBox(height: 6),
+                            _buildStatRow('Revisitas / Não-Venda:', '$nonSaleCount', color: nonSaleCount > 0 ? const Color(0xFFFFB74D) : Colors.white70),
+                            const SizedBox(height: 6),
+                            _buildStatRow('Fichas Vendidas:', '$soldCount', color: const Color(0xFF00E676)),
+                            const Divider(color: Colors.white12, height: 16),
+                            _buildStatRow('Total Vendido (R\$):', 'R\$ ${totalSalesVal.toStringAsFixed(2)}', isBold: true, color: const Color(0xFF00E676)),
+                            if (pendingReceipts > 0) ...[
+                              const SizedBox(height: 6),
+                              _buildStatRow('Comprovantes Pendentes:', '$pendingReceipts', color: Colors.orangeAccent),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (isAlreadyClosed) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.amberAccent, size: 16),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text('Esta cidade já foi encerrada anteriormente.',
+                                    style: TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      if (!isAlreadyClosed && hasUnresolved) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Atenção: Existem ${pendingCount + nonSaleCount} fichas sem venda nesta cidade. '
+                                  'Ao confirmar o fechamento, elas serão encerradas definitivamente e não poderão mais ser alteradas.',
+                                  style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: isSubmitting ? null : () => Navigator.pop(dialogContext),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
                 LedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fechamento enviado ao admin por $selectedSeller.')));
-                  },
+                  onPressed: (isSubmitting || isLoadingPreview || isAlreadyClosed)
+                      ? null
+                      : () async {
+                          setDialogState(() => isSubmitting = true);
+                          try {
+                            await ApiService().closeCity(selectedCity);
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext);
+                            }
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Cidade $selectedCity encerrada com sucesso!'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                              _fetchClients();
+                            }
+                          } catch (e) {
+                            setDialogState(() => isSubmitting = false);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Erro no fechamento: ${e.toString().replaceAll("Exception: ", "")}'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
                   style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
-                  child: const Text('Confirmar Fechamento'),
+                  child: isSubmitting
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                      : const Text('Confirmar Fechamento'),
                 ),
               ],
             );
-          }
+          },
         );
       },
+    );
+  }
+
+  Widget _buildStatRow(String label, String value, {bool isBold = false, Color? color}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(
+          value,
+          style: TextStyle(
+            color: color ?? Colors.white,
+            fontSize: 13,
+            fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 
@@ -417,120 +648,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  void _showTransferStockDialog(String itemType) async {
-    final qtyController = TextEditingController();
-    String? selectedRecipient;
-    List<dynamic> recipients = [];
-    bool isLoading = true;
 
-    // Fetch users immediately
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return const Center(child: CircularProgressIndicator(color: Colors.orangeAccent));
-      }
-    );
-
-    try {
-      final api = ApiService();
-      final users = await api.getCompanyUsers();
-      recipients = users;
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context); // close loading
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar usuários: $e')));
-      }
-      return;
-    }
-
-    if (!mounted) return;
-    Navigator.pop(context); // close loading
-
-    final titleItem = itemType == 'COVER' ? 'Capas' : 'Books';
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1A2535),
-              title: Text('Transferir $titleItem', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Selecione o destinatário e a quantidade para transferir:', style: TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: selectedRecipient,
-                    hint: const Text('Destinatário', style: TextStyle(color: Colors.white54)),
-                    dropdownColor: const Color(0xFF1A1A2E),
-                    items: recipients.map((r) => DropdownMenuItem<String>(value: r['id'], child: Text(r['name'], style: const TextStyle(color: Colors.white)))).toList(),
-                    onChanged: (val) {
-                      setStateDialog(() {
-                        selectedRecipient = val;
-                      });
-                    },
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: qtyController,
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Quantidade',
-                      labelStyle: const TextStyle(color: Colors.white54),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
-                ),
-                LedButton(
-                  onPressed: selectedRecipient == null ? null : () async {
-                    final qty = int.tryParse(qtyController.text) ?? 0;
-                    if (qty <= 0) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Quantidade inválida.')));
-                      return;
-                    }
-                    Navigator.pop(context);
-                    
-                    try {
-                      if (itemType == 'COVER') {
-                        await ApiService().transferBetweenSellers(selectedRecipient!, qty);
-                      } else {
-                        await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
-                      }
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Solicitação de transferência enviada!')));
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                      }
-                    }
-                  },
-                  style: LedButton.styleFrom(backgroundColor: Colors.orangeAccent),
-                  child: const Text('Confirmar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            );
-          }
-        );
-      },
-    );
-  }
 
   void _openQRScanner() {
     Navigator.push(context, MaterialPageRoute(builder: (context) {
@@ -654,46 +772,66 @@ class _SellerDashboardState extends State<SellerDashboard>
                       ],
                     ),
                   ),
-                  // Botão de Ações rápidas
-                  Semantics(
-                    label: 'Ações rápidas',
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: _isQuickMenuOpen ? null : _showQuickActionsMenu,
-                      child: Container(
-                        constraints: const BoxConstraints(
-                            minWidth: 48, minHeight: 48),
-                        alignment: Alignment.center,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.08),
+                  // 2 botões verticais independentes: Notificações (topo) e Configurações (baixo)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Botão Superior: Notificações
+                      Semantics(
+                        label: 'Notificações',
+                        child: InkWell(
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: Colors.white.withOpacity(0.18)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_unreadNotifs > 0)
-                              Badge(
-                                label: Text(_unreadNotifs.toString()),
-                                child: const Icon(Icons.bolt_rounded,
-                                    color: Colors.white, size: 18),
-                              )
-                            else
-                              const Icon(Icons.bolt_rounded,
-                                  color: Colors.white, size: 18),
-                            const SizedBox(width: 4),
-                            const Text('Ações',
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600)),
-                          ],
+                          onTap: _showNotificacoesVendedorDialog,
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withOpacity(0.18)),
+                            ),
+                            child: _unreadNotifs > 0
+                                ? Badge(
+                                    label: Text(_unreadNotifs.toString()),
+                                    child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent, size: 20),
+                                  )
+                                : const Icon(Icons.notifications_none_rounded, color: Colors.white70, size: 20),
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 6),
+                      // Botão Inferior: Configurações
+                      Semantics(
+                        label: 'Configurações',
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const SettingsScreen(
+                                  canManageRoi: false,
+                                  isFotografo: false,
+                                  isVendedor: true,
+                                ),
+                              ),
+                            ).then((_) => _fetchClients());
+                          },
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withOpacity(0.18)),
+                            ),
+                            child: const Icon(Icons.settings_outlined, color: Colors.white70, size: 20),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -717,168 +855,6 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  /// Menu de ações rápidas — BottomSheet vertical com um item por linha.
-  /// Cada item mantém exatamente a função original do IconButton correspondente.
-  void _showQuickActionsMenu() {
-    if (_isQuickMenuOpen) return;
-    setState(() => _isQuickMenuOpen = true);
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF0D1B2A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Handle visual
-                Container(
-                  width: 36, height: 4,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-                  child: Row(
-                    children: [
-                      Icon(Icons.flash_on_rounded,
-                          color: Color(0xFF4FC3F7), size: 18),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text('Ações Rápidas',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15),
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(color: Colors.white12, height: 1),
-                const SizedBox(height: 4),
-                // 1. Notificações
-                _quickActionItem(
-                  ctx: ctx,
-                  icon: _unreadNotifs > 0
-                      ? Icons.notifications_active_rounded
-                      : Icons.notifications_none_rounded,
-                  iconColor: _unreadNotifs > 0
-                      ? Colors.orangeAccent
-                      : Colors.white54,
-                  label: 'Notificações',
-                  badge: _unreadNotifs > 0 ? _unreadNotifs.toString() : null,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showNotificacoesVendedorDialog();
-                  },
-                ),
-                // 2. Transferir Capas
-                _quickActionItem(
-                  ctx: ctx,
-                  icon: Icons.assignment_return_rounded,
-                  iconColor: Colors.orangeAccent,
-                  label: 'Transferir / Dividir Capas',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showTransferStockDialog('COVER');
-                  },
-                ),
-                // 3. Transferir Books
-                _quickActionItem(
-                  ctx: ctx,
-                  icon: Icons.menu_book_rounded,
-                  iconColor: Colors.lightGreenAccent,
-                  label: 'Transferir / Dividir Books',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showTransferStockDialog('BOOK');
-                  },
-                ),
-                // 4. Lançar Despesa
-                _quickActionItem(
-                  ctx: ctx,
-                  icon: Icons.receipt_long_rounded,
-                  iconColor: const Color(0xFFCE93D8),
-                  label: 'Lançar Despesa',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => const CostEntryScreen(),
-                    ));
-                  },
-                ),
-                // 5. Configurações
-                _quickActionItem(
-                  ctx: ctx,
-                  icon: Icons.settings_rounded,
-                  iconColor: Colors.white70,
-                  label: 'Configurações',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => const SettingsScreen(canManageRoi: false),
-                    ));
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        );
-      },
-    ).whenComplete(() {
-      if (mounted) setState(() => _isQuickMenuOpen = false);
-    });
-  }
-
-  /// Item de ação rápida com ícone, texto e toque mínimo de 48px.
-  Widget _quickActionItem({
-    required BuildContext ctx,
-    required IconData icon,
-    required Color iconColor,
-    required String label,
-    String? badge,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 32,
-              child: badge != null
-                  ? Badge(
-                      label: Text(badge),
-                      child: Icon(icon, color: iconColor, size: 22),
-                    )
-                  : Icon(icon, color: iconColor, size: 22),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 15),
-              ),
-            ),
-            const Icon(Icons.chevron_right_rounded,
-                color: Colors.white24, size: 20),
-          ],
-        ),
-      ),
-    );
-  }
   void _showRepassBookDialog() {
     if (_selectedSellerForTransfer == null) return;
     final codeCtrl = TextEditingController();
@@ -1140,6 +1116,42 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   Widget _buildClientList() {
+    final pendingClients = _filteredClients.where((c) {
+      final outcome = c['outcomeStatus'] as String?;
+      final sales = (c['sales'] as List?) ?? [];
+      final hasSales = sales.isNotEmpty;
+      final hasNonSales = c['nonSales'] != null && (c['nonSales'] as List).isNotEmpty;
+
+      // Trava de Comprovante: Se a ficha foi vendida, mas ainda falta comprovante, permanece nas Pendentes
+      if (outcome == 'SOLD' || hasSales) {
+        final hasReceipt = sales.isNotEmpty && sales.every((s) => s['receiptUrl'] != null && s['receiptUrl'].toString().trim().isNotEmpty);
+        return !hasReceipt;
+      }
+
+      if (outcome == 'PENDING') return true;
+      if (outcome == 'NON_SALE') return false;
+      return !hasSales && !hasNonSales;
+    }).toList();
+
+    final revisitClients = _filteredClients.where((c) {
+      final outcome = c['outcomeStatus'] as String?;
+      final hasSales = c['sales'] != null && (c['sales'] as List).isNotEmpty;
+      final hasNonSales = c['nonSales'] != null && (c['nonSales'] as List).isNotEmpty;
+      if (outcome == 'SOLD' || hasSales) return false;
+      if (outcome == 'NON_SALE') return true;
+      return hasNonSales;
+    }).toList();
+
+    final soldClients = _filteredClients.where((c) {
+      final outcome = c['outcomeStatus'] as String?;
+      final sales = (c['sales'] as List?) ?? [];
+      final isSold = outcome == 'SOLD' || sales.isNotEmpty;
+      if (!isSold) return false;
+      // Para entrar nos resolvidos/vendidos, todos os comprovantes devem estar anexados
+      final hasReceipt = sales.isNotEmpty && sales.every((s) => s['receiptUrl'] != null && s['receiptUrl'].toString().trim().isNotEmpty);
+      return hasReceipt;
+    }).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1172,7 +1184,7 @@ class _SellerDashboardState extends State<SellerDashboard>
           onChanged: _filterClientList,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
-            hintText: 'Filtrar por nome ou ficha',
+            hintText: 'Filtrar por nome, ficha ou cidade',
             hintStyle: TextStyle(color: Colors.white.withOpacity(0.5)),
             prefixIcon: const Icon(Icons.filter_list_rounded,
                 color: Color(0xFF90CAF9)),
@@ -1191,8 +1203,134 @@ class _SellerDashboardState extends State<SellerDashboard>
                 const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           ),
         ),
-        const SizedBox(height: 16),
-        ..._filteredClients.map((client) => _buildClientCard(client)),
+        const SizedBox(height: 20),
+
+        // ── 1. GRUPO: FICHAS PENDENTES ──────────────────────────────────────────
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: [
+            const Icon(Icons.hourglass_top_rounded, color: Color(0xFF4FC3F7), size: 18),
+            Text(
+              'Fichas Pendentes (${pendingClients.length})',
+              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (pendingClients.isEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: const Center(
+              child: Text('Nenhuma ficha pendente.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+            ),
+          ),
+        ] else ...[
+          ...pendingClients.map((client) => _buildClientCard(client, outcome: 'PENDING')),
+        ],
+
+        const SizedBox(height: 24),
+
+        // ── 2. SEÇÃO RECOLHÍVEL: ATENDIDAS ─────────────────────────────────────
+        InkWell(
+          onTap: () => setState(() => _atendidasExpanded = !_atendidasExpanded),
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.12)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.done_all_rounded, color: Color(0xFF81C784), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Fichas Atendidas (${revisitClients.length + soldClients.length})',
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Icon(
+                  _atendidasExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                  color: Colors.white70,
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        if (_atendidasExpanded) ...[
+          const SizedBox(height: 16),
+          // Subgrupo Revisitas / Não Vendidas
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            children: [
+              const Icon(Icons.replay_rounded, color: Color(0xFFFFB74D), size: 16),
+              Text(
+                'Revisitas / Não Vendidas (${revisitClients.length})',
+                style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (revisitClients.isEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: const Center(
+                child: Text('Nenhuma ficha em revisita.', style: TextStyle(color: Colors.white38, fontSize: 12)),
+              ),
+            ),
+          ] else ...[
+            ...revisitClients.map((client) => _buildClientCard(client, outcome: 'NON_SALE')),
+          ],
+
+          const SizedBox(height: 16),
+          // Subgrupo Vendidas
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            children: [
+              const Icon(Icons.check_circle_rounded, color: Color(0xFF00E676), size: 16),
+              Text(
+                'Vendidas (${soldClients.length})',
+                style: const TextStyle(color: Color(0xFF00E676), fontSize: 14, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (soldClients.isEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: const Center(
+                child: Text('Nenhuma ficha vendida ainda.', style: TextStyle(color: Colors.white38, fontSize: 12)),
+              ),
+            ),
+          ] else ...[
+            ...soldClients.map((client) => _buildClientCard(client, outcome: 'SOLD')),
+          ],
+        ],
+
         const SizedBox(height: 24),
         LedButton.icon(
           onPressed: () {
@@ -1221,20 +1359,14 @@ class _SellerDashboardState extends State<SellerDashboard>
       return DateTime.parse(a['dateTime']).compareTo(DateTime.parse(b['dateTime']));
     });
 
-    // Pega os agendamentos futuros ou todos se n\u00e3o houver
+    // Pega os agendamentos a partir do início do dia atual em diante (sem fallback para o passado)
     final upcomingAppointments = sortedApps.where((app) {
       if (app['dateTime'] == null) return false;
       final dt = DateTime.parse(app['dateTime']).toLocal();
-      return !dt.isBefore(startOfToday); // Pega do inicio do dia de hoje para frente
+      return !dt.isBefore(startOfToday);
     }).toList();
-    
-    // Se a regra 'somente do dia pra frente' deixar a lista vazia (ex: todos no passado),
-    // ainda assim queremos mostrar os mais recentes se houver, ou a lista do dia pra frente.
-    // Mas o usu\u00e1rio quer que QUALQUER agendamento que ele acabou de criar mostre.
-    // Vamos apenas pegar os \u00faltimos 3 criados / mais recentes.
-    final List<Map<String, dynamic>> displayApps = upcomingAppointments.isNotEmpty 
-        ? upcomingAppointments.take(3).toList() 
-        : sortedApps.reversed.take(3).toList();
+
+    final List<Map<String, dynamic>> displayApps = upcomingAppointments.take(3).toList();
 
     return GestureDetector(
       onTap: () {
@@ -1268,24 +1400,32 @@ class _SellerDashboardState extends State<SellerDashboard>
             ),
             if (displayApps.isEmpty) ...[
               const SizedBox(height: 8),
-              const Text('Clique aqui para ver o calendário e adicionar lembretes.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+              const Text('Nenhum agendamento para hoje ou datas futuras.', style: TextStyle(color: Colors.white54, fontSize: 13)),
             ] else ...[
               const SizedBox(height: 12),
               const Text('Próximos Agendamentos:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               ...displayApps.map((app) {
-                final dt = DateTime.parse(app['dateTime']);
+                final dt = DateTime.parse(app['dateTime']).toLocal();
                 final dateString = '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}';
                 final timeString = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                final isClientApp = app['type'] == 'CLIENT';
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
                     children: [
-                      const Icon(Icons.access_time, size: 14, color: Color(0xFF00E5FF)),
+                      Icon(isClientApp ? Icons.business_center : Icons.access_time, size: 14, color: isClientApp ? const Color(0xFF00E5FF) : Colors.amber),
                       const SizedBox(width: 6),
-                      Text('$dateString $timeString', style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold)),
+                      Text('$dateString $timeString', style: TextStyle(color: isClientApp ? const Color(0xFF00E5FF) : Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
                       const SizedBox(width: 8),
-                      Expanded(child: Text(app['title'] ?? '', style: const TextStyle(color: Colors.white), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      Expanded(
+                        child: Text(
+                          app['title'] ?? app['clientName'] ?? 'Compromisso',
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -1299,7 +1439,6 @@ class _SellerDashboardState extends State<SellerDashboard>
 
   Widget _buildAgendaItem(Map<String, dynamic> client) {
     final status = client['bookStatus'] as String?;
-    final clientId = client['id'] as String;
     
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1320,119 +1459,307 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  Widget _buildClientCard(Map<String, dynamic> client) {
+  Widget _buildClientCard(Map<String, dynamic> client, {String outcome = 'PENDING'}) {
     final initials = client['name'].toString().substring(0, 1).toUpperCase();
     final clientId = client['id'] as String;
     final isSelected = _selectedClientIds.contains(clientId);
-    final statusColor = UIHelpers.getStatusColor(client['bookStatus'] as String?);
+    final isCityClosed = client['cityClosedAt'] != null;
+
+    final List sales = (client['sales'] is List) ? (client['sales'] as List) : [];
+    final Map<String, dynamic>? firstSale = sales.isNotEmpty ? Map<String, dynamic>.from(sales.first) : null;
+    final hasReceipt = firstSale != null && firstSale['receiptUrl'] != null && firstSale['receiptUrl'].toString().trim().isNotEmpty;
+
+    final isSoldWithoutReceipt = sales.isNotEmpty && !hasReceipt;
+
+    // Badges e cores
+    Color cardBorderColor = const Color(0xFF4FC3F7);
+    Widget badgeWidget;
+
+    if (isCityClosed) {
+      cardBorderColor = Colors.grey;
+      badgeWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.grey),
+        ),
+        child: const Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            Icon(Icons.lock_rounded, size: 12, color: Colors.white70),
+            Text('Cidade Fechada', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    } else if (isSoldWithoutReceipt) {
+      cardBorderColor = Colors.amberAccent;
+      badgeWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.amber.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.amberAccent),
+        ),
+        child: const Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            Icon(Icons.warning_amber_rounded, size: 12, color: Colors.amberAccent),
+            Text('Comprovante Pendente', style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    } else if (outcome == 'SOLD' || (sales.isNotEmpty && hasReceipt)) {
+      cardBorderColor = const Color(0xFF00E676);
+      badgeWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF00E676).withOpacity(0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF00E676)),
+        ),
+        child: const Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            Icon(Icons.check_circle, size: 12, color: Color(0xFF00E676)),
+            Text('Vendida', style: TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    } else if (outcome == 'NON_SALE') {
+      cardBorderColor = const Color(0xFFFF9100);
+      badgeWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFF9100).withOpacity(0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFFFF9100)),
+        ),
+        child: const Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            Icon(Icons.replay_rounded, size: 12, color: Color(0xFFFF9100)),
+            Text('Revisita', style: TextStyle(color: Color(0xFFFF9100), fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    } else {
+      cardBorderColor = const Color(0xFF4FC3F7);
+      badgeWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF4FC3F7).withOpacity(0.2),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF4FC3F7)),
+        ),
+        child: const Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 4,
+          children: [
+            Icon(Icons.access_time_rounded, size: 12, color: Color(0xFF4FC3F7)),
+            Text('Pendente', style: TextStyle(color: Color(0xFF4FC3F7), fontSize: 10, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      );
+    }
 
     return LedCard(
-      color: isSelected ? const Color(0xFFCE93D8) : statusColor,
+      color: isSelected ? const Color(0xFFCE93D8) : cardBorderColor,
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: isSelected ? const BorderSide(color: Color(0xFFCE93D8)) : BorderSide.none,
+        side: isSelected ? const BorderSide(color: Color(0xFFCE93D8), width: 2) : BorderSide.none,
       ),
-      child: ListTile(
-        onTap: () {
-          if (_selectedClientIds.isNotEmpty) {
-            setState(() {
-              if (isSelected) {
-                _selectedClientIds.remove(clientId);
-              } else {
-                _selectedClientIds.add(clientId);
-              }
-            });
-          } else {
-            _openClientDetail(client);
-          }
-        },
-        onLongPress: () {
-          setState(() {
-            if (isSelected) {
-              _selectedClientIds.remove(clientId);
-            } else {
-              _selectedClientIds.add(clientId);
-            }
-          });
-        },
-        leading: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Checkbox(
-              value: isSelected,
-              onChanged: (val) {
+      child: Column(
+        children: [
+          ListTile(
+            onTap: () {
+              if (_selectedClientIds.isNotEmpty) {
                 setState(() {
-                  if (val == true) {
-                    _selectedClientIds.add(clientId);
-                  } else {
+                  if (isSelected) {
                     _selectedClientIds.remove(clientId);
+                  } else {
+                    _selectedClientIds.add(clientId);
                   }
                 });
-              },
-              activeColor: const Color(0xFFCE93D8),
-              checkColor: Colors.black,
-            ),
-            CircleAvatar(
-              backgroundColor: const Color(0xFF0288D1).withOpacity(0.2),
-              child: Text(initials, style: const TextStyle(color: Color(0xFF4FC3F7))),
-            ),
-          ],
-        ),
-        title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        subtitle: Text('Ficha ${client['sequenceNumber']}', style: TextStyle(color: Colors.white.withOpacity(0.7))),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: Colors.white54),
-              color: const Color(0xFF2A2A3E),
-              onSelected: (val) async {
-                if (val == 'forcar_devolucao') {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (_) => AlertDialog(
-                      backgroundColor: const Color(0xFF1A1A2E),
-                      title: const Text('Forçar Devolução?', style: TextStyle(color: Colors.white)),
-                      content: const Text('Isso devolverá a ficha ao administrador imediatamente. Deseja continuar?', style: TextStyle(color: Colors.white70)),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Devolver', style: TextStyle(color: Colors.orangeAccent))),
-                      ],
-                    ),
-                  );
-                  if (confirm == true) {
-                    try {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolvendo ficha...')));
-                      if (client['bookStatus'] == 'DISTRIBUTED_REBOLO') {
-                        await ApiService().forceReturnRebolo(clientId);
-                      } else {
-                        await ApiService().forceReturn(clientId);
-                      }
-                      setState(() {
-                        _sellerClients.remove(client);
-                        _selectedClientIds.remove(clientId);
-                        if (_foundClient != null && _foundClient!['id'] == client['id']) {
-                          _foundClient = null;
-                        }
-                      });
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha devolvida!'), backgroundColor: Colors.green));
-                    } catch (e) {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao devolver: $e'), backgroundColor: Colors.red));
-                    }
-                  }
+              } else {
+                _openClientDetail(client);
+              }
+            },
+            onLongPress: () {
+              setState(() {
+                if (isSelected) {
+                  _selectedClientIds.remove(clientId);
+                } else {
+                  _selectedClientIds.add(clientId);
                 }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: 'forcar_devolucao',
-                  child: Text('Forçar Devolução', style: TextStyle(color: Colors.orangeAccent)),
+              });
+            },
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Checkbox(
+                  value: isSelected,
+                  onChanged: (val) {
+                    setState(() {
+                      if (val == true) {
+                        _selectedClientIds.add(clientId);
+                      } else {
+                        _selectedClientIds.remove(clientId);
+                      }
+                    });
+                  },
+                  activeColor: const Color(0xFFCE93D8),
+                  checkColor: Colors.black,
+                ),
+                CircleAvatar(
+                  backgroundColor: const Color(0xFF0288D1).withOpacity(0.2),
+                  child: Text(initials, style: const TextStyle(color: Color(0xFF4FC3F7))),
                 ),
               ],
             ),
-            const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+            title: Text(
+              client['name'] ?? 'Cliente',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      Text(
+                        'Ficha ${client['sequenceNumber'] ?? ''} · ${client['city'] ?? ''}',
+                        style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                      ),
+                      badgeWidget,
+                    ],
+                  ),
+                  if (isSoldWithoutReceipt && firstSale != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.receipt_long, color: Colors.amberAccent, size: 16),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Venda R\$ ${firstSale['value'] ?? '---'} registrada. Anexe o comprovante para finalizar!',
+                              style: const TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          GestureDetector(
+                            onTap: () => _openClientDetail(client),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.amberAccent,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text('Anexar', style: TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (outcome == 'SOLD' && firstSale != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Valor: R\$ ${firstSale['value'] ?? '---'}',
+                      style: const TextStyle(color: Color(0xFF00E676), fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.white54),
+                  color: const Color(0xFF2A2A3E),
+                  onSelected: (val) async {
+                    if (val == 'forcar_devolucao') {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          title: const Text('Forçar Devolução?', style: TextStyle(color: Colors.white)),
+                          content: const Text('Isso devolverá a ficha ao administrador imediatamente. Deseja continuar?', style: TextStyle(color: Colors.white70)),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Devolver', style: TextStyle(color: Colors.orangeAccent))),
+                          ],
+                        ),
+                      );
+                      if (confirm == true) {
+                        try {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolvendo ficha...')));
+                          if (client['bookStatus'] == 'DISTRIBUTED_REBOLO') {
+                            await ApiService().forceReturnRebolo(clientId);
+                          } else {
+                            await ApiService().forceReturn(clientId);
+                          }
+                          setState(() {
+                            _sellerClients.remove(client);
+                            _selectedClientIds.remove(clientId);
+                            if (_foundClient != null && _foundClient!['id'] == client['id']) {
+                              _foundClient = null;
+                            }
+                          });
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha devolvida!'), backgroundColor: Colors.green));
+                        } catch (e) {
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao devolver: $e'), backgroundColor: Colors.red));
+                        }
+                      }
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'forcar_devolucao',
+                      child: Text('Forçar Devolução', style: TextStyle(color: Colors.orangeAccent)),
+                    ),
+                  ],
+                ),
+                const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+              ],
+            ),
+          ),
+          if (outcome == 'NON_SALE' && !isCityClosed) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _openClientDetail(client),
+                  icon: const Icon(Icons.attach_money_rounded, size: 16, color: Color(0xFF00E676)),
+                  label: const Text('Registrar venda agora', style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF00E676)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                ),
+              ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }

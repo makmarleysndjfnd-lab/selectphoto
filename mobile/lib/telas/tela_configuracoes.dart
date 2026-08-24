@@ -7,12 +7,11 @@ import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
 import 'tela_config_impressora.dart';
+import 'tela_cadastro_custos.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
-
-
 
 class SettingsScreen extends StatefulWidget {
   /// Somente administradores devem receber [canManageRoi] = true.
@@ -25,10 +24,14 @@ class SettingsScreen extends StatefulWidget {
   /// download de backup visível somente para não-fotógrafos.
   final bool isFotografo;
 
+  /// [isVendedor] exibe ações operacionais do vendedor (transferência de capas, books e despesas).
+  final bool isVendedor;
+
   const SettingsScreen({
     super.key,
     this.canManageRoi = false,
     this.isFotografo = false,
+    this.isVendedor = false,
   });
 
   @override
@@ -115,6 +118,114 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+
+  void _showTransferDialog(BuildContext context, String itemType) async {
+    final qtyController = TextEditingController();
+    String? selectedRecipient;
+    List<dynamic> recipients = [];
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.orangeAccent)),
+    );
+
+    try {
+      final api = ApiService();
+      final users = await api.getCompanyUsers();
+      recipients = users;
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar usuários: $e')));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context); // fecha loading
+
+    if (!context.mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A2535),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  Icon(itemType == 'COVER' ? Icons.layers_rounded : Icons.menu_book_rounded, color: const Color(0xFF4FC3F7)),
+                  const SizedBox(width: 8),
+                  Text('Transferir ${itemType == 'COVER' ? 'Capas' : 'Books'}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF1A2535),
+                      value: selectedRecipient,
+                      hint: const Text('Selecione o destinatário', style: TextStyle(color: Colors.white54)),
+                      items: recipients.map((u) {
+                        return DropdownMenuItem<String>(
+                          value: u['id'].toString(),
+                          child: Text('${u['name']} (${u['role']})', style: const TextStyle(color: Colors.white), overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: (val) => setDialogState(() => selectedRecipient = val),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: qtyController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Quantidade',
+                        labelStyle: TextStyle(color: Colors.white54),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                LedButton(
+                  onPressed: () async {
+                    final qty = int.tryParse(qtyController.text);
+                    if (selectedRecipient == null || qty == null || qty <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha os campos corretamente.')));
+                      return;
+                    }
+                    try {
+                      if (itemType == 'COVER') {
+                        await ApiService().transferBetweenSellers(selectedRecipient!, qty);
+                      } else {
+                        await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
+                      }
+                      if (context.mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transferência solicitada/realizada com sucesso!'), backgroundColor: Colors.green));
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+                      }
+                    }
+                  },
+                  child: const Text('Confirmar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -204,9 +315,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         Icon(Icons.calculate, color: Color(0xFFCE93D8), size: 20),
                         SizedBox(width: 8),
-                        Text(
-                          'Parâmetros Base da Calculadora de ROI',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                        Expanded(
+                          child: Text(
+                            'Parâmetros Base da Calculadora de ROI',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
                         ),
                       ],
                     ),
@@ -333,6 +446,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
           ],
           
+          if (widget.isVendedor) ...[
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Row(
+                      children: [
+                        Icon(Icons.handyman_rounded, color: Color(0xFF4FC3F7), size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Operações do Vendedor',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(color: Colors.white12, height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
+                    title: const Text('Transferir / Dividir Capas', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Repassar saldo de capas para outro vendedor', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    onTap: () => _showTransferDialog(context, 'COVER'),
+                  ),
+                  const Divider(color: Colors.white12, height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.menu_book_rounded, color: Colors.lightGreenAccent),
+                    title: const Text('Transferir / Dividir Books', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Repassar books físicos entre a equipe', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    onTap: () => _showTransferDialog(context, 'BOOK'),
+                  ),
+                  const Divider(color: Colors.white12, height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
+                    title: const Text('Lançar Despesas / Custos', style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Cadastrar alimentação, combustível, hotel ou outros', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    onTap: () {
+                      Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => const CostEntryScreen(),
+                      ));
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
           // Actions
           LedCard(
             color: const Color(0xFF1A1A2E),
