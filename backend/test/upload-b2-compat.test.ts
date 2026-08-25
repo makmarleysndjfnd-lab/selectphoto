@@ -139,11 +139,12 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
       }
     });
 
-    it('Upload via multer-s3 NÃO envia canned ACL private ao Backblaze', async () => {
+    it('Storage B2 envia corpo completo com Content-Length e sem canned ACL', async () => {
       let interceptedHeaders: http.IncomingHttpHeaders = {};
+      let receivedBytes = 0;
       const server = http.createServer((req, res) => {
         interceptedHeaders = req.headers;
-        req.resume();
+        req.on('data', (chunk) => { receivedBytes += chunk.length; });
         req.on('end', () => {
           res.writeHead(200, {
             'Content-Type': 'application/xml',
@@ -185,8 +186,10 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
         assert.equal(
           interceptedHeaders['x-amz-acl'],
           undefined,
-          'multer-s3 não deve enviar x-amz-acl ao B2'
+          'storage não deve enviar x-amz-acl ao B2'
         );
+        assert.equal(Number(interceptedHeaders['content-length']), receivedBytes);
+        assert.equal(receivedBytes, Buffer.byteLength('simulated-jpeg-content-bytes'));
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
@@ -229,6 +232,20 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
         handleUploadError(err, res, 'corr-chk');
         assert.equal(res.statusCode, 503, `${name} deve retornar 503`);
       }
+    });
+
+    it('IncompleteBody do B2 -> 503 rastreável sem expor detalhes internos', () => {
+      const err = Object.assign(new Error('Request body size did not match the expected size'), {
+        name: 'IncompleteBody',
+        code: 'IncompleteBody',
+        $metadata: { httpStatusCode: 400, requestId: 'INTERNAL_REQUEST_ID' },
+      });
+      const res = mockResponse() as any;
+      handleUploadError(err, res, 'corr-body');
+      assert.equal(res.statusCode, 503);
+      assert.equal(res.jsonBody.supportCode, 'corr-body');
+      assert.ok(res.jsonBody.error.includes('indisponível'));
+      assert.ok(!JSON.stringify(res.jsonBody).includes('INTERNAL_REQUEST_ID'));
     });
 
     it('InvalidAccessKeyId (auth error) -> 503 com sanitização total de mensagem', () => {

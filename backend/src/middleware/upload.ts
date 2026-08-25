@@ -1,6 +1,5 @@
 import multer from 'multer';
-import multerS3 from 'multer-s3';
-import { S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
@@ -121,24 +120,65 @@ export function createB2S3Storage(
   client: S3Client = s3,
   bucket: string = process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app'
 ): multer.StorageEngine {
-  return multerS3({
-    s3: client,
-    bucket,
-    // multer-s3 usa "private" por padrão. O B2 S3-compatible não aceita
-    // canned ACLs; a privacidade é controlada na configuração do bucket.
-    acl: function (_req: any, _file: any, cb: any) {
-      cb(null, undefined);
+  return {
+    _handleFile(req: any, file: any, cb: any) {
+      // O Multer já limita cada arquivo a 15 MB. Manter o corpo em memória
+      // permite informar Content-Length exato ao B2 e evita IncompleteBody.
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let settled = false;
+
+      const finish = (error?: unknown, info?: Record<string, unknown>) => {
+        if (settled) return;
+        settled = true;
+        cb(error || null, info);
+      };
+
+      file.stream.on('data', (chunk: Buffer | Uint8Array | string) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        chunks.push(buffer);
+        totalBytes += buffer.length;
+      });
+      file.stream.once('error', (error: unknown) => finish(error));
+      file.stream.once('end', async () => {
+        if (settled) return;
+        try {
+          const body = Buffer.concat(chunks, totalBytes);
+          const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+          const companyId = req.user?.companyId || 'global';
+          const key = `${companyId}/${uuidv4()}${ext}`;
+          const result = await client.send(new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+            ContentLength: body.length,
+            ContentType: file.mimetype,
+            Metadata: {
+              fieldName: file.fieldname,
+              companyId,
+            },
+          }));
+
+          finish(undefined, {
+            size: body.length,
+            bucket,
+            key,
+            contentType: file.mimetype,
+            etag: result.ETag,
+            versionId: result.VersionId,
+          });
+        } catch (error) {
+          finish(error);
+        }
+      });
     },
-    metadata: function (req: any, file: any, cb: any) {
-      cb(null, { fieldName: file.fieldname, companyId: req.user?.companyId || 'UNKNOWN' });
+    _removeFile(_req: any, file: any, cb: any) {
+      client.send(new DeleteObjectCommand({
+        Bucket: file.bucket || bucket,
+        Key: file.key,
+      })).then(() => cb(null)).catch((error) => cb(error));
     },
-    key: function (req: any, file: any, cb: any) {
-      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-      const companyPrefix = req.user?.companyId ? `${req.user.companyId}/` : 'global/';
-      const fileName = `${companyPrefix}${uuidv4()}${ext}`;
-      cb(null, fileName);
-    },
-  });
+  };
 }
 
 function getS3Storage() {
@@ -288,6 +328,7 @@ export function handleUploadError(
     errName === 'BadDigest' ||
     errName === 'ChecksumMismatch' ||
     errName === 'XAmzContentSHA256Mismatch' ||
+    errName === 'IncompleteBody' ||
     // Disponibilidade
     errName === 'ServiceUnavailable' ||
     errName === 'TimeoutError' ||
@@ -306,6 +347,8 @@ export function handleUploadError(
     lowerMsg.includes('invalidargument') ||
     lowerMsg.includes('baddigest') ||
     lowerMsg.includes('checksum') ||
+    lowerMsg.includes('incompletebody') ||
+    lowerMsg.includes('incomplete body') ||
     lowerMsg.includes('serviceunavailable') ||
     lowerMsg.includes('networking') ||
     lowerMsg.includes('timeout') ||
