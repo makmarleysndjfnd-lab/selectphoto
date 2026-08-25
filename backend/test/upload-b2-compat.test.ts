@@ -16,6 +16,7 @@ import {
   s3,
   createB2S3Client,
   createB2S3Storage,
+  uploadBufferViaPresignedUrl,
   resolveB2Region,
   handleUploadError,
   UploadFileMetadata,
@@ -60,6 +61,7 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
         ? await customClient.config.requestChecksumCalculation()
         : customClient.config.requestChecksumCalculation;
       assert.equal(reqChecksum, 'WHEN_REQUIRED');
+      assert.equal(customClient.config.forcePathStyle, false);
     });
   });
 
@@ -208,6 +210,57 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
         assert.match(interceptedUrl, /X-Amz-Signature=/i);
         assert.equal(Number(interceptedHeaders['content-length']), receivedBytes);
         assert.equal(receivedBytes, simulatedLargePhoto.length);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
+    it('Presigned upload preserva o código XML seguro devolvido pelo B2 em erro 403', async () => {
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on('end', () => {
+          res.writeHead(403, {
+            'Content-Type': 'application/xml',
+            'x-amz-request-id': 'safe-request-id',
+          });
+          res.end(
+            '<Error><Code>SignatureDoesNotMatch</Code>' +
+            '<Message>The request signature does not match</Message>' +
+            '<Credential>SECRET_MUST_NOT_LEAK</Credential></Error>'
+          );
+        });
+      });
+
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+      const port = (server.address() as any).port;
+
+      try {
+        const localClient = createB2S3Client({
+          endpoint: `http://127.0.0.1:${port}`,
+          region: 'us-east-005',
+          credentials: {
+            accessKeyId: 'test-local-key-id',
+            secretAccessKey: 'test-local-app-key',
+          },
+          forcePathStyle: true,
+        });
+
+        await assert.rejects(
+          uploadBufferViaPresignedUrl(
+            localClient,
+            'test-bucket',
+            'company-test/profile.jpg',
+            Buffer.from('simulated-jpeg-content-bytes'),
+            'image/jpeg'
+          ),
+          (error: any) => {
+            assert.equal(error.name, 'SignatureDoesNotMatch');
+            assert.equal(error.code, 'SignatureDoesNotMatch');
+            assert.equal(error.$metadata.httpStatusCode, 403);
+            assert.ok(!error.message.includes('SECRET_MUST_NOT_LEAK'));
+            return true;
+          }
+        );
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }

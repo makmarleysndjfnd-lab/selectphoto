@@ -65,7 +65,10 @@ export function createB2S3Client(options?: {
     // Fotos acima de 2 MB fazem o SDK enviar Expect: 100-continue por padrão.
     // O B2 pode encerrar esse handshake antes de receber o corpo (IncompleteBody).
     expectContinueHeader: false,
-    forcePathStyle: options?.forcePathStyle ?? true,
+    // O exemplo oficial do Backblaze usa o endereçamento virtual-hosted
+    // resolvido pelo SDK. O modo path-style continua disponível apenas para
+    // testes locais que o solicitam explicitamente.
+    forcePathStyle: options?.forcePathStyle ?? false,
   });
 }
 
@@ -129,10 +132,11 @@ export async function uploadBufferViaPresignedUrl(
   contentType: string
 ): Promise<{ etag?: string; versionId?: string }> {
   // A URL expira rapidamente e nunca é retornada ao aplicativo ou registrada em log.
+  // Mantenha a operação assinada mínima, como no exemplo oficial do B2.
+  // O Content-Type é enviado no PUT, mas não faz parte da assinatura.
   const signedUrl = await getSignedUrl(client, new PutObjectCommand({
     Bucket: bucket,
     Key: key,
-    ContentType: contentType,
   }), { expiresIn: 60 });
 
   const controller = new AbortController();
@@ -148,9 +152,17 @@ export async function uploadBufferViaPresignedUrl(
     });
 
     if (!response.ok) {
+      // O B2 devolve erros S3 em XML. Extraímos somente Code/Message e
+      // descartamos o restante para nunca registrar URL assinada ou credenciais.
+      const responseText = (await response.text()).substring(0, 4096);
+      const xmlCode = responseText.match(/<Code>([^<]{1,100})<\/Code>/i)?.[1]?.trim();
+      const safeCode = xmlCode && /^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(xmlCode)
+        ? xmlCode
+        : `B2_HTTP_${response.status}`;
       const error: any = new Error(`B2 upload rejected with HTTP ${response.status}`);
-      error.name = 'B2StorageUploadError';
-      error.code = `B2_HTTP_${response.status}`;
+      error.name = safeCode;
+      error.code = safeCode;
+      error.isB2StorageUploadError = true;
       error.$metadata = {
         httpStatusCode: response.status,
         requestId: response.headers.get('x-amz-request-id') || undefined,
@@ -163,7 +175,7 @@ export async function uploadBufferViaPresignedUrl(
       versionId: response.headers.get('x-amz-version-id') || undefined,
     };
   } catch (error: any) {
-    if (error?.name === 'B2StorageUploadError') throw error;
+    if (error?.isB2StorageUploadError) throw error;
 
     const transportError: any = new Error(
       error?.name === 'AbortError'
