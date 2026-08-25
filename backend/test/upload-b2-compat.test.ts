@@ -47,6 +47,10 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
       assert.equal(resChecksum, 'WHEN_REQUIRED', 'responseChecksumValidation deve ser WHEN_REQUIRED para compatibilidade com B2');
     });
 
+    it('s3 padrão desativa Expect: 100-continue para uploads compatíveis com B2', () => {
+      assert.equal(s3.config.expectContinueHeader, false);
+    });
+
     it('createB2S3Client cria instância com parâmetros de compatibilidade B2', async () => {
       const customClient = createB2S3Client({
         endpoint: 'https://s3.eu-central-003.backblazeb2.com',
@@ -139,9 +143,10 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
       }
     });
 
-    it('Storage B2 envia corpo completo com Content-Length e sem canned ACL', async () => {
+    it('Storage B2 envia foto acima de 2 MB completa, sem Expect e sem canned ACL', async () => {
       let interceptedHeaders: http.IncomingHttpHeaders = {};
       let receivedBytes = 0;
+      const simulatedLargePhoto = Buffer.alloc((2 * 1024 * 1024) + 1, 0xab);
       const server = http.createServer((req, res) => {
         interceptedHeaders = req.headers;
         req.on('data', (chunk) => { receivedBytes += chunk.length; });
@@ -177,7 +182,7 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
               originalname: 'profile.jpg',
               encoding: '7bit',
               mimetype: 'image/jpeg',
-              stream: Readable.from(Buffer.from('simulated-jpeg-content-bytes')),
+              stream: Readable.from(simulatedLargePhoto),
             },
             (error: Error | null) => error ? reject(error) : resolve()
           );
@@ -188,8 +193,13 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
           undefined,
           'storage não deve enviar x-amz-acl ao B2'
         );
+        assert.equal(
+          interceptedHeaders.expect,
+          undefined,
+          'storage não deve iniciar o handshake Expect: 100-continue'
+        );
         assert.equal(Number(interceptedHeaders['content-length']), receivedBytes);
-        assert.equal(receivedBytes, Buffer.byteLength('simulated-jpeg-content-bytes'));
+        assert.equal(receivedBytes, simulatedLargePhoto.length);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }

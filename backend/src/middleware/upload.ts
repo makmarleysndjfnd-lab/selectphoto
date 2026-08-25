@@ -61,6 +61,9 @@ export function createB2S3Client(options?: {
     },
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED',
+    // Fotos acima de 2 MB fazem o SDK enviar Expect: 100-continue por padrão.
+    // O B2 pode encerrar esse handshake antes de receber o corpo (IncompleteBody).
+    expectContinueHeader: false,
     forcePathStyle: options?.forcePathStyle ?? true,
   });
 }
@@ -122,8 +125,8 @@ export function createB2S3Storage(
 ): multer.StorageEngine {
   return {
     _handleFile(req: any, file: any, cb: any) {
-      // O Multer já limita cada arquivo a 15 MB. Manter o corpo em memória
-      // permite informar Content-Length exato ao B2 e evita IncompleteBody.
+      // O Multer já limita cada arquivo a 15 MB. O Buffer permite ao SDK
+      // calcular Content-Length exato sem depender de um stream indefinido.
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       let settled = false;
@@ -151,7 +154,6 @@ export function createB2S3Storage(
             Bucket: bucket,
             Key: key,
             Body: body,
-            ContentLength: body.length,
             ContentType: file.mimetype,
             Metadata: {
               fieldName: file.fieldname,
