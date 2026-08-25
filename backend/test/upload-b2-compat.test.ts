@@ -146,9 +146,11 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
     it('Storage B2 envia foto acima de 2 MB completa, sem Expect e sem canned ACL', async () => {
       let interceptedHeaders: http.IncomingHttpHeaders = {};
       let receivedBytes = 0;
+      let interceptedUrl = '';
       const simulatedLargePhoto = Buffer.alloc((2 * 1024 * 1024) + 1, 0xab);
       const server = http.createServer((req, res) => {
         interceptedHeaders = req.headers;
+        interceptedUrl = req.url || '';
         req.on('data', (chunk) => { receivedBytes += chunk.length; });
         req.on('end', () => {
           res.writeHead(200, {
@@ -198,6 +200,12 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
           undefined,
           'storage não deve iniciar o handshake Expect: 100-continue'
         );
+        assert.equal(
+          interceptedHeaders.authorization,
+          undefined,
+          'fetch usa assinatura temporária na URL, não credencial no header'
+        );
+        assert.match(interceptedUrl, /X-Amz-Signature=/i);
         assert.equal(Number(interceptedHeaders['content-length']), receivedBytes);
         assert.equal(receivedBytes, simulatedLargePhoto.length);
       } finally {

@@ -1,5 +1,6 @@
 import multer from 'multer';
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
@@ -119,6 +120,64 @@ const diskStorage = multer.diskStorage({
 });
 
 let s3Storage: any = null;
+
+export async function uploadBufferViaPresignedUrl(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  body: Buffer,
+  contentType: string
+): Promise<{ etag?: string; versionId?: string }> {
+  // A URL expira rapidamente e nunca é retornada ao aplicativo ou registrada em log.
+  const signedUrl = await getSignedUrl(client, new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType,
+  }), { expiresIn: 60 });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const requestBody = new Blob([Uint8Array.from(body)], { type: contentType });
+    const response = await fetch(signedUrl, {
+      method: 'PUT',
+      headers: { 'content-type': contentType },
+      body: requestBody,
+      redirect: 'error',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error: any = new Error(`B2 upload rejected with HTTP ${response.status}`);
+      error.name = 'B2StorageUploadError';
+      error.code = `B2_HTTP_${response.status}`;
+      error.$metadata = {
+        httpStatusCode: response.status,
+        requestId: response.headers.get('x-amz-request-id') || undefined,
+      };
+      throw error;
+    }
+
+    return {
+      etag: response.headers.get('etag') || undefined,
+      versionId: response.headers.get('x-amz-version-id') || undefined,
+    };
+  } catch (error: any) {
+    if (error?.name === 'B2StorageUploadError') throw error;
+
+    const transportError: any = new Error(
+      error?.name === 'AbortError'
+        ? 'B2 upload transport timeout'
+        : 'B2 upload transport failure'
+    );
+    transportError.name = 'B2StorageTransportError';
+    transportError.code = error?.name === 'AbortError' ? 'B2_UPLOAD_TIMEOUT' : 'B2_UPLOAD_TRANSPORT';
+    throw transportError;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function createB2S3Storage(
   client: S3Client = s3,
   bucket: string = process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app'
@@ -150,24 +209,21 @@ export function createB2S3Storage(
           const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
           const companyId = req.user?.companyId || 'global';
           const key = `${companyId}/${uuidv4()}${ext}`;
-          const result = await client.send(new PutObjectCommand({
-            Bucket: bucket,
-            Key: key,
-            Body: body,
-            ContentType: file.mimetype,
-            Metadata: {
-              fieldName: file.fieldname,
-              companyId,
-            },
-          }));
+          const result = await uploadBufferViaPresignedUrl(
+            client,
+            bucket,
+            key,
+            body,
+            file.mimetype
+          );
 
           finish(undefined, {
             size: body.length,
             bucket,
             key,
             contentType: file.mimetype,
-            etag: result.ETag,
-            versionId: result.VersionId,
+            etag: result.etag,
+            versionId: result.versionId,
           });
         } catch (error) {
           finish(error);
