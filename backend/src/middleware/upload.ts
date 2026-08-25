@@ -117,21 +117,33 @@ const diskStorage = multer.diskStorage({
 });
 
 let s3Storage: any = null;
+export function createB2S3Storage(
+  client: S3Client = s3,
+  bucket: string = process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app'
+): multer.StorageEngine {
+  return multerS3({
+    s3: client,
+    bucket,
+    // multer-s3 usa "private" por padrão. O B2 S3-compatible não aceita
+    // canned ACLs; a privacidade é controlada na configuração do bucket.
+    acl: function (_req: any, _file: any, cb: any) {
+      cb(null, undefined);
+    },
+    metadata: function (req: any, file: any, cb: any) {
+      cb(null, { fieldName: file.fieldname, companyId: req.user?.companyId || 'UNKNOWN' });
+    },
+    key: function (req: any, file: any, cb: any) {
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const companyPrefix = req.user?.companyId ? `${req.user.companyId}/` : 'global/';
+      const fileName = `${companyPrefix}${uuidv4()}${ext}`;
+      cb(null, fileName);
+    },
+  });
+}
+
 function getS3Storage() {
   if (!s3Storage) {
-    s3Storage = multerS3({
-      s3: s3,
-      bucket: process.env.B2_BUCKET_NAME || 'selectphoto-comprovantes-app',
-      metadata: function (req: any, file: any, cb: any) {
-        cb(null, { fieldName: file.fieldname, companyId: req.user?.companyId || 'UNKNOWN' });
-      },
-      key: function (req: any, file: any, cb: any) {
-        const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-        const companyPrefix = req.user?.companyId ? `${req.user.companyId}/` : 'global/';
-        const fileName = `${companyPrefix}${uuidv4()}${ext}`;
-        cb(null, fileName);
-      },
-    });
+    s3Storage = createB2S3Storage();
   }
   return s3Storage;
 }
@@ -258,6 +270,8 @@ export function handleUploadError(
 
   // 3. Falhas do S3/Backblaze B2, checksum e rede -> HTTP 503 amigável e seguro
   const isAuthError =
+    httpStatus === 401 ||
+    httpStatus === 403 ||
     errName === 'InvalidAccessKeyId' ||
     errName === 'SignatureDoesNotMatch' ||
     errName === 'AccessDenied' ||

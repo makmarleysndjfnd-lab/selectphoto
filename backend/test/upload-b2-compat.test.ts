@@ -10,10 +10,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { Readable } from 'node:stream';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   s3,
   createB2S3Client,
+  createB2S3Storage,
   resolveB2Region,
   handleUploadError,
   UploadFileMetadata,
@@ -136,6 +138,59 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     });
+
+    it('Upload via multer-s3 NÃO envia canned ACL private ao Backblaze', async () => {
+      let interceptedHeaders: http.IncomingHttpHeaders = {};
+      const server = http.createServer((req, res) => {
+        interceptedHeaders = req.headers;
+        req.resume();
+        req.on('end', () => {
+          res.writeHead(200, {
+            'Content-Type': 'application/xml',
+            'ETag': '"d41d8cd98f00b204e9800998ecf8427e"',
+          });
+          res.end();
+        });
+      });
+
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+      const port = (server.address() as any).port;
+
+      try {
+        const localClient = createB2S3Client({
+          endpoint: `http://127.0.0.1:${port}`,
+          region: 'us-east-005',
+          credentials: {
+            accessKeyId: 'test-local-key-id',
+            secretAccessKey: 'test-local-app-key',
+          },
+          forcePathStyle: true,
+        });
+        const storage: any = createB2S3Storage(localClient, 'test-bucket');
+
+        await new Promise<void>((resolve, reject) => {
+          storage._handleFile(
+            { user: { companyId: 'company-test' } },
+            {
+              fieldname: 'profilePhoto',
+              originalname: 'profile.jpg',
+              encoding: '7bit',
+              mimetype: 'image/jpeg',
+              stream: Readable.from(Buffer.from('simulated-jpeg-content-bytes')),
+            },
+            (error: Error | null) => error ? reject(error) : resolve()
+          );
+        });
+
+        assert.equal(
+          interceptedHeaders['x-amz-acl'],
+          undefined,
+          'multer-s3 não deve enviar x-amz-acl ao B2'
+        );
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
   });
 
   describe('4. Tratamento Seguro e Granular de Erros (handleUploadError)', () => {
@@ -187,6 +242,19 @@ describe('COMPATIBILIDADE BACKBLAZE B2 — Testes Locais e Configuração S3 (1.
       const resStr = JSON.stringify(res.jsonBody);
       assert.ok(!resStr.includes('SUPER_SECRET_KEY'), 'Chave secreta não deve vazar na resposta');
       assert.ok(!resStr.includes('SECRET_REQ_ID_LONG'), 'Request ID longo não deve vazar na resposta');
+    });
+
+    it('Erro S3 genérico com HTTP 403 -> 503 de configuração e supportCode', () => {
+      const err = Object.assign(new Error('Forbidden'), {
+        name: 'Unknown',
+        $metadata: { httpStatusCode: 403, requestId: 'SECRET_REQ_ID_LONG' },
+      });
+      const res = mockResponse() as any;
+      handleUploadError(err, res, 'corr-403');
+      assert.equal(res.statusCode, 503);
+      assert.equal(res.jsonBody.supportCode, 'corr-403');
+      assert.ok(res.jsonBody.error.includes('indisponível'));
+      assert.ok(!JSON.stringify(res.jsonBody).includes('SECRET_REQ_ID_LONG'));
     });
 
     it('ECONNREFUSED -> 503', () => {
