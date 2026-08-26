@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -8,7 +9,8 @@ import 'ajudante_bd.dart';
 
 class SyncRequest {
   final String id;
-  final String type; // 'SYNC_CLIENTS', 'REGISTER_SALE', 'REGISTER_NONSALE', 'REGISTER_APPOINTMENT', 'SUBMIT_COST', etc
+  final String
+      type; // 'SYNC_CLIENTS', 'REGISTER_SALE', 'REGISTER_NONSALE', 'REGISTER_APPOINTMENT', 'SUBMIT_COST', etc
   final Map<String, dynamic> payload;
   final DateTime createdAt;
   int retryCount;
@@ -25,22 +27,25 @@ class SyncRequest {
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'type': type,
-    'payload': payload,
-    'createdAt': createdAt.toIso8601String(),
-    'retryCount': retryCount,
-    'lastError': lastError,
-  };
+        'id': id,
+        'type': type,
+        'payload': payload,
+        'createdAt': createdAt.toIso8601String(),
+        'retryCount': retryCount,
+        'lastError': lastError,
+      };
 
   factory SyncRequest.fromJson(Map<String, dynamic> json) => SyncRequest(
-    id: json['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
-    type: json['type'] ?? '',
-    payload: json['payload'] is Map<String, dynamic> ? json['payload'] : {},
-    createdAt: json['createdAt'] != null ? DateTime.tryParse(json['createdAt']) ?? DateTime.now() : DateTime.now(),
-    retryCount: json['retryCount'] is int ? json['retryCount'] : 0,
-    lastError: json['lastError'],
-  );
+        id: json['id']?.toString() ??
+            DateTime.now().millisecondsSinceEpoch.toString(),
+        type: json['type'] ?? '',
+        payload: json['payload'] is Map<String, dynamic> ? json['payload'] : {},
+        createdAt: json['createdAt'] != null
+            ? DateTime.tryParse(json['createdAt']) ?? DateTime.now()
+            : DateTime.now(),
+        retryCount: json['retryCount'] is int ? json['retryCount'] : 0,
+        lastError: json['lastError'],
+      );
 }
 
 class SyncService extends ChangeNotifier {
@@ -48,6 +53,7 @@ class SyncService extends ChangeNotifier {
   List<SyncRequest> _pendingRequests = [];
   Timer? _retryTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  late final Future<void> _initialization;
   bool _isOnline = true;
   static const int maxRetries = 5;
 
@@ -64,6 +70,7 @@ class SyncService extends ChangeNotifier {
 
   @visibleForTesting
   Future<void> setOnlineForTesting(bool online) async {
+    await _initialization;
     final wasOffline = !_isOnline;
     _isOnline = online;
     _safeNotifyListeners();
@@ -86,12 +93,19 @@ class SyncService extends ChangeNotifier {
 
   SyncService(this.apiService, {bool? initialOnline}) {
     if (initialOnline != null) _isOnline = initialOnline;
+    _initialization = _loadPendingRequests();
     _initConnectivityListener();
-    _loadPendingRequests();
+    _initialization.then((_) {
+      if (_pendingRequests.isNotEmpty && _isOnline && !_isDisposed) {
+        syncAllPending();
+      }
+    });
   }
 
   void _initConnectivityListener() {
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
+    _connectivitySubscription = Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) {
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
       final wasOffline = !_isOnline;
       _isOnline = hasConnection;
@@ -100,7 +114,8 @@ class SyncService extends ChangeNotifier {
       // Dispara sincronização imediatamente ao recuperar conectividade caso haja pendências
       if (wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
         if (kDebugMode) {
-          print('[SyncService] Conexão restabelecida com ${_pendingRequests.length} pendências! Iniciando sincronização.');
+          print(
+              '[SyncService] Conexão restabelecida com ${_pendingRequests.length} pendências! Iniciando sincronização.');
         }
         syncAllPending();
       }
@@ -131,10 +146,12 @@ class SyncService extends ChangeNotifier {
     }
 
     // Intervalo progressivo: 15s, 30s, 60s, até 120s no máximo
-    final delaySeconds = (15 * (1 << (maxRetryLevel > 3 ? 3 : maxRetryLevel))).clamp(15, 120);
+    final delaySeconds =
+        (15 * (1 << (maxRetryLevel > 3 ? 3 : maxRetryLevel))).clamp(15, 120);
 
     if (kDebugMode) {
-      print('[SyncService] Agendando próxima tentativa de sync para daqui a ${delaySeconds}s');
+      print(
+          '[SyncService] Agendando próxima tentativa de sync para daqui a ${delaySeconds}s');
     }
 
     _retryTimer = Timer(Duration(seconds: delaySeconds), () {
@@ -153,9 +170,6 @@ class SyncService extends ChangeNotifier {
         final List<dynamic> decoded = json.decode(data);
         _pendingRequests = decoded.map((e) => SyncRequest.fromJson(e)).toList();
         _safeNotifyListeners();
-        if (_pendingRequests.isNotEmpty && _isOnline) {
-          syncAllPending();
-        }
       }
     } catch (e) {
       if (kDebugMode) {
@@ -167,7 +181,8 @@ class SyncService extends ChangeNotifier {
   Future<void> _savePendingRequests() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final String encoded = json.encode(_pendingRequests.map((e) => e.toJson()).toList());
+      final String encoded =
+          json.encode(_pendingRequests.map((e) => e.toJson()).toList());
       await prefs.setString('offline_backups', encoded);
       _safeNotifyListeners();
     } catch (e) {
@@ -177,7 +192,15 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  Future<void> addPendingRequest(String type, Map<String, dynamic> payload) async {
+  Future<void> addPendingRequest(
+      String type, Map<String, dynamic> payload) async {
+    await _initialization;
+    if (type == 'REGISTER_SALE' && payload['clientId'] != null) {
+      _pendingRequests.removeWhere((request) =>
+          request.type == 'REGISTER_SALE' &&
+          request.payload['clientId']?.toString() ==
+              payload['clientId']?.toString());
+    }
     final req = SyncRequest(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       type: type,
@@ -201,6 +224,7 @@ class SyncService extends ChangeNotifier {
   }
 
   Future<void> removePendingRequest(String id) async {
+    await _initialization;
     _pendingRequests.removeWhere((e) => e.id == id);
     await _savePendingRequests();
     if (_pendingRequests.isEmpty) {
@@ -211,9 +235,10 @@ class SyncService extends ChangeNotifier {
   bool _isSyncing = false;
 
   Future<void> syncAllPending() async {
+    await _initialization;
     if (_isSyncing || _pendingRequests.isEmpty || !_isOnline) return;
     _isSyncing = true;
-    
+
     try {
       final requestsToSync = List<SyncRequest>.from(_pendingRequests);
       bool hasChanges = false;
@@ -233,23 +258,25 @@ class SyncService extends ChangeNotifier {
             await apiService.syncClients([req.payload]);
             success = true;
           } else if (req.type == 'REGISTER_SALE') {
-            final saleId = await apiService.registerSale(req.payload);
-            success = true;
-            final pendingReceiptPath = req.payload['pendingReceiptPath'] as String?;
-            if (pendingReceiptPath != null && pendingReceiptPath.isNotEmpty && !saleId.startsWith('offline_')) {
-              try {
-                await apiService.uploadSaleReceipt(saleId, pendingReceiptPath);
-              } catch (_) {
-                await addPendingRequest('UPLOAD_RECEIPT', {
-                  'saleId': saleId,
-                  'filePath': pendingReceiptPath,
-                });
-              }
+            final pendingReceiptPath =
+                req.payload['pendingReceiptPath'] as String?;
+            if (pendingReceiptPath != null && pendingReceiptPath.isNotEmpty) {
+              await apiService.registerSaleWithReceipt(
+                  req.payload, pendingReceiptPath);
+            } else {
+              throw StateError(
+                  'Venda antiga sem comprovante. Exclua este envio e refaça a venda com a foto obrigatória.');
             }
+            success = true;
+            try {
+              await File(pendingReceiptPath).delete();
+            } catch (_) {}
           } else if (req.type == 'UPLOAD_RECEIPT') {
             final saleId = req.payload['saleId']?.toString();
             final filePath = req.payload['filePath']?.toString();
-            if (saleId != null && filePath != null && !saleId.startsWith('offline_')) {
+            if (saleId != null &&
+                filePath != null &&
+                !saleId.startsWith('offline_')) {
               await apiService.uploadSaleReceipt(saleId, filePath);
               success = true;
             } else {
@@ -269,7 +296,8 @@ class SyncService extends ChangeNotifier {
           hasErrors = true;
           failureError = e.toString();
           if (kDebugMode) {
-            print('[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
+            print(
+                '[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
           }
         } finally {
           req.isSyncing = false;
@@ -299,4 +327,3 @@ class SyncService extends ChangeNotifier {
     }
   }
 }
-

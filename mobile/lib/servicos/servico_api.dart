@@ -3,6 +3,16 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
+class ApiRequestException implements Exception {
+  final String message;
+  final bool retryable;
+
+  const ApiRequestException(this.message, {required this.retryable});
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   late Dio _dio;
   String _baseUrl = AppConfig.serverUrl;
@@ -16,7 +26,7 @@ class ApiService {
     }
     return _instance;
   }
-  
+
   ApiService._internal() {
     _initDio();
   }
@@ -33,10 +43,15 @@ class ApiService {
   /// Resolve URL de mídia (comprovantes, fotos de perfil, assinaturas) dinamicamente a partir do servidor configurado
   static String resolveMediaUrl(String? url, {String? customBaseUrl}) {
     if (url == null || url.trim().isEmpty) return '';
-    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+    if (url.startsWith('http://') ||
+        url.startsWith('https://') ||
+        url.startsWith('data:')) {
       return url;
     }
-    String serverBase = customBaseUrl ?? (_instance._baseUrl.isNotEmpty ? _instance._baseUrl : AppConfig.serverUrl);
+    String serverBase = customBaseUrl ??
+        (_instance._baseUrl.isNotEmpty
+            ? _instance._baseUrl
+            : AppConfig.serverUrl);
     if (serverBase.endsWith('/api')) {
       serverBase = serverBase.substring(0, serverBase.length - 4);
     }
@@ -60,7 +75,8 @@ class ApiService {
 
   /// Retorna os cabeçalhos de autenticação para NetworkImage e requisições HTTP seguras
   Future<Map<String, String>> get authHeaders async {
-    final token = _token ?? (await SharedPreferences.getInstance()).getString('jwt_token');
+    final token = _token ??
+        (await SharedPreferences.getInstance()).getString('jwt_token');
     if (token != null && token.isNotEmpty) {
       return {'Authorization': 'Bearer $token'};
     }
@@ -83,7 +99,8 @@ class ApiService {
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
         // Trava estrita de segurança: valida se a baseUrl é permitida no ambiente
-        if (options.baseUrl.trim().isEmpty && !options.path.startsWith('http')) {
+        if (options.baseUrl.trim().isEmpty &&
+            !options.path.startsWith('http')) {
           return handler.reject(
             DioException(
               requestOptions: options,
@@ -97,13 +114,18 @@ class ApiService {
 
         // Em release, assegura que a requisição está direcionada ao host oficial autorizado
         if (kReleaseMode) {
-          final targetUrl = options.path.startsWith('http') ? options.path : '${options.baseUrl}/${options.path}';
+          final targetUrl = options.path.startsWith('http')
+              ? options.path
+              : '${options.baseUrl}/${options.path}';
           final uri = Uri.tryParse(targetUrl);
-          if (uri != null && uri.hasAuthority && uri.host != AppConfig.authorizedProductionHost) {
+          if (uri != null &&
+              uri.hasAuthority &&
+              uri.host != AppConfig.authorizedProductionHost) {
             return handler.reject(
               DioException(
                 requestOptions: options,
-                error: StateError('🛑 SEGURANÇA: Requisição para host não autorizado bloqueada em release.'),
+                error: StateError(
+                    '🛑 SEGURANÇA: Requisição para host não autorizado bloqueada em release.'),
                 type: DioExceptionType.cancel,
               ),
             );
@@ -206,7 +228,8 @@ class ApiService {
         if (apiMsg.contains('User is inactive')) {
           return 'Usuário inativo. Entre em contato com a administração.';
         }
-        if (apiMsg.contains('Company account is inactive') || apiMsg.contains('Company account is missing')) {
+        if (apiMsg.contains('Company account is inactive') ||
+            apiMsg.contains('Company account is missing')) {
           return 'Conta da empresa inativa. Entre em contato com a administração.';
         }
       }
@@ -218,13 +241,18 @@ class ApiService {
       }
       return apiMsg ?? 'Acesso não autorizado para esta operação.';
     }
-    final supportCode = (data is Map && data['supportCode'] != null) ? data['supportCode'].toString() : null;
+    final supportCode = (data is Map && data['supportCode'] != null)
+        ? data['supportCode'].toString()
+        : null;
 
     if (statusCode == 503) {
       if (supportCode != null && supportCode.isNotEmpty) {
-        return apiMsg != null ? '$apiMsg (Código de suporte: $supportCode)' : 'Armazenamento temporariamente indisponível. (Código de suporte: $supportCode)';
+        return apiMsg != null
+            ? '$apiMsg (Código de suporte: $supportCode)'
+            : 'Armazenamento temporariamente indisponível. (Código de suporte: $supportCode)';
       }
-      return apiMsg ?? 'Serviço temporariamente indisponível. Tente novamente mais tarde.';
+      return apiMsg ??
+          'Serviço temporariamente indisponível. Tente novamente mais tarde.';
     }
     if (statusCode != null && statusCode >= 500) {
       if (supportCode != null && supportCode.isNotEmpty) {
@@ -240,6 +268,19 @@ class ApiService {
     return apiMsg ?? 'Falha na comunicação com o servidor.';
   }
 
+  bool _isRetryable(DioException e) {
+    if (e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.sendTimeout ||
+        e.type == DioExceptionType.receiveTimeout ||
+        e.type == DioExceptionType.connectionError) {
+      return true;
+    }
+    final statusCode = e.response?.statusCode;
+    return statusCode == 408 ||
+        statusCode == 429 ||
+        (statusCode != null && statusCode >= 500);
+  }
+
   Future<Map<String, dynamic>> login(String cpf, String password) async {
     try {
       final response = await _dio.post('/auth/login', data: {
@@ -253,7 +294,8 @@ class ApiService {
   }
 
   // Get Client by Ficha (QR Code)
-  Future<Map<String, dynamic>> getClientBySequence(String sequenceNumber) async {
+  Future<Map<String, dynamic>> getClientBySequence(
+      String sequenceNumber) async {
     try {
       final response = await _dio.get('/clients/ficha/$sequenceNumber');
       return response.data;
@@ -265,10 +307,8 @@ class ApiService {
   // Assign seller to a book or rebolo
   Future<void> assignSeller(String sequenceNumber, String sellerId) async {
     try {
-      await _dio.post('/clients/assign-seller', data: {
-        'sequenceNumber': sequenceNumber,
-        'sellerId': sellerId
-      });
+      await _dio.post('/clients/assign-seller',
+          data: {'sequenceNumber': sequenceNumber, 'sellerId': sellerId});
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
@@ -295,7 +335,8 @@ class ApiService {
   }
 
   // Request stock transfer (covers or books)
-  Future<void> requestStockTransfer(String recipientId, String type, int quantity) async {
+  Future<void> requestStockTransfer(
+      String recipientId, String type, int quantity) async {
     try {
       await _dio.post('/stock/request-transfer', data: {
         'recipientId': recipientId,
@@ -346,11 +387,13 @@ class ApiService {
   }
 
   // Get clients by city and optional bookStatus
-  Future<List<dynamic>> getClientsByCity(String city, {String? bookStatus}) async {
+  Future<List<dynamic>> getClientsByCity(String city,
+      {String? bookStatus}) async {
     try {
       final Map<String, dynamic> params = {'city': city};
       if (bookStatus != null) params['bookStatus'] = bookStatus;
-      final response = await _dio.get('/clients/by-city', queryParameters: params);
+      final response =
+          await _dio.get('/clients/by-city', queryParameters: params);
       return response.data as List<dynamic>;
     } on DioException catch (e) {
       throw Exception(_extractError(e));
@@ -358,7 +401,8 @@ class ApiService {
   }
 
   // Batch assign a list of client IDs to a seller
-  Future<Map<String, dynamic>> batchAssignSeller(List<String> clientIds, String assignedSellerId) async {
+  Future<Map<String, dynamic>> batchAssignSeller(
+      List<String> clientIds, String assignedSellerId) async {
     try {
       final response = await _dio.patch('/clients/batch-assign', data: {
         'clientIds': clientIds,
@@ -370,14 +414,35 @@ class ApiService {
     }
   }
 
-
   // Sales
   Future<String> registerSale(Map<String, dynamic> saleData) async {
     try {
       final response = await _dio.post('/sales', data: saleData);
       return response.data['id'];
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar venda');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao registrar venda');
+    }
+  }
+
+  Future<String> registerSaleWithReceipt(
+      Map<String, dynamic> saleData, String filePath) async {
+    try {
+      final fields = <String, dynamic>{};
+      for (final entry in saleData.entries) {
+        if (entry.key == 'pendingReceiptPath' || entry.value == null) continue;
+        fields[entry.key] = entry.value.toString();
+      }
+      fields['receipt'] = await MultipartFile.fromFile(filePath);
+      final response = await _dio.post('/sales/with-receipt',
+          data: FormData.fromMap(fields));
+      return response.data['id'].toString();
+    } on DioException catch (e) {
+      throw ApiRequestException(
+        _extractError(e),
+        retryable: _isRetryable(e),
+      );
     }
   }
 
@@ -386,7 +451,9 @@ class ApiService {
     try {
       await _dio.put('/finance/costs/$id', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao editar custo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao editar custo');
     }
   }
 
@@ -394,7 +461,9 @@ class ApiService {
     try {
       await _dio.put('/finance/sales/$id', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao editar venda');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao editar venda');
     }
   }
 
@@ -442,7 +511,9 @@ class ApiService {
     try {
       await _dio.post('/books/close-event', data: {'eventName': eventName});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao fechar lote de evento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao fechar lote de evento');
     }
   }
 
@@ -451,7 +522,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-send');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao enviar ficha');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao enviar ficha');
     }
   }
 
@@ -460,7 +533,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-release');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar ficha');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao liberar ficha');
     }
   }
 
@@ -469,7 +544,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-to-stock');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao resgatar ficha');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao resgatar ficha');
     }
   }
 
@@ -478,7 +555,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao forçar devolução');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao forçar devolução');
     }
   }
 
@@ -487,7 +566,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-rebolo-stock');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao resgatar ficha de rebolo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao resgatar ficha de rebolo');
     }
   }
 
@@ -496,7 +577,9 @@ class ApiService {
     try {
       await _dio.put('/books/client/$clientId/force-return-rebolo');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao forçar devolução de rebolo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao forçar devolução de rebolo');
     }
   }
 
@@ -504,7 +587,9 @@ class ApiService {
     try {
       await _dio.put('/books/batch/$id', data: {'status': status});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar status do lote');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar status do lote');
     }
   }
 
@@ -513,15 +598,20 @@ class ApiService {
       final response = await _dio.get('/stock/info');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar informacoes de capas');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar informacoes de capas');
     }
   }
 
   Future<void> transferCovers(String sellerId, int quantity) async {
     try {
-      await _dio.post('/stock/transfer', data: {'sellerId': sellerId, 'quantity': quantity});
+      await _dio.post('/stock/transfer',
+          data: {'sellerId': sellerId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao transferir capas');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao transferir capas');
     }
   }
 
@@ -529,23 +619,31 @@ class ApiService {
     try {
       await _dio.post('/stock/batch', data: {'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar estoque geral');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar estoque geral');
     }
   }
 
   Future<void> transferBetweenSellers(String recipientId, int quantity) async {
     try {
-      await _dio.post('/stock/transfer-between-sellers', data: {'recipientId': recipientId, 'quantity': quantity});
+      await _dio.post('/stock/transfer-between-sellers',
+          data: {'recipientId': recipientId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao solicitar transferência');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao solicitar transferência');
     }
   }
 
   Future<void> returnDefectiveCovers(String sellerId, int quantity) async {
     try {
-      await _dio.post('/stock/defective', data: {'sellerId': sellerId, 'quantity': quantity});
+      await _dio.post('/stock/defective',
+          data: {'sellerId': sellerId, 'quantity': quantity});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao devolver capas defeituosas');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao devolver capas defeituosas');
     }
   }
 
@@ -559,7 +657,9 @@ class ApiService {
       final response = await _dio.get('/books/batch');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar lotes de books');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar lotes de books');
     }
   }
 
@@ -569,7 +669,9 @@ class ApiService {
     try {
       await _dio.post('/fleet', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao cadastrar veículo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao cadastrar veículo');
     }
   }
 
@@ -577,7 +679,9 @@ class ApiService {
     try {
       await _dio.put('/fleet/$id', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar veículo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar veículo');
     }
   }
 
@@ -585,7 +689,9 @@ class ApiService {
     try {
       await _dio.delete('/fleet/$id');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir veículo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao excluir veículo');
     }
   }
 
@@ -593,7 +699,9 @@ class ApiService {
     try {
       await _dio.post('/fleet/checklist', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao enviar checklist');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao enviar checklist');
     }
   }
 
@@ -603,11 +711,13 @@ class ApiService {
   List<Map<String, dynamic>> get cachedSearches => _searchCache;
 
   // AI Events
-  Future<Map<String, dynamic>> searchEvents(String city, {bool forceRefresh = false}) async {
+  Future<Map<String, dynamic>> searchEvents(String city,
+      {bool forceRefresh = false}) async {
     final lowerCity = city.toLowerCase();
 
     if (!forceRefresh) {
-      final cachedIndex = _searchCache.indexWhere((c) => c['cityQuery'] == lowerCity);
+      final cachedIndex =
+          _searchCache.indexWhere((c) => c['cityQuery'] == lowerCity);
       if (cachedIndex != -1) {
         final cached = _searchCache[cachedIndex];
         final DateTime savedAt = DateTime.parse(cached['savedAt']);
@@ -625,7 +735,8 @@ class ApiService {
         data: {'city': city},
         options: Options(receiveTimeout: const Duration(seconds: 120)),
       );
-      final Map<String, dynamic> responseData = response.data as Map<String, dynamic>;
+      final Map<String, dynamic> responseData =
+          response.data as Map<String, dynamic>;
 
       _searchCache.removeWhere((c) => c['cityQuery'] == lowerCity);
       _searchCache.insert(0, {
@@ -643,12 +754,15 @@ class ApiService {
     } on DioException catch (e) {
       print('=== DIO ERROR IN SEARCH ===');
       print(e.message);
-      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
-      throw Exception(errorMsg ?? 'Erro ao buscar eventos na IA (tempo limite excedido). Tente novamente.');
+      final errorMsg =
+          (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ??
+          'Erro ao buscar eventos na IA (tempo limite excedido). Tente novamente.');
     }
   }
 
-  Future<Map<String, dynamic>> fetchStateRadar(String state, {bool force = false}) async {
+  Future<Map<String, dynamic>> fetchStateRadar(String state,
+      {bool force = false}) async {
     try {
       final response = await _dio.get(
         '/events/state-radar?state=$state&force=$force',
@@ -656,8 +770,10 @@ class ApiService {
       );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
-      throw Exception(errorMsg ?? 'Erro ao buscar radar por estado. O servidor demorou para responder. Tente novamente.');
+      final errorMsg =
+          (e.response?.data is Map) ? e.response?.data['error'] : null;
+      throw Exception(errorMsg ??
+          'Erro ao buscar radar por estado. O servidor demorou para responder. Tente novamente.');
     }
   }
 
@@ -667,7 +783,8 @@ class ApiService {
       final response = await _dio.get('/events/smart-route');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      final errorMsg = (e.response?.data is Map) ? e.response?.data['error'] : null;
+      final errorMsg =
+          (e.response?.data is Map) ? e.response?.data['error'] : null;
       throw Exception(errorMsg ?? 'Erro ao buscar roteiro inteligente.');
     }
   }
@@ -676,19 +793,43 @@ class ApiService {
     try {
       await _dio.post('/closing/daily', data: closingData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar fechamento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao salvar fechamento');
     }
   }
 
-  Future<void> payRepasse(String sellerId, double amount, {double? commissionToLog}) async {
+  Future<void> payRepasse(String sellerId, double amount,
+      {required String direction}) async {
     try {
       await _dio.post('/closing/pay-repasse', data: {
         'sellerId': sellerId,
         'amount': amount,
-        'commissionToLog': commissionToLog
+        'direction': direction,
       });
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao pagar repasse');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao pagar repasse');
+    }
+  }
+
+  Future<String> getMyPixKey() async {
+    try {
+      final response = await _dio.get('/users/me/pix-key');
+      return response.data['pixKey']?.toString() ?? '';
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<String> saveMyPixKey(String pixKey) async {
+    try {
+      final response =
+          await _dio.put('/users/me/pix-key', data: {'pixKey': pixKey.trim()});
+      return response.data['pixKey']?.toString() ?? '';
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
     }
   }
 
@@ -696,7 +837,9 @@ class ApiService {
     try {
       await _dio.post('/events', data: eventData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar prospect');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao salvar prospect');
     }
   }
 
@@ -705,26 +848,31 @@ class ApiService {
       final response = await _dio.get('/events');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar prospects');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar prospects');
     }
   }
-
-
 
   Future<List<dynamic>> getUpcomingEvents() async {
     try {
       final response = await _dio.get('/events/upcoming');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar eventos próximos');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar eventos próximos');
     }
   }
 
   Future<void> toggleFavorite(String eventId, bool isFavorite) async {
     try {
-      await _dio.put('/events/$eventId/favorite', data: {'isFavorite': isFavorite});
+      await _dio
+          .put('/events/$eventId/favorite', data: {'isFavorite': isFavorite});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao favoritar evento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao favoritar evento');
     }
   }
 
@@ -732,7 +880,9 @@ class ApiService {
     try {
       await _dio.put('/events/$eventId/prospect');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao transformar em prospect');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao transformar em prospect');
     }
   }
 
@@ -740,7 +890,9 @@ class ApiService {
     try {
       await _dio.put('/events/$eventId', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar prospect');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar prospect');
     }
   }
 
@@ -748,7 +900,9 @@ class ApiService {
     try {
       await _dio.delete('/events/$eventId');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir prospect');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao excluir prospect');
     }
   }
 
@@ -758,7 +912,9 @@ class ApiService {
       costData['status'] = 'PLANNED';
       await _dio.post('/costs', data: costData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao salvar custo planejado');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao salvar custo planejado');
     }
   }
 
@@ -769,11 +925,14 @@ class ApiService {
       final response = await _dio.get('/finance/overview');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fluxo de caixa');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fluxo de caixa');
     }
   }
 
-  Future<Map<String, dynamic>> getClosingData(String city, {List<String>? sellerIds, String? date}) async {
+  Future<Map<String, dynamic>> getClosingData(String city,
+      {List<String>? sellerIds, String? date}) async {
     try {
       final queryParams = <String, dynamic>{};
       if (sellerIds != null && sellerIds.isNotEmpty) {
@@ -782,18 +941,24 @@ class ApiService {
       if (date != null && date.isNotEmpty) {
         queryParams['date'] = date;
       }
-      
+
       final response = await _dio.get(
         '/closing/city/$city',
         queryParameters: queryParams.isNotEmpty ? queryParams : null,
       );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fechamento');
     }
   }
 
-  Future<Map<String, dynamic>> getCustomMetrics({List<String>? sellerIds, String? startDate, String? endDate, String? city}) async {
+  Future<Map<String, dynamic>> getCustomMetrics(
+      {List<String>? sellerIds,
+      String? startDate,
+      String? endDate,
+      String? city}) async {
     try {
       final queryParams = <String, dynamic>{};
       if (sellerIds != null && sellerIds.isNotEmpty) {
@@ -808,7 +973,7 @@ class ApiService {
       if (city != null && city.isNotEmpty) {
         queryParams['city'] = city;
       }
-      
+
       final response = await _dio.get(
         '/closing/custom',
         queryParameters: queryParams.isNotEmpty ? queryParams : null,
@@ -826,16 +991,21 @@ class ApiService {
       final response = await _dio.get('/closing/daily/$sellerId');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fechamento');
     }
   }
 
-  Future<Map<String, dynamic>> getPhotographerClosing(String photographerId) async {
+  Future<Map<String, dynamic>> getPhotographerClosing(
+      String photographerId) async {
     try {
       final response = await _dio.get('/closing/photographer/$photographerId');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fechamento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fechamento');
     }
   }
 
@@ -844,7 +1014,9 @@ class ApiService {
       final response = await _dio.get('/finance/pending-costs');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar custos pendentes');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar custos pendentes');
     }
   }
 
@@ -852,17 +1024,20 @@ class ApiService {
     try {
       await _dio.put('/finance/costs/$costId/status', data: {'status': status});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar status do custo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar status do custo');
     }
   }
-
 
   Future<Map<String, dynamic>> getHealthDashboard() async {
     try {
       final response = await _dio.get('/finance/health');
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar indicadores de saúde');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar indicadores de saúde');
     }
   }
 
@@ -870,7 +1045,9 @@ class ApiService {
     try {
       await _dio.post('/costs', data: costData);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao registrar custo');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao registrar custo');
     }
   }
 
@@ -892,7 +1069,9 @@ class ApiService {
       final response = await _dio.get('/users');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar funcionários');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar funcionários');
     }
   }
 
@@ -900,7 +1079,9 @@ class ApiService {
     try {
       await _dio.post('/users', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar funcionário');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao criar funcionário');
     }
   }
 
@@ -908,7 +1089,9 @@ class ApiService {
     try {
       await _dio.put('/users/$id', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar funcionário');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar funcionário');
     }
   }
 
@@ -916,7 +1099,9 @@ class ApiService {
     try {
       await _dio.delete('/users/$id');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir funcionário');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao excluir funcionário');
     }
   }
 
@@ -927,7 +1112,9 @@ class ApiService {
       final response = await _dio.get('/teams');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar equipes');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar equipes');
     }
   }
 
@@ -936,7 +1123,9 @@ class ApiService {
       final res = await _dio.post('/teams', data: data);
       return res.data;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar equipe');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao criar equipe');
     }
   }
 
@@ -944,7 +1133,9 @@ class ApiService {
     try {
       await _dio.put('/teams/$id', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao atualizar equipe');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar equipe');
     }
   }
 
@@ -952,7 +1143,9 @@ class ApiService {
     try {
       await _dio.delete('/teams/$id');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao excluir equipe');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao excluir equipe');
     }
   }
 
@@ -963,7 +1156,9 @@ class ApiService {
       final response = await _dio.get('/fleet');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar frota');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar frota');
     }
   }
 
@@ -979,9 +1174,6 @@ class ApiService {
     }
   }
 
-
-
-
   // ── Notificações (Notifications) ──────────────────────────────────────────
 
   Future<List<dynamic>> getNotifications() async {
@@ -989,11 +1181,14 @@ class ApiService {
       final response = await _dio.get('/notifications');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar notificações');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar notificações');
     }
   }
 
-  Future<void> actionNotification(String id, String actionType, {Map<String, dynamic>? extraData}) async {
+  Future<void> actionNotification(String id, String actionType,
+      {Map<String, dynamic>? extraData}) async {
     try {
       final data = <String, dynamic>{'actionType': actionType};
       if (extraData != null) {
@@ -1001,7 +1196,9 @@ class ApiService {
       }
       await _dio.post('/notifications/$id/action', data: data);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao processar notificação');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao processar notificação');
     }
   }
 
@@ -1009,7 +1206,9 @@ class ApiService {
     try {
       await _dio.patch('/notifications/$id/read');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao marcar notificação como lida');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao marcar notificação como lida');
     }
   }
 
@@ -1039,7 +1238,9 @@ class ApiService {
         'targetUserId': targetUserId,
       });
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar notificação');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao criar notificação');
     }
   }
 
@@ -1047,9 +1248,12 @@ class ApiService {
     try {
       await _dio.put('/clients/release-city', data: {'city': city});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar lotes da cidade');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao liberar lotes da cidade');
     }
   }
+
   Future<void> createEditRequest({
     required String clientId,
     required Map<String, dynamic> proposedData,
@@ -1058,7 +1262,7 @@ class ApiService {
     try {
       final userResponse = await _dio.get('/users/me');
       final photographerId = userResponse.data['id'];
-      
+
       await _dio.post('/edit-requests', data: {
         'clientId': clientId,
         'photographerId': photographerId,
@@ -1066,7 +1270,9 @@ class ApiService {
         'reason': reason,
       });
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao criar solicitação de edição');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao criar solicitação de edição');
     }
   }
 
@@ -1075,7 +1281,9 @@ class ApiService {
       final response = await _dio.get('/clients/photographer');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fichas');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fichas');
     }
   }
 
@@ -1084,11 +1292,14 @@ class ApiService {
       final response = await _dio.get('/clients/seller');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar fichas do vendedor');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar fichas do vendedor');
     }
   }
 
-  Future<List<dynamic>> getPersonalAppointments(String sellerId, {DateTime? from}) async {
+  Future<List<dynamic>> getPersonalAppointments(String sellerId,
+      {DateTime? from}) async {
     try {
       final queryParams = <String, dynamic>{};
       if (from != null) {
@@ -1104,7 +1315,8 @@ class ApiService {
     }
   }
 
-  Future<List<dynamic>> getUnifiedAppointments(String sellerId, {DateTime? from}) async {
+  Future<List<dynamic>> getUnifiedAppointments(String sellerId,
+      {DateTime? from}) async {
     try {
       final queryParams = <String, dynamic>{};
       if (from != null) {
@@ -1147,7 +1359,9 @@ class ApiService {
       );
       return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar prévia de fechamento');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar prévia de fechamento');
     }
   }
 
@@ -1159,7 +1373,9 @@ class ApiService {
       });
       return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao realizar fechamento de cidade');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao realizar fechamento de cidade');
     }
   }
 
@@ -1168,7 +1384,9 @@ class ApiService {
       final response = await _dio.get('/edit-requests/pending');
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar solicitações');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar solicitações');
     }
   }
 
@@ -1176,7 +1394,9 @@ class ApiService {
     try {
       await _dio.post('/edit-requests/$id/approve');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao aprovar solicitação');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao aprovar solicitação');
     }
   }
 
@@ -1184,16 +1404,21 @@ class ApiService {
     try {
       await _dio.post('/edit-requests/$id/reject');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao rejeitar solicitação');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao rejeitar solicitação');
     }
   }
 
   Future<List<dynamic>> searchBooks(String query) async {
     try {
-      final response = await _dio.get('/books/search', queryParameters: {'q': query});
+      final response =
+          await _dio.get('/books/search', queryParameters: {'q': query});
       return response.data as List<dynamic>;
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao buscar livros');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar livros');
     }
   }
 
@@ -1201,27 +1426,34 @@ class ApiService {
     try {
       await _dio.put('/books/batch/$id/release');
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao liberar lote para estoque');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao liberar lote para estoque');
     }
   }
 
   Future<void> receiveReturnedBook(String sequenceNumber) async {
     try {
-      await _dio.post('/books/receive-return', data: {'sequenceNumber': sequenceNumber});
+      await _dio.post('/books/receive-return',
+          data: {'sequenceNumber': sequenceNumber});
     } on DioException catch (e) {
-      throw Exception((e.response?.data is Map ? e.response?.data['error'] : null) ?? 'Erro ao receber devolução');
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao receber devolução');
     }
   }
+
   Future<String> downloadBackup() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
-      
-      final res = await _dio.get('/backup/download', options: Options(
-        headers: {'Authorization': 'Bearer $token'},
-        responseType: ResponseType.plain, // To get the raw JSON string
-      ));
-      
+
+      final res = await _dio.get('/backup/download',
+          options: Options(
+            headers: {'Authorization': 'Bearer $token'},
+            responseType: ResponseType.plain, // To get the raw JSON string
+          ));
+
       if (res.statusCode == 200) {
         return res.data.toString();
       } else {
@@ -1232,29 +1464,31 @@ class ApiService {
       throw Exception('Network error');
     }
   }
+
   Future<void> restoreBackup(String filePath, {bool force = false}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
-      
+
       final formData = FormData.fromMap({
         'file': await MultipartFile.fromFile(filePath, filename: 'backup.json'),
       });
-      
+
       final res = await _dio.post(
         '/backup/restore',
         queryParameters: {'force': force},
         data: formData,
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
-      
+
       if (res.statusCode != 200) {
         throw Exception('Failed to restore backup');
       }
     } on DioException catch (e) {
       if (e.response?.statusCode == 409) {
         // Specifically throw to handle conflict
-        throw Exception('CONFLICT: ${(e.response?.data is Map ? e.response?.data['error'] : null)}');
+        throw Exception(
+            'CONFLICT: ${(e.response?.data is Map ? e.response?.data['error'] : null)}');
       }
       throw Exception('Network error');
     } catch (e) {
@@ -1262,8 +1496,6 @@ class ApiService {
       throw Exception('Error restoring backup');
     }
   }
-
-
 
   Future<String> getDailyQuote() async {
     try {
@@ -1282,14 +1514,20 @@ class ApiService {
   }
 
   // ── Estatísticas / BI ──────────────────────────────────────
-  Future<dynamic> getStatsBooks({String? from, String? to, String? city, String? event, String? batchId}) async {
+  Future<dynamic> getStatsBooks(
+      {String? from,
+      String? to,
+      String? city,
+      String? event,
+      String? batchId}) async {
     final queryParams = <String, String>{};
     if (from != null) queryParams['from'] = from;
     if (to != null) queryParams['to'] = to;
     if (city != null) queryParams['city'] = city;
     if (event != null) queryParams['event'] = event;
     if (batchId != null) queryParams['batchId'] = batchId;
-    final resp = await _dio.get('/stats/books', queryParameters: queryParams.isEmpty ? null : queryParams);
+    final resp = await _dio.get('/stats/books',
+        queryParameters: queryParams.isEmpty ? null : queryParams);
     return resp.data;
   }
 
@@ -1311,14 +1549,16 @@ class ApiService {
     await _dio.put('/users/profile', data: {'name': newName});
   }
 
-  Future<void> approveEventRoi(String eventId, {required double totalCost, double? expectedRevenue}) async {
+  Future<void> approveEventRoi(String eventId,
+      {required double totalCost, double? expectedRevenue}) async {
     await _dio.patch('/events/$eventId/approve-roi', data: {
       'totalCost': totalCost,
       if (expectedRevenue != null) 'expectedRevenue': expectedRevenue,
     });
   }
 
-  Future<void> batchAssignClients(List<String> clientIds, String sellerId) async {
+  Future<void> batchAssignClients(
+      List<String> clientIds, String sellerId) async {
     await _dio.patch('/clients/batch-assign', data: {
       'clientIds': clientIds,
       'assignedSellerId': sellerId,
@@ -1331,7 +1571,10 @@ class ApiService {
       final List<dynamic> users = resp.data;
       return users.where((u) {
         final role = (u['role'] ?? '').toString().toUpperCase();
-        return role == 'VENDEDOR' || role == 'SELLER' || role == 'ADMIN' || role == 'SUPER_ADMIN';
+        return role == 'VENDEDOR' ||
+            role == 'SELLER' ||
+            role == 'ADMIN' ||
+            role == 'SUPER_ADMIN';
       }).toList();
     } catch (_) {
       return [];

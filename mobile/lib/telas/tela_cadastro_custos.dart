@@ -9,7 +9,6 @@ import '../servicos/ajudante_bd.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/led_button.dart';
 
-
 class CostEntryScreen extends StatefulWidget {
   const CostEntryScreen({super.key});
 
@@ -68,7 +67,8 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
   }
 
   Future<void> _takePhoto() async {
-    final result = await MediaPickerService().pickDocumentOrImage(context, title: 'Comprovante de Despesa');
+    final result = await MediaPickerService()
+        .pickDocumentOrImage(context, title: 'Comprovante de Despesa');
     if (result != null) {
       setState(() {
         _receiptPhoto = result.file;
@@ -78,39 +78,44 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
 
   Future<void> _submitCost() async {
     if (_amountController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha o valor')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Preencha o valor')));
       return;
     }
 
     if (_category == 'Manutenção/Óleo') {
       if (_carId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Selecione um carro para a manutenção.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Selecione um carro para a manutenção.')));
         return;
       }
       if (_nextOilChangeKmController.text.isNotEmpty) {
         final nextKm = int.tryParse(_nextOilChangeKmController.text);
         if (nextKm == null) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('KM inválido')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('KM inválido')));
           return;
         }
 
-        final selectedCar = _realCars.firstWhere((c) => c['id'] == _carId, orElse: () => null);
+        final selectedCar =
+            _realCars.firstWhere((c) => c['id'] == _carId, orElse: () => null);
         if (selectedCar != null) {
           final currentKm = (selectedCar['currentKm'] as num?)?.toInt() ?? 0;
           if (nextKm < currentKm + 9000 || nextKm > currentKm + 14000) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('O KM da próxima troca deve ser entre ${currentKm + 9000} e ${currentKm + 14000} (9k a 14k a mais que o atual). Caso haja erro no KM atual, contate o Admin.'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
-              )
-            );
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  'O KM da próxima troca deve ser entre ${currentKm + 9000} e ${currentKm + 14000} (9k a 14k a mais que o atual). Caso haja erro no KM atual, contate o Admin.'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ));
             return;
           }
         }
       }
     }
-    final cleanAmount = _amountController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
+    final cleanAmount = _amountController.text
+        .replaceAll(RegExp(r'[^0-9,]'), '')
+        .replaceAll(',', '.');
     final amount = double.tryParse(cleanAmount) ?? 0.0;
 
     final db = await DbHelper.instance.database;
@@ -126,7 +131,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
-      
+
       String receiptUrl = '';
       // Se a foto falhar no envio, não salvamos o arquivo local no payload de backup para evitar payload gigante,
       // ou então teríamos que converter a foto em base64. O ideal seria base64, mas por simplicidade salvaremos sem o path.
@@ -137,7 +142,7 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
           print('Erro no upload da foto: $e');
         }
       }
-      
+
       final payload = {
         'amount': amount,
         'category': _category,
@@ -145,20 +150,28 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
         'paymentMethod': _paymentMethod,
         'carId': _carId,
         'receiptUrl': receiptUrl,
-        if (_category == 'Manutenção/Óleo' && _nextOilChangeKmController.text.isNotEmpty)
+        if (_category == 'Manutenção/Óleo' &&
+            _nextOilChangeKmController.text.isNotEmpty)
           'nextOilChangeKm': _nextOilChangeKmController.text,
       };
 
       try {
         await apiService.submitCost(payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Despesa registrada com sucesso!'), backgroundColor: Colors.green));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Despesa registrada com sucesso!'),
+              backgroundColor: Colors.green));
       } catch (e) {
         await syncService.addPendingRequest('SUBMIT_COST', payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Despesa salva no aparelho e aguardando envio.'),
+              backgroundColor: Colors.orange));
       }
-
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro interno: $e'), backgroundColor: Colors.red));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Erro interno: $e'), backgroundColor: Colors.red));
       return;
     }
 
@@ -171,42 +184,46 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
       backgroundColor: const Color(0xFF0D0D1A),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A0030),
-        title: const Text('Lançar Despesa', style: TextStyle(color: Colors.white, fontSize: 16)),
+        title: const Text('Lançar Despesa',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+              Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const tela_sincronizacao.SyncScreen()));
             },
-            icon: Consumer<SyncService>(
-              builder: (context, sync, child) {
-                return Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    const Icon(Icons.cloud_sync, color: Color(0xFFE1BEE7)),
-                    if (sync.pendingRequests.isNotEmpty)
-                      Positioned(
-                        right: 0,
-                        top: 0,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                          child: Text(
-                            '${sync.pendingRequests.length}',
-                            style: const TextStyle(color: Colors.white, fontSize: 8),
-                            textAlign: TextAlign.center,
-                          ),
+            icon: Consumer<SyncService>(builder: (context, sync, child) {
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  const Icon(Icons.cloud_sync, color: Color(0xFFE1BEE7)),
+                  if (sync.pendingRequests.isNotEmpty)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(2),
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints:
+                            const BoxConstraints(minWidth: 12, minHeight: 12),
+                        child: Text(
+                          '${sync.pendingRequests.length}',
+                          style:
+                              const TextStyle(color: Colors.white, fontSize: 8),
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                  ],
-                );
-              }
-            ),
-            tooltip: 'Backups Offline',
+                    ),
+                ],
+              );
+            }),
+            tooltip: 'Envios Pendentes',
           ),
         ],
       ),
@@ -215,7 +232,9 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Comprovante Fiscal', style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+            const Text('Comprovante Fiscal',
+                style: TextStyle(
+                    color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             GestureDetector(
               onTap: _takePhoto,
@@ -224,42 +243,56 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF1A1A2E),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _receiptPhoto != null ? Colors.green : Colors.white24, width: 2),
-                  image: _receiptPhoto != null ? DecorationImage(image: FileImage(_receiptPhoto!), fit: BoxFit.cover) : null,
+                  border: Border.all(
+                      color:
+                          _receiptPhoto != null ? Colors.green : Colors.white24,
+                      width: 2),
+                  image: _receiptPhoto != null
+                      ? DecorationImage(
+                          image: FileImage(_receiptPhoto!), fit: BoxFit.cover)
+                      : null,
                 ),
                 child: _receiptPhoto == null
                     ? const Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.camera_alt, color: Colors.white54, size: 40),
+                          Icon(Icons.camera_alt,
+                              color: Colors.white54, size: 40),
                           SizedBox(height: 8),
-                          Text('Tirar book do Recibo (Opcional)', style: TextStyle(color: Colors.white54)),
+                          Text('Tirar book do Recibo (Opcional)',
+                              style: TextStyle(color: Colors.white54)),
                         ],
                       )
                     : null,
               ),
             ),
             const SizedBox(height: 24),
-            
-            const Text('Detalhes do Gasto', style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+            const Text('Detalhes do Gasto',
+                style: TextStyle(
+                    color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            
             TextField(
               controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [CurrencyTextInputFormatter.currency(locale: 'pt_BR', symbol: 'R\$')],
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                CurrencyTextInputFormatter.currency(
+                    locale: 'pt_BR', symbol: 'R\$')
+              ],
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 labelText: 'Valor (R\$)',
                 labelStyle: const TextStyle(color: Colors.white54),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                prefixIcon: const Icon(Icons.attach_money, color: Colors.white54),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
+                prefixIcon:
+                    const Icon(Icons.attach_money, color: Colors.white54),
               ),
             ),
             const SizedBox(height: 16),
-            
             DropdownButtonFormField<String>(
               value: _category,
               dropdownColor: const Color(0xFF1A1A2E),
@@ -269,7 +302,9 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 labelStyle: const TextStyle(color: Colors.white54),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
               ),
               items: _categories.map((cat) {
                 return DropdownMenuItem(value: cat, child: Text(cat));
@@ -280,7 +315,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 });
               },
             ),
-            
             if (_category == 'Manutenção/Óleo') ...[
               const SizedBox(height: 16),
               if (_isLoadingCars)
@@ -295,13 +329,17 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                     labelStyle: const TextStyle(color: Colors.white54),
                     filled: true,
                     fillColor: const Color(0xFF1A1A2E),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                    prefixIcon: const Icon(Icons.directions_car, color: Colors.white54),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none),
+                    prefixIcon:
+                        const Icon(Icons.directions_car, color: Colors.white54),
                   ),
                   items: _realCars.map((c) {
                     return DropdownMenuItem<String>(
                       value: c['id'],
-                      child: Text('${c['plate']} - ${c['model'] ?? ''} (KM: ${c['currentKm'] ?? 0})'),
+                      child: Text(
+                          '${c['plate']} - ${c['model'] ?? ''} (KM: ${c['currentKm'] ?? 0})'),
                     );
                   }).toList(),
                   onChanged: (v) {
@@ -311,7 +349,6 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                   },
                 ),
             ],
-            
             if (_category == 'Manutenção/Óleo') ...[
               const SizedBox(height: 16),
               TextField(
@@ -323,16 +360,15 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                   labelStyle: const TextStyle(color: Colors.white54),
                   filled: true,
                   fillColor: const Color(0xFF1A1A2E),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none),
                   prefixIcon: const Icon(Icons.speed, color: Colors.white54),
                 ),
               ),
             ],
             const SizedBox(height: 16),
-
-
             const SizedBox(height: 16),
-
             DropdownButtonFormField<String>(
               value: _paymentMethod,
               dropdownColor: const Color(0xFF1A1A2E),
@@ -342,17 +378,21 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 labelStyle: const TextStyle(color: Colors.white54),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
               ),
               items: const [
-                DropdownMenuItem(value: 'Dinheiro', child: Text('Dinheiro Físico')),
+                DropdownMenuItem(
+                    value: 'Dinheiro', child: Text('Dinheiro Físico')),
                 DropdownMenuItem(value: 'PIX', child: Text('PIX da Empresa')),
-                DropdownMenuItem(value: 'Cartão de Crédito', child: Text('Cartão de Crédito Corporativo')),
+                DropdownMenuItem(
+                    value: 'Cartão de Crédito',
+                    child: Text('Cartão de Crédito Corporativo')),
               ],
               onChanged: (v) => setState(() => _paymentMethod = v!),
             ),
             const SizedBox(height: 16),
-
             TextField(
               controller: _descController,
               maxLines: 2,
@@ -362,19 +402,25 @@ class _CostEntryScreenState extends State<CostEntryScreen> {
                 hintStyle: const TextStyle(color: Colors.white54),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none),
               ),
             ),
-            
             const SizedBox(height: 32),
             LedButton(
               onPressed: _submitCost,
               style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
-              child: const Text('Registrar Despesa', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text('Registrar Despesa',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold)),
             ),
           ],
         ),

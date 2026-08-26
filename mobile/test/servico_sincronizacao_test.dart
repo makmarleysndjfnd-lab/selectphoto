@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeApiService extends ApiService {
   int registerSaleCalls = 0;
+  int registerSaleWithReceiptCalls = 0;
   bool shouldFail = false;
   Completer<void>? inFlightCompleter;
 
@@ -22,6 +23,17 @@ class FakeApiService extends ApiService {
     }
     return 'sale-1';
   }
+
+  @override
+  Future<String> registerSaleWithReceipt(
+      Map<String, dynamic> data, String filePath) async {
+    registerSaleWithReceiptCalls++;
+    if (inFlightCompleter != null) {
+      await inFlightCompleter!.future;
+    }
+    if (shouldFail) throw Exception('Network timeout test');
+    return 'sale-with-receipt-1';
+  }
 }
 
 void main() {
@@ -35,7 +47,8 @@ void main() {
   });
 
   group('SyncRequest Model Tests', () {
-    test('deve instanciar SyncRequest com valores padrão de retryCount = 0', () {
+    test('deve instanciar SyncRequest com valores padrão de retryCount = 0',
+        () {
       final req = SyncRequest(
         id: '123',
         type: 'REGISTER_SALE',
@@ -50,7 +63,8 @@ void main() {
       expect(req.isSyncing, isFalse);
     });
 
-    test('deve serializar e desserializar SyncRequest via JSON corretamente', () {
+    test('deve serializar e desserializar SyncRequest via JSON corretamente',
+        () {
       final original = SyncRequest(
         id: '456',
         type: 'SUBMIT_COST',
@@ -83,7 +97,8 @@ void main() {
   });
 
   group('SyncService - Fila, Conectividade, Bateria e Backoff Exponencial', () {
-    test('1. Fila vazia não cria timer de retry (economia de bateria)', () async {
+    test('1. Fila vazia não cria timer de retry (economia de bateria)',
+        () async {
       final service = SyncService(fakeApi, initialOnline: true);
       expect(service.pendingRequests, isEmpty);
       expect(service.retryTimer, isNull);
@@ -93,41 +108,53 @@ void main() {
     test('2. Nova pendência online sincroniza imediatamente', () async {
       final service = SyncService(fakeApi, initialOnline: true);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 100.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 100.0,
+        'pendingReceiptPath': 'receipt-100.jpg',
+      });
 
-      expect(fakeApi.registerSaleCalls, 1);
+      expect(fakeApi.registerSaleWithReceiptCalls, 1);
       expect(service.pendingRequests, isEmpty);
       expect(service.retryTimer, isNull);
       service.dispose();
     });
 
-    test('3. Pendência offline aguarda reconexão sem chamar API imediatamente', () async {
+    test('3. Pendência offline aguarda reconexão sem chamar API imediatamente',
+        () async {
       final service = SyncService(fakeApi, initialOnline: false);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 150.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 150.0,
+        'pendingReceiptPath': 'receipt-150.jpg',
+      });
 
       expect(fakeApi.registerSaleCalls, 0);
       expect(service.pendingRequests.length, 1);
-      expect(service.retryTimer, isNull); // Offline não cria timer; aguarda reconexão
+      expect(service.retryTimer,
+          isNull); // Offline não cria timer; aguarda reconexão
       service.dispose();
     });
 
     test('4. Reconexão de rede dispara sincronização de pendências', () async {
       final service = SyncService(fakeApi, initialOnline: false);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 200.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 200.0,
+        'pendingReceiptPath': 'receipt-200.jpg',
+      });
       expect(fakeApi.registerSaleCalls, 0);
 
       // Simular reconexão de rede
       await service.setOnlineForTesting(true);
 
       // Sincronização executada automaticamente
-      expect(fakeApi.registerSaleCalls, 1);
+      expect(fakeApi.registerSaleWithReceiptCalls, 1);
       expect(service.pendingRequests, isEmpty);
       service.dispose();
     });
 
-    test('5. Falha cria backoff exponencial (15s, 30s, 60s, max 120s)', () async {
+    test('5. Falha cria backoff exponencial (15s, 30s, 60s, max 120s)',
+        () async {
       expect(SyncService.calculateBackoff(0), 15);
       expect(SyncService.calculateBackoff(1), 30);
       expect(SyncService.calculateBackoff(2), 60);
@@ -138,9 +165,12 @@ void main() {
       fakeApi.shouldFail = true;
       final service = SyncService(fakeApi, initialOnline: true);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 250.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 250.0,
+        'pendingReceiptPath': 'receipt-250.jpg',
+      });
 
-      expect(fakeApi.registerSaleCalls, 1);
+      expect(fakeApi.registerSaleWithReceiptCalls, 1);
       expect(service.pendingRequests.length, 1);
       expect(service.pendingRequests.first.retryCount, 1);
       expect(service.retryTimer, isNotNull);
@@ -148,11 +178,15 @@ void main() {
       service.dispose();
     });
 
-    test('6. Fila vazia cancela timer e removePendingRequest limpa timer', () async {
+    test('6. Fila vazia cancela timer e removePendingRequest limpa timer',
+        () async {
       fakeApi.shouldFail = true;
       final service = SyncService(fakeApi, initialOnline: true);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 300.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 300.0,
+        'pendingReceiptPath': 'receipt-300.jpg',
+      });
       expect(service.retryTimer, isNotNull);
 
       final reqId = service.pendingRequests.first.id;
@@ -167,7 +201,10 @@ void main() {
       fakeApi.shouldFail = true;
       final service = SyncService(fakeApi, initialOnline: true);
 
-      await service.addPendingRequest('REGISTER_SALE', {'value': 350.0});
+      await service.addPendingRequest('REGISTER_SALE', {
+        'value': 350.0,
+        'pendingReceiptPath': 'receipt-350.jpg',
+      });
       expect(service.retryTimer, isNotNull);
 
       service.dispose();
@@ -178,9 +215,13 @@ void main() {
       fakeApi.inFlightCompleter = Completer<void>();
       final service = SyncService(fakeApi, initialOnline: true);
 
-      final future1 = service.addPendingRequest('REGISTER_SALE', {'value': 400.0});
+      final future1 = service.addPendingRequest('REGISTER_SALE', {
+        'value': 400.0,
+        'pendingReceiptPath': 'receipt-400.jpg',
+      });
       // Tenta chamar syncAllPending enquanto a primeira ainda está em voo
       final future2 = service.syncAllPending();
+      await Future<void>.delayed(Duration.zero);
 
       expect(service.isSyncing, isTrue);
 
@@ -190,11 +231,13 @@ void main() {
       await future2;
 
       expect(service.isSyncing, isFalse);
-      expect(fakeApi.registerSaleCalls, 1);
+      expect(fakeApi.registerSaleWithReceiptCalls, 1);
       service.dispose();
     });
 
-    test('9. Item com maxRetries permanece visível como falha definitiva sem loop infinito', () async {
+    test(
+        '9. Item com maxRetries permanece visível como falha definitiva sem loop infinito',
+        () async {
       fakeApi.shouldFail = true;
       final service = SyncService(fakeApi, initialOnline: true);
 
@@ -215,6 +258,42 @@ void main() {
       expect(fakeApi.registerSaleCalls, 0);
       expect(service.pendingRequests.length, 1);
       expect(service.retryTimer, isNull); // Nenhum timer agendado
+      service.dispose();
+    });
+
+    test('10. Duas vendas offline da mesma ficha viram uma única pendência',
+        () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client-1',
+        'value': 100,
+        'pendingReceiptPath': 'receipt-a.jpg',
+      });
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client-1',
+        'value': 120,
+        'pendingReceiptPath': 'receipt-b.jpg',
+      });
+
+      expect(service.pendingRequests, hasLength(1));
+      expect(service.pendingRequests.single.payload['value'], 120);
+      service.dispose();
+    });
+
+    test(
+        '11. Venda com comprovante pendente usa a operação atômica ao reconectar',
+        () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client-2',
+        'value': 200,
+        'pendingReceiptPath': 'receipt.jpg',
+      });
+      await service.setOnlineForTesting(true);
+
+      expect(fakeApi.registerSaleWithReceiptCalls, 1);
+      expect(fakeApi.registerSaleCalls, 0);
+      expect(service.pendingRequests, isEmpty);
       service.dispose();
     });
   });

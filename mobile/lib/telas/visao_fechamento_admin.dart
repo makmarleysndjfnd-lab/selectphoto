@@ -4,6 +4,12 @@ import 'package:flutter/services.dart';
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
+double normalizeCommissionPercentage(dynamic rate, dynamic percentage) {
+  final raw = rate is num
+      ? rate.toDouble()
+      : (percentage is num ? percentage.toDouble() : 0.0);
+  return raw <= 1.0 ? raw * 100 : raw;
+}
 
 class VisaoFechamentoAdmin extends StatefulWidget {
   const VisaoFechamentoAdmin({super.key});
@@ -31,14 +37,14 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       }
     } catch (_) {}
   }
+
   String? _selectedSeller;
-  
+
   // Para o card Análise de Desempenho
   List<String> _selectedSellersCustom = [];
   DateTimeRange? _selectedDateRangeCustom;
   String? _selectedCityCustom;
-  
-  final List<String> _mockReceipts = [];
+  bool _isRepasseSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +52,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       backgroundColor: const Color(0xFF0D0D1A),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text('Fechamentos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Fechamentos',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: RefreshIndicator(
@@ -62,8 +69,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               _buildVendedorCard(),
               const SizedBox(height: 20),
               _buildAnaliseDesempenhoCard(),
-                const SizedBox(height: 20),
-                _buildCidadesALiberarCard(),
+              const SizedBox(height: 20),
+              _buildCidadesALiberarCard(),
             ],
           ),
         ),
@@ -79,31 +86,38 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       ]),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-           return const Center(child: CircularProgressIndicator(color: Colors.white));
+          return const Center(
+              child: CircularProgressIndicator(color: Colors.white));
         }
         if (snapshot.hasError) {
-           return Center(child: Text('Erro: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent)));
+          return Center(
+              child: Text('Erro: ${snapshot.error}',
+                  style: const TextStyle(color: Colors.redAccent)));
         }
 
         final results = snapshot.data ?? [[], []];
         final batches = results[0] as List<dynamic>;
         final clients = results[1] as List<dynamic>;
-        
-        final createdBatches = batches.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
-        final looseClients = clients.where((c) => c['bookStatus'] == 'CREATED' && c['batchId'] == null).toList();
+
+        final createdBatches =
+            batches.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
+        final looseClients = clients
+            .where((c) => c['bookStatus'] == 'CREATED' && c['batchId'] == null)
+            .toList();
 
         if (createdBatches.isEmpty && looseClients.isEmpty) {
-           return Container(
-             padding: const EdgeInsets.all(20),
-             decoration: BoxDecoration(
-               color: const Color(0xFF1A1A2E),
-               borderRadius: BorderRadius.circular(16),
-               border: Border.all(color: Colors.white12),
-             ),
-             child: const Center(
-               child: Text('Nenhuma cidade/lote ou ficha aguardando liberação.', style: TextStyle(color: Colors.white54))
-             ),
-           );
+          return Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A2E),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: const Center(
+                child: Text(
+                    'Nenhuma cidade/lote ou ficha aguardando liberação.',
+                    style: TextStyle(color: Colors.white54))),
+          );
         }
 
         return Container(
@@ -116,523 +130,726 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            if (createdBatches.isNotEmpty) ...[
-              const Text('Lotes / Cidades Prontas para Liberação', style: TextStyle(color: Colors.orangeAccent, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              const Text('Os fotógrafos finalizaram a produção destes lotes. Libere-os para formar as rotas inteligentes.', style: TextStyle(color: Colors.white70, fontSize: 14)),
-              const SizedBox(height: 24),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: createdBatches.map((batch) {
-                  final city = batch['name'] ?? 'Desconhecida';
-                  final batchId = batch['id'];
-                  final cityClients = clients.where((c) => c['batchId'] == batchId).toList();
-                  final clientCount = cityClients.length;
-                  final sequenceNumbers = cityClients.map((c) => c['sequenceNumber'] ?? 'S/N').join(', ');
-                  
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ActionChip(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        backgroundColor: const Color(0xFFCE93D8),
-                        label: Text('Liberar $city ($clientCount fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                        onPressed: () async {
-                          try {
-                            await ApiService().releaseBatchToStock(batchId);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lote $city liberado para estoque!'), backgroundColor: Colors.green));
-                              setState(() {}); 
+              if (createdBatches.isNotEmpty) ...[
+                const Text('Lotes / Cidades Prontas para Liberação',
+                    style: TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text(
+                    'Os fotógrafos finalizaram a produção destes lotes. Libere-os para formar as rotas inteligentes.',
+                    style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const SizedBox(height: 24),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: createdBatches.map((batch) {
+                    final city = batch['name'] ?? 'Desconhecida';
+                    final batchId = batch['id'];
+                    final cityClients =
+                        clients.where((c) => c['batchId'] == batchId).toList();
+                    final clientCount = cityClients.length;
+                    final sequenceNumbers = cityClients
+                        .map((c) => c['sequenceNumber'] ?? 'S/N')
+                        .join(', ');
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ActionChip(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          backgroundColor: const Color(0xFFCE93D8),
+                          label: Text('Liberar $city ($clientCount fichas)',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16)),
+                          onPressed: () async {
+                            try {
+                              await ApiService().releaseBatchToStock(batchId);
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text(
+                                            'Lote $city liberado para estoque!'),
+                                        backgroundColor: Colors.green));
+                                setState(() {});
+                              }
+                            } catch (e) {
+                              if (mounted)
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content:
+                                            Text('Erro ao liberar $city: $e'),
+                                        backgroundColor: Colors.red));
                             }
-                          } catch (e) {
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao liberar $city: $e'), backgroundColor: Colors.red));
-                          }
-                        },
-                      ),
-                      if (clientCount > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                          child: Text(
-                            'Fichas: $sequenceNumbers',
-                            style: const TextStyle(color: Colors.white54, fontSize: 11),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          },
                         ),
-                    ],
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 32),
-            ],
-            
-            if (looseClients.isNotEmpty) ...[
-              const Text('⚠️ Fichas Órfãs / Avulsas', style: TextStyle(color: Colors.redAccent, fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              const Text('Fichas criadas mas não agrupadas em lote. Resgate para o estoque:', style: TextStyle(color: Colors.white70, fontSize: 14)),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: looseClients.map((c) {
-                  final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
-                  return ActionChip(
-                    backgroundColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      side: const BorderSide(color: Colors.redAccent)
-                    ),
-                    label: Text('Resgatar: $name', style: const TextStyle(color: Colors.redAccent)),
-                    onPressed: () async {
-                      final messenger = ScaffoldMessenger.of(context);
-                      try {
-                        messenger.showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
-                        await ApiService().forceReleaseClient(c['id']);
-                        if (mounted) {
-                          messenger.showSnackBar(const SnackBar(content: Text('Ficha resgatada para o estoque!'), backgroundColor: Colors.green));
-                          setState(() {}); 
+                        if (clientCount > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                            child: Text(
+                              'Fichas: $sequenceNumbers',
+                              style: const TextStyle(
+                                  color: Colors.white54, fontSize: 11),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 32),
+              ],
+              if (looseClients.isNotEmpty) ...[
+                const Text('⚠️ Fichas Órfãs / Avulsas',
+                    style: TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text(
+                    'Fichas criadas mas não agrupadas em lote. Resgate para o estoque:',
+                    style: TextStyle(color: Colors.white70, fontSize: 14)),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: looseClients.map((c) {
+                    final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
+                    return ActionChip(
+                      backgroundColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          side: const BorderSide(color: Colors.redAccent)),
+                      label: Text('Resgatar: $name',
+                          style: const TextStyle(color: Colors.redAccent)),
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        try {
+                          messenger.showSnackBar(const SnackBar(
+                              content: Text('Resgatando ficha...')));
+                          await ApiService().forceReleaseClient(c['id']);
+                          if (mounted) {
+                            messenger.showSnackBar(const SnackBar(
+                                content:
+                                    Text('Ficha resgatada para o estoque!'),
+                                backgroundColor: Colors.green));
+                            setState(() {});
+                          }
+                        } catch (e) {
+                          if (mounted)
+                            messenger.showSnackBar(SnackBar(
+                                content: Text('Erro ao resgatar: $e'),
+                                backgroundColor: Colors.red));
                         }
-                      } catch (e) {
-                        if (mounted) messenger.showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
-                      }
-                    },
-                  );
-                }).toList(),
-              ),
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
             ],
-          ],
-        ),
-      );
-    },
+          ),
+        );
+      },
     );
   }
 
   Widget _buildVendedorCard() {
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Fechamento Vendedor (Financeiro)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          // Add logic to load from /api/closing/daily/:sellerId
-          const Text('Selecione um vendedor:', style: TextStyle(color: Colors.white70)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            isExpanded: true,
-            dropdownColor: const Color(0xFF2A2A3E),
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: const Color(0xFF0D0D1A),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Fechamento Vendedor (Financeiro)',
+                style: TextStyle(
+                    color: Color(0xFFCE93D8),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            // Add logic to load from /api/closing/daily/:sellerId
+            const Text('Selecione um vendedor:',
+                style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _selectedSeller,
+              isExpanded: true,
+              dropdownColor: const Color(0xFF2A2A3E),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF0D0D1A),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              items: _sellers
+                  .map((s) => DropdownMenuItem(
+                      value: s['id'] as String,
+                      child: Text(s['name'] as String)))
+                  .toList(),
+              onChanged: (val) => setState(() => _selectedSeller = val),
             ),
-            items: _sellers.map((s) => DropdownMenuItem(value: s['id'] as String, child: Text(s['name'] as String))).toList(),
-            onChanged: (val) => setState(() => _selectedSeller = val),
-          ),
-          const SizedBox(height: 16),
-          if (_selectedSeller != null)
-             _buildVendedorDetails(),
-        ],
-      )
-    );
+            const SizedBox(height: 16),
+            if (_selectedSeller != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _selectedSeller = null),
+                  icon: const Icon(Icons.clear, size: 18),
+                  label: const Text('Limpar vendedor'),
+                ),
+              ),
+            if (_selectedSeller != null) _buildVendedorDetails(),
+          ],
+        ));
   }
 
   Widget _buildVendedorDetails() {
     if (_selectedSeller == null) return const SizedBox.shrink();
-    
+
     return FutureBuilder<Map<String, dynamic>>(
-      future: ApiService().getSellerClosing(_selectedSeller!),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.white));
-        }
-        if (snapshot.hasError) {
-          return Text('Erro ao carregar fechamento: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
-        }
-        
-        final data = snapshot.data!;
-        double totalVendas = (data['totalSalesValue'] ?? 0).toDouble();
-        double dinheiro = (data['cashValue'] ?? 0).toDouble();
-        double pix = (data['pixValue'] ?? 0).toDouble();
-        double credito = (data['creditValue'] ?? 0).toDouble();
-        double debito = (data['debitValue'] ?? 0).toDouble();
-        
-        // Contrato financeiro unificado backend/mobile
-        double comissao = (data['commissionAmount'] ?? data['commission'] ?? data['calculatedCommission'] ?? 0).toDouble();
-        double taxaComissao = (data['commissionRate'] != null)
-            ? (data['commissionRate'] as num).toDouble()
-            : ((data['commissionPercentage'] ?? 15) / 100.0);
-        double percentual = taxaComissao <= 1.0 ? taxaComissao * 100 : taxaComissao;
-        double saldoHistorico = (data['historicalBalance'] ?? data['totalHistoricalDebt'] ?? 0).toDouble();
-        double sellerOwes = (data['sellerOwesCompany'] ?? 0).toDouble();
-        double companyOwes = (data['companyOwesSeller'] ?? 0).toDouble();
+        future: ApiService().getSellerClosing(_selectedSeller!),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+                child: CircularProgressIndicator(color: Colors.white));
+          }
+          if (snapshot.hasError) {
+            return Text('Erro ao carregar fechamento: ${snapshot.error}',
+                style: const TextStyle(color: Colors.redAccent));
+          }
 
-        final direction = data['finalDirection']?.toString() ?? (dinheiro > comissao ? 'SELLER_PAYS_COMPANY' : (comissao > dinheiro ? 'COMPANY_PAYS_SELLER' : 'SETTLED'));
-        double saldoFinal = (data['finalAmount'] != null)
-            ? (data['finalAmount'] as num).toDouble()
-            : (sellerOwes > 0 ? sellerOwes : (companyOwes > 0 ? companyOwes : ((comissao - dinheiro) + saldoHistorico).abs()));
+          final data = snapshot.data!;
+          double totalVendas = (data['totalSalesValue'] ?? 0).toDouble();
+          double dinheiro = (data['cashValue'] ?? 0).toDouble();
+          double pix = (data['pixValue'] ?? 0).toDouble();
+          double credito = (data['creditValue'] ?? 0).toDouble();
+          double debito = (data['debitValue'] ?? 0).toDouble();
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-             const Text('Resumo Financeiro (Dados Reais)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-             const SizedBox(height: 8),
-             _infoRow('Dinheiro (Cash)', 'R\$ ${dinheiro.toStringAsFixed(2)}'),
-             _infoRow('Pix', 'R\$ ${pix.toStringAsFixed(2)}'),
-             _infoRow('Crédito', 'R\$ ${credito.toStringAsFixed(2)}'),
-             _infoRow('Débito', 'R\$ ${debito.toStringAsFixed(2)}'),
-             const Divider(color: Colors.white24, height: 24),
-             _infoRow('Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
-             _infoRow('Comissão do Dia (${percentual.toInt()}%)', 'R\$ ${comissao.toStringAsFixed(2)}'),
-             if (saldoHistorico != 0)
-                _infoRow('Saldo Histórico Acumulado', 'R\$ ${saldoHistorico.toStringAsFixed(2)}', color: saldoHistorico > 0 ? Colors.redAccent : Colors.greenAccent),
-             const Divider(color: Colors.white24, height: 24),
-             
-             if (direction == 'COMPANY_PAYS_SELLER' && saldoFinal > 0) ...[
-                _infoRow('Comissão a Pagar ao Vendedor (Final)', 'R\$ ${saldoFinal.toStringAsFixed(2)}', color: Colors.green),
+          // Contrato financeiro unificado backend/mobile
+          double comissao = (data['commissionAmount'] ??
+                  data['commission'] ??
+                  data['calculatedCommission'] ??
+                  0)
+              .toDouble();
+          double percentual = normalizeCommissionPercentage(
+              data['commissionRate'], data['commissionPercentage']);
+          double saldoHistorico =
+              (data['historicalBalance'] ?? data['totalHistoricalDebt'] ?? 0)
+                  .toDouble();
+          double sellerOwes = (data['sellerOwesCompany'] ?? 0).toDouble();
+          double companyOwes = (data['companyOwesSeller'] ?? 0).toDouble();
+
+          final direction = data['finalDirection']?.toString() ??
+              (dinheiro > comissao
+                  ? 'SELLER_PAYS_COMPANY'
+                  : (comissao > dinheiro ? 'COMPANY_PAYS_SELLER' : 'SETTLED'));
+          double saldoFinal = (data['finalAmount'] != null)
+              ? (data['finalAmount'] as num).toDouble()
+              : (sellerOwes > 0
+                  ? sellerOwes
+                  : (companyOwes > 0
+                      ? companyOwes
+                      : ((comissao - dinheiro) + saldoHistorico).abs()));
+
+          return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Resumo Financeiro (Dados Reais)',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                _infoRow(
+                    'Dinheiro (Cash)', 'R\$ ${dinheiro.toStringAsFixed(2)}'),
+                _infoRow('Pix', 'R\$ ${pix.toStringAsFixed(2)}'),
+                _infoRow('Crédito', 'R\$ ${credito.toStringAsFixed(2)}'),
+                _infoRow('Débito', 'R\$ ${debito.toStringAsFixed(2)}'),
+                const Divider(color: Colors.white24, height: 24),
+                _infoRow(
+                    'Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
+                _infoRow('Comissão do Dia (${percentual.toInt()}%)',
+                    'R\$ ${comissao.toStringAsFixed(2)}'),
+                if (saldoHistorico != 0)
+                  _infoRow('Saldo Histórico Acumulado',
+                      'R\$ ${saldoHistorico.toStringAsFixed(2)}',
+                      color: saldoHistorico > 0
+                          ? Colors.redAccent
+                          : Colors.greenAccent),
+                const Divider(color: Colors.white24, height: 24),
+                if (direction == 'COMPANY_PAYS_SELLER' && saldoFinal > 0) ...[
+                  _infoRow('Comissão a Pagar ao Vendedor (Final)',
+                      'R\$ ${saldoFinal.toStringAsFixed(2)}',
+                      color: Colors.green),
+                  const SizedBox(height: 16),
+                  LedButton(
+                      onPressed: () async {
+                        try {
+                          if (_isRepasseSubmitting) return;
+                          setState(() => _isRepasseSubmitting = true);
+                          await ApiService().payRepasse(
+                              _selectedSeller!, saldoFinal,
+                              direction: 'COMPANY_PAYS_SELLER');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text(
+                                      'Pagamento registrado com sucesso!')));
+                          setState(() {});
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro: $e')));
+                        } finally {
+                          if (mounted)
+                            setState(() => _isRepasseSubmitting = false);
+                        }
+                      },
+                      style: LedButton.styleFrom(backgroundColor: Colors.green),
+                      child: const Text('Registrar Pagamento')),
+                ] else if (direction == 'SELLER_PAYS_COMPANY' &&
+                    saldoFinal > 0) ...[
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Repasse Pendente',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 14)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Container(
+                            constraints: BoxConstraints(
+                              maxWidth: MediaQuery.sizeOf(context).width - 104,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: Colors.white12,
+                                borderRadius: BorderRadius.circular(4)),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    'Pix: ${data['adminPixKey']?.toString().trim().isNotEmpty == true ? data['adminPixKey'] : 'não cadastrado'}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Colors.white, fontSize: 11),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                GestureDetector(
+                                  onTap: data['adminPixKey']
+                                              ?.toString()
+                                              .trim()
+                                              .isNotEmpty ==
+                                          true
+                                      ? () {
+                                          Clipboard.setData(ClipboardData(
+                                              text: data['adminPixKey']
+                                                  .toString()));
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(const SnackBar(
+                                                  content:
+                                                      Text('Pix copiado!')));
+                                        }
+                                      : null,
+                                  child: const Icon(Icons.copy,
+                                      color: Colors.white, size: 14),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  LedButton(
+                      onPressed: () async {
+                        try {
+                          if (_isRepasseSubmitting) return;
+                          setState(() => _isRepasseSubmitting = true);
+                          await ApiService().payRepasse(
+                              _selectedSeller!, saldoFinal.abs(),
+                              direction: 'SELLER_PAYS_COMPANY');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content:
+                                      Text('Repasse registrado com sucesso!')));
+                          setState(() {});
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro: $e')));
+                        } finally {
+                          if (mounted)
+                            setState(() => _isRepasseSubmitting = false);
+                        }
+                      },
+                      style: LedButton.styleFrom(
+                          backgroundColor: Colors.redAccent),
+                      child: const Text('Confirmar Recebimento de Repasse',
+                          style: TextStyle(color: Colors.white))),
+                ] else ...[
+                  _infoRow('Status', 'Tudo Quitado', color: Colors.blueAccent),
+                ],
+                const SizedBox(height: 24),
+                const Divider(color: Colors.white24, height: 1),
                 const SizedBox(height: 16),
-                LedButton(
-                   onPressed: () async {
-                     try {
-                       await ApiService().payRepasse(_selectedSeller!, saldoFinal, commissionToLog: comissao);
-                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pagamento registrado com sucesso!')));
-                       setState(() {});
-                     } catch (e) {
-                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                     }
-                   },
-                   style: LedButton.styleFrom(backgroundColor: Colors.green),
-                   child: const Text('Registrar Pagamento')
-                ),
-             ] else if (direction == 'SELLER_PAYS_COMPANY' && saldoFinal > 0) ...[
-               Row(
-                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                 children: [
-                   Row(
-                     children: [
-                       const Text('Repasse Pendente', style: TextStyle(color: Colors.white70, fontSize: 14)),
-                       const SizedBox(width: 8),
-                       Container(
-                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                         decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
-                         child: Row(
-                           children: [
-                             const Text('Pix: 123.456.789-00', style: TextStyle(color: Colors.white, fontSize: 11)),
-                             const SizedBox(width: 6),
-                             GestureDetector(
-                               onTap: () {
-                                 Clipboard.setData(const ClipboardData(text: '123.456.789-00'));
-                                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pix copiado!')));
-                               },
-                               child: const Icon(Icons.copy, color: Colors.white, size: 14),
-                             ),
-                           ],
-                         ),
-                       )
-                     ]
-                   ),
-                   Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}', style: const TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold)),
-                 ],
-               ),
-               const SizedBox(height: 16),
-               LedButton(
-                  onPressed: () async {
-                    try {
-                      await ApiService().payRepasse(_selectedSeller!, saldoFinal.abs(), commissionToLog: comissao);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repasse registrado com sucesso!')));
-                      setState(() {});
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
-                    }
-                  },
-                  style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
-                  child: const Text('Confirmar Recebimento de Repasse', style: TextStyle(color: Colors.white))
-               ),
-             ] else ...[
-               _infoRow('Status', 'Tudo Quitado', color: Colors.blueAccent),
-             ],
-         
-         const SizedBox(height: 24),
-         const Divider(color: Colors.white24, height: 1),
-         const SizedBox(height: 16),
-         const Text('Comprovantes de Vendas (Hoje)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-         const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: _mockReceipts.map((url) => Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: AuthenticatedImage(
-                  url: url,
-                  width: 100,
-                  height: 140,
-                  fit: BoxFit.cover,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              )).toList(),
-            ),
-          ),
-            ]
-          );
-      }
-    );
+                const Text('Comprovantes de Vendas (Hoje)',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Builder(builder: (context) {
+                  final receipts = (data['sales'] is List
+                          ? data['sales'] as List
+                          : const [])
+                      .map((sale) =>
+                          sale is Map ? sale['receiptUrl']?.toString() : null)
+                      .whereType<String>()
+                      .where((url) => url.trim().isNotEmpty)
+                      .toList();
+                  if (receipts.isEmpty) {
+                    return const Text('Nenhum comprovante concluído hoje.',
+                        style: TextStyle(color: Colors.white54));
+                  }
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: receipts
+                          .map((url) => Padding(
+                                padding: const EdgeInsets.only(right: 12),
+                                child: AuthenticatedImage(
+                                  url: url,
+                                  width: 100,
+                                  height: 140,
+                                  fit: BoxFit.cover,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ))
+                          .toList(),
+                    ),
+                  );
+                }),
+              ]);
+        });
   }
 
   Widget _buildAnaliseDesempenhoCard() {
     final sellerNames = _selectedSellersCustom.map((id) {
-      final s = _sellers.firstWhere((element) => element['id'] == id, orElse: () => {'name': 'Desconhecido'});
+      final s = _sellers.firstWhere((element) => element['id'] == id,
+          orElse: () => {'name': 'Desconhecido'});
       return s['name'];
     }).join(', ');
 
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Análise de Desempenho', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          // Seletor de data e vendedores
-          Row(
-            children: [
-              Expanded(
-                child: LedButton.icon(
-                  onPressed: () async {
-                    final range = await showDateRangePicker(
-                      context: context,
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime(2100),
-                      initialDateRange: _selectedDateRangeCustom,
-                      builder: (context, child) {
-                         return Theme(
-                           data: Theme.of(context).copyWith(
-                             colorScheme: const ColorScheme.dark(
-                               primary: Color(0xFFCE93D8),
-                               onPrimary: Colors.white,
-                               surface: Color(0xFF1A1A2E),
-                               onSurface: Colors.white,
-                             ),
-                           ),
-                           child: child!,
-                         );
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Análise de Desempenho',
+                style: TextStyle(
+                    color: Color(0xFFCE93D8),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            // Seletor de data e vendedores
+            Row(
+              children: [
+                Expanded(
+                  child: LedButton.icon(
+                    onPressed: () async {
+                      final range = await showDateRangePicker(
+                          context: context,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2100),
+                          initialDateRange: _selectedDateRangeCustom,
+                          builder: (context, child) {
+                            return Theme(
+                              data: Theme.of(context).copyWith(
+                                colorScheme: const ColorScheme.dark(
+                                  primary: Color(0xFFCE93D8),
+                                  onPrimary: Colors.white,
+                                  surface: Color(0xFF1A1A2E),
+                                  onSurface: Colors.white,
+                                ),
+                              ),
+                              child: child!,
+                            );
+                          });
+                      if (range != null) {
+                        setState(() => _selectedDateRangeCustom = range);
                       }
-                    );
-                    if (range != null) {
-                      setState(() => _selectedDateRangeCustom = range);
-                    }
-                  },
-                  icon: const Icon(Icons.date_range, size: 16),
-                  label: Text(_selectedDateRangeCustom != null 
-                    ? '${_selectedDateRangeCustom!.start.day}/${_selectedDateRangeCustom!.start.month}/${_selectedDateRangeCustom!.start.year} - ${_selectedDateRangeCustom!.end.day}/${_selectedDateRangeCustom!.end.month}/${_selectedDateRangeCustom!.end.year}' 
-                    : 'Selecionar Período'),
-                  style: LedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2A2A3E),
-                    foregroundColor: Colors.white,
-                    alignment: Alignment.centerLeft,
+                    },
+                    icon: const Icon(Icons.date_range, size: 16),
+                    label: Text(_selectedDateRangeCustom != null
+                        ? '${_selectedDateRangeCustom!.start.day}/${_selectedDateRangeCustom!.start.month}/${_selectedDateRangeCustom!.start.year} - ${_selectedDateRangeCustom!.end.day}/${_selectedDateRangeCustom!.end.month}/${_selectedDateRangeCustom!.end.year}'
+                        : 'Selecionar Período'),
+                    style: LedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2A2A3E),
+                      foregroundColor: Colors.white,
+                      alignment: Alignment.centerLeft,
+                    ),
                   ),
                 ),
-              ),
-              if (_selectedDateRangeCustom != null)
-                IconButton(
-                  icon: const Icon(Icons.clear, color: Colors.white54),
-                  onPressed: () => setState(() => _selectedDateRangeCustom = null),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          LedButton.icon(
-            onPressed: () {
-              _showMultiSelectSellerDialog(
-                'Selecione os Vendedores',
-                _sellers,
-                _selectedSellersCustom,
-                (List<String> results) {
-                  setState(() => _selectedSellersCustom = results);
-                },
-              );
-            },
-            icon: const Icon(Icons.people, size: 16),
-            label: Text(_selectedSellersCustom.isEmpty ? 'Selecionar Vendedores' : sellerNames, overflow: TextOverflow.ellipsis),
-            style: LedButton.styleFrom(
-              backgroundColor: const Color(0xFF2A2A3E),
-              foregroundColor: Colors.white,
-              alignment: Alignment.centerLeft,
-              minimumSize: const Size(double.infinity, 48),
+                if (_selectedDateRangeCustom != null)
+                  IconButton(
+                    icon: const Icon(Icons.clear, color: Colors.white54),
+                    onPressed: () =>
+                        setState(() => _selectedDateRangeCustom = null),
+                  ),
+              ],
             ),
-          ),
-          const SizedBox(height: 12),
-
-          // Seletor de Cidade Finalizada
-          FutureBuilder<List<dynamic>>(
-            future: ApiService().getAllClients(),
-            builder: (context, snapshot) {
-              final clients = snapshot.data ?? [];
-              final citiesSet = <String>{};
-              for (final c in clients) {
-                if (c is Map && c['city'] != null && c['city'].toString().trim().isNotEmpty) {
-                  citiesSet.add(c['city'].toString().trim());
-                }
-              }
-              final citiesList = citiesSet.toList()..sort();
-
-              return DropdownButtonFormField<String>(
-                value: _selectedCityCustom,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF1E1E2C),
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Filtrar por Cidade Finalizada',
-                  labelStyle: const TextStyle(color: Color(0xFFCE93D8), fontSize: 13),
-                  filled: true,
-                  fillColor: const Color(0xFF2A2A3E),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                  prefixIcon: const Icon(Icons.location_city, color: Color(0xFFCE93D8), size: 18),
-                  suffixIcon: _selectedCityCustom != null
-                      ? IconButton(
-                          icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
-                          onPressed: () => setState(() => _selectedCityCustom = null),
-                        )
-                      : null,
-                ),
-                items: [
-                  const DropdownMenuItem<String>(
-                    value: null,
-                    child: Text('Todas as Cidades Finalizadas', style: TextStyle(color: Colors.white70)),
-                  ),
-                  ...citiesList.map((city) => DropdownMenuItem<String>(
-                        value: city,
-                        child: Text(city, style: const TextStyle(color: Colors.white)),
-                      )),
-                ],
-                onChanged: (val) => setState(() => _selectedCityCustom = val),
-              );
-            },
-          ),
-
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: LedButton(
+            const SizedBox(height: 12),
+            LedButton.icon(
               onPressed: () {
-                 setState(() {}); // refresh
+                _showMultiSelectSellerDialog(
+                  'Selecione os Vendedores',
+                  _sellers,
+                  _selectedSellersCustom,
+                  (List<String> results) {
+                    setState(() => _selectedSellersCustom = results);
+                  },
+                );
               },
-              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Buscar', style: TextStyle(color: Colors.white)),
+              icon: const Icon(Icons.people, size: 16),
+              label: Text(
+                  _selectedSellersCustom.isEmpty
+                      ? 'Selecionar Vendedores'
+                      : sellerNames,
+                  overflow: TextOverflow.ellipsis),
+              style: LedButton.styleFrom(
+                backgroundColor: const Color(0xFF2A2A3E),
+                foregroundColor: Colors.white,
+                alignment: Alignment.centerLeft,
+                minimumSize: const Size(double.infinity, 48),
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          FutureBuilder<Map<String, dynamic>>(
-            future: ApiService().getCustomMetrics(
-              sellerIds: _selectedSellersCustom,
-              startDate: _selectedDateRangeCustom?.start.toIso8601String(),
-              endDate: _selectedDateRangeCustom?.end.toIso8601String(),
-              city: _selectedCityCustom,
-            ),
-            builder: (context, snapshot) {
-               if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator(color: Colors.white));
-               }
-               if (snapshot.hasError) {
-                  return Text('Erro ao carregar métricas: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
-               }
-               
-               final data = snapshot.data!;
-               final salesCount = data['salesCount'] ?? 0;
-               final nonSalesCount = data['nonSalesCount'] ?? 0;
-               final totalFichas = salesCount + nonSalesCount;
-               final sumValorTotal = (data['totalSalesValue'] ?? 0).toDouble();
-               double ticketMedio = totalFichas > 0 ? (sumValorTotal / totalFichas) : 0;
+            const SizedBox(height: 12),
 
-               return Column(
-                 crossAxisAlignment: CrossAxisAlignment.start,
-                 children: [
-                   const Text('Métricas de Vendas x Não Vendas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                   const SizedBox(height: 8),
-                   _infoRow('Total de Fichas', '$totalFichas'),
-                   _infoRow('Vendas vs Não Vendas', '$salesCount / $nonSalesCount'),
-                   _infoRow('Ticket Médio Geral', 'R\$ ${ticketMedio.toStringAsFixed(2)}'),
-                   
-                   const SizedBox(height: 16),
-                   const Divider(color: Colors.white12),
-                   const SizedBox(height: 16),
-                   
-                   _infoRow('Total de Vendas (Consolidado)', 'R\$ ${sumValorTotal.toStringAsFixed(2)}', color: const Color(0xFFCE93D8)),
-                 ]
-               );
-            }
-          )
-        ],
-      )
-    );
+            // Seletor de Cidade Finalizada
+            FutureBuilder<List<dynamic>>(
+              future: ApiService().getAllClients(),
+              builder: (context, snapshot) {
+                final clients = snapshot.data ?? [];
+                final citiesSet = <String>{};
+                for (final c in clients) {
+                  if (c is Map &&
+                      c['city'] != null &&
+                      c['city'].toString().trim().isNotEmpty) {
+                    citiesSet.add(c['city'].toString().trim());
+                  }
+                }
+                final citiesList = citiesSet.toList()..sort();
+
+                return DropdownButtonFormField<String>(
+                  value: _selectedCityCustom,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF1E1E2C),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Filtrar por Cidade Finalizada',
+                    labelStyle:
+                        const TextStyle(color: Color(0xFFCE93D8), fontSize: 13),
+                    filled: true,
+                    fillColor: const Color(0xFF2A2A3E),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none),
+                    prefixIcon: const Icon(Icons.location_city,
+                        color: Color(0xFFCE93D8), size: 18),
+                    suffixIcon: _selectedCityCustom != null
+                        ? IconButton(
+                            icon: const Icon(Icons.clear,
+                                color: Colors.white54, size: 18),
+                            onPressed: () =>
+                                setState(() => _selectedCityCustom = null),
+                          )
+                        : null,
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('Todas as Cidades Finalizadas',
+                          style: TextStyle(color: Colors.white70)),
+                    ),
+                    ...citiesList.map((city) => DropdownMenuItem<String>(
+                          value: city,
+                          child: Text(city,
+                              style: const TextStyle(color: Colors.white)),
+                        )),
+                  ],
+                  onChanged: (val) => setState(() => _selectedCityCustom = val),
+                );
+              },
+            ),
+
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: (_selectedDateRangeCustom == null &&
+                        _selectedSellersCustom.isEmpty &&
+                        _selectedCityCustom == null)
+                    ? null
+                    : () => setState(() {
+                          _selectedDateRangeCustom = null;
+                          _selectedSellersCustom = [];
+                          _selectedCityCustom = null;
+                        }),
+                icon: const Icon(Icons.filter_alt_off),
+                label: const Text('Limpar pesquisa'),
+              ),
+            ),
+            SizedBox(
+              width: double.infinity,
+              child: LedButton(
+                onPressed: () {
+                  setState(() {}); // refresh
+                },
+                style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFFCE93D8)),
+                child:
+                    const Text('Buscar', style: TextStyle(color: Colors.white)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FutureBuilder<Map<String, dynamic>>(
+                future: ApiService().getCustomMetrics(
+                  sellerIds: _selectedSellersCustom,
+                  startDate: _selectedDateRangeCustom?.start.toIso8601String(),
+                  endDate: _selectedDateRangeCustom?.end.toIso8601String(),
+                  city: _selectedCityCustom,
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                        child: CircularProgressIndicator(color: Colors.white));
+                  }
+                  if (snapshot.hasError) {
+                    return Text('Erro ao carregar métricas: ${snapshot.error}',
+                        style: const TextStyle(color: Colors.redAccent));
+                  }
+
+                  final data = snapshot.data!;
+                  final salesCount = data['salesCount'] ?? 0;
+                  final nonSalesCount = data['nonSalesCount'] ?? 0;
+                  final totalFichas = salesCount + nonSalesCount;
+                  final sumValorTotal =
+                      (data['totalSalesValue'] ?? 0).toDouble();
+                  double ticketMedio =
+                      totalFichas > 0 ? (sumValorTotal / totalFichas) : 0;
+
+                  return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Métricas de Vendas x Não Vendas',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        _infoRow('Total de Fichas', '$totalFichas'),
+                        _infoRow('Vendas vs Não Vendas',
+                            '$salesCount / $nonSalesCount'),
+                        _infoRow('Ticket Médio Geral',
+                            'R\$ ${ticketMedio.toStringAsFixed(2)}'),
+                        const SizedBox(height: 16),
+                        const Divider(color: Colors.white12),
+                        const SizedBox(height: 16),
+                        _infoRow('Total de Vendas (Consolidado)',
+                            'R\$ ${sumValorTotal.toStringAsFixed(2)}',
+                            color: const Color(0xFFCE93D8)),
+                      ]);
+                })
+          ],
+        ));
   }
 
-  void _showMultiSelectSellerDialog(String title, List<dynamic> sellers, List<String> selectedIds, Function(List<String>) onConfirm) {
+  void _showMultiSelectSellerDialog(String title, List<dynamic> sellers,
+      List<String> selectedIds, Function(List<String>) onConfirm) {
     List<String> tempSelected = List.from(selectedIds);
     showDialog(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1E1E2C),
-              title: Text(title, style: const TextStyle(color: Colors.white)),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: sellers.length,
-                  itemBuilder: (context, index) {
-                    final seller = sellers[index];
-                    final id = seller['id'] as String;
-                    final name = seller['name'] ?? 'Vendedor ${index + 1}';
-                    return CheckboxListTile(
-                      title: Text(name, style: const TextStyle(color: Colors.white)),
-                      subtitle: seller['role'] != null ? Text(seller['role'] == 'SELLER' ? 'Vendedor' : seller['role'], style: const TextStyle(color: Colors.white54, fontSize: 11)) : null,
-                      value: tempSelected.contains(id),
-                      activeColor: const Color(0xFFCE93D8),
-                      checkColor: Colors.black,
-                      onChanged: (bool? checked) {
-                        setStateDialog(() {
-                          if (checked == true) {
-                            tempSelected.add(id);
-                          } else {
-                            tempSelected.remove(id);
-                          }
-                        });
-                      },
-                    );
-                  },
-                ),
+        return StatefulBuilder(builder: (context, setStateDialog) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E2C),
+            title: Text(title, style: const TextStyle(color: Colors.white)),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: sellers.length,
+                itemBuilder: (context, index) {
+                  final seller = sellers[index];
+                  final id = seller['id'] as String;
+                  final name = seller['name'] ?? 'Vendedor ${index + 1}';
+                  return CheckboxListTile(
+                    title:
+                        Text(name, style: const TextStyle(color: Colors.white)),
+                    subtitle: seller['role'] != null
+                        ? Text(
+                            seller['role'] == 'SELLER'
+                                ? 'Vendedor'
+                                : seller['role'],
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11))
+                        : null,
+                    value: tempSelected.contains(id),
+                    activeColor: const Color(0xFFCE93D8),
+                    checkColor: Colors.black,
+                    onChanged: (bool? checked) {
+                      setStateDialog(() {
+                        if (checked == true) {
+                          tempSelected.add(id);
+                        } else {
+                          tempSelected.remove(id);
+                        }
+                      });
+                    },
+                  );
+                },
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
-                ),
-                LedButton(
-                  onPressed: () {
-                    onConfirm(tempSelected);
-                    Navigator.pop(context);
-                  },
-                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-                  child: const Text('Confirmar'),
-                ),
-              ],
-            );
-          }
-        );
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white70)),
+              ),
+              LedButton(
+                onPressed: () {
+                  onConfirm(tempSelected);
+                  Navigator.pop(context);
+                },
+                style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFFCE93D8)),
+                child: const Text('Confirmar'),
+              ),
+            ],
+          );
+        });
       },
     );
   }
@@ -643,8 +860,13 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14)),
-          Text(value, style: TextStyle(color: color ?? Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+          Text(label,
+              style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          Text(value,
+              style: TextStyle(
+                  color: color ?? Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold)),
         ],
       ),
     );

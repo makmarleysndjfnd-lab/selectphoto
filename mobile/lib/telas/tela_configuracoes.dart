@@ -46,6 +46,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _prodCtrl = TextEditingController();
   final TextEditingController _ticketCtrl = TextEditingController();
   final TextEditingController _fichasCtrl = TextEditingController();
+  final TextEditingController _pixCtrl = TextEditingController();
+  bool _savingPix = false;
 
   @override
   void initState() {
@@ -58,14 +60,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _prodCtrl.text = settings.productCost.toStringAsFixed(2);
     _ticketCtrl.text = settings.defaultTicket.toStringAsFixed(2);
     _fichasCtrl.text = settings.defaultFichasPerDay.toString();
+    if (widget.canManageRoi) _loadPixKey();
+  }
+
+  Future<void> _loadPixKey() async {
+    try {
+      final pixKey = await ApiService().getMyPixKey();
+      if (mounted) setState(() => _pixCtrl.text = pixKey);
+    } catch (_) {}
+  }
+
+  Future<void> _savePixKey() async {
+    if (_savingPix) return;
+    setState(() => _savingPix = true);
+    try {
+      final saved = await ApiService().saveMyPixKey(_pixCtrl.text);
+      if (!mounted) return;
+      setState(() => _pixCtrl.text = saved);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Chave PIX de repasse salva.'),
+          backgroundColor: Colors.green));
+    } catch (e) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Erro ao salvar PIX: $e'),
+            backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _savingPix = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _hotelCtrl.dispose();
+    _foodCtrl.dispose();
+    _fuelCtrl.dispose();
+    _prodCtrl.dispose();
+    _ticketCtrl.dispose();
+    _fichasCtrl.dispose();
+    _pixCtrl.dispose();
+    super.dispose();
   }
 
   void _saveRoiSettings(SettingsProvider settings) {
-    final double hotel = double.tryParse(_hotelCtrl.text.replaceAll(',', '.')) ?? 70.0;
-    final double food = double.tryParse(_foodCtrl.text.replaceAll(',', '.')) ?? 50.0;
-    final double fuel = double.tryParse(_fuelCtrl.text.replaceAll(',', '.')) ?? 0.60;
-    final double prod = double.tryParse(_prodCtrl.text.replaceAll(',', '.')) ?? 21.0;
-    final double ticket = double.tryParse(_ticketCtrl.text.replaceAll(',', '.')) ?? 150.0;
+    final double hotel =
+        double.tryParse(_hotelCtrl.text.replaceAll(',', '.')) ?? 70.0;
+    final double food =
+        double.tryParse(_foodCtrl.text.replaceAll(',', '.')) ?? 50.0;
+    final double fuel =
+        double.tryParse(_fuelCtrl.text.replaceAll(',', '.')) ?? 0.60;
+    final double prod =
+        double.tryParse(_prodCtrl.text.replaceAll(',', '.')) ?? 21.0;
+    final double ticket =
+        double.tryParse(_ticketCtrl.text.replaceAll(',', '.')) ?? 150.0;
     final int fichas = int.tryParse(_fichasCtrl.text) ?? 30;
 
     settings.updateRoiSettings(
@@ -78,14 +126,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Parâmetros de ROI salvos com sucesso!'), backgroundColor: Colors.green),
+      const SnackBar(
+          content: Text('Parâmetros de ROI salvos com sucesso!'),
+          backgroundColor: Colors.green),
     );
   }
 
   void _handleLogout(BuildContext context) async {
     // Clear API token
     Provider.of<ApiService>(context, listen: false).clearToken();
-    
+
     // Clear token from SharedPreferences
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('jwt_token');
@@ -108,13 +158,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await syncService.syncAllPending();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sincronização concluída com sucesso!'), backgroundColor: Colors.green),
+          const SnackBar(
+              content: Text('Sincronização concluída com sucesso!'),
+              backgroundColor: Colors.green),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro na sincronização: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro na sincronização: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -128,7 +182,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.orangeAccent)),
+      builder: (context) => const Center(
+          child: CircularProgressIndicator(color: Colors.orangeAccent)),
     );
 
     try {
@@ -138,7 +193,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao carregar usuários: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erro ao carregar usuários: $e')));
       }
       return;
     }
@@ -155,12 +211,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           builder: (context, setDialogState) {
             return AlertDialog(
               backgroundColor: const Color(0xFF1A2535),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               title: Row(
                 children: [
-                  Icon(itemType == 'COVER' ? Icons.layers_rounded : Icons.menu_book_rounded, color: const Color(0xFF4FC3F7)),
+                  Icon(
+                      itemType == 'COVER'
+                          ? Icons.layers_rounded
+                          : Icons.menu_book_rounded,
+                      color: const Color(0xFF4FC3F7)),
                   const SizedBox(width: 8),
-                  Text('Transferir ${itemType == 'COVER' ? 'Capas' : 'Books'}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('Transferir ${itemType == 'COVER' ? 'Capas' : 'Books'}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16)),
                 ],
               ),
               content: SingleChildScrollView(
@@ -171,14 +236,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       isExpanded: true,
                       dropdownColor: const Color(0xFF1A2535),
                       value: selectedRecipient,
-                      hint: const Text('Selecione o destinatário', style: TextStyle(color: Colors.white54)),
+                      hint: const Text('Selecione o destinatário',
+                          style: TextStyle(color: Colors.white54)),
                       items: recipients.map((u) {
                         return DropdownMenuItem<String>(
                           value: u['id'].toString(),
-                          child: Text('${u['name']} (${u['role']})', style: const TextStyle(color: Colors.white), overflow: TextOverflow.ellipsis),
+                          child: Text('${u['name']} (${u['role']})',
+                              style: const TextStyle(color: Colors.white),
+                              overflow: TextOverflow.ellipsis),
                         );
                       }).toList(),
-                      onChanged: (val) => setDialogState(() => selectedRecipient = val),
+                      onChanged: (val) =>
+                          setDialogState(() => selectedRecipient = val),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -194,27 +263,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar',
+                        style: TextStyle(color: Colors.white54))),
                 LedButton(
                   onPressed: () async {
                     final qty = int.tryParse(qtyController.text);
                     if (selectedRecipient == null || qty == null || qty <= 0) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preencha os campos corretamente.')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Preencha os campos corretamente.')));
                       return;
                     }
                     try {
                       if (itemType == 'COVER') {
-                        await ApiService().transferBetweenSellers(selectedRecipient!, qty);
+                        await ApiService()
+                            .transferBetweenSellers(selectedRecipient!, qty);
                       } else {
-                        await ApiService().requestStockTransfer(selectedRecipient!, itemType, qty);
+                        await ApiService().requestStockTransfer(
+                            selectedRecipient!, itemType, qty);
                       }
                       if (context.mounted) {
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transferência solicitada/realizada com sucesso!'), backgroundColor: Colors.green));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            content: Text(
+                                'Transferência solicitada/realizada com sucesso!'),
+                            backgroundColor: Colors.green));
                       }
                     } catch (e) {
                       if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('Erro: $e'),
+                            backgroundColor: Colors.red));
                       }
                     }
                   },
@@ -234,7 +314,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Configurações', style: TextStyle(color: Colors.white)),
+        title:
+            const Text('Configurações', style: TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1A1A2E),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -250,7 +331,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 settings.isDarkMode ? Icons.dark_mode : Icons.light_mode,
                 color: Colors.blueAccent,
               ),
-              title: const Text('Modo Escuro', style: TextStyle(color: Colors.white)),
+              title: const Text('Modo Escuro',
+                  style: TextStyle(color: Colors.white)),
               trailing: Switch(
                 value: settings.isDarkMode,
                 onChanged: (val) => settings.setDarkMode(val),
@@ -259,7 +341,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          
+
           // Server URL Settings (Apenas em ambiente de desenvolvimento / debug)
           if (!kReleaseMode) ...[
             LedCard(
@@ -269,7 +351,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('IP / URL do Servidor (Debug)', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    const Text('IP / URL do Servidor (Debug)',
+                        style: TextStyle(color: Colors.white70, fontSize: 14)),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _urlController,
@@ -286,14 +369,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: LedButton(
-                        style: LedButton.styleFrom(backgroundColor: const Color(0xFF0288D1)),
+                        style: LedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0288D1)),
                         onPressed: () {
                           settings.setServerUrl(_urlController.text.trim());
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('URL salva com sucesso!'), backgroundColor: Colors.green),
+                            const SnackBar(
+                                content: Text('URL salva com sucesso!'),
+                                backgroundColor: Colors.green),
                           );
                         },
-                        child: const Text('Salvar Servidor', style: TextStyle(color: Colors.white)),
+                        child: const Text('Salvar Servidor',
+                            style: TextStyle(color: Colors.white)),
                       ),
                     )
                   ],
@@ -307,18 +394,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
             LedCard(
               color: const Color(0xFF1A1A2E),
               child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(children: [
+                      Icon(Icons.pix, color: Colors.greenAccent),
+                      SizedBox(width: 8),
+                      Expanded(
+                          child: Text('PIX para recebimento de repasses',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold))),
+                    ]),
+                    const SizedBox(height: 8),
+                    const Text(
+                        'Esta é a chave exibida ao vendedor quando ele precisa repassar valores à empresa.',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _pixCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      maxLength: 140,
+                      decoration: const InputDecoration(
+                          labelText: 'Chave PIX do administrador',
+                          prefixIcon: Icon(Icons.key)),
+                    ),
+                    SizedBox(
+                      width: double.infinity,
+                      child: LedButton(
+                        onPressed: _savingPix ? null : _savePixKey,
+                        child: Text(
+                            _savingPix ? 'Salvando...' : 'Salvar chave PIX'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Row(
                       children: [
-                        Icon(Icons.calculate, color: Color(0xFFCE93D8), size: 20),
+                        Icon(Icons.calculate,
+                            color: Color(0xFFCE93D8), size: 20),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Parâmetros Base da Calculadora de ROI',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15),
                           ),
                         ),
                       ],
@@ -338,7 +471,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Hospedagem (R\$/p/dia)',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -353,7 +487,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Alimentação (R\$/p/dia)',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -372,7 +507,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Combustível (R\$/km)',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -387,7 +523,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Custo Produto (R\$)',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -406,7 +543,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Ticket Médio (R\$)',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -421,7 +559,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: const TextStyle(color: Colors.white),
                             decoration: const InputDecoration(
                               labelText: 'Fichas/Dia Padrão',
-                              labelStyle: TextStyle(color: Colors.white54, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white54, fontSize: 12),
                               filled: true,
                               fillColor: Color(0xFF161625),
                               border: OutlineInputBorder(),
@@ -434,9 +573,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: LedButton(
-                        style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                        style: LedButton.styleFrom(
+                            backgroundColor: const Color(0xFFCE93D8)),
                         onPressed: () => _saveRoiSettings(settings),
-                        child: const Text('Salvar Parâmetros de ROI', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                        child: const Text('Salvar Parâmetros de ROI',
+                            style: TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold)),
                       ),
                     ),
                   ],
@@ -445,7 +588,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
           ],
-          
+
           if (widget.isVendedor) ...[
             LedCard(
               color: const Color(0xFF1A1A2E),
@@ -456,12 +599,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
                     child: Row(
                       children: [
-                        Icon(Icons.handyman_rounded, color: Color(0xFF4FC3F7), size: 18),
+                        Icon(Icons.handyman_rounded,
+                            color: Color(0xFF4FC3F7), size: 18),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Operações do Vendedor',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15),
                           ),
                         ),
                       ],
@@ -469,27 +616,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const Divider(color: Colors.white12, height: 1),
                   ListTile(
-                    leading: const Icon(Icons.assignment_return_rounded, color: Colors.orangeAccent),
-                    title: const Text('Transferir / Dividir Capas', style: TextStyle(color: Colors.white)),
-                    subtitle: const Text('Repassar saldo de capas para outro vendedor', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const Icon(Icons.assignment_return_rounded,
+                        color: Colors.orangeAccent),
+                    title: const Text('Transferir / Dividir Capas',
+                        style: TextStyle(color: Colors.white)),
+                    subtitle: const Text(
+                        'Repassar saldo de capas para outro vendedor',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () => _showTransferDialog(context, 'COVER'),
                   ),
                   const Divider(color: Colors.white12, height: 1),
                   ListTile(
-                    leading: const Icon(Icons.menu_book_rounded, color: Colors.lightGreenAccent),
-                    title: const Text('Transferir / Dividir Books', style: TextStyle(color: Colors.white)),
-                    subtitle: const Text('Repassar books físicos entre a equipe', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const Icon(Icons.menu_book_rounded,
+                        color: Colors.lightGreenAccent),
+                    title: const Text('Transferir / Dividir Books',
+                        style: TextStyle(color: Colors.white)),
+                    subtitle: const Text(
+                        'Repassar books físicos entre a equipe',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () => _showTransferDialog(context, 'BOOK'),
                   ),
                   const Divider(color: Colors.white12, height: 1),
                   ListTile(
-                    leading: const Icon(Icons.receipt_long_rounded, color: Color(0xFFCE93D8)),
-                    title: const Text('Lançar Despesas / Custos', style: TextStyle(color: Colors.white)),
-                    subtitle: const Text('Cadastrar alimentação, combustível, hotel ou outros', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const Icon(Icons.receipt_long_rounded,
+                        color: Color(0xFFCE93D8)),
+                    title: const Text('Lançar Despesas / Custos',
+                        style: TextStyle(color: Colors.white)),
+                    subtitle: const Text(
+                        'Cadastrar alimentação, combustível, hotel ou outros',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
-                      Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => const CostEntryScreen(),
-                      ));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const CostEntryScreen(),
+                          ));
                     },
                   ),
                 ],
@@ -505,41 +666,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 ListTile(
                   leading: const Icon(Icons.sync, color: Colors.greenAccent),
-                  title: const Text('Sincronizar Manualmente', style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Envia dados offline pendentes', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  title: const Text('Sincronizar Manualmente',
+                      style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Envia dados offline pendentes',
+                      style: TextStyle(color: Colors.white54, fontSize: 12)),
                   onTap: () => _handleSync(context),
                 ),
                 if (widget.isFotografo) ...[
                   const Divider(color: Colors.white12, height: 1),
                   ListTile(
-                    leading: const Icon(Icons.print, color: Colors.orangeAccent),
-                    title: const Text('Configurar Impressora', style: TextStyle(color: Colors.white)),
-                    subtitle: const Text('Conectar via Bluetooth', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading:
+                        const Icon(Icons.print, color: Colors.orangeAccent),
+                    title: const Text('Configurar Impressora',
+                        style: TextStyle(color: Colors.white)),
+                    subtitle: const Text('Conectar via Bluetooth',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const PrinterConfigScreen()));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const PrinterConfigScreen()));
                     },
                   ),
                 ],
                 if (!widget.isFotografo) ...[
                   const Divider(color: Colors.white12, height: 1),
                   ListTile(
-                    leading: const Icon(Icons.cloud_download_rounded, color: Colors.blueAccent),
-                    title: const Text('Baixar Backup (JSON)', style: TextStyle(color: Colors.blueAccent)),
+                    leading: const Icon(Icons.cloud_download_rounded,
+                        color: Colors.blueAccent),
+                    title: const Text('Baixar Backup (JSON)',
+                        style: TextStyle(color: Colors.blueAccent)),
                     onTap: () async {
                       try {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Baixando backup, aguarde...')));
+                        if (mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content:
+                                      Text('Baixando backup, aguarde...')));
                         final jsonString = await ApiService().downloadBackup();
-                        final dateStr = DateTime.now().toIso8601String().split('T')[0];
-                        
-                        await Share.share(jsonString, subject: 'backup_selectphoto_$dateStr.json');
+                        final dateStr =
+                            DateTime.now().toIso8601String().split('T')[0];
+
+                        await Share.share(jsonString,
+                            subject: 'backup_selectphoto_$dateStr.json');
                       } catch (e) {
-                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao baixar: $e'), backgroundColor: Colors.red));
+                        if (mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text('Erro ao baixar: $e'),
+                              backgroundColor: Colors.red));
                       }
                     },
                   ),
                   ListTile(
-                    leading: const Icon(Icons.restore_page_rounded, color: Colors.orangeAccent),
-                    title: const Text('Restaurar Backup', style: TextStyle(color: Colors.orangeAccent)),
+                    leading: const Icon(Icons.restore_page_rounded,
+                        color: Colors.orangeAccent),
+                    title: const Text('Restaurar Backup',
+                        style: TextStyle(color: Colors.orangeAccent)),
                     onTap: () async {
                       // 1. Alert about data loss
                       final bool? confirmed = await showDialog<bool>(
@@ -547,20 +729,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         builder: (context) {
                           return AlertDialog(
                             backgroundColor: const Color(0xFF1A2535),
-                            title: const Text('Atenção: Ação Irreversível!', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                            content: const Text('Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelo conteúdo do arquivo.\n\nTem certeza que deseja continuar?', style: TextStyle(color: Colors.white)),
+                            title: const Text('Atenção: Ação Irreversível!',
+                                style: TextStyle(
+                                    color: Colors.redAccent,
+                                    fontWeight: FontWeight.bold)),
+                            content: const Text(
+                                'Restaurar um backup irá APAGAR TODOS os dados atuais e substituí-los pelo conteúdo do arquivo.\n\nTem certeza que deseja continuar?',
+                                style: TextStyle(color: Colors.white)),
                             actions: [
-                              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                              TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancelar',
+                                      style: TextStyle(color: Colors.white54))),
                               LedButton(
-                                style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
+                                style: LedButton.styleFrom(
+                                    backgroundColor: Colors.redAccent),
                                 onPressed: () => Navigator.pop(context, true),
-                                child: const Text('CONFIRMO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                child: const Text('CONFIRMO',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold)),
                               ),
                             ],
                           );
                         },
                       );
-                      
+
                       if (confirmed != true) return;
 
                       // 2. Pick JSON File
@@ -571,12 +766,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                       if (result != null && result.files.single.path != null) {
                         final filePath = result.files.single.path!;
-                        
+
                         try {
-                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Restaurando backup, isso pode demorar...')));
+                          if (mounted)
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'Restaurando backup, isso pode demorar...')));
                           await ApiService().restoreBackup(filePath);
                           if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado com Sucesso!'), backgroundColor: Colors.green));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content:
+                                        Text('Backup Restaurado com Sucesso!'),
+                                    backgroundColor: Colors.green));
                           }
                         } catch (e) {
                           if (e.toString().contains('CONFLICT')) {
@@ -587,33 +790,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               builder: (context) {
                                 return AlertDialog(
                                   backgroundColor: const Color(0xFF1A2535),
-                                  title: const Text('Backup Antigo Detectado', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-                                  content: const Text('O backup online atual é mais RECENTE do que este arquivo que você está tentando restaurar.\n\nDeseja forçar a restauração mesmo assim?', style: TextStyle(color: Colors.white)),
+                                  title: const Text('Backup Antigo Detectado',
+                                      style: TextStyle(
+                                          color: Colors.orangeAccent,
+                                          fontWeight: FontWeight.bold)),
+                                  content: const Text(
+                                      'O backup online atual é mais RECENTE do que este arquivo que você está tentando restaurar.\n\nDeseja forçar a restauração mesmo assim?',
+                                      style: TextStyle(color: Colors.white)),
                                   actions: [
-                                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                                    TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(context, false),
+                                        child: const Text('Cancelar',
+                                            style: TextStyle(
+                                                color: Colors.white54))),
                                     LedButton(
-                                      style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: const Text('FORÇAR RESTAURAÇÃO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                      style: LedButton.styleFrom(
+                                          backgroundColor: Colors.redAccent),
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      child: const Text('FORÇAR RESTAURAÇÃO',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold)),
                                     ),
                                   ],
                                 );
                               },
                             );
-                            
+
                             if (force == true) {
                               try {
-                                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Forçando restauração...')));
-                                await ApiService().restoreBackup(filePath, force: true);
+                                if (mounted)
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content:
+                                              Text('Forçando restauração...')));
+                                await ApiService()
+                                    .restoreBackup(filePath, force: true);
                                 if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup Restaurado (Forçado)!'), backgroundColor: Colors.green));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text(
+                                              'Backup Restaurado (Forçado)!'),
+                                          backgroundColor: Colors.green));
                                 }
                               } catch (e2) {
-                                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e2'), backgroundColor: Colors.red));
+                                if (mounted)
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text('Erro: $e2'),
+                                          backgroundColor: Colors.red));
                               }
                             }
                           } else {
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text('Erro: $e'),
+                                      backgroundColor: Colors.red));
                           }
                         }
                       }
@@ -626,18 +861,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Opacity(
                   opacity: 0.55,
                   child: ListTile(
-                    leading: const Icon(Icons.notifications_active_outlined, color: Colors.amberAccent),
-                    title: const Text('Scout Automático de Eventos (Push IA)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text('Notificações automáticas quando novos circos ou eventos longos forem detectados na sua região.', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    leading: const Icon(Icons.notifications_active_outlined,
+                        color: Colors.amberAccent),
+                    title: const Text('Scout Automático de Eventos (Push IA)',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text(
+                        'Notificações automáticas quando novos circos ou eventos longos forem detectados na sua região.',
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
                     trailing: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white24)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: Colors.white10,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24)),
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.lock_outline, color: Colors.amberAccent, size: 13),
+                          Icon(Icons.lock_outline,
+                              color: Colors.amberAccent, size: 13),
                           SizedBox(width: 4),
-                          Text('Em Breve', style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text('Em Breve',
+                              style: TextStyle(
+                                  color: Colors.amberAccent,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -646,7 +895,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const Divider(color: Colors.white12, height: 1),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.redAccent),
-                  title: const Text('Sair da Conta', style: TextStyle(color: Colors.redAccent)),
+                  title: const Text('Sair da Conta',
+                      style: TextStyle(color: Colors.redAccent)),
                   onTap: () => _handleLogout(context),
                 ),
               ],

@@ -30,7 +30,6 @@ const _accentPurple = Color(0xFF9C27B0);
 const _chartGreen = Color(0xFF43A047);
 final _months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'];
 
-
 final _teamData = [
   {
     'team': 'Equipe 1 — SP',
@@ -39,12 +38,16 @@ final _teamData = [
     'sellers': [
       {
         'name': 'Carlos Lima',
-        'sales': 42, 'avg': 380.0, 'nonSales': 8,
+        'sales': 42,
+        'avg': 380.0,
+        'nonSales': 8,
         'monthlySales': [8, 10, 13, 16, 20, 17],
       },
       {
         'name': 'Fernanda Reis',
-        'sales': 37, 'avg': 410.0, 'nonSales': 5,
+        'sales': 37,
+        'avg': 410.0,
+        'nonSales': 5,
         'monthlySales': [10, 12, 15, 19, 22, 21],
       },
     ],
@@ -58,12 +61,16 @@ final _teamData = [
     'sellers': [
       {
         'name': 'Bruno Alves',
-        'sales': 31, 'avg': 355.0, 'nonSales': 11,
+        'sales': 31,
+        'avg': 355.0,
+        'nonSales': 11,
         'monthlySales': [5, 8, 10, 13, 18, 20],
       },
       {
         'name': 'Marina Souza',
-        'sales': 45, 'avg': 425.0, 'nonSales': 4,
+        'sales': 45,
+        'avg': 425.0,
+        'nonSales': 4,
         'monthlySales': [7, 10, 14, 17, 20, 25],
       },
     ],
@@ -77,7 +84,9 @@ final _teamData = [
     'sellers': [
       {
         'name': 'Patrícia Nunes',
-        'sales': 28, 'avg': 370.0, 'nonSales': 9,
+        'sales': 28,
+        'avg': 370.0,
+        'nonSales': 9,
         'monthlySales': [8, 12, 16, 22, 25, 28],
       },
     ],
@@ -86,9 +95,7 @@ final _teamData = [
   },
 ];
 
-
 // ── Mock: Estoque não-vendas ──────────────────────────────────────────────────
-
 
 class AdminErrorBoundary extends StatefulWidget {
   final Widget child;
@@ -132,11 +139,15 @@ class _AdminErrorBoundaryState extends State<AdminErrorBoundary> {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.shield_outlined, color: Color(0xFFCE93D8), size: 48),
+            const Icon(Icons.shield_outlined,
+                color: Color(0xFFCE93D8), size: 48),
             const SizedBox(height: 16),
             const Text(
               'Aba Protegida',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             const Text(
@@ -150,8 +161,11 @@ class _AdminErrorBoundaryState extends State<AdminErrorBoundary> {
                 setState(() => _hasError = false);
                 widget.onRetry();
               },
-              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Atualizar Aba', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              style:
+                  LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+              child: const Text('Atualizar Aba',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -181,7 +195,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   List<dynamic> _upcomingEvents = [];
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
-  
+
   String _userName = '';
   String _greeting = 'Olá';
   String _verse = '';
@@ -192,45 +206,61 @@ class _AdminDashboardState extends State<AdminDashboard>
   Set<String> _pendingReleaseCities = {};
 
   final Map<String, List<Map<String, dynamic>>> _booksDistribuidos = {};
-  
+
   List<Map<String, dynamic>> _realPhotoEvents = [];
 
   List<Map<String, dynamic>> _rotasRebolo = [];
   List<Map<String, dynamic>> _rebolosNaoAtribuidos = [];
   List<Map<String, dynamic>> _pendingReleaseBatches = [];
+  List<Map<String, dynamic>> _companySellers = [];
 
   final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
 
-  List<String> get _todosVendedores {
-    List<String> list = [];
-    for (var team in _teamData) {
-      for (var seller in team['sellers'] as List) {
-        list.add(seller['name']);
-      }
+  Future<void> _loadCompanySellers() async {
+    try {
+      final users = await ApiService().getCompanyUsers();
+      final sellers = users
+          .where((user) =>
+              user is Map &&
+              user['active'] == true &&
+              ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'].contains(user['role']))
+          .map((user) => Map<String, dynamic>.from(user as Map))
+          .toList();
+      if (mounted) setState(() => _companySellers = sellers);
+    } catch (e) {
+      debugPrint('Erro ao carregar vendedores reais: $e');
     }
-    return list;
   }
+
+  String _sellerName(String sellerId) => _companySellers
+      .firstWhere((seller) => seller['id'] == sellerId,
+          orElse: () => {'name': 'Vendedor'})['name']
+      .toString();
 
   int _unreadNotifs = 0;
 
   Future<void> _loadClients() async {
     try {
       final api = ApiService();
-      
+
       // Fetch rebolos first
       final rebolos = await api.getRebolos();
-      final Set<String> reboloIds = rebolos.map((r) => r['id'].toString()).toSet();
-      
+      final Set<String> reboloIds =
+          rebolos.map((r) => r['id'].toString()).toSet();
+
       final clients = await api.getAllClients();
-      if(mounted) setState(() => _allClients = List<Map<String, dynamic>>.from(clients));
+      if (mounted)
+        setState(() => _allClients = List<Map<String, dynamic>>.from(clients));
 
       final pendingBatches = await api.getPendingBookBatches();
-      if(mounted) setState(() => _pendingReleaseBatches = List<Map<String, dynamic>>.from(pendingBatches));
-      
+      if (mounted)
+        setState(() => _pendingReleaseBatches =
+            List<Map<String, dynamic>>.from(pendingBatches));
+
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
       final List<Map<String, dynamic>> unassigned = [];
       final Set<String> unreleased = {};
-      
+
       // Map photographerId -> List of books
       final Map<String, List<Map<String, dynamic>>> photographerBooks = {};
       final Map<String, List<Map<String, dynamic>>> distributedBooks = {};
@@ -239,10 +269,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         if (reboloIds.contains(client['id'].toString())) continue;
 
         final b = {
-          'id': client['id'], 
-          'ficha': client['sequenceNumber'] ?? 'S/N', 
-          'lote': 'N/A', 
-          'qr': client['sequenceNumber'] ?? 'S/N', 
+          'id': client['id'],
+          'ficha': client['sequenceNumber'] ?? 'S/N',
+          'lote': 'N/A',
+          'qr': client['sequenceNumber'] ?? 'S/N',
           'cliente': client['name'] ?? 'Cliente',
           'city': client['city'],
           'photographerId': client['photographerId'],
@@ -256,35 +286,35 @@ class _AdminDashboardState extends State<AdminDashboard>
           }
           distributedBooks[assignedSeller]!.add(b);
         } else {
-          final pId = client['photographer']?['name'] 
-              ?? (client['photographerId'] != null 
+          final pId = client['photographer']?['name'] ??
+              (client['photographerId'] != null
                   ? 'Fotógrafo #${client['photographerId'].toString().substring(0, client['photographerId'].toString().length > 8 ? 8 : client['photographerId'].toString().length)}'
                   : 'Sem Fotógrafo');
-        if (!photographerBooks.containsKey(pId)) {
-          photographerBooks[pId] = [];
-        }
-        photographerBooks[pId]!.add(b);
-        
-        final city = client['city'];
-        final isReleased = client['releasedForRouting'] == true;
+          if (!photographerBooks.containsKey(pId)) {
+            photographerBooks[pId] = [];
+          }
+          photographerBooks[pId]!.add(b);
 
-        if (city == null || city.toString().trim().isEmpty) {
-          if (isReleased) {
-            unassigned.add(b);
+          final city = client['city'];
+          final isReleased = client['releasedForRouting'] == true;
+
+          if (city == null || city.toString().trim().isEmpty) {
+            if (isReleased) {
+              unassigned.add(b);
+            }
+          } else {
+            if (!isReleased) {
+              unreleased.add(city);
+              continue; // do not add to routing yet
+            }
+            if (!cityGroups.containsKey(city)) {
+              cityGroups[city] = [];
+            }
+            cityGroups[city]!.add(b);
           }
-        } else {
-          if (!isReleased) {
-            unreleased.add(city);
-            continue; // do not add to routing yet
-          }
-          if (!cityGroups.containsKey(city)) {
-            cityGroups[city] = [];
-          }
-          cityGroups[city]!.add(b);
-        }
         }
       }
-      
+
       final List<Map<String, dynamic>> routes = [];
       for (var entry in cityGroups.entries) {
         if (entry.value.length >= 5) {
@@ -297,14 +327,19 @@ class _AdminDashboardState extends State<AdminDashboard>
           unassigned.addAll(entry.value);
         }
       }
-      
+
       final List<Map<String, dynamic>> realEvents = [];
       int colorIndex = 0;
-      final colors = [const Color(0xFFAB47BC), const Color(0xFF7E57C2), const Color(0xFF5C6BC0), const Color(0xFF4FC3F7)];
-      
+      final colors = [
+        const Color(0xFFAB47BC),
+        const Color(0xFF7E57C2),
+        const Color(0xFF5C6BC0),
+        const Color(0xFF4FC3F7)
+      ];
+
       for (var entry in photographerBooks.entries) {
         final teamColor = colors[colorIndex % colors.length];
-        
+
         // Group books by event/city for this photographer
         final Map<String, List<Map<String, dynamic>>> eventBooks = {};
         for (var b in entry.value) {
@@ -314,7 +349,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           }
           eventBooks[city]!.add(b);
         }
-        
+
         final List<Map<String, dynamic>> events = [];
         for (var ev in eventBooks.entries) {
           events.add({
@@ -324,15 +359,17 @@ class _AdminDashboardState extends State<AdminDashboard>
             'books': ev.value,
           });
         }
-        
+
         realEvents.add({
           'team': entry.key,
-          'code': entry.key.substring(0, entry.key.length > 3 ? 3 : entry.key.length).toUpperCase(),
+          'code': entry.key
+              .substring(0, entry.key.length > 3 ? 3 : entry.key.length)
+              .toUpperCase(),
           'color': teamColor,
           'events': events,
           'allBooks': entry.value,
         });
-        
+
         colorIndex++;
       }
 
@@ -342,10 +379,10 @@ class _AdminDashboardState extends State<AdminDashboard>
 
       for (var client in rebolos) {
         final b = {
-          'id': client['id'], 
-          'ficha': client['sequenceNumber'] ?? 'S/N', 
-          'lote': 'N/A', 
-          'qr': client['sequenceNumber'] ?? 'S/N', 
+          'id': client['id'],
+          'ficha': client['sequenceNumber'] ?? 'S/N',
+          'lote': 'N/A',
+          'qr': client['sequenceNumber'] ?? 'S/N',
           'cliente': client['name'] ?? 'Cliente',
           'city': client['city'],
           'photographerId': client['photographerId'],
@@ -386,13 +423,13 @@ class _AdminDashboardState extends State<AdminDashboard>
           _rotasManuais = routes;
           _pendingReleaseCities = unreleased;
           _realPhotoEvents = realEvents;
-          
+
           _booksDistribuidos.clear();
           _booksDistribuidos.addAll(distributedBooks);
-          
+
           _rebolosDistribuidos.clear();
           _rebolosDistribuidos.addAll(rebolosDistributed);
-          
+
           _rotasRebolo = rRoutes;
           _rebolosNaoAtribuidos = rebolosUnassigned;
         });
@@ -407,11 +444,11 @@ class _AdminDashboardState extends State<AdminDashboard>
     super.initState();
     _animController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 600));
-    _fadeAnim =
-        CurvedAnimation(parent: _animController, curve: Curves.easeOut);
+    _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
     _loadUpcomingEvents();
     _fetchUnreadNotifications();
+    _loadCompanySellers();
     _loadClients();
     _checkAutomaticBackup();
     _loadUserData();
@@ -424,8 +461,10 @@ class _AdminDashboardState extends State<AdminDashboard>
       builder: (context) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1E1E2C),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Alterar Nome de Exibição', style: TextStyle(color: Colors.white)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Alterar Nome de Exibição',
+              style: TextStyle(color: Colors.white)),
           content: TextField(
             controller: controller,
             style: const TextStyle(color: Colors.white),
@@ -434,13 +473,16 @@ class _AdminDashboardState extends State<AdminDashboard>
               labelStyle: const TextStyle(color: Colors.white70),
               filled: true,
               fillColor: Colors.white10,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: Colors.white54)),
             ),
             LedButton(
               onPressed: () async {
@@ -457,7 +499,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                     setState(() => _userName = newName);
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Nome atualizado com sucesso!'), backgroundColor: Colors.green),
+                      const SnackBar(
+                          content: Text('Nome atualizado com sucesso!'),
+                          backgroundColor: Colors.green),
                     );
                   }
                 }
@@ -477,7 +521,9 @@ class _AdminDashboardState extends State<AdminDashboard>
       setState(() {
         _userName = name;
         _greeting = UIHelpers.getGreeting();
-        _verse = quote.isNotEmpty ? quote : '"A persistência realiza o impossível." - Provérbio Chinês';
+        _verse = quote.isNotEmpty
+            ? quote
+            : '"A persistência realiza o impossível." - Provérbio Chinês';
       });
     }
   }
@@ -496,20 +542,19 @@ class _AdminDashboardState extends State<AdminDashboard>
       // Se não tem backup ou passou de 30 dias
       if (lastBackup == null || now.difference(lastBackup).inDays >= 30) {
         final jsonString = await ApiService().downloadBackup();
-        
+
         final directory = await getApplicationDocumentsDirectory();
-        final file = File('${directory.path}/backup_automatico_selectphoto.json');
-        
+        final file =
+            File('${directory.path}/backup_automatico_selectphoto.json');
+
         await file.writeAsString(jsonString);
         await prefs.setString('last_auto_backup_date', now.toIso8601String());
-        
+
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Backup automático de 30 dias salvo no dispositivo.'),
-              backgroundColor: Colors.green,
-            )
-          );
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Backup automático de 30 dias salvo no dispositivo.'),
+            backgroundColor: Colors.green,
+          ));
         }
       }
     } catch (e) {
@@ -551,38 +596,37 @@ class _AdminDashboardState extends State<AdminDashboard>
     return sellers.fold(0.0, (s, v) => s + (v['avg'] as double)) /
         sellers.length;
   }
+
   int get _totalSalesCount => (_currentTeam['sellers'] as List)
       .fold(0, (s, v) => s + (v['sales'] as int));
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isDesktop = constraints.maxWidth > 800;
-        
-        return Scaffold(
-          key: _scaffoldKey,
-          drawer: !isDesktop ? Drawer(child: _buildSideMenu()) : null,
-          backgroundColor: const Color(0xFF0D0D1A),
-          body: Row(
-            children: [
-              if (isDesktop) _buildSideMenu(),
-              Expanded(
-                child: FadeTransition(
-                  opacity: _fadeAnim,
-                  child: Column(
-                    children: [
-                      _buildHeader(isDesktop: isDesktop),
-                      Expanded(child: _buildBody()),
-                    ],
-                  ),
+    return LayoutBuilder(builder: (context, constraints) {
+      final isDesktop = constraints.maxWidth > 800;
+
+      return Scaffold(
+        key: _scaffoldKey,
+        drawer: !isDesktop ? Drawer(child: _buildSideMenu()) : null,
+        backgroundColor: const Color(0xFF0D0D1A),
+        body: Row(
+          children: [
+            if (isDesktop) _buildSideMenu(),
+            Expanded(
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: Column(
+                  children: [
+                    _buildHeader(isDesktop: isDesktop),
+                    Expanded(child: _buildBody()),
+                  ],
                 ),
               ),
-            ],
-          ),
-        );
-      }
-    );
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildSideMenu() {
@@ -599,27 +643,40 @@ class _AdminDashboardState extends State<AdminDashboard>
               width: 180,
               height: 100,
               fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) =>
-                  const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFFCE93D8), size: 48),
+              errorBuilder: (context, error, stackTrace) => const Icon(
+                  Icons.admin_panel_settings_rounded,
+                  color: Color(0xFFCE93D8),
+                  size: 48),
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Central Fotográfica', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-          const Text('Admin Web', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 14)),
+          const Text('Central Fotográfica',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
+          const Text('Admin Web',
+              style: TextStyle(color: Color(0xFFCE93D8), fontSize: 14)),
           const SizedBox(height: 20),
           Expanded(
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
                 Theme(
-                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  data: Theme.of(context)
+                      .copyWith(dividerColor: Colors.transparent),
                   child: ExpansionTile(
-                    title: const Text('OPERAÇÕES E PRODUTOS', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    title: const Text('OPERAÇÕES E PRODUTOS',
+                        style: TextStyle(
+                            color: Color(0xFF90CAF9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
                     initiallyExpanded: true,
                     iconColor: const Color(0xFF90CAF9),
                     collapsedIconColor: const Color(0xFF90CAF9),
                     children: [
-                      _sideMenuItem(7, Icons.account_balance_wallet_rounded, 'Fechamentos'),
+                      _sideMenuItem(7, Icons.account_balance_wallet_rounded,
+                          'Fechamentos'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
@@ -628,44 +685,60 @@ class _AdminDashboardState extends State<AdminDashboard>
                     ],
                   ),
                 ),
-                
-                const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider(color: Colors.white12, height: 1)),
-                
+                const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Divider(color: Colors.white12, height: 1)),
                 Theme(
-                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  data: Theme.of(context)
+                      .copyWith(dividerColor: Colors.transparent),
                   child: ExpansionTile(
-                    title: const Text('FINANCEIRO E SAÚDE', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    title: const Text('FINANCEIRO E SAÚDE',
+                        style: TextStyle(
+                            color: Color(0xFF90CAF9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
                     iconColor: const Color(0xFF90CAF9),
                     collapsedIconColor: const Color(0xFF90CAF9),
                     children: [
-                      _sideMenuItem(4, Icons.attach_money_rounded, 'Financeiro e Saúde'),
+                      _sideMenuItem(
+                          4, Icons.attach_money_rounded, 'Financeiro e Saúde'),
                       ListTile(
-                        leading: const Icon(Icons.money_off, color: Color(0xFFE57373)),
-                        title: const Text('Despesas', style: TextStyle(color: Color(0xFFE57373))),
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CostEntryScreen())),
+                        leading: const Icon(Icons.money_off,
+                            color: Color(0xFFE57373)),
+                        title: const Text('Despesas',
+                            style: TextStyle(color: Color(0xFFE57373))),
+                        onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const CostEntryScreen())),
                       ),
                     ],
                   ),
                 ),
-
-                const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Divider(color: Colors.white12, height: 1)),
-
+                const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Divider(color: Colors.white12, height: 1)),
                 Theme(
-                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  data: Theme.of(context)
+                      .copyWith(dividerColor: Colors.transparent),
                   child: ExpansionTile(
-                    title: const Text('RH E LOGÍSTICA', style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.bold)),
+                    title: const Text('RH E LOGÍSTICA',
+                        style: TextStyle(
+                            color: Color(0xFF90CAF9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold)),
                     iconColor: const Color(0xFF90CAF9),
                     collapsedIconColor: const Color(0xFF90CAF9),
                     children: [
-                      _sideMenuItem(5, Icons.people_alt_rounded, 'Funcionários'),
+                      _sideMenuItem(
+                          5, Icons.people_alt_rounded, 'Funcionários'),
                       _sideMenuItem(3, Icons.directions_car_rounded, 'Frota'),
-                                            ],
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-
           const SizedBox(height: 20),
         ],
       ),
@@ -674,29 +747,35 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   void _showNotificacoesDialog() {
     showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(builder: (context, setDialogState) {
             return AlertDialog(
               backgroundColor: const Color(0xFF1A2535),
-              title: const Text('Notificações e Pendências', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              title: const Text('Notificações e Pendências',
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
               content: FutureBuilder<List<dynamic>>(
                 future: ApiService().getNotifications(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const SizedBox(
-                      width: 100, height: 100,
-                      child: Center(child: CircularProgressIndicator(color: Colors.orangeAccent)),
+                      width: 100,
+                      height: 100,
+                      child: Center(
+                          child: CircularProgressIndicator(
+                              color: Colors.orangeAccent)),
                     );
                   }
                   if (snapshot.hasError) {
-                    return const Text('Erro ao carregar notificações.', style: TextStyle(color: Colors.redAccent));
+                    return const Text('Erro ao carregar notificações.',
+                        style: TextStyle(color: Colors.redAccent));
                   }
-                  
+
                   final notifications = snapshot.data ?? [];
                   if (notifications.isEmpty) {
-                    return const Text('Tudo limpo! Nenhuma pendência.', style: TextStyle(color: Colors.white70));
+                    return const Text('Tudo limpo! Nenhuma pendência.',
+                        style: TextStyle(color: Colors.white70));
                   }
 
                   return SizedBox(
@@ -706,46 +785,69 @@ class _AdminDashboardState extends State<AdminDashboard>
                       itemCount: notifications.length,
                       itemBuilder: (context, index) {
                         final notif = notifications[index];
-                        final senderName = notif['sender'] != null ? notif['sender']['name'] : 'Sistema';
-                        
+                        final senderName = notif['sender'] != null
+                            ? notif['sender']['name']
+                            : 'Sistema';
+
                         IconData icon;
                         switch (notif['type']) {
                           case 'COVER_TRANSFER_REQUEST':
-                          case 'STOCK_TRANSFER_COVER': icon = Icons.layers_rounded; break;
-                          case 'STOCK_TRANSFER_BOOK': icon = Icons.menu_book_rounded; break;
-                          case 'COST_APPROVAL': icon = Icons.attach_money_rounded; break;
-                          case 'FLEET_URGENT': icon = Icons.warning_amber_rounded; break;
-                          default: icon = Icons.notifications_active_rounded;
+                          case 'STOCK_TRANSFER_COVER':
+                            icon = Icons.layers_rounded;
+                            break;
+                          case 'STOCK_TRANSFER_BOOK':
+                            icon = Icons.menu_book_rounded;
+                            break;
+                          case 'COST_APPROVAL':
+                            icon = Icons.attach_money_rounded;
+                            break;
+                          case 'FLEET_URGENT':
+                            icon = Icons.warning_amber_rounded;
+                            break;
+                          default:
+                            icon = Icons.notifications_active_rounded;
                         }
 
                         return LedCard(
                           color: Colors.white.withOpacity(0.05),
                           child: ListTile(
                             leading: Icon(icon, color: Colors.orangeAccent),
-                            title: Text('$senderName \u2794 Admin', style: const TextStyle(color: Colors.white, fontSize: 14)),
-                            subtitle: Text(notif['message'] ?? 'Notificação', style: const TextStyle(color: Colors.white70)),
+                            title: Text('$senderName \u2794 Admin',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 14)),
+                            subtitle: Text(notif['message'] ?? 'Notificação',
+                                style: const TextStyle(color: Colors.white70)),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 IconButton(
-                                  icon: const Icon(Icons.close, color: Colors.redAccent),
+                                  icon: const Icon(Icons.close,
+                                      color: Colors.redAccent),
                                   onPressed: () async {
                                     try {
-                                      await ApiService().actionNotification(notif['id'], 'REJECT');
-                                      setDialogState(() {}); // Refreshes FutureBuilder
+                                      await ApiService().actionNotification(
+                                          notif['id'], 'REJECT');
+                                      setDialogState(
+                                          () {}); // Refreshes FutureBuilder
                                     } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                              content: Text('Erro: $e')));
                                     }
                                   },
                                 ),
                                 IconButton(
-                                  icon: const Icon(Icons.check, color: Colors.greenAccent),
+                                  icon: const Icon(Icons.check,
+                                      color: Colors.greenAccent),
                                   onPressed: () async {
                                     try {
-                                      await ApiService().actionNotification(notif['id'], 'ACCEPT');
+                                      await ApiService().actionNotification(
+                                          notif['id'], 'ACCEPT');
                                       setDialogState(() {});
                                     } catch (e) {
-                                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e')));
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
+                                              content: Text('Erro: $e')));
                                     }
                                   },
                                 ),
@@ -764,29 +866,31 @@ class _AdminDashboardState extends State<AdminDashboard>
                     Navigator.pop(context);
                     _fetchUnreadNotifications();
                   },
-                  child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+                  child: const Text('Fechar',
+                      style: TextStyle(color: Colors.white70)),
                 ),
               ],
             );
-          }
-        );
-      }
-    );
+          });
+        });
   }
 
-  
   void _printUnidadeBluetooth(Map<String, dynamic> ficha) async {
     final bluetooth = BlueThermalPrinter.instance;
     bool? isConnected = await bluetooth.isConnected;
     if (isConnected != true) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Nenhuma impressora conectada! Vá nas configurações.',
+                style: TextStyle(color: Colors.white)),
+            backgroundColor: Colors.red));
       return;
     }
 
     final seq = ficha['ficha'] ?? 'S/N';
     final city = ficha['city'] ?? 'Sem Cidade';
     final eventName = ficha['cliente'] ?? 'Evento Desconhecido';
-    
+
     bluetooth.printNewLine();
     bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
     bluetooth.printNewLine();
@@ -801,58 +905,73 @@ class _AdminDashboardState extends State<AdminDashboard>
     bluetooth.printNewLine();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo ticket...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Imprimindo ticket...',
+              style: TextStyle(color: Colors.white)),
+          backgroundColor: Colors.green));
     }
   }
 
   void _showReceiveReturnDialog() {
     final codeCtrl = TextEditingController();
     showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text('Receber Devolução de Book', style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('O book será re-cadastrado no estoque para Rebolo.', style: TextStyle(color: Colors.white70)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: codeCtrl,
-              style: const TextStyle(color: Colors.white),
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Código da Ficha',
-                labelStyle: TextStyle(color: Colors.white54),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+        context: context,
+        builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1A1A2E),
+              title: const Text('Receber Devolução de Book',
+                  style: TextStyle(color: Colors.white)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                      'O book será re-cadastrado no estoque para Rebolo.',
+                      style: TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: codeCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Código da Ficha',
+                      labelStyle: TextStyle(color: Colors.white54),
+                      enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white24)),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          LedButton(
-            onPressed: () async {
-              final code = codeCtrl.text.trim();
-              if (code.isEmpty) return;
-              Navigator.pop(ctx);
-              try {
-                await ApiService().receiveReturnedBook(code);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Devolução registrada. Book no estoque!'), backgroundColor: Colors.green));
-                  _loadClients();
-                }
-              } catch(e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                }
-              }
-            },
-            child: const Text('Confirmar'),
-          )
-        ],
-      )
-    );
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancelar',
+                        style: TextStyle(color: Colors.white54))),
+                LedButton(
+                  onPressed: () async {
+                    final code = codeCtrl.text.trim();
+                    if (code.isEmpty) return;
+                    Navigator.pop(ctx);
+                    try {
+                      await ApiService().receiveReturnedBook(code);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text(
+                                    'Devolução registrada. Book no estoque!'),
+                                backgroundColor: Colors.green));
+                        _loadClients();
+                      }
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('Erro: $e'),
+                            backgroundColor: Colors.red));
+                      }
+                    }
+                  },
+                  child: const Text('Confirmar'),
+                )
+              ],
+            ));
   }
 
   Widget _sideMenuItem(int index, IconData icon, String label) {
@@ -869,7 +988,6 @@ class _AdminDashboardState extends State<AdminDashboard>
       },
     );
   }
-
 
   // ── Header ─────────────────────────────────────────────────────────────────
   Widget _buildHeader({bool isDesktop = false}) {
@@ -900,7 +1018,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                         decoration: BoxDecoration(
                           color: _accentPurple.withOpacity(0.3),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: _accentPurple.withOpacity(0.5), width: 1.2),
+                          border: Border.all(
+                              color: _accentPurple.withOpacity(0.5),
+                              width: 1.2),
                           boxShadow: [
                             BoxShadow(
                               color: _accentPurple.withOpacity(0.4),
@@ -915,10 +1035,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                       if (!isDesktop) ...[
                         const SizedBox(height: 2),
                         IconButton(
-                          constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                          constraints:
+                              const BoxConstraints(minWidth: 48, minHeight: 44),
                           padding: EdgeInsets.zero,
-                          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                          icon: const Icon(Icons.menu, color: Colors.white, size: 24),
+                          onPressed: () =>
+                              _scaffoldKey.currentState?.openDrawer(),
+                          icon: const Icon(Icons.menu,
+                              color: Colors.white, size: 24),
                           tooltip: 'Abrir Menu',
                         ),
                       ],
@@ -931,7 +1054,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       onTap: _showEditProfileDialog,
                       borderRadius: BorderRadius.circular(8),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 2, horizontal: 4),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
@@ -952,7 +1076,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                                   ),
                                 ),
                                 const SizedBox(width: 4),
-                                const Icon(Icons.edit, color: Colors.white54, size: 14),
+                                const Icon(Icons.edit,
+                                    color: Colors.white54, size: 14),
                               ],
                             ),
                             const SizedBox(height: 2),
@@ -988,27 +1113,36 @@ class _AdminDashboardState extends State<AdminDashboard>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 44),
                         padding: EdgeInsets.zero,
                         onPressed: () {
                           _showNotificacoesDialog();
                         },
-                        icon: _unreadNotifs > 0 
-                          ? Badge(
-                              label: Text(_unreadNotifs.toString()),
-                              child: const Icon(Icons.notifications_active_rounded, color: Colors.orangeAccent, size: 22),
-                            )
-                          : const Icon(Icons.notifications_none_rounded, color: Colors.white70, size: 22),
+                        icon: _unreadNotifs > 0
+                            ? Badge(
+                                label: Text(_unreadNotifs.toString()),
+                                child: const Icon(
+                                    Icons.notifications_active_rounded,
+                                    color: Colors.orangeAccent,
+                                    size: 22),
+                              )
+                            : const Icon(Icons.notifications_none_rounded,
+                                color: Colors.white70, size: 22),
                         tooltip: 'Notificações',
                       ),
                       const SizedBox(height: 2),
                       IconButton(
-                        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 44),
                         padding: EdgeInsets.zero,
                         onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(canManageRoi: true)));
+                          Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) =>
+                                  const SettingsScreen(canManageRoi: true)));
                         },
-                        icon: const Icon(Icons.settings, color: Color(0xFFCE93D8), size: 22),
+                        icon: const Icon(Icons.settings,
+                            color: Color(0xFFCE93D8), size: 22),
                         tooltip: 'Configurações',
                       ),
                     ],
@@ -1063,8 +1197,6 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-
-
   // ══════════════════════════════════════════════════════════════════════════
   // ABA 1 — MÉTRICAS
   // ══════════════════════════════════════════════════════════════════════════
@@ -1085,22 +1217,32 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 30),
+                  const Icon(Icons.warning_amber_rounded,
+                      color: Colors.redAccent, size: 30),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Atenção: Eventos Favoritos Próximos!', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                        const Text('Atenção: Eventos Favoritos Próximos!',
+                            style: TextStyle(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16)),
                         const SizedBox(height: 4),
-                        Text('Você possui ${_upcomingEvents.length} evento(s) que ocorrerão nos próximos 5 dias.', style: const TextStyle(color: Colors.white70)),
+                        Text(
+                            'Você possui ${_upcomingEvents.length} evento(s) que ocorrerão nos próximos 5 dias.',
+                            style: const TextStyle(color: Colors.white70)),
                       ],
                     ),
                   ),
                   LedButton(
-                    onPressed: () => setState(() => _navIndex = 0), // Go to IA Events
-                    style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
-                    child: const Text('Ver', style: TextStyle(color: Colors.white)),
+                    onPressed: () =>
+                        setState(() => _navIndex = 0), // Go to IA Events
+                    style:
+                        LedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    child: const Text('Ver',
+                        style: TextStyle(color: Colors.white)),
                   )
                 ],
               ),
@@ -1117,7 +1259,6 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 20),
           _buildRotasInteligentes(),
           const SizedBox(height: 20),
-
         ],
       ),
     );
@@ -1138,19 +1279,15 @@ class _AdminDashboardState extends State<AdminDashboard>
             onTap: () => setState(() => _selectedTeam = i),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               decoration: BoxDecoration(
                 gradient: selected
-                    ? LinearGradient(
-                        colors: [color.withOpacity(0.8), color])
+                    ? LinearGradient(colors: [color.withOpacity(0.8), color])
                     : null,
                 color: selected ? null : const Color(0xFF1A1A2E),
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(
-                    color: selected
-                        ? color
-                        : Colors.white.withOpacity(0.1)),
+                    color: selected ? color : Colors.white.withOpacity(0.1)),
                 boxShadow: selected
                     ? [
                         BoxShadow(
@@ -1163,9 +1300,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               child: Text(
                 t['code'] as String,
                 style: TextStyle(
-                  color: selected
-                      ? Colors.white
-                      : const Color(0xFF90CAF9),
+                  color: selected ? Colors.white : const Color(0xFF90CAF9),
                   fontWeight: FontWeight.bold,
                   fontSize: 12,
                 ),
@@ -1215,13 +1350,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 8),
           Text(value,
               style: TextStyle(
-                  color: color,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold)),
+                  color: color, fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 2),
           Text(label,
-              style: const TextStyle(
-                  color: Color(0xFF90CAF9), fontSize: 10)),
+              style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
         ],
       ),
     );
@@ -1266,15 +1398,11 @@ class _AdminDashboardState extends State<AdminDashboard>
               DropdownButton<int>(
                 value: _selectedMonth,
                 dropdownColor: const Color(0xFF1A1A2E),
-                style: const TextStyle(
-                    color: Color(0xFFCE93D8), fontSize: 12),
+                style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12),
                 underline: const SizedBox(),
-                items: List.generate(
-                    _months.length,
-                    (i) => DropdownMenuItem(
-                        value: i, child: Text(_months[i]))),
-                onChanged: (v) =>
-                    setState(() => _selectedMonth = v ?? 5),
+                items: List.generate(_months.length,
+                    (i) => DropdownMenuItem(value: i, child: Text(_months[i]))),
+                onChanged: (v) => setState(() => _selectedMonth = v ?? 5),
               ),
             ],
           ),
@@ -1286,8 +1414,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: List.generate(_months.length, (i) {
                 final isSelected = i == _selectedMonth;
-                final barHeight =
-                    maxVal > 0 ? (sales[i] / maxVal) * 120 : 0.0;
+                final barHeight = maxVal > 0 ? (sales[i] / maxVal) * 120 : 0.0;
                 final nsHeight =
                     maxVal > 0 ? (nonSales[i] / maxVal) * 120 : 0.0;
                 return GestureDetector(
@@ -1319,8 +1446,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                             width: 26,
                             height: barHeight + nsHeight,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFEF5350)
-                                  .withOpacity(0.5),
+                              color: const Color(0xFFEF5350).withOpacity(0.5),
                               borderRadius: BorderRadius.circular(6),
                             ),
                           ),
@@ -1355,9 +1481,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       const SizedBox(height: 6),
                       Text(_months[i],
                           style: TextStyle(
-                              color: isSelected
-                                  ? color
-                                  : const Color(0xFF546E7A),
+                              color:
+                                  isSelected ? color : const Color(0xFF546E7A),
                               fontSize: 10,
                               fontWeight: isSelected
                                   ? FontWeight.bold
@@ -1378,12 +1503,10 @@ class _AdminDashboardState extends State<AdminDashboard>
       Container(
           width: 8,
           height: 8,
-          decoration:
-              BoxDecoration(color: color, shape: BoxShape.circle)),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
       const SizedBox(width: 4),
       Text(label,
-          style: const TextStyle(
-              color: Color(0xFF90CAF9), fontSize: 11)),
+          style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 11)),
     ]);
   }
 
@@ -1411,13 +1534,12 @@ class _AdminDashboardState extends State<AdminDashboard>
                       fontWeight: FontWeight.bold,
                       fontSize: 13)),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: _chartGreen.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                      color: _chartGreen.withOpacity(0.4)),
+                  border: Border.all(color: _chartGreen.withOpacity(0.4)),
                 ),
                 child: Text(monthLabel,
                     style: const TextStyle(
@@ -1440,8 +1562,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               TableRow(
                 decoration: BoxDecoration(
                   border: Border(
-                      bottom: BorderSide(
-                          color: Colors.white.withOpacity(0.1))),
+                      bottom: BorderSide(color: Colors.white.withOpacity(0.1))),
                 ),
                 children: [
                   _tableHeader('Vendedor'),
@@ -1458,12 +1579,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                 final totalMes = monthSales * avg;
                 return TableRow(children: [
                   _tableCell(s['name'], isName: true),
-                  _tableCell('$monthSales',
-                      color: const Color(0xFF66BB6A)),
-                  _tableCell('R\$ ${avg.toStringAsFixed(0)}',
-                      color: color),
-                  _tableCell(
-                      'R\$ ${totalMes.toStringAsFixed(0)}',
+                  _tableCell('$monthSales', color: const Color(0xFF66BB6A)),
+                  _tableCell('R\$ ${avg.toStringAsFixed(0)}', color: color),
+                  _tableCell('R\$ ${totalMes.toStringAsFixed(0)}',
                       color: _chartGreen),
                   _tableCell('${s['nonSales']}',
                       color: const Color(0xFFEF5350)),
@@ -1487,23 +1605,20 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  Widget _tableCell(String text,
-      {Color? color, bool isName = false}) {
+  Widget _tableCell(String text, {Color? color, bool isName = false}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Text(text,
           style: TextStyle(
               color: color ?? Colors.white,
               fontSize: isName ? 12 : 13,
-              fontWeight:
-                  isName ? FontWeight.normal : FontWeight.bold)),
+              fontWeight: isName ? FontWeight.normal : FontWeight.bold)),
     );
   }
 
   Widget _buildSalesVsNonSales() {
     final month = _months[_selectedMonth];
-    final sales =
-        (_currentTeam['monthlySales'] as List<int>)[_selectedMonth];
+    final sales = (_currentTeam['monthlySales'] as List<int>)[_selectedMonth];
     final nonSales =
         (_currentTeam['monthlyNonSales'] as List<int>)[_selectedMonth];
     final total = sales + nonSales;
@@ -1526,8 +1641,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   fontSize: 13)),
           const SizedBox(height: 6),
           Text('Equipe: ${_currentTeam['team']}',
-              style: const TextStyle(
-                  color: Color(0xFF90CAF9), fontSize: 11)),
+              style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 11)),
           const SizedBox(height: 20),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
@@ -1540,22 +1654,20 @@ class _AdminDashboardState extends State<AdminDashboard>
                 flex: nonSales == 0 ? 1 : nonSales,
                 child: Container(
                     height: 14,
-                    color:
-                        const Color(0xFFEF5350).withOpacity(0.7)),
+                    color: const Color(0xFFEF5350).withOpacity(0.7)),
               ),
             ]),
           ),
           const SizedBox(height: 16),
           Row(
             children: [
+              Expanded(child: _numberStat('Vendas', '$sales', color)),
               Expanded(
-                  child: _numberStat('Vendas', '$sales', color)),
+                  child: _numberStat(
+                      'Não-Vendas', '$nonSales', const Color(0xFFEF5350))),
               Expanded(
-                  child: _numberStat('Não-Vendas', '$nonSales',
-                      const Color(0xFFEF5350))),
-              Expanded(
-                  child: _numberStat('Total Atend.', '$total',
-                      const Color(0xFF90CAF9))),
+                  child: _numberStat(
+                      'Total Atend.', '$total', const Color(0xFF90CAF9))),
               Expanded(
                   child: _numberStat(
                       'Conv. %',
@@ -1574,13 +1686,10 @@ class _AdminDashboardState extends State<AdminDashboard>
     return Column(children: [
       Text(value,
           style: TextStyle(
-              color: color,
-              fontSize: 20,
-              fontWeight: FontWeight.bold)),
+              color: color, fontSize: 20, fontWeight: FontWeight.bold)),
       const SizedBox(height: 2),
       Text(label,
-          style: const TextStyle(
-              color: Color(0xFF90CAF9), fontSize: 11),
+          style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 11),
           textAlign: TextAlign.center),
     ]);
   }
@@ -1588,44 +1697,55 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   // ABA 2 — books POR EQUIPE
   // ══════════════════════════════════════════════════════════════════════════
-  
+
   int get _totalBooksProduced => _allClients.length;
-  int get _booksAguardando => _allClients.where((c) => c['releasedForRouting'] != true).length;
-  int get _booksLiberados => _allClients.where((c) => c['releasedForRouting'] == true).length;
+  int get _booksAguardando =>
+      _allClients.where((c) => c['releasedForRouting'] != true).length;
+  int get _booksLiberados =>
+      _allClients.where((c) => c['releasedForRouting'] == true).length;
 
   Widget _buildResumoGeralProducao() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Resumo de Produção (Geral)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _infoBoxProducao('Total Produzido', '$_totalBooksProduced', Colors.blueAccent),
-              _infoBoxProducao('Aguardando Rota', '$_booksAguardando', Colors.orangeAccent),
-              _infoBoxProducao('Liberado p/ Rota', '$_booksLiberados', Colors.greenAccent),
-            ],
-          )
-        ],
-      )
-    );
+        margin: const EdgeInsets.only(bottom: 20),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Resumo de Produção (Geral)',
+                style: TextStyle(
+                    color: Color(0xFFCE93D8),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _infoBoxProducao('Total Produzido', '$_totalBooksProduced',
+                    Colors.blueAccent),
+                _infoBoxProducao('Aguardando Rota', '$_booksAguardando',
+                    Colors.orangeAccent),
+                _infoBoxProducao(
+                    'Liberado p/ Rota', '$_booksLiberados', Colors.greenAccent),
+              ],
+            )
+          ],
+        ));
   }
 
   Widget _infoBoxProducao(String label, String value, Color color) {
     return Column(
       children: [
-        Text(value, style: TextStyle(color: color, fontSize: 28, fontWeight: FontWeight.bold)),
+        Text(value,
+            style: TextStyle(
+                color: color, fontSize: 28, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(label,
+            style: const TextStyle(color: Colors.white70, fontSize: 12)),
       ],
     );
   }
@@ -1642,10 +1762,15 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Todos os Books Produzidos', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Todos os Books Produzidos',
+              style: TextStyle(
+                  color: Color(0xFFCE93D8),
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           if (_allClients.isEmpty)
-            const Text('Nenhum book foi produzido ainda.', style: TextStyle(color: Colors.white54)),
+            const Text('Nenhum book foi produzido ainda.',
+                style: TextStyle(color: Colors.white54)),
           ..._allClients.map((c) {
             final name = c['name'] ?? 'Sem Nome';
             final city = c['city'] ?? 'Sem Cidade';
@@ -1671,18 +1796,25 @@ class _AdminDashboardState extends State<AdminDashboard>
                   backgroundColor: Colors.white12,
                   child: Icon(Icons.menu_book, color: Colors.white),
                 ),
-                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text('Ficha: $seq | Cidade: $city', style: const TextStyle(color: Colors.white70)),
+                title: Text(name,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text('Ficha: $seq | Cidade: $city',
+                    style: const TextStyle(color: Colors.white70)),
                 trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isReleased ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                    color: isReleased
+                        ? Colors.green.withOpacity(0.2)
+                        : Colors.orange.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     isReleased ? 'Liberado' : 'Aguardando',
                     style: TextStyle(
-                      color: isReleased ? Colors.greenAccent : Colors.orangeAccent,
+                      color:
+                          isReleased ? Colors.greenAccent : Colors.orangeAccent,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -1695,7 +1827,6 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  
   Widget _buildFechamentoFotografosLive() {
     // Agrupa todos os clientes por fotografo
     final Map<String, String> photographerNames = {};
@@ -1705,11 +1836,13 @@ class _AdminDashboardState extends State<AdminDashboard>
     for (var c in _allClients) {
       if (c['photographerId'] == null) continue;
       final pid = c['photographerId'];
-      final name = c['photographer'] != null ? (c['photographer']['name'] ?? 'Sem Nome') : 'Sem Nome';
+      final name = c['photographer'] != null
+          ? (c['photographer']['name'] ?? 'Sem Nome')
+          : 'Sem Nome';
       final status = c['bookStatus'];
 
       photographerNames[pid] = name;
-      
+
       if (status == 'CREATED') {
         liveCounts[pid] = (liveCounts[pid] ?? 0) + 1;
       } else if (status == 'AWAITING_RELEASE') {
@@ -1730,15 +1863,20 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Produção ao Vivo (Fotógrafos)', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Produção ao Vivo (Fotógrafos)',
+              style: TextStyle(
+                  color: Color(0xFFCE93D8),
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           if (pids.isEmpty)
-            const Text('Nenhuma produção recente registrada.', style: TextStyle(color: Colors.white54)),
+            const Text('Nenhuma produção recente registrada.',
+                style: TextStyle(color: Colors.white54)),
           ...pids.map((pid) {
             final name = photographerNames[pid]!;
             final live = liveCounts[pid] ?? 0;
             final closed = closedCounts[pid] ?? 0;
-            
+
             if (live == 0 && closed == 0) return const SizedBox.shrink();
 
             return LedCard(
@@ -1749,14 +1887,22 @@ class _AdminDashboardState extends State<AdminDashboard>
                   backgroundColor: Colors.white12,
                   child: Icon(Icons.camera_alt_outlined, color: Colors.white),
                 ),
-                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text(name,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (live > 0)
-                      Text('$live fichas', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                      Text('$live fichas',
+                          style: const TextStyle(
+                              color: Colors.orangeAccent,
+                              fontWeight: FontWeight.bold)),
                     if (closed > 0)
-                      Text('Total: $closed fichas (Finalizado)', style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                      Text('Total: $closed fichas (Finalizado)',
+                          style: const TextStyle(
+                              color: Colors.greenAccent,
+                              fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
@@ -1800,7 +1946,8 @@ class _AdminDashboardState extends State<AdminDashboard>
               maxChildSize: 0.95,
               expand: false,
               builder: (_, scrollController) {
-                final allSelected = books.isNotEmpty && selectedIds.length == books.length;
+                final allSelected =
+                    books.isNotEmpty && selectedIds.length == books.length;
 
                 return Column(
                   children: [
@@ -1817,7 +1964,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       padding: const EdgeInsets.all(16.0),
                       child: Row(
                         children: [
-                          const Icon(Icons.menu_book_rounded, color: Color(0xFFCE93D8)),
+                          const Icon(Icons.menu_book_rounded,
+                              color: Color(0xFFCE93D8)),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -1836,15 +1984,26 @@ class _AdminDashboardState extends State<AdminDashboard>
                                   if (allSelected) {
                                     selectedIds.clear();
                                   } else {
-                                    selectedIds = books.map((b) => b['id'].toString()).toSet();
+                                    selectedIds = books
+                                        .map((b) => b['id'].toString())
+                                        .toSet();
                                   }
                                 });
                               },
-                              icon: Icon(allSelected ? Icons.deselect : Icons.select_all, color: const Color(0xFFCE93D8), size: 18),
-                              label: Text(allSelected ? 'Desmarcar' : 'Marcar Tudo', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12)),
+                              icon: Icon(
+                                  allSelected
+                                      ? Icons.deselect
+                                      : Icons.select_all,
+                                  color: const Color(0xFFCE93D8),
+                                  size: 18),
+                              label: Text(
+                                  allSelected ? 'Desmarcar' : 'Marcar Tudo',
+                                  style: const TextStyle(
+                                      color: Color(0xFFCE93D8), fontSize: 12)),
                             ),
                           IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white70),
+                            icon:
+                                const Icon(Icons.close, color: Colors.white70),
                             onPressed: () => Navigator.pop(ctx),
                           ),
                         ],
@@ -1868,7 +2027,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 final isSelected = selectedIds.contains(bId);
 
                                 return Container(
-                                  color: isSelected ? const Color(0xFFCE93D8).withOpacity(0.1) : null,
+                                  color: isSelected
+                                      ? const Color(0xFFCE93D8).withOpacity(0.1)
+                                      : null,
                                   child: Row(
                                     children: [
                                       Checkbox(
@@ -1884,7 +2045,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                                           });
                                         },
                                       ),
-                                      Expanded(child: _buildBookTile(b, null, false)),
+                                      Expanded(
+                                          child:
+                                              _buildBookTile(b, null, false)),
                                     ],
                                   ),
                                 );
@@ -1897,7 +2060,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                         decoration: BoxDecoration(
                           color: const Color(0xFF2A1A4A),
                           boxShadow: [
-                            BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 10, offset: const Offset(0, -2))
+                            BoxShadow(
+                                color: Colors.black.withOpacity(0.4),
+                                blurRadius: 10,
+                                offset: const Offset(0, -2))
                           ],
                         ),
                         child: Column(
@@ -1911,21 +2077,32 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     dropdownColor: const Color(0xFF1A1A2E),
                                     style: const TextStyle(color: Colors.white),
                                     decoration: InputDecoration(
-                                      labelText: 'Selecione o Vendedor Destinatário',
-                                      labelStyle: const TextStyle(color: Colors.white70),
+                                      labelText:
+                                          'Selecione o Vendedor Destinatário',
+                                      labelStyle: const TextStyle(
+                                          color: Colors.white70),
                                       filled: true,
                                       fillColor: Colors.white10,
-                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      border: OutlineInputBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          borderSide: BorderSide.none),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 8),
                                     ),
-                                    items: sellersList.map<DropdownMenuItem<String>>((s) {
+                                    items: sellersList
+                                        .map<DropdownMenuItem<String>>((s) {
                                       return DropdownMenuItem<String>(
                                         value: s['id'].toString(),
-                                        child: Text(s['name'] ?? 'Vendedor', style: const TextStyle(color: Colors.white)),
+                                        child: Text(s['name'] ?? 'Vendedor',
+                                            style: const TextStyle(
+                                                color: Colors.white)),
                                       );
                                     }).toList(),
                                     onChanged: (val) {
-                                      setModalState(() => selectedSellerId = val);
+                                      setModalState(
+                                          () => selectedSellerId = val);
                                     },
                                   ),
                                 ),
@@ -1939,25 +2116,42 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     ? null
                                     : () async {
                                         try {
-                                          await ApiService().batchAssignClients(selectedIds.toList(), selectedSellerId!);
+                                          await ApiService().batchAssignClients(
+                                              selectedIds.toList(),
+                                              selectedSellerId!);
                                           Navigator.pop(ctx);
                                           _loadClients();
                                           if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(content: Text('Sucesso! ${selectedIds.length} fichas distribuídas.'), backgroundColor: Colors.green),
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                  content: Text(
+                                                      'Sucesso! ${selectedIds.length} fichas distribuídas.'),
+                                                  backgroundColor:
+                                                      Colors.green),
                                             );
                                           }
                                         } catch (e) {
                                           if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(content: Text('Erro ao atribuir: $e'), backgroundColor: Colors.red),
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                  content: Text(
+                                                      'Erro ao atribuir: $e'),
+                                                  backgroundColor: Colors.red),
                                             );
                                           }
                                         }
                                       },
-                                icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
-                                label: Text('Distribuir Lote (${selectedIds.length} Fichas)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                style: LedButton.styleFrom(backgroundColor: Colors.green),
+                                icon: const Icon(Icons.send_rounded,
+                                    color: Colors.white, size: 18),
+                                label: Text(
+                                    'Distribuir Lote (${selectedIds.length} Fichas)',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold)),
+                                style: LedButton.styleFrom(
+                                    backgroundColor: Colors.green),
                               ),
                             ),
                           ],
@@ -1996,21 +2190,36 @@ class _AdminDashboardState extends State<AdminDashboard>
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.local_shipping_rounded, color: Color(0xFFFFB74D), size: 22),
+                      Icon(Icons.local_shipping_rounded,
+                          color: Color(0xFFFFB74D), size: 22),
                       SizedBox(width: 8),
-                      Text('Rotas e Chegada da Gráfica', style: TextStyle(color: Color(0xFFFFB74D), fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text('Rotas e Chegada da Gráfica',
+                          style: TextStyle(
+                              color: Color(0xFFFFB74D),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  const Text('Confirme a chegada dos lotes impressos por evento para o estoque e distribua aos vendedores.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const Text(
+                      'Confirme a chegada dos lotes impressos por evento para o estoque e distribua aos vendedores.',
+                      style: TextStyle(color: Colors.white70, fontSize: 12)),
                   const SizedBox(height: 14),
                   SizedBox(
                     width: double.infinity,
                     child: LedButton.icon(
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VisaoRotasChegada())),
-                      icon: const Icon(Icons.inventory_rounded, color: Colors.black),
-                      label: const Text('Abrir Chegada da Gráfica', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                      style: LedButton.styleFrom(backgroundColor: const Color(0xFFFFB74D)),
+                      onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const VisaoRotasChegada())),
+                      icon: const Icon(Icons.inventory_rounded,
+                          color: Colors.black),
+                      label: const Text('Abrir Chegada da Gráfica',
+                          style: TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold)),
+                      style: LedButton.styleFrom(
+                          backgroundColor: const Color(0xFFFFB74D)),
                     ),
                   ),
                 ],
@@ -2019,7 +2228,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
           const SizedBox(height: 20),
 
-            // Resumo geral
+          // Resumo geral
           InkWell(
             onTap: () {
               final allBooksList = <Map<String, dynamic>>[];
@@ -2039,8 +2248,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   colors: [Color(0xFF1A0030), Color(0xFF3A0068)],
                 ),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                    color: _accentPurple.withOpacity(0.3)),
+                border: Border.all(color: _accentPurple.withOpacity(0.3)),
               ),
               child: Row(
                 children: [
@@ -2065,7 +2273,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                               color: Colors.white,
                               fontSize: 24,
                               fontWeight: FontWeight.bold)),
-                      Text('${_realPhotoEvents.length} equipes ativas (Toque p/ ver)',
+                      Text(
+                          '${_realPhotoEvents.length} equipes ativas (Toque p/ ver)',
                           style: const TextStyle(
                               color: Color(0xFFCE93D8), fontSize: 12)),
                     ],
@@ -2080,34 +2289,32 @@ class _AdminDashboardState extends State<AdminDashboard>
           ..._realPhotoEvents.map((team) {
             final color = team['color'] as Color;
             final events = team['events'] as List;
-            final teamTotal = events.fold<int>(
-                0, (s, e) => s + (e['photos'] as int));
+            final teamTotal =
+                events.fold<int>(0, (s, e) => s + (e['photos'] as int));
 
             return Container(
               margin: const EdgeInsets.only(bottom: 16),
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A2E),
                 borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: color.withOpacity(0.25)),
+                border: Border.all(color: color.withOpacity(0.25)),
               ),
               child: Column(
                 children: [
                   // Header da equipe
                   InkWell(
                     onTap: () {
-                      final books = List<Map<String, dynamic>>.from(team['allBooks'] ?? []);
+                      final books = List<Map<String, dynamic>>.from(
+                          team['allBooks'] ?? []);
                       _showBooksModal('Books - ${team['team']}', books);
                     },
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                    borderRadius:
+                        const BorderRadius.vertical(top: Radius.circular(20)),
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [
-                            color.withOpacity(0.15),
-                            Colors.transparent
-                          ],
+                          colors: [color.withOpacity(0.15), Colors.transparent],
                         ),
                         borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(20)),
@@ -2120,8 +2327,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                             decoration: BoxDecoration(
                               color: color.withOpacity(0.2),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                  color: color.withOpacity(0.5)),
+                              border: Border.all(color: color.withOpacity(0.5)),
                             ),
                             child: Text(team['code'] as String,
                                 style: TextStyle(
@@ -2138,8 +2344,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     fontSize: 14)),
                           ),
                           Column(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.end,
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Text('$teamTotal',
                                   style: TextStyle(
@@ -2148,8 +2353,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                       fontWeight: FontWeight.bold)),
                               const Text('books (Toque p/ abrir)',
                                   style: TextStyle(
-                                      color: Color(0xFF90CAF9),
-                                      fontSize: 10)),
+                                      color: Color(0xFF90CAF9), fontSize: 10)),
                             ],
                           ),
                         ],
@@ -2161,10 +2365,12 @@ class _AdminDashboardState extends State<AdminDashboard>
                     final i = entry.key;
                     final e = entry.value as Map;
                     final isLast = i == events.length - 1;
-                    final eventBooks = List<Map<String, dynamic>>.from(e['books'] ?? []);
+                    final eventBooks =
+                        List<Map<String, dynamic>>.from(e['books'] ?? []);
 
                     return InkWell(
-                      onTap: () => _showBooksModal(e['event'] as String, eventBooks),
+                      onTap: () =>
+                          _showBooksModal(e['event'] as String, eventBooks),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 12),
@@ -2173,8 +2379,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                               ? null
                               : Border(
                                   bottom: BorderSide(
-                                      color: Colors.white
-                                          .withOpacity(0.06))),
+                                      color: Colors.white.withOpacity(0.06))),
                         ),
                         child: Row(
                           children: [
@@ -2183,53 +2388,42 @@ class _AdminDashboardState extends State<AdminDashboard>
                               height: 38,
                               decoration: BoxDecoration(
                                 color: color.withOpacity(0.1),
-                                borderRadius:
-                                    BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              child: Icon(
-                                  Icons.camera_alt_rounded,
-                                  color: color,
-                                  size: 18),
+                              child: Icon(Icons.camera_alt_rounded,
+                                  color: color, size: 18),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(e['event'] as String,
                                       style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 13,
-                                          fontWeight:
-                                              FontWeight.w600)),
+                                          fontWeight: FontWeight.w600)),
                                   const SizedBox(height: 2),
                                   Row(children: [
-                                    const Icon(
-                                        Icons
-                                            .location_on_outlined,
-                                        color: Color(0xFF90CAF9),
-                                        size: 12),
+                                    const Icon(Icons.location_on_outlined,
+                                        color: Color(0xFF90CAF9), size: 12),
                                     const SizedBox(width: 3),
                                     Text(e['city'] as String,
                                         style: const TextStyle(
-                                            color:
-                                                Color(0xFF90CAF9),
+                                            color: Color(0xFF90CAF9),
                                             fontSize: 11)),
                                   ]),
                                 ],
                               ),
                             ),
                             Column(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.end,
+                              crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
                                 Text('${e['photos']}',
                                     style: TextStyle(
                                         color: color,
                                         fontSize: 18,
-                                        fontWeight:
-                                            FontWeight.bold)),
+                                        fontWeight: FontWeight.bold)),
                                 const Text('books',
                                     style: TextStyle(
                                         color: Color(0xFF90CAF9),
@@ -2256,21 +2450,36 @@ class _AdminDashboardState extends State<AdminDashboard>
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.route_rounded, color: Color(0xFF80DEEA), size: 22),
+                      Icon(Icons.route_rounded,
+                          color: Color(0xFF80DEEA), size: 22),
                       SizedBox(width: 8),
-                      Text('Mapeamento de Rotas & Transbordo', style: TextStyle(color: Color(0xFF80DEEA), fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text('Mapeamento de Rotas & Transbordo',
+                          style: TextStyle(
+                              color: Color(0xFF80DEEA),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  const Text('Visualiza itinerários de 300 km para retransportar fichas perdidas entre rotas de vendedores no mesmo trajeto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const Text(
+                      'Visualiza itinerários de 300 km para retransportar fichas perdidas entre rotas de vendedores no mesmo trajeto.',
+                      style: TextStyle(color: Colors.white70, fontSize: 12)),
                   const SizedBox(height: 14),
                   SizedBox(
                     width: double.infinity,
                     child: LedButton.icon(
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VisaoRoteiroInteligente())),
-                      icon: const Icon(Icons.alt_route_rounded, color: Colors.black),
-                      label: const Text('Abrir Mapeamento de Rotas', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                      style: LedButton.styleFrom(backgroundColor: const Color(0xFF80DEEA)),
+                      onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const VisaoRoteiroInteligente())),
+                      icon: const Icon(Icons.alt_route_rounded,
+                          color: Colors.black),
+                      label: const Text('Abrir Mapeamento de Rotas',
+                          style: TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold)),
+                      style: LedButton.styleFrom(
+                          backgroundColor: const Color(0xFF80DEEA)),
                     ),
                   ),
                 ],
@@ -2278,7 +2487,6 @@ class _AdminDashboardState extends State<AdminDashboard>
             ),
           ),
           const SizedBox(height: 20),
-
         ],
       ),
     );
@@ -2288,7 +2496,8 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ABA 3 — ESTOQUE NÃO-VENDAS
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildStockTab() {
-    final totalFichas = _rotasRebolo.fold<int>(0, (s, r) => s + (r['books'] as List).length) +
+    final totalFichas = _rotasRebolo.fold<int>(
+            0, (s, r) => s + (r['books'] as List).length) +
         _rebolosNaoAtribuidos.length +
         _rebolosDistribuidos.values.fold<int>(0, (s, list) => s + list.length);
 
@@ -2305,8 +2514,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                 colors: [Color(0xFF1A0A00), Color(0xFF3A1000)],
               ),
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                  color: const Color(0xFFEF5350).withOpacity(0.3)),
+              border:
+                  Border.all(color: const Color(0xFFEF5350).withOpacity(0.3)),
             ),
             child: Row(
               children: [
@@ -2324,8 +2533,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text('Estoque de Não-Vendas',
-                        style: TextStyle(
-                            color: Color(0xFF90CAF9), fontSize: 12)),
+                        style:
+                            TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
                     Text('$totalFichas fichas',
                         style: const TextStyle(
                             color: Colors.white,
@@ -2339,8 +2548,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 const Spacer(),
                 const Text('Toque para\nver detalhes',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                        color: Color(0xFF90CAF9), fontSize: 10)),
+                    style: TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
               ],
             ),
           ),
@@ -2356,7 +2564,8 @@ class _AdminDashboardState extends State<AdminDashboard>
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                child: Text('Nenhum rebolo acumulado em estoque por enquanto.', style: TextStyle(color: Colors.white54)),
+                child: Text('Nenhum rebolo acumulado em estoque por enquanto.',
+                    style: TextStyle(color: Colors.white54)),
               ),
             )
           else
@@ -2392,8 +2601,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         decoration: BoxDecoration(
           color: const Color(0xFF1A1A2E),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: urgencyColor.withOpacity(0.25), width: 1),
+          border: Border.all(color: urgencyColor.withOpacity(0.25), width: 1),
         ),
         child: Column(
           children: [
@@ -2420,11 +2628,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                               fontWeight: FontWeight.bold,
                               fontSize: 15)),
                       const SizedBox(height: 2),
-                      Text(
-                          '${fichas.length} fichas detalhadas disponíveis',
+                      Text('${fichas.length} fichas detalhadas disponíveis',
                           style: const TextStyle(
-                              color: Color(0xFF90CAF9),
-                              fontSize: 11)),
+                              color: Color(0xFF90CAF9), fontSize: 11)),
                     ],
                   ),
                 ),
@@ -2437,9 +2643,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                             fontSize: 26,
                             fontWeight: FontWeight.bold)),
                     const Text('não-vendas',
-                        style: TextStyle(
-                            color: Color(0xFF90CAF9),
-                            fontSize: 10)),
+                        style:
+                            TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
                   ],
                 ),
               ],
@@ -2454,12 +2659,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                     child: Stack(
                       children: [
                         Container(
-                            height: 6,
-                            color: Colors.white.withOpacity(0.08)),
+                            height: 6, color: Colors.white.withOpacity(0.08)),
                         FractionallySizedBox(
                           widthFactor: barPct,
-                          child: Container(
-                              height: 6, color: urgencyColor),
+                          child: Container(height: 6, color: urgencyColor),
                         ),
                       ],
                     ),
@@ -2476,8 +2679,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  void _showStockBottomSheet(
-      String city, List fichas) {
+  void _showStockBottomSheet(String city, List fichas) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -2485,130 +2687,148 @@ class _AdminDashboardState extends State<AdminDashboard>
       builder: (_) => _StockBottomSheet(city: city, fichas: fichas),
     );
   }
+
   void _scanAndDistributeBooks({bool isRebolo = false}) {
     showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF1A1A2E),
-      builder: (context) {
-        return SizedBox(
-          height: MediaQuery.of(context).size.height * 0.8,
-          child: Column(
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text('Leitura de Saída (QR Code)', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-              ),
-              Expanded(
-                child: MobileScanner(
-                  onDetect: (capture) {
-                    final List<Barcode> barcodes = capture.barcodes;
-                    if (barcodes.isNotEmpty) {
-                      final code = barcodes.first.rawValue;
-                      if (code != null) {
-                        Navigator.pop(context);
-                        _assignBookToSellerDialog(code, isRebolo);
-                      }
-                    }
-                  },
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: const Color(0xFF1A1A2E),
+        builder: (context) {
+          return SizedBox(
+            height: MediaQuery.of(context).size.height * 0.8,
+            child: Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Leitura de Saída (QR Code)',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold)),
                 ),
-              ),
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text('Aponte a câmera para o QR Code impresso no book', style: TextStyle(color: Colors.white70)),
-              )
-            ],
-          ),
-        );
-      }
-    );
+                Expanded(
+                  child: MobileScanner(
+                    onDetect: (capture) {
+                      final List<Barcode> barcodes = capture.barcodes;
+                      if (barcodes.isNotEmpty) {
+                        final code = barcodes.first.rawValue;
+                        if (code != null) {
+                          Navigator.pop(context);
+                          _assignBookToSellerDialog(code, isRebolo);
+                        }
+                      }
+                    },
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Aponte a câmera para o QR Code impresso no book',
+                      style: TextStyle(color: Colors.white70)),
+                )
+              ],
+            ),
+          );
+        });
   }
 
   void _assignBookToSellerDialog(String qrCode, bool isRebolo) {
     String? selectedSeller;
     showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(builder: (context, setDialogState) {
             return AlertDialog(
               backgroundColor: const Color(0xFF1E1E2C),
-              title: const Text('Atribuir via QR Code', style: TextStyle(color: Colors.white)),
+              title: const Text('Atribuir via QR Code',
+                  style: TextStyle(color: Colors.white)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Ficha/Book: $qrCode', style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold)),
+                  Text('Ficha/Book: $qrCode',
+                      style: const TextStyle(
+                          color: Color(0xFFCE93D8),
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
-                  const Text('Selecione o Vendedor:', style: TextStyle(color: Colors.white70)),
+                  const Text('Selecione o Vendedor:',
+                      style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+                    decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(8)),
                     child: DropdownButton<String>(
                       value: selectedSeller,
-                      items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
-                      onChanged: (v) { setDialogState(() => selectedSeller = v); },
+                      items: _companySellers
+                          .map((seller) => DropdownMenuItem<String>(
+                                value: seller['id'].toString(),
+                                child: Text(seller['name'].toString(),
+                                    style:
+                                        const TextStyle(color: Colors.white)),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        setDialogState(() => selectedSeller = v);
+                      },
                       dropdownColor: const Color(0xFF1E1E2C),
                       isExpanded: true,
                       underline: const SizedBox(),
-                      hint: const Text('Selecionar', style: TextStyle(color: Colors.white54)),
+                      hint: const Text('Selecionar',
+                          style: TextStyle(color: Colors.white54)),
                     ),
                   ),
                 ],
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar',
+                        style: TextStyle(color: Colors.white54))),
                 LedButton(
-                  onPressed: selectedSeller == null ? null : () {
-                    Navigator.pop(context);
-                    _distribuirBookPorQR(qrCode, selectedSeller!, isRebolo);
-                  },
-                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-                  child: const Text('Confirmar', style: TextStyle(color: Colors.white)),
+                  onPressed: selectedSeller == null
+                      ? null
+                      : () {
+                          Navigator.pop(context);
+                          _distribuirBookPorQR(
+                              qrCode, selectedSeller!, isRebolo);
+                        },
+                  style: LedButton.styleFrom(
+                      backgroundColor: const Color(0xFFCE93D8)),
+                  child: const Text('Confirmar',
+                      style: TextStyle(color: Colors.white)),
                 ),
               ],
             );
-          }
-        );
-      }
-    );
+          });
+        });
   }
 
-  Future<void> _distribuirBookPorQR(String qr, String seller, bool isRebolo) async {
-    String? sellerId;
-    for (var team in _teamData) {
-      if (team['sellers'] != null) {
-        for (var s in team['sellers'] as List) {
-          if (s['name'] == seller) {
-            sellerId = s['id'];
-            break;
-          }
-        }
-      }
-    }
-    
-    if (sellerId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vendedor não encontrado no sistema.'), backgroundColor: Colors.red));
-      return;
-    }
-    
+  Future<void> _distribuirBookPorQR(
+      String qr, String sellerId, bool isRebolo) async {
     try {
       await ApiService().assignSeller(qr, sellerId);
       await _loadClients(); // Atualiza a tela com o novo status
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Book distribuído com sucesso!'), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Book distribuído com sucesso!'),
+          backgroundColor: Colors.green));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao atribuir: $e'), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Erro ao atribuir: $e'), backgroundColor: Colors.red));
     }
   }
 
-
-
   void _printBatch(String seller, bool isRebolo) async {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Preparando lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
-    final books = isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Preparando lote de ${isRebolo ? "rebolos" : "books"} de $seller...')));
+    final books =
+        isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
     if (books != null && books.isNotEmpty) {
-      final clients = books.map((b) => b['rawClientData'] as Map<String, dynamic>).where((c) => c != null).toList();
+      final clients = books
+          .map((b) => b['rawClientData'] as Map<String, dynamic>)
+          .where((c) => c != null)
+          .toList();
       if (clients.isNotEmpty) {
         await PdfGenerator.printBatch(clients, seller);
       }
@@ -2616,100 +2836,124 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   void _printItem(Map<String, dynamic> book, bool isRebolo) async {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imprimindo unidade: ${book['ficha']}...")));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Imprimindo unidade: ${book['ficha']}...")));
     if (book['rawClientData'] != null) {
       await PdfGenerator.printFicha(book['rawClientData']);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Dados do cliente incompletos para impressão.")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Dados do cliente incompletos para impressão.")));
     }
   }
 
-  Widget _loteCard(String title, String subtitle, Color color, {Widget? trailing}) {
-     return Container(
-       padding: const EdgeInsets.all(12),
-       decoration: BoxDecoration(
-         color: color.withOpacity(0.2),
-         borderRadius: BorderRadius.circular(12),
-         border: Border.all(color: color.withOpacity(0.5)),
-       ),
-       child: Row(
-         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-         children: [
-           Column(
-             crossAxisAlignment: CrossAxisAlignment.start,
-             children: [
-               Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
-               Text(subtitle, style: const TextStyle(color: Colors.white)),
-             ],
-           ),
-           if (trailing != null) trailing,
-         ],
-       ),
-     );
+  Widget _loteCard(String title, String subtitle, Color color,
+      {Widget? trailing}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+              Text(subtitle, style: const TextStyle(color: Colors.white)),
+            ],
+          ),
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
   }
 
   Widget _buildRotasInteligentes({bool isRebolo = false}) {
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(isRebolo ? 'Rotas de Rebolo (Revisita)' : 'Rotas Inteligentes (Manual)', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
-              ),
-              LedButton.icon(
-                onPressed: () => _showNovaRotaDialog(isRebolo),
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('Nova Rota'),
-                style: LedButton.styleFrom(backgroundColor: Colors.blueAccent),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(isRebolo ? 'Organize os rebolos em rotas manuais para revisitas.' : 'Organize os books prontos em rotas manuais.', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-          const SizedBox(height: 16),
-          
-          
-          if ((isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos).isNotEmpty)
-            _buildNaoAtribuidosSection(isRebolo),
-            
-          const SizedBox(height: 8),
-          ...(isRebolo ? _rotasRebolo : _rotasManuais).map((rota) => _buildRotaCard(rota, isRebolo)),
-          
-          const SizedBox(height: 24),
-          const Divider(color: Colors.white24),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(isRebolo ? 'Malotes de Revisita (Saída)' : 'Malotes dos Vendedores (Saída)', style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
-              ),
-              LedButton(
-                onPressed: () => _scanAndDistributeBooks(isRebolo: isRebolo),
-                icon: Icons.qr_code_scanner,
-                text: 'Escanear QR',
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if ((isRebolo ? _rebolosDistribuidos : _booksDistribuidos).isEmpty)
-            Text(isRebolo ? 'Nenhum rebolo distribuído ainda.' : 'Nenhum book distribuído ainda.', style: const TextStyle(color: Colors.white54)),
-          ...(isRebolo ? _rebolosDistribuidos : _booksDistribuidos).entries.map((e) => _buildMaloteCard(e.key, e.value, isRebolo)),
-        ],
-      )
-    );
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                      isRebolo
+                          ? 'Rotas de Rebolo (Revisita)'
+                          : 'Rotas Inteligentes (Manual)',
+                      style: const TextStyle(
+                          color: Color(0xFFCE93D8),
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                ),
+                LedButton.icon(
+                  onPressed: () => _showNovaRotaDialog(isRebolo),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Nova Rota'),
+                  style:
+                      LedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+                isRebolo
+                    ? 'Organize os rebolos em rotas manuais para revisitas.'
+                    : 'Organize os books prontos em rotas manuais.',
+                style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 16),
+            if ((isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos)
+                .isNotEmpty)
+              _buildNaoAtribuidosSection(isRebolo),
+            const SizedBox(height: 8),
+            ...(isRebolo ? _rotasRebolo : _rotasManuais)
+                .map((rota) => _buildRotaCard(rota, isRebolo)),
+            const SizedBox(height: 24),
+            const Divider(color: Colors.white24),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                      isRebolo
+                          ? 'Malotes de Revisita (Saída)'
+                          : 'Malotes dos Vendedores (Saída)',
+                      style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                ),
+                LedButton(
+                  onPressed: () => _scanAndDistributeBooks(isRebolo: isRebolo),
+                  icon: Icons.qr_code_scanner,
+                  text: 'Escanear QR',
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if ((isRebolo ? _rebolosDistribuidos : _booksDistribuidos).isEmpty)
+              Text(
+                  isRebolo
+                      ? 'Nenhum rebolo distribuído ainda.'
+                      : 'Nenhum book distribuído ainda.',
+                  style: const TextStyle(color: Colors.white54)),
+            ...(isRebolo ? _rebolosDistribuidos : _booksDistribuidos)
+                .entries
+                .map((e) => _buildMaloteCard(e.key, e.value, isRebolo)),
+          ],
+        ));
   }
-
-
 
   Widget _buildNaoAtribuidosSection(bool isRebolo) {
     final list = isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos;
@@ -2722,7 +2966,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         color: Colors.orangeAccent.withOpacity(0.05),
       ),
       child: ExpansionTile(
-        title: Text('${isRebolo ? "Rebolos" : "Books"} Não Atribuídos ($count)', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+        title: Text('${isRebolo ? "Rebolos" : "Books"} Não Atribuídos ($count)',
+            style: const TextStyle(
+                color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
         iconColor: Colors.orangeAccent,
         collapsedIconColor: Colors.orangeAccent,
         children: list.map((b) => _buildBookTile(b, null, isRebolo)).toList(),
@@ -2742,7 +2988,9 @@ class _AdminDashboardState extends State<AdminDashboard>
             const Icon(Icons.map_rounded, color: Colors.blueAccent, size: 20),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('${rota['title']} (${books.length} Books)', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text('${rota['title']} (${books.length} Books)',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
@@ -2758,17 +3006,22 @@ class _AdminDashboardState extends State<AdminDashboard>
                 TextButton.icon(
                   onPressed: () => _showRenomearRotaDialog(rota, isRebolo),
                   icon: const Icon(Icons.edit, color: Colors.white70, size: 16),
-                  label: const Text('Renomear', style: TextStyle(color: Colors.white70)),
+                  label: const Text('Renomear',
+                      style: TextStyle(color: Colors.white70)),
                 ),
                 TextButton.icon(
                   onPressed: () => _atribuirRotaInteiraDialog(rota, isRebolo),
-                  icon: const Icon(Icons.local_shipping, color: Colors.greenAccent, size: 16),
-                  label: const Text('Atribuir Rota', style: TextStyle(color: Colors.greenAccent)),
+                  icon: const Icon(Icons.local_shipping,
+                      color: Colors.greenAccent, size: 16),
+                  label: const Text('Atribuir Rota',
+                      style: TextStyle(color: Colors.greenAccent)),
                 ),
                 TextButton.icon(
                   onPressed: () => _excluirRota(rota, isRebolo),
-                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 16),
-                  label: const Text('Excluir Rota', style: TextStyle(color: Colors.redAccent)),
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.redAccent, size: 16),
+                  label: const Text('Excluir Rota',
+                      style: TextStyle(color: Colors.redAccent)),
                 ),
               ],
             ),
@@ -2779,7 +3032,8 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  Widget _buildBookTile(Map<String, dynamic> book, String? rotaId, bool isRebolo) {
+  Widget _buildBookTile(
+      Map<String, dynamic> book, String? rotaId, bool isRebolo) {
     return ListTile(
       onTap: () {
         Navigator.push(
@@ -2793,7 +3047,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         );
       },
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      title: Text(book['cliente'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+      title: Text(book['cliente'] as String,
+          style: const TextStyle(
+              color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 8.0),
         child: Wrap(
@@ -2820,16 +3076,25 @@ class _AdminDashboardState extends State<AdminDashboard>
         },
         itemBuilder: (context) {
           List<PopupMenuEntry<String>> items = [];
-          
-          items.add(const PopupMenuItem(value: 'atribuir_vendedor', child: Text('Atribuir a Vendedor', style: TextStyle(color: Colors.greenAccent))));
+
+          items.add(const PopupMenuItem(
+              value: 'atribuir_vendedor',
+              child: Text('Atribuir a Vendedor',
+                  style: TextStyle(color: Colors.greenAccent))));
           items.add(const PopupMenuDivider());
-          
+
           if (rotaId != null) {
-            items.add(const PopupMenuItem(value: 'desatribuir', child: Text('Mover para Não Atribuídos', style: TextStyle(color: Colors.orangeAccent))));
+            items.add(const PopupMenuItem(
+                value: 'desatribuir',
+                child: Text('Mover para Não Atribuídos',
+                    style: TextStyle(color: Colors.orangeAccent))));
           }
           for (var r in (isRebolo ? _rotasRebolo : _rotasManuais)) {
             if (r['id'] != rotaId) {
-              items.add(PopupMenuItem(value: r['id'], child: Text('Mover para ${r['title']}', style: const TextStyle(color: Colors.white))));
+              items.add(PopupMenuItem(
+                  value: r['id'],
+                  child: Text('Mover para ${r['title']}',
+                      style: const TextStyle(color: Colors.white))));
             }
           }
           return items;
@@ -2841,74 +3106,88 @@ class _AdminDashboardState extends State<AdminDashboard>
   Widget _chip(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(4)),
-      child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+      decoration: BoxDecoration(
+          color: Colors.white12, borderRadius: BorderRadius.circular(4)),
+      child: Text(text,
+          style: const TextStyle(color: Colors.white70, fontSize: 10)),
     );
   }
 
   void _showNovaRotaDialog(bool isRebolo) {
     final ctrl = TextEditingController();
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E2C),
-        title: const Text('Nova Rota', style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: ctrl,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(hintText: 'Nome da Rota', hintStyle: TextStyle(color: Colors.white54)),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          LedButton(
-            onPressed: () {
-              if (ctrl.text.isNotEmpty) {
-                setState(() {
-                  (isRebolo ? _rotasRebolo : _rotasManuais).add({
-                    'id': 'r_${DateTime.now().millisecondsSinceEpoch}',
-                    'title': ctrl.text,
-                    'books': [],
-                  });
-                });
-                Navigator.pop(context);
-              }
-            },
-            style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-            child: const Text('Criar', style: TextStyle(color: Colors.white)),
-          )
-        ],
-      )
-    );
+        context: context,
+        builder: (context) => AlertDialog(
+              backgroundColor: const Color(0xFF1E1E2C),
+              title: const Text('Nova Rota',
+                  style: TextStyle(color: Colors.white)),
+              content: TextField(
+                controller: ctrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    hintText: 'Nome da Rota',
+                    hintStyle: TextStyle(color: Colors.white54)),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar',
+                        style: TextStyle(color: Colors.white54))),
+                LedButton(
+                  onPressed: () {
+                    if (ctrl.text.isNotEmpty) {
+                      setState(() {
+                        (isRebolo ? _rotasRebolo : _rotasManuais).add({
+                          'id': 'r_${DateTime.now().millisecondsSinceEpoch}',
+                          'title': ctrl.text,
+                          'books': [],
+                        });
+                      });
+                      Navigator.pop(context);
+                    }
+                  },
+                  style: LedButton.styleFrom(
+                      backgroundColor: const Color(0xFFCE93D8)),
+                  child: const Text('Criar',
+                      style: TextStyle(color: Colors.white)),
+                )
+              ],
+            ));
   }
 
   void _showRenomearRotaDialog(Map<String, dynamic> rota, bool isRebolo) {
     final ctrl = TextEditingController(text: rota['title']);
     showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E2C),
-        title: const Text('Renomear Rota', style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: ctrl,
-          style: const TextStyle(color: Colors.white),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-          LedButton(
-            onPressed: () {
-              if (ctrl.text.isNotEmpty) {
-                setState(() {
-                  rota['title'] = ctrl.text;
-                });
-                Navigator.pop(context);
-              }
-            },
-            style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-            child: const Text('Salvar', style: TextStyle(color: Colors.white)),
-          )
-        ],
-      )
-    );
+        context: context,
+        builder: (context) => AlertDialog(
+              backgroundColor: const Color(0xFF1E1E2C),
+              title: const Text('Renomear Rota',
+                  style: TextStyle(color: Colors.white)),
+              content: TextField(
+                controller: ctrl,
+                style: const TextStyle(color: Colors.white),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancelar',
+                        style: TextStyle(color: Colors.white54))),
+                LedButton(
+                  onPressed: () {
+                    if (ctrl.text.isNotEmpty) {
+                      setState(() {
+                        rota['title'] = ctrl.text;
+                      });
+                      Navigator.pop(context);
+                    }
+                  },
+                  style: LedButton.styleFrom(
+                      backgroundColor: const Color(0xFFCE93D8)),
+                  child: const Text('Salvar',
+                      style: TextStyle(color: Colors.white)),
+                )
+              ],
+            ));
   }
 
   void _excluirRota(Map<String, dynamic> rota, bool isRebolo) {
@@ -2921,21 +3200,29 @@ class _AdminDashboardState extends State<AdminDashboard>
         _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
       }
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota excluída. ${isRebolo ? "Rebolos" : "Books"} movidos para Não Atribuídos.')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Rota excluída. ${isRebolo ? "Rebolos" : "Books"} movidos para Não Atribuídos.')));
   }
 
-  Widget _buildMaloteCard(String seller, List<Map<String, dynamic>> books, bool isRebolo) {
+  Widget _buildMaloteCard(
+      String seller, List<Map<String, dynamic>> books, bool isRebolo) {
     return LedCard(
       color: Colors.greenAccent.withOpacity(0.05),
       margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.greenAccent.withOpacity(0.3))),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.greenAccent.withOpacity(0.3))),
       child: ExpansionTile(
         title: Row(
           children: [
             const Icon(Icons.person, color: Colors.greenAccent, size: 20),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('$seller (${books.length} ${isRebolo ? "Rebolos" : "Books"})', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text(
+                  '$seller (${books.length} ${isRebolo ? "Rebolos" : "Books"})',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold)),
             ),
             IconButton(
               icon: const Icon(Icons.print, color: Colors.white70, size: 20),
@@ -2946,65 +3233,98 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
         iconColor: Colors.white,
         collapsedIconColor: Colors.white70,
-        children: books.map((b) => ListTile(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => SellerClientDetailScreen(
-                  clientData: b['rawClientData'] ?? b,
-                  isFotografo: true,
-                ),
-              ),
-            );
-          },
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-          title: Text(b['cliente'] as String, style: const TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text('Ficha: ${b['ficha']} | Lote: ${b['lote']}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.print, color: Colors.blueAccent, size: 18),
-                tooltip: 'Imprimir Ficha',
-                onPressed: () => _printItem(b, isRebolo),
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings_backup_restore, color: Colors.orangeAccent, size: 18),
-                tooltip: 'Forçar Resgate pro Estoque',
-                onPressed: () async {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (_) => AlertDialog(
-                      backgroundColor: const Color(0xFF1A1A2E),
-                      title: const Text('Forçar Resgate?', style: TextStyle(color: Colors.white)),
-                      content: const Text('Isso removerá a ficha deste vendedor imediatamente e a devolverá para o estoque. Deseja continuar?', style: TextStyle(color: Colors.white70)),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Resgatar', style: TextStyle(color: Colors.orangeAccent))),
-                      ],
-                    ),
-                  );
-                  if (confirm == true) {
-                    try {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Resgatando ficha...')));
-                      final fichaId = b['rawClientData']?['id'] ?? b['id'];
-                      if (isRebolo) {
-                        await ApiService().forceReturnReboloStock(fichaId);
-                      } else {
-                        await ApiService().forceReturnToStock(fichaId);
-                      }
-                      _loadClients(); // Reload from backend
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ficha resgatada com sucesso!'), backgroundColor: Colors.green));
-                    } catch (e) {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao resgatar: $e'), backgroundColor: Colors.red));
-                    }
-                  }
-                },
-              ),
-            ],
-          ),
-        )).toList(),
+        children: books
+            .map((b) => ListTile(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SellerClientDetailScreen(
+                          clientData: b['rawClientData'] ?? b,
+                          isFotografo: true,
+                        ),
+                      ),
+                    );
+                  },
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                  title: Text(b['cliente'] as String,
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 13)),
+                  subtitle: Text('Ficha: ${b['ficha']} | Lote: ${b['lote']}',
+                      style:
+                          const TextStyle(color: Colors.white54, fontSize: 11)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.print,
+                            color: Colors.blueAccent, size: 18),
+                        tooltip: 'Imprimir Ficha',
+                        onPressed: () => _printItem(b, isRebolo),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.settings_backup_restore,
+                            color: Colors.orangeAccent, size: 18),
+                        tooltip: 'Forçar Resgate pro Estoque',
+                        onPressed: () async {
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              backgroundColor: const Color(0xFF1A1A2E),
+                              title: const Text('Forçar Resgate?',
+                                  style: TextStyle(color: Colors.white)),
+                              content: const Text(
+                                  'Isso removerá a ficha deste vendedor imediatamente e a devolverá para o estoque. Deseja continuar?',
+                                  style: TextStyle(color: Colors.white70)),
+                              actions: [
+                                TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('Cancelar')),
+                                TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('Resgatar',
+                                        style: TextStyle(
+                                            color: Colors.orangeAccent))),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            try {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text('Resgatando ficha...')));
+                              final fichaId =
+                                  b['rawClientData']?['id'] ?? b['id'];
+                              if (isRebolo) {
+                                await ApiService()
+                                    .forceReturnReboloStock(fichaId);
+                              } else {
+                                await ApiService().forceReturnToStock(fichaId);
+                              }
+                              _loadClients(); // Reload from backend
+                              if (mounted)
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            'Ficha resgatada com sucesso!'),
+                                        backgroundColor: Colors.green));
+                            } catch (e) {
+                              if (mounted)
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content: Text('Erro ao resgatar: $e'),
+                                        backgroundColor: Colors.red));
+                            }
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ))
+            .toList(),
       ),
     );
   }
@@ -3012,112 +3332,166 @@ class _AdminDashboardState extends State<AdminDashboard>
   void _atribuirRotaInteiraDialog(Map<String, dynamic> rota, bool isRebolo) {
     String? selectedSeller;
     showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E1E2C),
-          title: const Text('Atribuir Rota Inteira', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Rota: ${rota['title']} (${(rota['books'] as List).length} ${isRebolo ? "rebolos" : "books"})', style: const TextStyle(color: Colors.white70)),
-              const SizedBox(height: 16),
-              DropdownButton<String>(
-                value: selectedSeller,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF1E1E2C),
-                hint: const Text('Selecione o Vendedor', style: TextStyle(color: Colors.white54)),
-                items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
-                onChanged: (v) => setDialogState(() => selectedSeller = v),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            LedButton(
-              onPressed: selectedSeller == null ? null : () {
-                setState(() {
-                  if (isRebolo) {
-                    _rebolosDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
-                    _rotasRebolo.removeWhere((r) => r['id'] == rota['id']);
-                  } else {
-                    _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).addAll(List.from(rota['books']));
-                    _rotasManuais.removeWhere((r) => r['id'] == rota['id']);
-                  }
-                });
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Rota atribuída para $selectedSeller!'), backgroundColor: Colors.green));
-              },
-              style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
-              child: const Text('Atribuir', style: TextStyle(color: Colors.white)),
-            )
-          ],
-        )
-      )
-    );
+        context: context,
+        builder: (context) => StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+                  backgroundColor: const Color(0xFF1E1E2C),
+                  title: const Text('Atribuir Rota Inteira',
+                      style: TextStyle(color: Colors.white)),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                          'Rota: ${rota['title']} (${(rota['books'] as List).length} ${isRebolo ? "rebolos" : "books"})',
+                          style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 16),
+                      DropdownButton<String>(
+                        value: selectedSeller,
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF1E1E2C),
+                        hint: const Text('Selecione o Vendedor',
+                            style: TextStyle(color: Colors.white54)),
+                        items: _companySellers
+                            .map((seller) => DropdownMenuItem<String>(
+                                  value: seller['id'].toString(),
+                                  child: Text(seller['name'].toString(),
+                                      style:
+                                          const TextStyle(color: Colors.white)),
+                                ))
+                            .toList(),
+                        onChanged: (v) =>
+                            setDialogState(() => selectedSeller = v),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancelar',
+                            style: TextStyle(color: Colors.white54))),
+                    LedButton(
+                      onPressed: selectedSeller == null
+                          ? null
+                          : () async {
+                              final sellerId = selectedSeller!;
+                              final clientIds = (rota['books'] as List)
+                                  .map((book) =>
+                                      book['rawClientData']?['id'] ??
+                                      book['id'])
+                                  .whereType<String>()
+                                  .toList();
+                              try {
+                                await ApiService()
+                                    .batchAssignSeller(clientIds, sellerId);
+                                if (!context.mounted) return;
+                                Navigator.pop(context);
+                                await _loadClients();
+                                if (mounted)
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(SnackBar(
+                                          content: Text(
+                                              'Rota atribuída para ${_sellerName(sellerId)}!'),
+                                          backgroundColor: Colors.green));
+                              } catch (e) {
+                                if (context.mounted)
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content:
+                                              Text('Erro ao atribuir rota: $e'),
+                                          backgroundColor: Colors.red));
+                              }
+                            },
+                      style: LedButton.styleFrom(
+                          backgroundColor: Colors.greenAccent),
+                      child: const Text('Atribuir',
+                          style: TextStyle(color: Colors.white)),
+                    )
+                  ],
+                )));
   }
 
-  void _atribuirBookDialog(Map<String, dynamic> book, String? rotaId, bool isRebolo) {
+  void _atribuirBookDialog(
+      Map<String, dynamic> book, String? rotaId, bool isRebolo) {
     String? selectedSeller;
     showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E1E2C),
-          title: const Text('Atribuir Book Individual', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Ficha: ${book['ficha']} (${book['cliente']})', style: const TextStyle(color: Colors.white70)),
-              const SizedBox(height: 16),
-              DropdownButton<String>(
-                value: selectedSeller,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF1E1E2C),
-                hint: const Text('Selecione o Vendedor', style: TextStyle(color: Colors.white54)),
-                items: _todosVendedores.map((v) => DropdownMenuItem(value: v, child: Text(v, style: const TextStyle(color: Colors.white)))).toList(),
-                onChanged: (v) => setDialogState(() => selectedSeller = v),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            LedButton(
-              onPressed: selectedSeller == null ? null : () {
-                setState(() {
-                  if (rotaId == null) {
-                    if (isRebolo) {
-                      _rebolosNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
-                    } else {
-                      _booksNaoAtribuidos.removeWhere((b) => b['id'] == book['id']);
-                    }
-                  } else {
-                    final rota = isRebolo 
-                      ? _rotasRebolo.firstWhere((r) => r['id'] == rotaId)
-                      : _rotasManuais.firstWhere((r) => r['id'] == rotaId);
-                    (rota['books'] as List).removeWhere((b) => b['id'] == book['id']);
-                  }
-                  if (isRebolo) {
-                    _rebolosDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
-                  } else {
-                    _booksDistribuidos.putIfAbsent(selectedSeller!, () => []).add(book);
-                  }
-                });
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${isRebolo ? "Rebolo" : "Book"} atribuído para $selectedSeller!'), backgroundColor: Colors.green));
-              },
-              style: LedButton.styleFrom(backgroundColor: Colors.greenAccent),
-              child: const Text('Atribuir', style: TextStyle(color: Colors.white)),
-            )
-          ],
-        )
-      )
-    );
+        context: context,
+        builder: (context) => StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+                  backgroundColor: const Color(0xFF1E1E2C),
+                  title: const Text('Atribuir Book Individual',
+                      style: TextStyle(color: Colors.white)),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Ficha: ${book['ficha']} (${book['cliente']})',
+                          style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 16),
+                      DropdownButton<String>(
+                        value: selectedSeller,
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF1E1E2C),
+                        hint: const Text('Selecione o Vendedor',
+                            style: TextStyle(color: Colors.white54)),
+                        items: _companySellers
+                            .map((seller) => DropdownMenuItem<String>(
+                                  value: seller['id'].toString(),
+                                  child: Text(seller['name'].toString(),
+                                      style:
+                                          const TextStyle(color: Colors.white)),
+                                ))
+                            .toList(),
+                        onChanged: (v) =>
+                            setDialogState(() => selectedSeller = v),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancelar',
+                            style: TextStyle(color: Colors.white54))),
+                    LedButton(
+                      onPressed: selectedSeller == null
+                          ? null
+                          : () async {
+                              final sellerId = selectedSeller!;
+                              final clientId =
+                                  (book['rawClientData']?['id'] ?? book['id'])
+                                      ?.toString();
+                              if (clientId == null || clientId.isEmpty) return;
+                              try {
+                                await ApiService()
+                                    .batchAssignSeller([clientId], sellerId);
+                                if (!context.mounted) return;
+                                Navigator.pop(context);
+                                await _loadClients();
+                                if (mounted)
+                                  ScaffoldMessenger.of(this.context)
+                                      .showSnackBar(SnackBar(
+                                          content: Text(
+                                              '${isRebolo ? "Rebolo" : "Book"} atribuído para ${_sellerName(sellerId)}!'),
+                                          backgroundColor: Colors.green));
+                              } catch (e) {
+                                if (context.mounted)
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                          content: Text('Erro ao atribuir: $e'),
+                                          backgroundColor: Colors.red));
+                              }
+                            },
+                      style: LedButton.styleFrom(
+                          backgroundColor: Colors.greenAccent),
+                      child: const Text('Atribuir',
+                          style: TextStyle(color: Colors.white)),
+                    )
+                  ],
+                )));
   }
 
-  void _moverBook(Map<String, dynamic> book, String? fromRotaId, String? toRotaId, bool isRebolo) {
+  void _moverBook(Map<String, dynamic> book, String? fromRotaId,
+      String? toRotaId, bool isRebolo) {
     setState(() {
       // Remover de onde estava
       if (fromRotaId == null) {
@@ -3126,7 +3500,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         final rota = _rotasManuais.firstWhere((r) => r['id'] == fromRotaId);
         (rota['books'] as List).removeWhere((b) => b['id'] == book['id']);
       }
-      
+
       // Adicionar para onde vai
       if (toRotaId == null) {
         _booksNaoAtribuidos.add(book);
@@ -3164,8 +3538,8 @@ class _StockBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.75),
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
       decoration: const BoxDecoration(
         color: Color(0xFF12122A),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -3202,15 +3576,14 @@ class _StockBottomSheet extends StatelessWidget {
                               fontSize: 16)),
                       Text('${fichas.length} fichas não-vendidas',
                           style: const TextStyle(
-                              color: Color(0xFF90CAF9),
-                              fontSize: 12)),
+                              color: Color(0xFF90CAF9), fontSize: 12)),
                     ],
                   ),
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close_rounded,
-                      color: Color(0xFF90CAF9)),
+                  icon:
+                      const Icon(Icons.close_rounded, color: Color(0xFF90CAF9)),
                 ),
               ],
             ),
@@ -3231,8 +3604,7 @@ class _StockBottomSheet extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: const Color(0xFF1A1A2E),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                        color: rColor.withOpacity(0.2)),
+                    border: Border.all(color: rColor.withOpacity(0.2)),
                   ),
                   child: Row(
                     children: [
@@ -3255,8 +3627,7 @@ class _StockBottomSheet extends StatelessWidget {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
-                          crossAxisAlignment:
-                              CrossAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             // Nome + ficha
                             Row(children: [
@@ -3272,8 +3643,7 @@ class _StockBottomSheet extends StatelessWidget {
                             Row(children: [
                               // Nº da ficha
                               const Icon(Icons.tag_rounded,
-                                  color: Color(0xFF4FC3F7),
-                                  size: 12),
+                                  color: Color(0xFF4FC3F7), size: 12),
                               const SizedBox(width: 3),
                               Text(f['seq'] as String,
                                   style: const TextStyle(
@@ -3283,13 +3653,11 @@ class _StockBottomSheet extends StatelessWidget {
                               const SizedBox(width: 12),
                               // Lote
                               const Icon(Icons.inventory_rounded,
-                                  color: Color(0xFF90CAF9),
-                                  size: 12),
+                                  color: Color(0xFF90CAF9), size: 12),
                               const SizedBox(width: 3),
                               Text(f['lote'] as String,
                                   style: const TextStyle(
-                                      color: Color(0xFF90CAF9),
-                                      fontSize: 11)),
+                                      color: Color(0xFF90CAF9), fontSize: 11)),
                             ]),
                           ],
                         ),
@@ -3301,14 +3669,10 @@ class _StockBottomSheet extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: rColor.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: rColor.withOpacity(0.35)),
+                          border: Border.all(color: rColor.withOpacity(0.35)),
                         ),
                         child: Text(
-                          reason
-                              .split(' ')
-                              .take(2)
-                              .join('\n'),
+                          reason.split(' ').take(2).join('\n'),
                           textAlign: TextAlign.center,
                           style: TextStyle(
                               color: rColor,

@@ -9,6 +9,7 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import '../servicos/servico_midia.dart';
@@ -16,11 +17,11 @@ import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
 
-
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
   final bool isFotografo;
-  const SellerClientDetailScreen({super.key, required this.clientData, this.isFotografo = false});
+  const SellerClientDetailScreen(
+      {super.key, required this.clientData, this.isFotografo = false});
 
   @override
   // ignore: library_private_types_in_public_api
@@ -55,15 +56,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(children: [
-          const Icon(Icons.check_circle_rounded,
-              color: Colors.white, size: 18),
+          const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
           const SizedBox(width: 10),
           Expanded(child: Text(msg)),
         ]),
         backgroundColor: const Color(0xFF43A047),
         behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -190,37 +189,41 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               ),
               IconButton(
                 onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const tela_sincronizacao.SyncScreen()));
                 },
-                icon: Consumer<SyncService>(
-                  builder: (context, sync, child) {
-                    return Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        const Icon(Icons.cloud_sync, color: Color(0xFF4FC3F7)),
-                        if (sync.pendingRequests.isNotEmpty)
-                          Positioned(
-                            right: 0,
-                            top: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: const BoxDecoration(
-                                color: Colors.red,
-                                shape: BoxShape.circle,
-                              ),
-                              constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
-                              child: Text(
-                                '${sync.pendingRequests.length}',
-                                style: const TextStyle(color: Colors.white, fontSize: 8),
-                                textAlign: TextAlign.center,
-                              ),
+                icon: Consumer<SyncService>(builder: (context, sync, child) {
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      const Icon(Icons.cloud_sync, color: Color(0xFF4FC3F7)),
+                      if (sync.pendingRequests.isNotEmpty)
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: const BoxConstraints(
+                                minWidth: 12, minHeight: 12),
+                            child: Text(
+                              '${sync.pendingRequests.length}',
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 8),
+                              textAlign: TextAlign.center,
                             ),
                           ),
-                      ],
-                    );
-                  }
-                ),
-                tooltip: 'Backups Offline',
+                        ),
+                    ],
+                  );
+                }),
+                tooltip: 'Envios Pendentes',
               ),
             ],
           ),
@@ -241,14 +244,16 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       if (intVal != null) return Color(intVal);
       return null;
     }
-    
+
     Color? parsedHouseColor = parseColor(client['houseColor']);
     Color? parsedGateColor = parseColor(client['gateColor']);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: UIHelpers.getLedDecoration(client['bookStatus']?.toString()).copyWith(
-        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
+      decoration:
+          UIHelpers.getLedDecoration(client['bookStatus']?.toString()).copyWith(
+        border:
+            Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Column(
         children: [
@@ -259,47 +264,68 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (client['phone1'] != null && client['phone1'].toString().isNotEmpty)
+                    if (client['phone1'] != null &&
+                        client['phone1'].toString().isNotEmpty)
                       GestureDetector(
                         onTap: () async {
-                          final num = client['phone1'].toString().replaceAll(RegExp(r'\D'), '');
+                          final num = client['phone1']
+                              .toString()
+                              .replaceAll(RegExp(r'\D'), '');
                           final fullNum = num.startsWith('55') ? num : '55$num';
                           final uri = Uri.parse('https://wa.me/$fullNum');
                           if (await canLaunchUrl(uri)) {
-                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
                           } else {
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Não foi possível abrir o WhatsApp'),
+                                      backgroundColor: Colors.red));
                           }
                         },
                         child: Container(
                           color: Colors.transparent,
                           padding: const EdgeInsets.only(bottom: 4),
-                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone1'].toString()),
+                          child: _infoRow(FontAwesomeIcons.whatsapp,
+                              client['phone1'].toString()),
                         ),
                       ),
-                    if (client['phone2'] != null && client['phone2'].toString().isNotEmpty)
+                    if (client['phone2'] != null &&
+                        client['phone2'].toString().isNotEmpty)
                       GestureDetector(
                         onTap: () async {
-                          final num = client['phone2'].toString().replaceAll(RegExp(r'\D'), '');
+                          final num = client['phone2']
+                              .toString()
+                              .replaceAll(RegExp(r'\D'), '');
                           final fullNum = num.startsWith('55') ? num : '55$num';
                           final uri = Uri.parse('https://wa.me/$fullNum');
                           if (await canLaunchUrl(uri)) {
-                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
                           } else {
-                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Não foi possível abrir o WhatsApp'), backgroundColor: Colors.red));
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Não foi possível abrir o WhatsApp'),
+                                      backgroundColor: Colors.red));
                           }
                         },
                         child: Container(
                           color: Colors.transparent,
                           padding: const EdgeInsets.only(bottom: 4),
-                          child: _infoRow(FontAwesomeIcons.whatsapp, client['phone2'].toString()),
+                          child: _infoRow(FontAwesomeIcons.whatsapp,
+                              client['phone2'].toString()),
                         ),
                       ),
                     GestureDetector(
                       onTap: () async {
                         final street = client['street']?.toString() ?? '';
                         final number = client['number']?.toString() ?? '';
-                        final neighborhood = client['neighborhood']?.toString() ?? '';
+                        final neighborhood =
+                            client['neighborhood']?.toString() ?? '';
                         final city = client['city']?.toString() ?? '';
                         final state = client['state']?.toString() ?? '';
                         final parts = [
@@ -311,19 +337,21 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                           'Brasil',
                         ];
                         final q = parts.join(', ');
-                        final url = Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+                        final url = Uri.parse(
+                            'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
                         if (await canLaunchUrl(url)) {
-                          await launchUrl(url, mode: LaunchMode.externalApplication);
+                          await launchUrl(url,
+                              mode: LaunchMode.externalApplication);
                         }
                       },
                       child: Container(
                         color: Colors.transparent, // to make it tappable
-                        child: _infoRow(
-                            Icons.location_on_rounded,
+                        child: _infoRow(Icons.location_on_rounded,
                             "${client['street']}, ${client['number']} — ${client['city']}"),
                       ),
                     ),
-                    if (client['referencePoint'] != null && client['referencePoint'].toString().isNotEmpty) ...[
+                    if (client['referencePoint'] != null &&
+                        client['referencePoint'].toString().isNotEmpty) ...[
                       const SizedBox(height: 4),
                       _infoRow(Icons.place, "Ref: ${client['referencePoint']}"),
                     ],
@@ -332,9 +360,15 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               ),
             ],
           ),
-          
+
           // Additional Info Row (Cor da Casa, Cor do Portão, Profissao, Horario, Criancas)
-          if (parsedHouseColor != null || parsedGateColor != null || client['visitTime'] != null || client['profession'] != null || (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty)) ...[
+          if (parsedHouseColor != null ||
+              parsedGateColor != null ||
+              client['visitTime'] != null ||
+              client['profession'] != null ||
+              (client['children'] != null &&
+                  client['children'] is List &&
+                  (client['children'] as List).isNotEmpty)) ...[
             const SizedBox(height: 12),
             const Divider(color: Colors.white12),
             if (parsedHouseColor != null || parsedGateColor != null) ...[
@@ -345,10 +379,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   if (parsedHouseColor != null) ...[
                     Column(
                       children: [
-                        const Text('Cor da Casa', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        const Text('Cor da Casa',
+                            style:
+                                TextStyle(color: Colors.white54, fontSize: 10)),
                         const SizedBox(height: 4),
                         Container(
-                          width: 24, height: 24,
+                          width: 24,
+                          height: 24,
                           decoration: BoxDecoration(
                             color: parsedHouseColor,
                             shape: BoxShape.circle,
@@ -362,10 +399,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   if (parsedGateColor != null) ...[
                     Column(
                       children: [
-                        const Text('Cor do Portão', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                        const Text('Cor do Portão',
+                            style:
+                                TextStyle(color: Colors.white54, fontSize: 10)),
                         const SizedBox(height: 4),
                         Container(
-                          width: 24, height: 24,
+                          width: 24,
+                          height: 24,
                           decoration: BoxDecoration(
                             color: parsedGateColor,
                             shape: BoxShape.circle,
@@ -380,7 +420,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               ),
             ],
             // Profissão e Horário em linhas separadas (evita espremimento e overflow)
-            if (client['profession'] != null && client['profession'].toString().isNotEmpty) ...[
+            if (client['profession'] != null &&
+                client['profession'].toString().isNotEmpty) ...[
               const SizedBox(height: 6),
               _infoRow(Icons.work, client['profession'].toString()),
             ],
@@ -388,15 +429,20 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
               const SizedBox(height: 4),
               _infoRow(Icons.access_time, "Visita: ${client['visitTime']}"),
             ],
-            if (client['children'] != null && client['children'] is List && (client['children'] as List).isNotEmpty) ...[
+            if (client['children'] != null &&
+                client['children'] is List &&
+                (client['children'] as List).isNotEmpty) ...[
               const SizedBox(height: 8),
-              _infoRow(Icons.child_care, "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
+              _infoRow(Icons.child_care,
+                  "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
             ],
-            if (client['signatureUrl'] != null && client['signatureUrl'].toString().trim().isNotEmpty) ...[
+            if (client['signatureUrl'] != null &&
+                client['signatureUrl'].toString().trim().isNotEmpty) ...[
               const SizedBox(height: 12),
               const Divider(color: Colors.white12),
               const SizedBox(height: 8),
-              const Text('Assinatura do Cliente (Ficha)', style: TextStyle(color: Colors.white54, fontSize: 10)),
+              const Text('Assinatura do Cliente (Ficha)',
+                  style: TextStyle(color: Colors.white54, fontSize: 10)),
               const SizedBox(height: 4),
               Container(
                 height: 80,
@@ -412,7 +458,9 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 ),
               ),
             ],
-            if (client['nonSales'] != null && client['nonSales'] is List && (client['nonSales'] as List).isNotEmpty) ...[
+            if (client['nonSales'] != null &&
+                client['nonSales'] is List &&
+                (client['nonSales'] as List).isNotEmpty) ...[
               const SizedBox(height: 12),
               Container(
                 width: double.infinity,
@@ -427,20 +475,33 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   children: [
                     Row(
                       children: const [
-                        Icon(Icons.report_problem_rounded, color: Colors.redAccent, size: 18),
+                        Icon(Icons.report_problem_rounded,
+                            color: Colors.redAccent, size: 18),
                         SizedBox(width: 8),
-                        Text('Histórico de Não-Venda (Rebolo)', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                        Text('Histórico de Não-Venda (Rebolo)',
+                            style: TextStyle(
+                                color: Colors.redAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13)),
                       ],
                     ),
                     const SizedBox(height: 8),
                     ...(client['nonSales'] as List).map((ns) {
                       final reason = ns['reason'] ?? 'Motivo não especificado';
-                      final sellerName = ns['seller']?['name'] ?? ns['sellerName'] ?? 'Vendedor';
-                      final dateStr = ns['date'] != null ? ns['date'].toString().split('T')[0] : '';
+                      final sellerName = ns['seller']?['name'] ??
+                          ns['sellerName'] ??
+                          'Vendedor';
+                      final dateStr = ns['date'] != null
+                          ? ns['date'].toString().split('T')[0]
+                          : '';
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 4),
-                        child: Text('• Motivo: "$reason" | Vendedor: $sellerName ($dateStr)',
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500)),
+                        child: Text(
+                            '• Motivo: "$reason" | Vendedor: $sellerName ($dateStr)',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500)),
                       );
                     }).toList(),
                   ],
@@ -455,16 +516,21 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 decoration: BoxDecoration(
                   color: Colors.amber.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.amberAccent.withOpacity(0.6)),
+                  border:
+                      Border.all(color: Colors.amberAccent.withOpacity(0.6)),
                 ),
                 child: Row(
                   children: const [
-                    Icon(Icons.lock_rounded, color: Colors.amberAccent, size: 20),
+                    Icon(Icons.lock_rounded,
+                        color: Colors.amberAccent, size: 20),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Cidade Encerrada: O registro de novas vendas e não-vendas está bloqueado para esta ficha.',
-                        style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: Colors.amberAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold),
                       ),
                     ),
                   ],
@@ -483,8 +549,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       const SizedBox(width: 6),
       Expanded(
           child: Text(text,
-              style: const TextStyle(
-                  color: Color(0xFF90CAF9), fontSize: 12),
+              style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 12),
               overflow: TextOverflow.ellipsis)),
     ]);
   }
@@ -497,8 +562,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
         tabs: _tabs,
         labelColor: const Color(0xFF4FC3F7),
         unselectedLabelColor: const Color(0xFF546E7A),
-        labelStyle:
-            const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+        labelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
         indicatorColor: const Color(0xFF4FC3F7),
         indicatorWeight: 2,
         dividerColor: Colors.transparent,
@@ -528,8 +592,7 @@ InputDecoration _fieldDecoration(String label, IconData icon) {
     prefixIcon: Icon(icon, color: const Color(0xFF4FC3F7), size: 18),
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
-      borderSide:
-          BorderSide(color: Colors.white.withOpacity(0.15), width: 1),
+      borderSide: BorderSide(color: Colors.white.withOpacity(0.15), width: 1),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
@@ -554,7 +617,8 @@ Widget _buildRatingField(String label, void Function(double) onRatingUpdate) {
         itemCount: 5,
         itemSize: 30,
         unratedColor: Colors.white24,
-        itemBuilder: (context, _) => const Icon(Icons.star_rounded, color: Colors.amber),
+        itemBuilder: (context, _) =>
+            const Icon(Icons.star_rounded, color: Colors.amber),
         onRatingUpdate: onRatingUpdate,
       ),
     ],
@@ -583,8 +647,7 @@ Widget _confirmButton(
       style: LedButton.styleFrom(
         backgroundColor: Colors.transparent,
         shadowColor: Colors.transparent,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       child: isLoading
           ? const SizedBox(
@@ -631,15 +694,29 @@ class _SaleTabState extends State<_SaleTab> {
   String? _saleId;
 
   void _submit() async {
-    final cleanAmount = _valorVendaController.text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
+    final cleanAmount = _valorVendaController.text
+        .replaceAll(RegExp(r'[^0-9,]'), '')
+        .replaceAll(',', '.');
     final double valor = double.tryParse(cleanAmount) ?? 0.0;
-    if (_valorVendaController.text.isEmpty) return;
+    if (_valorVendaController.text.isEmpty || valor <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Informe um valor de venda válido.'),
+          backgroundColor: Colors.red));
+      return;
+    }
+    if (_receiptPhoto == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('Tire a foto do comprovante antes de confirmar a venda.'),
+          backgroundColor: Colors.orange));
+      return;
+    }
     setState(() => _isLoading = true);
-    
+
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
-      
+
       final payload = {
         'clientId': widget.client['id'],
         'city': widget.client['city'] ?? '',
@@ -651,27 +728,49 @@ class _SaleTabState extends State<_SaleTab> {
         'paymentMethod': _paymentMethod,
       };
 
-      String? finalSaleId;
       try {
-        finalSaleId = await apiService.registerSale(payload);
-      } catch (e) {
-        await syncService.addPendingRequest('REGISTER_SALE', payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
-        finalSaleId = 'offline_${DateTime.now().millisecondsSinceEpoch}';
+        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path);
+      } on ApiRequestException catch (e) {
+        if (!e.retryable) rethrow;
+        final storageDir = await getApplicationSupportDirectory();
+        final pendingDir = Directory(
+            '${storageDir.path}${Platform.pathSeparator}pending_receipts');
+        await pendingDir.create(recursive: true);
+        final persistedReceipt = await _receiptPhoto!.copy(
+          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        );
+        await syncService.addPendingRequest('REGISTER_SALE', {
+          ...payload,
+          'pendingReceiptPath': persistedReceipt.path,
+        });
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Sem confirmação do servidor. Venda e comprovante ficaram aguardando sincronização.'),
+            backgroundColor: Colors.orange,
+          ));
+        }
+        return;
       }
 
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _saleFinalized = true;
-        _saleId = finalSaleId;
+        _saleFinalized = false;
+        _receiptPhoto = null;
+        _saleId = null;
       });
-      widget.onSuccess('Venda registrada com sucesso!');
+      _valorVendaController.clear();
+      _numeroFichaController.clear();
+      widget.onSuccess('Venda e comprovante registrados com sucesso!');
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao registrar venda: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro ao registrar venda: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -703,7 +802,9 @@ class _SaleTabState extends State<_SaleTab> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao anexar comprovante: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro ao anexar comprovante: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -712,7 +813,7 @@ class _SaleTabState extends State<_SaleTab> {
   void _sendReceipt() async {
     if (_receiptPhoto == null || _saleId == null) return;
     setState(() => _isLoading = true);
-    
+
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.uploadSaleReceipt(_saleId!, _receiptPhoto!.path);
@@ -731,7 +832,9 @@ class _SaleTabState extends State<_SaleTab> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao anexar comprovante: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro ao anexar comprovante: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -740,19 +843,31 @@ class _SaleTabState extends State<_SaleTab> {
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
-    final isSold = client['outcomeStatus'] == 'SOLD' || (client['sales'] != null && (client['sales'] as List).isNotEmpty);
+    final isSold = client['outcomeStatus'] == 'SOLD';
     final isCityClosed = client['cityClosedAt'] != null;
-    final List sales = (client['sales'] is List) ? (client['sales'] as List) : [];
-    final Map<String, dynamic>? activeSale = sales.isNotEmpty ? Map<String, dynamic>.from(sales.first) : null;
+    final List sales =
+        (client['sales'] is List) ? (client['sales'] as List) : [];
+    final completedSales = sales
+        .where((sale) =>
+            sale is Map &&
+            sale['receiptUrl'] != null &&
+            sale['receiptUrl'].toString().trim().isNotEmpty)
+        .toList();
+    final Map<String, dynamic>? activeSale = completedSales.isNotEmpty
+        ? Map<String, dynamic>.from(completedSales.first as Map)
+        : null;
 
     final keyboardPadding = MediaQuery.of(context).viewInsets.bottom;
 
     if (isSold && activeSale != null) {
       final receiptUrl = activeSale['receiptUrl']?.toString();
       final hasReceipt = receiptUrl != null && receiptUrl.trim().isNotEmpty;
-      final saleVal = activeSale['value'] != null ? activeSale['value'].toString() : '---';
+      final saleVal =
+          activeSale['value'] != null ? activeSale['value'].toString() : '---';
       final saleProd = activeSale['product']?.toString() ?? 'Book';
-      final saleDate = activeSale['date'] != null ? activeSale['date'].toString().split('T')[0] : '';
+      final saleDate = activeSale['date'] != null
+          ? activeSale['date'].toString().split('T')[0]
+          : '';
       final salePay = activeSale['paymentMethod']?.toString() ?? '';
 
       return SingleChildScrollView(
@@ -769,15 +884,21 @@ class _SaleTabState extends State<_SaleTab> {
             children: [
               Row(
                 children: const [
-                  Icon(Icons.check_circle_rounded, color: Color(0xFF00E676), size: 28),
+                  Icon(Icons.check_circle_rounded,
+                      color: Color(0xFF00E676), size: 28),
                   SizedBox(width: 10),
-                  Text('Venda Já Registrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('Venda Já Registrada',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                 ],
               ),
               const SizedBox(height: 16),
               const Divider(color: Colors.white12),
               const SizedBox(height: 12),
-              _buildDetailRow('Valor da Venda', 'R\$ $saleVal', highlight: true),
+              _buildDetailRow('Valor da Venda', 'R\$ $saleVal',
+                  highlight: true),
               const SizedBox(height: 8),
               _buildDetailRow('Produto', saleProd),
               const SizedBox(height: 8),
@@ -787,7 +908,11 @@ class _SaleTabState extends State<_SaleTab> {
               const SizedBox(height: 16),
               const Divider(color: Colors.white12),
               const SizedBox(height: 12),
-              const Text('Comprovante de Pagamento:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+              const Text('Comprovante de Pagamento:',
+                  style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               if (hasReceipt) ...[
                 Container(
@@ -799,17 +924,23 @@ class _SaleTabState extends State<_SaleTab> {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: AuthenticatedImage(url: receiptUrl, fit: BoxFit.cover),
+                    child:
+                        AuthenticatedImage(url: receiptUrl, fit: BoxFit.cover),
                   ),
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _isLoading ? null : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
-                  icon: const Icon(Icons.refresh, color: Color(0xFF4FC3F7), size: 18),
-                  label: const Text('Substituir Comprovante', style: TextStyle(color: Color(0xFF4FC3F7))),
+                  onPressed: _isLoading
+                      ? null
+                      : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
+                  icon: const Icon(Icons.refresh,
+                      color: Color(0xFF4FC3F7), size: 18),
+                  label: const Text('Substituir Comprovante',
+                      style: TextStyle(color: Color(0xFF4FC3F7))),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFF4FC3F7)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                 ),
               ] else ...[
@@ -818,26 +949,34 @@ class _SaleTabState extends State<_SaleTab> {
                   decoration: BoxDecoration(
                     color: Colors.orange.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orangeAccent.withOpacity(0.4)),
+                    border:
+                        Border.all(color: Colors.orangeAccent.withOpacity(0.4)),
                   ),
                   child: Row(
                     children: const [
-                      Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent, size: 20),
+                      Icon(Icons.warning_amber_rounded,
+                          color: Colors.orangeAccent, size: 20),
                       SizedBox(width: 8),
                       Expanded(
-                        child: Text('Nenhum comprovante anexado a esta venda.', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                        child: Text('Nenhum comprovante anexado a esta venda.',
+                            style: TextStyle(
+                                color: Colors.orangeAccent, fontSize: 12)),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _isLoading ? null : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
+                  onPressed: _isLoading
+                      ? null
+                      : () => _takeReceiptPhoto(targetSaleId: activeSale['id']),
                   icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
-                  label: const Text('Anexar Comprovante Agora', style: TextStyle(color: Color(0xFF4FC3F7))),
+                  label: const Text('Anexar Comprovante Agora',
+                      style: TextStyle(color: Color(0xFF4FC3F7))),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFF4FC3F7)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
@@ -861,9 +1000,14 @@ class _SaleTabState extends State<_SaleTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: const [
-              Icon(Icons.lock_outline_rounded, color: Colors.amberAccent, size: 48),
+              Icon(Icons.lock_outline_rounded,
+                  color: Colors.amberAccent, size: 48),
               SizedBox(height: 12),
-              Text('Cidade Encerrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Cidade Encerrada',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
               Text(
                 'Esta cidade foi encerrada no Fechamento de Cidade. O registro de novas vendas está bloqueado para estas fichas.',
@@ -889,11 +1033,10 @@ class _SaleTabState extends State<_SaleTab> {
                   fontSize: 18,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text('Cliente: ${widget.client['name'] ?? widget.client['id']} · Cidade: ${widget.client['city'] ?? ''}',
-              style:
-                  const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
+          Text(
+              'Cliente: ${widget.client['name'] ?? widget.client['id']} · Cidade: ${widget.client['city'] ?? ''}',
+              style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           const SizedBox(height: 20),
-
           ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 56),
             child: TextField(
@@ -905,54 +1048,66 @@ class _SaleTabState extends State<_SaleTab> {
                     locale: 'pt_BR', symbol: r'R$')
               ],
               style: const TextStyle(color: Colors.white, fontSize: 18),
-              decoration:
-                  _fieldDecoration(r'Valor da Venda (R$)', Icons.attach_money_rounded),
+              decoration: _fieldDecoration(
+                  r'Valor da Venda (R$)', Icons.attach_money_rounded),
             ),
           ),
           const SizedBox(height: 16),
-
           TextField(
             controller: _numeroFichaController,
             style: const TextStyle(color: Colors.white),
             decoration: _fieldDecoration('Observações', Icons.notes_rounded),
           ),
           const SizedBox(height: 16),
-
-          _buildDropdown('Produto', _product, ['Book completo capa +Book+mídias', 'Book sem mídias', 'Book sem capa', 'Book com defeito'], (v) {
+          _buildDropdown('Produto', _product, [
+            'Book completo capa +Book+mídias',
+            'Book sem mídias',
+            'Book sem capa',
+            'Book com defeito'
+          ], (v) {
             setState(() {
               _product = v!;
               if (_product == 'Book sem capa') {
                 _hasCover = false;
-              } else if (_product == 'Book completo capa +Book+mídias' || _product == 'Book sem mídias') {
+              } else if (_product == 'Book completo capa +Book+mídias' ||
+                  _product == 'Book sem mídias') {
                 _hasCover = true;
               }
             });
           }),
           const SizedBox(height: 16),
-          
           if (_product == 'Book com defeito') ...[
             Theme(
               data: Theme.of(context).copyWith(
                 unselectedWidgetColor: Colors.white54,
               ),
               child: CheckboxListTile(
-                title: const Text('O book tinha capa?', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Marque se a capa precisou ser usada.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                title: const Text('O book tinha capa?',
+                    style: TextStyle(color: Colors.white)),
+                subtitle: const Text('Marque se a capa precisou ser usada.',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
                 value: _hasCover,
                 activeColor: const Color(0xFF4FC3F7),
                 checkColor: Colors.black,
                 tileColor: Colors.white.withOpacity(0.05),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
                 onChanged: (val) => setState(() => _hasCover = val ?? false),
               ),
             ),
             const SizedBox(height: 16),
           ],
-          
-          _buildDropdown('Método de Pagamento', _paymentMethod, ['CASH', 'PIX', 'DEBIT', 'CREDIT'], (v) => setState(() => _paymentMethod = v!)),
+          _buildDropdown(
+              'Método de Pagamento',
+              _paymentMethod,
+              ['CASH', 'PIX', 'DEBIT', 'CREDIT'],
+              (v) => setState(() => _paymentMethod = v!)),
           const SizedBox(height: 24),
-          
-          const Text('Avaliação do Atendimento', style: TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14)),
+          const Text('Avaliação do Atendimento',
+              style: TextStyle(
+                  color: Color(0xFF90CAF9),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14)),
           const SizedBox(height: 12),
           _buildRatingField('Vendedor', (r) => _sellerRating = r),
           const SizedBox(height: 12),
@@ -960,12 +1115,44 @@ class _SaleTabState extends State<_SaleTab> {
           const SizedBox(height: 12),
           _buildRatingField('O Contato', (r) => _contactRating = r),
           const SizedBox(height: 24),
-
           if (!_saleFinalized) ...[
+            const Text('Comprovante de pagamento (obrigatório)',
+                style: TextStyle(
+                    color: Color(0xFF90CAF9),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14)),
+            const SizedBox(height: 12),
+            if (_receiptPhoto != null) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.file(_receiptPhoto!,
+                    height: 140, width: double.infinity, fit: BoxFit.cover),
+              ),
+              TextButton.icon(
+                onPressed: _takeReceiptPhoto,
+                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+                label: const Text('Tirar outra foto',
+                    style: TextStyle(color: Color(0xFF4FC3F7))),
+              ),
+            ] else ...[
+              OutlinedButton.icon(
+                onPressed: _takeReceiptPhoto,
+                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+                label: const Text('Tirar foto do comprovante',
+                    style: TextStyle(color: Color(0xFF4FC3F7))),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 56),
+                  side: const BorderSide(color: Color(0xFF4FC3F7)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
             _confirmButton(
               isLoading: _isLoading,
               onPressed: _submit,
-              label: 'Confirmar Venda',
+              label: 'Confirmar Venda com Comprovante',
               colors: const [Color(0xFF2E7D32), Color(0xFF66BB6A)],
             ),
           ] else ...[
@@ -974,21 +1161,31 @@ class _SaleTabState extends State<_SaleTab> {
               decoration: BoxDecoration(
                 color: const Color(0xFF2E7D32).withOpacity(0.15),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3)),
+                border:
+                    Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3)),
               ),
               child: Column(
                 children: [
-                  const Icon(Icons.check_circle_outline, color: Color(0xFF81C784), size: 40),
+                  const Icon(Icons.check_circle_outline,
+                      color: Color(0xFF81C784), size: 40),
                   const SizedBox(height: 8),
-                  const Text('Venda Finalizada!', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text('Venda Finalizada!',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  const Text('Deseja anexar o comprovante de pagamento?', style: TextStyle(color: Colors.white70, fontSize: 12), textAlign: TextAlign.center),
+                  const Text('Deseja anexar o comprovante de pagamento?',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                      textAlign: TextAlign.center),
                   const SizedBox(height: 16),
-                  
                   if (_receiptPhoto != null) ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
-                      child: Image.file(_receiptPhoto!, height: 120, width: double.infinity, fit: BoxFit.cover),
+                      child: Image.file(_receiptPhoto!,
+                          height: 120,
+                          width: double.infinity,
+                          fit: BoxFit.cover),
                     ),
                     const SizedBox(height: 16),
                     _confirmButton(
@@ -1000,17 +1197,22 @@ class _SaleTabState extends State<_SaleTab> {
                     const SizedBox(height: 8),
                     TextButton(
                       onPressed: () => setState(() => _receiptPhoto = null),
-                      child: const Text('Tirar outra foto', style: TextStyle(color: Color(0xFFEF5350))),
+                      child: const Text('Tirar outra foto',
+                          style: TextStyle(color: Color(0xFFEF5350))),
                     )
                   ] else ...[
                     OutlinedButton.icon(
                       onPressed: _takeReceiptPhoto,
-                      icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
-                      label: const Text('Tirar Foto do Comprovante', style: TextStyle(color: Color(0xFF4FC3F7))),
+                      icon: const Icon(Icons.camera_alt,
+                          color: Color(0xFF4FC3F7)),
+                      label: const Text('Tirar Foto do Comprovante',
+                          style: TextStyle(color: Color(0xFF4FC3F7))),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFF4FC3F7)),
-                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 14, horizontal: 20),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -1022,7 +1224,8 @@ class _SaleTabState extends State<_SaleTab> {
                           _numeroFichaController.clear();
                         });
                       },
-                      child: const Text('Pular / Fechar', style: TextStyle(color: Colors.white54)),
+                      child: const Text('Pular / Fechar',
+                          style: TextStyle(color: Colors.white54)),
                     )
                   ],
                 ],
@@ -1038,7 +1241,8 @@ class _SaleTabState extends State<_SaleTab> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+        Text(label,
+            style: const TextStyle(color: Colors.white70, fontSize: 13)),
         Text(
           value,
           style: TextStyle(
@@ -1051,7 +1255,8 @@ class _SaleTabState extends State<_SaleTab> {
     );
   }
 
-  Widget _buildDropdown(String label, String value, List<String> items, void Function(String?) onChanged) {
+  Widget _buildDropdown(String label, String value, List<String> items,
+      void Function(String?) onChanged) {
     return DropdownButtonFormField<String>(
       isExpanded: true,
       value: value,
@@ -1062,10 +1267,18 @@ class _SaleTabState extends State<_SaleTab> {
         labelStyle: const TextStyle(color: Color(0xFF90CAF9)),
         filled: true,
         fillColor: Colors.white.withOpacity(0.05),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.white.withOpacity(0.15), width: 1)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide:
+                BorderSide(color: Colors.white.withOpacity(0.15), width: 1)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5)),
       ),
-      items: items.map((i) => DropdownMenuItem(value: i, child: Text(i, overflow: TextOverflow.ellipsis))).toList(),
+      items: items
+          .map((i) => DropdownMenuItem(
+              value: i, child: Text(i, overflow: TextOverflow.ellipsis)))
+          .toList(),
       onChanged: onChanged,
     );
   }
@@ -1113,14 +1326,14 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           behavior: SnackBarBehavior.floating));
       return;
     }
-    
+
     final reasonToSubmit = _selectedReason!;
     setState(() => _isLoading = true);
 
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
-      
+
       final payload = {
         'clientId': widget.client['id'],
         'reason': reasonToSubmit,
@@ -1132,8 +1345,11 @@ class _NonSaleTabState extends State<_NonSaleTab> {
         widget.onSuccess('Não-venda registrada com sucesso!');
       } catch (e) {
         await syncService.addPendingRequest('REGISTER_NONSALE', payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
-        widget.onSuccess('Não-venda registrada (backup offline)!');
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Não-venda salva no aparelho e aguardando envio.'),
+              backgroundColor: Colors.orange));
+        widget.onSuccess('Não-venda aguardando confirmação do servidor.');
       }
 
       if (!mounted) return;
@@ -1146,7 +1362,9 @@ class _NonSaleTabState extends State<_NonSaleTab> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro interno ao registrar não-venda: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro interno ao registrar não-venda: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -1155,7 +1373,8 @@ class _NonSaleTabState extends State<_NonSaleTab> {
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
-    final isSold = client['outcomeStatus'] == 'SOLD' || (client['sales'] != null && (client['sales'] as List).isNotEmpty);
+    final isSold = client['outcomeStatus'] == 'SOLD' ||
+        (client['sales'] != null && (client['sales'] as List).isNotEmpty);
     final isCityClosed = client['cityClosedAt'] != null;
 
     if (isSold) {
@@ -1171,9 +1390,14 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: const [
-              Icon(Icons.check_circle_outline_rounded, color: Color(0xFF00E676), size: 48),
+              Icon(Icons.check_circle_outline_rounded,
+                  color: Color(0xFF00E676), size: 48),
               SizedBox(height: 12),
-              Text('Ficha Já Vendida', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Ficha Já Vendida',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
               Text(
                 'Esta ficha já possui venda confirmada. Não é possível registrar não-venda.',
@@ -1199,9 +1423,14 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: const [
-              Icon(Icons.lock_outline_rounded, color: Colors.amberAccent, size: 48),
+              Icon(Icons.lock_outline_rounded,
+                  color: Colors.amberAccent, size: 48),
               SizedBox(height: 12),
-              Text('Cidade Encerrada', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Cidade Encerrada',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               SizedBox(height: 8),
               Text(
                 'Esta cidade foi encerrada no Fechamento de Cidade. O registro de não-venda está bloqueado.',
@@ -1234,7 +1463,8 @@ class _NonSaleTabState extends State<_NonSaleTab> {
             decoration: _fieldDecoration(
                 'Motivo da Recusa', Icons.report_problem_rounded),
             items: _reasons
-                .map((r) => DropdownMenuItem(value: r, child: Text(r, overflow: TextOverflow.ellipsis)))
+                .map((r) => DropdownMenuItem(
+                    value: r, child: Text(r, overflow: TextOverflow.ellipsis)))
                 .toList(),
             onChanged: (v) => setState(() => _selectedReason = v),
           ),
@@ -1249,8 +1479,8 @@ class _NonSaleTabState extends State<_NonSaleTab> {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: const Color(0xFF4FC3F7).withOpacity(0.4)),
+              border:
+                  Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.4)),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
@@ -1268,8 +1498,11 @@ class _NonSaleTabState extends State<_NonSaleTab> {
                 style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           ),
           const SizedBox(height: 12),
-          
-          const Text('Avaliação do Atendimento', style: TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14)),
+          const Text('Avaliação do Atendimento',
+              style: TextStyle(
+                  color: Color(0xFF90CAF9),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14)),
           const SizedBox(height: 12),
           _buildRatingField('Vendedor', (r) => _sellerRating = r),
           const SizedBox(height: 12),
@@ -1277,7 +1510,6 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           const SizedBox(height: 12),
           _buildRatingField('O Contato', (r) => _contactRating = r),
           const SizedBox(height: 24),
-
           _confirmButton(
             isLoading: _isLoading,
             onPressed: _submit,
@@ -1322,14 +1554,14 @@ class _ScheduleTabState extends State<_ScheduleTab> {
       return;
     }
     setState(() => _isLoading = true);
-    
+
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
-      
+
       final dateIso = _selectedDay!.toIso8601String();
       final timeToSubmit = _selectedTime!;
-      
+
       final payload = {
         'clientId': widget.client['id'],
         'date': dateIso,
@@ -1342,8 +1574,12 @@ class _ScheduleTabState extends State<_ScheduleTab> {
         widget.onSuccess('Agendamento salvo com sucesso!');
       } catch (e) {
         await syncService.addPendingRequest('REGISTER_APPOINTMENT', payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline!'), backgroundColor: Colors.orange));
-        widget.onSuccess('Agendamento salvo (backup offline)!');
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content:
+                  Text('Agendamento salvo no aparelho e aguardando envio.'),
+              backgroundColor: Colors.orange));
+        widget.onSuccess('Agendamento aguardando confirmação do servidor.');
       }
 
       if (!mounted) return;
@@ -1357,7 +1593,9 @@ class _ScheduleTabState extends State<_ScheduleTab> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro interno ao registrar agendamento: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro interno ao registrar agendamento: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -1365,16 +1603,17 @@ class _ScheduleTabState extends State<_ScheduleTab> {
 
   Widget _buildTimeSlot(String time) {
     bool isSelected = _selectedTime == time;
-    
+
     int hour = int.parse(time.split(':')[0]);
     int currentHour = DateTime.now().hour;
     int diff = (hour - currentHour).abs();
-    
-    Color neonColor = const Color(0xFF00E676); 
-    if (diff > 5) neonColor = const Color(0xFF00B0FF); 
-    if (diff > 10) neonColor = const Color(0xFFD500F9); 
-    
-    double glowOpacity = isSelected ? 0.8 : (1.0 - (diff * 0.1)).clamp(0.1, 0.4);
+
+    Color neonColor = const Color(0xFF00E676);
+    if (diff > 5) neonColor = const Color(0xFF00B0FF);
+    if (diff > 10) neonColor = const Color(0xFFD500F9);
+
+    double glowOpacity =
+        isSelected ? 0.8 : (1.0 - (diff * 0.1)).clamp(0.1, 0.4);
 
     return GestureDetector(
       onTap: () => setState(() => _selectedTime = time),
@@ -1447,7 +1686,17 @@ class _ScheduleTabState extends State<_ScheduleTab> {
 
   @override
   Widget build(BuildContext context) {
-    List<String> hours = ['08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+    List<String> hours = [
+      '08:00',
+      '09:00',
+      '10:00',
+      '11:00',
+      '13:00',
+      '14:00',
+      '15:00',
+      '16:00',
+      '17:00'
+    ];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -1463,18 +1712,23 @@ class _ScheduleTabState extends State<_ScheduleTab> {
                       fontSize: 18,
                       fontWeight: FontWeight.bold)),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFF00E676).withOpacity(0.2),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF00E676).withOpacity(0.5)),
+                  border: Border.all(
+                      color: const Color(0xFF00E676).withOpacity(0.5)),
                 ),
-                child: const Text('Neon Calendar', style: TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.bold)),
+                child: const Text('Neon Calendar',
+                    style: TextStyle(
+                        color: Color(0xFF00E676),
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold)),
               ),
             ],
           ),
           const SizedBox(height: 16),
-          
           Container(
             decoration: BoxDecoration(
               color: const Color(0xFF1E2A3A),
@@ -1514,11 +1768,14 @@ class _ScheduleTabState extends State<_ScheduleTab> {
               calendarStyle: CalendarStyle(
                 defaultTextStyle: const TextStyle(color: Colors.white),
                 weekendTextStyle: const TextStyle(color: Color(0xFFFF8A65)),
-                outsideTextStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                outsideTextStyle:
+                    TextStyle(color: Colors.white.withOpacity(0.3)),
                 selectedDecoration: const BoxDecoration(
                   color: Color(0xFF00E676),
                   shape: BoxShape.circle,
-                  boxShadow: [BoxShadow(color: Color(0xFF00E676), blurRadius: 10)],
+                  boxShadow: [
+                    BoxShadow(color: Color(0xFF00E676), blurRadius: 10)
+                  ],
                 ),
                 todayDecoration: BoxDecoration(
                   color: Colors.transparent,
@@ -1527,15 +1784,21 @@ class _ScheduleTabState extends State<_ScheduleTab> {
                 ),
               ),
               headerStyle: HeaderStyle(
-                titleTextStyle: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                formatButtonTextStyle: const TextStyle(color: Colors.white, fontSize: 13),
+                titleTextStyle: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold),
+                formatButtonTextStyle:
+                    const TextStyle(color: Colors.white, fontSize: 13),
                 formatButtonDecoration: BoxDecoration(
                   color: const Color(0xFF00B0FF).withOpacity(0.3),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: const Color(0xFF00B0FF)),
                 ),
-                leftChevronIcon: const Icon(Icons.chevron_left, color: Colors.white),
-                rightChevronIcon: const Icon(Icons.chevron_right, color: Colors.white),
+                leftChevronIcon:
+                    const Icon(Icons.chevron_left, color: Colors.white),
+                rightChevronIcon:
+                    const Icon(Icons.chevron_right, color: Colors.white),
               ),
               daysOfWeekStyle: const DaysOfWeekStyle(
                 weekdayStyle: TextStyle(color: Colors.white70),
@@ -1543,7 +1806,6 @@ class _ScheduleTabState extends State<_ScheduleTab> {
               ),
             ),
           ),
-          
           const SizedBox(height: 24),
           const Text('Planilha de Horários',
               style: TextStyle(
@@ -1551,23 +1813,21 @@ class _ScheduleTabState extends State<_ScheduleTab> {
                   fontSize: 16,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
-          
           ...hours.map((time) => _buildTimeSlot(time)),
-          
           const SizedBox(height: 16),
           TextField(
             controller: _obsController,
             style: const TextStyle(color: Colors.white),
             maxLines: 3,
-            decoration: _fieldDecoration(
-                'Observações (opcional)', Icons.notes_rounded),
+            decoration:
+                _fieldDecoration('Observações (opcional)', Icons.notes_rounded),
           ),
           const SizedBox(height: 20),
           _confirmButton(
             isLoading: _isLoading,
             onPressed: _selectedTime != null ? _submit : null,
             label: 'Confirmar Agendamento',
-            colors: _selectedTime != null 
+            colors: _selectedTime != null
                 ? const [Color(0xFF00E676), Color(0xFF00C853)]
                 : const [Colors.grey, Colors.grey],
           ),
@@ -1602,11 +1862,11 @@ class _PhotosTabState extends State<_PhotosTab> {
   void _upload() async {
     if (_photoFile == null) return;
     setState(() => _isUploading = true);
-    
+
     try {
       final bytes = await _photoFile!.readAsBytes();
       final base64String = base64Encode(bytes);
-      
+
       final apiService = Provider.of<ApiService>(context, listen: false);
       await apiService.uploadPhoto({
         'clientId': widget.clientId,
@@ -1618,12 +1878,15 @@ class _PhotosTabState extends State<_PhotosTab> {
         _isUploading = false;
         _photoFile = null;
       });
-      widget.onSuccess('Foto enviada! Será deletada automaticamente em 10 dias.');
+      widget
+          .onSuccess('Foto enviada! Será deletada automaticamente em 10 dias.');
     } catch (e) {
       setState(() => _isUploading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao enviar foto: $e'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erro ao enviar foto: $e'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -1649,8 +1912,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                           fontWeight: FontWeight.bold)),
                   Text(
                       'books são armazenadas por 10 dias e deletadas automaticamente.',
-                      style: TextStyle(
-                          color: Color(0xFF90CAF9), fontSize: 12)),
+                      style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
                   SizedBox(height: 20),
                 ],
               ),
@@ -1675,8 +1937,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                             const SizedBox(height: 12),
                             Text(_photoFile!.path.split('/').last,
                                 style: const TextStyle(
-                                    color: Color(0xFF90CAF9),
-                                    fontSize: 13)),
+                                    color: Color(0xFF90CAF9), fontSize: 13)),
                             const SizedBox(height: 4),
                             const Text('Pronto para enviar',
                                 style: TextStyle(
@@ -1693,8 +1954,7 @@ class _PhotosTabState extends State<_PhotosTab> {
                             SizedBox(height: 12),
                             Text('Nenhuma book selecionada',
                                 style: TextStyle(
-                                    color: Color(0xFF546E7A),
-                                    fontSize: 13)),
+                                    color: Color(0xFF546E7A), fontSize: 13)),
                           ],
                         ),
                 ),

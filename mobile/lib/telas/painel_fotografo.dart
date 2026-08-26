@@ -22,7 +22,6 @@ import '../utils/km_request_dialog.dart';
 import '../utils/ui_helpers.dart';
 import '../widgets/led_button.dart';
 
-
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [
   Colors.white,
@@ -40,7 +39,8 @@ const List<Color> _houseColors = [
 
 class PhoneInputFormatter extends TextInputFormatter {
   @override
-  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
     final digits = newValue.text.replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) return newValue.copyWith(text: '');
     final buffer = StringBuffer();
@@ -79,7 +79,8 @@ class PhotographerDashboard extends StatefulWidget {
   State<PhotographerDashboard> createState() => _PhotographerDashboardState();
 }
 
-class _PhotographerDashboardState extends State<PhotographerDashboard> with SingleTickerProviderStateMixin {
+class _PhotographerDashboardState extends State<PhotographerDashboard>
+    with SingleTickerProviderStateMixin {
   // Lote Memory State
   String? _currentCityLote;
   String? _currentEventName;
@@ -108,7 +109,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   Color? _selectedGateColor;
   final _gateObservationController = TextEditingController();
   TimeOfDay? _visitTime;
-  
+
   // Children
   final List<Map<String, String>> _children = [];
   final _clothesColorController = TextEditingController();
@@ -118,15 +119,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     penColor: Colors.black,
     exportBackgroundColor: Colors.white,
   );
-  
+
   bool _isLoading = false;
-  String? _generatedQrCodeData; 
+  String? _generatedQrCodeData;
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
   List<String> _professionsCache = [];
-  
+
   String _userName = '';
   String _greeting = 'Olá';
   String _verse = '';
@@ -134,23 +135,36 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _animController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
     _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
-    
+
     _loadProfessions();
     _restoreFormDraft();
 
     final controllersToWatch = [
-      _nameController, _phoneController, _phone2Controller, _professionController,
-      _cepController, _streetController, _numberController, _condoController,
-      _blockController, _aptController, _neighborhoodController, _cityController,
-      _stateController, _referenceController, _gateObservationController, _clothesColorController,
+      _nameController,
+      _phoneController,
+      _phone2Controller,
+      _professionController,
+      _cepController,
+      _streetController,
+      _numberController,
+      _condoController,
+      _blockController,
+      _aptController,
+      _neighborhoodController,
+      _cityController,
+      _stateController,
+      _referenceController,
+      _gateObservationController,
+      _clothesColorController,
     ];
     for (final ctrl in controllersToWatch) {
       ctrl.addListener(_saveFormDraft);
     }
-    
+
     _loadFichasHojeCount();
     _loadUserData();
 
@@ -175,10 +189,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
 
     if (!mounted) return;
 
-    if (_currentCityLote == null || _currentCityLote!.isEmpty || _currentEventName == null || _currentEventName!.isEmpty) {
+    if (_currentCityLote == null ||
+        _currentCityLote!.isEmpty ||
+        _currentEventName == null ||
+        _currentEventName!.isEmpty) {
       await _showLoteConfigDialog();
     }
-    
+
     if (mounted) {
       KmRequestHelper.checkKmRequests(context);
     }
@@ -191,7 +208,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       setState(() {
         _userName = name;
         _greeting = UIHelpers.getGreeting();
-        _verse = quote.isNotEmpty ? quote : '"A persistência realiza o impossível." - Provérbio Chinês';
+        _verse = quote.isNotEmpty
+            ? quote
+            : '"A persistência realiza o impossível." - Provérbio Chinês';
       });
     }
   }
@@ -299,7 +318,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           if (draft['gateColor'] != null) {
             _selectedGateColor = Color(draft['gateColor'] as int);
           }
-          if (draft['visitTimeHour'] != null && draft['visitTimeMinute'] != null) {
+          if (draft['visitTimeHour'] != null &&
+              draft['visitTimeMinute'] != null) {
             _visitTime = TimeOfDay(
               hour: draft['visitTimeHour'] as int,
               minute: draft['visitTimeMinute'] as int,
@@ -310,7 +330,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Rascunho de ficha salvo automaticamente foi restaurado!'),
+              content: Text(
+                  'Rascunho de ficha salvo automaticamente foi restaurado!'),
               backgroundColor: Colors.blueAccent,
               duration: Duration(seconds: 3),
             ),
@@ -360,124 +381,140 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     List<String> eventSuggestions = [];
     try {
       final upcoming = await ApiService().getUpcomingEvents();
-      eventSuggestions = upcoming.map((e) => (e['name'] ?? '').toString()).toList();
+      eventSuggestions =
+          upcoming.map((e) => (e['name'] ?? '').toString()).toList();
     } catch (_) {}
 
     if (!mounted) return;
 
     await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Configurar Lote e Evento', style: TextStyle(color: Colors.white)),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: loteCtrl,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(labelText: 'Cidade / Lote (Ex: SP, CAMPINAS01)', labelStyle: TextStyle(color: Colors.white54)),
-                  validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
-                ),
-                const SizedBox(height: 12),
-                Autocomplete<String>(
-                  initialValue: TextEditingValue(text: _currentEventName ?? ''),
-                  optionsBuilder: (TextEditingValue textEditingValue) {
-                    if (textEditingValue.text.isEmpty) {
-                      return eventSuggestions;
-                    }
-                    return eventSuggestions.where((String option) {
-                      return option.toLowerCase().contains(textEditingValue.text.toLowerCase());
-                    });
-                  },
-                  onSelected: (String selection) {
-                    eventCtrl.text = selection;
-                  },
-                  fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                    // Sync the autocomplete controller with our eventCtrl
-                    controller.addListener(() {
-                      eventCtrl.text = controller.text;
-                    });
-                    return TextFormField(
-                      controller: controller,
-                      focusNode: focusNode,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        labelText: 'Nome do Evento (Sugestões automáticas)', 
-                        labelStyle: TextStyle(color: Colors.white54),
-                        hintText: 'Digite ou selecione um evento...',
-                        hintStyle: TextStyle(color: Colors.white24),
-                      ),
-                      validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
-                    );
-                  },
-                  optionsViewBuilder: (context, onSelected, options) {
-                    return Align(
-                      alignment: Alignment.topLeft,
-                      child: Material(
-                        elevation: 4.0,
-                        color: const Color(0xFF2A2A3E),
-                        borderRadius: BorderRadius.circular(8),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 200, maxWidth: 250),
-                          child: ListView.builder(
-                            padding: EdgeInsets.zero,
-                            itemCount: options.length,
-                            itemBuilder: (BuildContext context, int index) {
-                              final String option = options.elementAt(index);
-                              return InkWell(
-                                onTap: () => onSelected(option),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(16.0),
-                                  child: Text(option, style: const TextStyle(color: Colors.white)),
-                                ),
-                              );
-                            },
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A2E),
+            title: const Text('Configurar Lote e Evento',
+                style: TextStyle(color: Colors.white)),
+            content: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: loteCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                        labelText: 'Cidade / Lote (Ex: SP, CAMPINAS01)',
+                        labelStyle: TextStyle(color: Colors.white54)),
+                    validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  Autocomplete<String>(
+                    initialValue:
+                        TextEditingValue(text: _currentEventName ?? ''),
+                    optionsBuilder: (TextEditingValue textEditingValue) {
+                      if (textEditingValue.text.isEmpty) {
+                        return eventSuggestions;
+                      }
+                      return eventSuggestions.where((String option) {
+                        return option
+                            .toLowerCase()
+                            .contains(textEditingValue.text.toLowerCase());
+                      });
+                    },
+                    onSelected: (String selection) {
+                      eventCtrl.text = selection;
+                    },
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onFieldSubmitted) {
+                      // Sync the autocomplete controller with our eventCtrl
+                      controller.addListener(() {
+                        eventCtrl.text = controller.text;
+                      });
+                      return TextFormField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          labelText: 'Nome do Evento (Sugestões automáticas)',
+                          labelStyle: TextStyle(color: Colors.white54),
+                          hintText: 'Digite ou selecione um evento...',
+                          hintStyle: TextStyle(color: Colors.white24),
+                        ),
+                        validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                      );
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4.0,
+                          color: const Color(0xFF2A2A3E),
+                          borderRadius: BorderRadius.circular(8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                                maxHeight: 200, maxWidth: 250),
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              itemCount: options.length,
+                              itemBuilder: (BuildContext context, int index) {
+                                final String option = options.elementAt(index);
+                                return InkWell(
+                                  onTap: () => onSelected(option),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16.0),
+                                    child: Text(option,
+                                        style: const TextStyle(
+                                            color: Colors.white)),
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            if (_currentCityLote != null && _currentCityLote!.isNotEmpty && _currentEventName != null && _currentEventName!.isNotEmpty)
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                      );
+                    },
+                  ),
+                ],
               ),
-            LedButton(
-              onPressed: () async {
-                if (formKey.currentState!.validate()) {
-                  final city = loteCtrl.text.toUpperCase();
-                  final event = eventCtrl.text;
-
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setString('lote_city', city);
-                  await prefs.setString('lote_event_name', event);
-
-                  if (mounted) {
-                    setState(() {
-                      _currentCityLote = city;
-                      _currentEventName = event;
-                    });
-                    Navigator.pop(context);
-                  }
-                }
-              },
-              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Salvar Sessão', style: TextStyle(color: Colors.white)),
             ),
-          ],
-        );
-      }
-    );
+            actions: [
+              if (_currentCityLote != null &&
+                  _currentCityLote!.isNotEmpty &&
+                  _currentEventName != null &&
+                  _currentEventName!.isNotEmpty)
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar',
+                      style: TextStyle(color: Colors.white54)),
+                ),
+              LedButton(
+                onPressed: () async {
+                  if (formKey.currentState!.validate()) {
+                    final city = loteCtrl.text.toUpperCase();
+                    final event = eventCtrl.text;
+
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setString('lote_city', city);
+                    await prefs.setString('lote_event_name', event);
+
+                    if (mounted) {
+                      setState(() {
+                        _currentCityLote = city;
+                        _currentEventName = event;
+                      });
+                      Navigator.pop(context);
+                    }
+                  }
+                },
+                style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFFCE93D8)),
+                child: const Text('Salvar Sessão',
+                    style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        });
   }
 
   // ── GPS Reverse Geocoding ──────────────────────────────────────────────────
@@ -488,36 +525,58 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permissão de localização negada.'), backgroundColor: Colors.red));
+          if (mounted)
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Permissão de localização negada.'),
+                backgroundColor: Colors.red));
           return;
         }
       }
       if (permission == LocationPermission.deniedForever) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Localização bloqueada. Habilite nas configurações do celular.'), backgroundColor: Colors.red));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Localização bloqueada. Habilite nas configurações do celular.'),
+              backgroundColor: Colors.red));
         return;
       }
 
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('📍 Obtendo localização GPS...'), duration: Duration(seconds: 2)));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('📍 Obtendo localização GPS...'),
+            duration: Duration(seconds: 2)));
 
-      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 10)));
-      final placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+      final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 10)));
+      final placemarks =
+          await placemarkFromCoordinates(position.latitude, position.longitude);
 
       if (placemarks.isNotEmpty) {
         final p = placemarks.first;
         setState(() {
           if ((p.street ?? '').isNotEmpty) _streetController.text = p.street!;
-          if ((p.subLocality ?? '').isNotEmpty) _neighborhoodController.text = p.subLocality!;
+          if ((p.subLocality ?? '').isNotEmpty)
+            _neighborhoodController.text = p.subLocality!;
           if ((p.locality ?? '').isNotEmpty) _cityController.text = p.locality!;
-          if ((p.administrativeArea ?? '').isNotEmpty) _stateController.text = p.administrativeArea!;
-          if ((p.postalCode ?? '').isNotEmpty) _cepController.text = p.postalCode!;
+          if ((p.administrativeArea ?? '').isNotEmpty)
+            _stateController.text = p.administrativeArea!;
+          if ((p.postalCode ?? '').isNotEmpty)
+            _cepController.text = p.postalCode!;
         });
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('📍 Endereço GPS: ${p.street ?? ''}, ${p.locality ?? ''}'),
-          backgroundColor: Colors.green,
-        ));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text('📍 Endereço GPS: ${p.street ?? ''}, ${p.locality ?? ''}'),
+            backgroundColor: Colors.green,
+          ));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao obter GPS: $e'), backgroundColor: Colors.red));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Erro ao obter GPS: $e'),
+            backgroundColor: Colors.red));
     }
   }
 
@@ -525,9 +584,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   Future<void> _onCepChanged(String value) async {
     final cleanCep = value.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleanCep.length == 8) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando CEP...'), duration: Duration(milliseconds: 1000)));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Buscando CEP...'),
+            duration: Duration(milliseconds: 1000)));
       try {
-        final response = await http.get(Uri.parse('https://viacep.com.br/ws/$cleanCep/json/'));
+        final response = await http
+            .get(Uri.parse('https://viacep.com.br/ws/$cleanCep/json/'));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['erro'] != true) {
@@ -537,7 +600,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               _cityController.text = data['localidade'] ?? '';
               _stateController.text = data['uf'] ?? '';
             });
-            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Endereço preenchido!'), backgroundColor: Colors.green, duration: Duration(milliseconds: 1500)));
+            if (mounted)
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Endereço preenchido!'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(milliseconds: 1500)));
           }
         }
       } catch (e) {
@@ -550,74 +617,86 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
   void _addChild() {
     final nameCtrl = TextEditingController();
     final ageCtrl = TextEditingController();
-    
+
     showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Adicionar Criança', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Nome da Criança',
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF1A2535),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A2E),
+            title: const Text('Adicionar Criança',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Nome da Criança',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF1A2535),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ageCtrl,
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(2),
-                ],
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Idade (Somente Números)',
-                  labelStyle: const TextStyle(color: Colors.white54),
-                  filled: true,
-                  fillColor: const Color(0xFF1A2535),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ageCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(2),
+                  ],
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Idade (Somente Números)',
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    filled: true,
+                    fillColor: const Color(0xFF1A2535),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none),
+                  ),
                 ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar',
+                      style: TextStyle(color: Colors.white54))),
+              LedButton(
+                onPressed: () {
+                  final name = nameCtrl.text.trim();
+                  final age = ageCtrl.text.trim();
+                  if (name.isEmpty || age.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                            'É obrigatório preencher NOME e IDADE da criança!'),
+                        backgroundColor: Colors.redAccent,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                    return;
+                  }
+                  setState(() {
+                    _children.add({'name': name, 'age': age});
+                  });
+                  Navigator.pop(context);
+                },
+                style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFFCE93D8)),
+                child: const Text('Adicionar',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.white54))),
-            LedButton(
-              onPressed: () {
-                final name = nameCtrl.text.trim();
-                final age = ageCtrl.text.trim();
-                if (name.isEmpty || age.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('É obrigatório preencher NOME e IDADE da criança!'),
-                      backgroundColor: Colors.redAccent,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                  return;
-                }
-                setState(() {
-                  _children.add({'name': name, 'age': age});
-                });
-                Navigator.pop(context);
-              },
-              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Adicionar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-      }
-    );
+          );
+        });
   }
 
   Future<void> _pickTime() async {
@@ -625,10 +704,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       context: context,
       initialTime: TimeOfDay.now(),
       builder: (BuildContext context, Widget? child) {
-         return MediaQuery(
-           data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
-           child: child!,
-         );
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+          child: child!,
+        );
       },
     );
     if (picked != null && picked != _visitTime) {
@@ -653,31 +732,36 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       _scrollToTop();
       return;
     }
-    
+
     if (_selectedHouseColor == null) {
       _scrollToTop();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A cor da casa é obrigatória.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A cor da casa é obrigatória.')));
       return;
     }
-    
+
     if (_selectedGateColor == null) {
       _scrollToTop();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A cor do portão é obrigatória.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A cor do portão é obrigatória.')));
       return;
     }
-    
+
     if (_visitTime == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('O horário de visita é obrigatório.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('O horário de visita é obrigatório.')));
       return;
     }
-    
+
     if (_children.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('É obrigatório adicionar pelo menos uma criança.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('É obrigatório adicionar pelo menos uma criança.')));
       return;
     }
 
     if (_signatureController.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A assinatura do responsável é obrigatória.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('A assinatura do responsável é obrigatória.')));
       return;
     }
 
@@ -689,26 +773,27 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     await _saveProfession(_professionController.text.trim());
 
     bool? accepted = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Aviso Legal', style: TextStyle(color: Colors.white)),
-          content: const Text(
-            'Autorizo fotografar minha criança(s) ganhar uma book presente e demonstrar as outras books sem compromisso de compra em até 90 dias.',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            LedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: LedButton.styleFrom(backgroundColor: Colors.green),
-              child: const Text('Li e Aceito', style: TextStyle(color: Colors.white)),
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A2E),
+            title: const Text('Aviso Legal',
+                style: TextStyle(color: Colors.white)),
+            content: const Text(
+              'Autorizo fotografar minha criança(s) ganhar uma book presente e demonstrar as outras books sem compromisso de compra em até 90 dias.',
+              style: TextStyle(color: Colors.white70),
             ),
-          ],
-        );
-      }
-    );
+            actions: [
+              LedButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: LedButton.styleFrom(backgroundColor: Colors.green),
+                child: const Text('Li e Aceito',
+                    style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        });
 
     if (accepted != true) return;
 
@@ -717,18 +802,19 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     try {
       final signatureBytes = await _signatureController.toPngBytes();
       final base64Signature = base64Encode(signatureBytes!);
-      
+
       final seqString = _sequenceCount.toString().padLeft(4, '0');
-      
+
       final prefs = await SharedPreferences.getInstance();
       final photographerCode = prefs.getString('photographer_code') ?? '0000';
       final eventAbbrev = _abbreviateEvent(_currentEventName!);
-      
-      final sequenceNumber = '$photographerCode-$eventAbbrev-$_currentCityLote-$seqString'; 
+
+      final sequenceNumber =
+          '$photographerCode-$eventAbbrev-$_currentCityLote-$seqString';
 
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
-      
+
       final payload = {
         'sequenceNumber': sequenceNumber,
         'event': _currentEventName,
@@ -749,7 +835,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         'gateColor': _selectedGateColor?.value.toString(),
         'gateObservation': _gateObservationController.text,
         'profession': _professionController.text,
-        'visitTime': _visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : null,
+        'visitTime': _visitTime != null
+            ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}'
+            : null,
         'clothesColor': _clothesColorController.text,
         'children': _children,
         'signatureBase64': base64Signature,
@@ -757,10 +845,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
 
       try {
         await apiService.syncClients([payload]);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sincronizado com o servidor!'), backgroundColor: Colors.green));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Sincronizado com o servidor!'),
+              backgroundColor: Colors.green));
       } catch (e) {
         await syncService.addPendingRequest('SYNC_CLIENTS', payload);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Salvo no Backup Offline! Não esqueça de sincronizar depois.'), backgroundColor: Colors.orange));
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Cadastro salvo no aparelho e aguardando sincronização.'),
+              backgroundColor: Colors.orange));
       }
 
       setState(() {
@@ -769,7 +864,6 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         _fichasHojeCount++; // Atualiza UI de Hoje
       });
       await prefs.setInt('lote_sequence_count', _sequenceCount);
-      
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -798,7 +892,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     _selectedGateColor = null;
     _visitTime = null;
     _signatureController.clear();
-    
+
     setState(() {
       _generatedQrCodeData = null;
     });
@@ -808,10 +902,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     final bluetooth = BlueThermalPrinter.instance;
     bool? isConnected = await bluetooth.isConnected;
     if (isConnected != true) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Nenhuma impressora conectada! Vá nas configurações.',
+                style: TextStyle(color: Colors.white)),
+            backgroundColor: Colors.red));
       return;
     }
-    
+
     bluetooth.printNewLine();
     bluetooth.printCustom("LUMORA - FICHA COMPLETA", 2, 1);
     bluetooth.printNewLine();
@@ -824,14 +922,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     bluetooth.printCustom("Profissao: ${_professionController.text}", 0, 0);
     bluetooth.printNewLine();
     bluetooth.printCustom("Endereco", 1, 0);
-    bluetooth.printCustom("${_streetController.text}, ${_numberController.text}", 0, 0);
+    bluetooth.printCustom(
+        "${_streetController.text}, ${_numberController.text}", 0, 0);
     bluetooth.printCustom("Bairro: ${_neighborhoodController.text}", 0, 0);
     bluetooth.printCustom("Cep: ${_cepController.text}", 0, 0);
     bluetooth.printCustom("Ref: ${_referenceController.text}", 0, 0);
     bluetooth.printNewLine();
     bluetooth.printCustom("Cor da Casa: ${_selectedHouseColor?.value}", 0, 0);
     bluetooth.printCustom("Cor do Portao: ${_selectedGateColor?.value}", 0, 0);
-    bluetooth.printCustom("Horario Visita: ${_visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : ''}", 0, 0);
+    bluetooth.printCustom(
+        "Horario Visita: ${_visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : ''}",
+        0,
+        0);
     bluetooth.printNewLine();
     bluetooth.printCustom("Criancas:", 1, 0);
     for (var child in _children) {
@@ -849,20 +951,28 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     final words = eventName.trim().split(RegExp(r'\s+'));
     if (words.length > 1) {
       final abbrev = words.map((w) => w[0]).join('');
-      return abbrev.length > 5 ? abbrev.substring(0, 5).toUpperCase() : abbrev.toUpperCase();
+      return abbrev.length > 5
+          ? abbrev.substring(0, 5).toUpperCase()
+          : abbrev.toUpperCase();
     }
     final single = eventName.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-    return single.length > 5 ? single.substring(0, 5).toUpperCase() : single.toUpperCase();
+    return single.length > 5
+        ? single.substring(0, 5).toUpperCase()
+        : single.toUpperCase();
   }
 
   void _printLote() async {
     final bluetooth = BlueThermalPrinter.instance;
     bool? isConnected = await bluetooth.isConnected;
     if (isConnected != true) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Nenhuma impressora conectada! Vá nas configurações.',
+                style: TextStyle(color: Colors.white)),
+            backgroundColor: Colors.red));
       return;
     }
-    
+
     bluetooth.printNewLine();
     bluetooth.printCustom("LUMORA - FECHAMENTO DE LOTE", 2, 1);
     bluetooth.printNewLine();
@@ -875,68 +985,84 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
     bluetooth.printNewLine();
     bluetooth.printNewLine();
     bluetooth.printNewLine();
-    
+
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo fechamento do lote...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Imprimindo fechamento do lote...',
+              style: TextStyle(color: Colors.white)),
+          backgroundColor: Colors.green));
     }
   }
 
   void _showFechamentoDialog() {
     if (_currentEventName == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhum lote/evento configurado para fechar!'), backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Nenhum lote/evento configurado para fechar!'),
+          backgroundColor: Colors.red));
       return;
     }
-    
+
     showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1A1A2E),
-          title: const Text('Finalizar Lote/Evento', style: TextStyle(color: Colors.white)),
-          content: Text('Deseja realmente finalizar a produção do Evento $_currentEventName (Lote: $_currentCityLote)? O admin será notificado na tela de liberação.', style: const TextStyle(color: Colors.white70)),
-          actionsAlignment: MainAxisAlignment.end,
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            LedButton(
-              onPressed: () async {
-                final eventToFinish = _currentEventName!;
-                Navigator.pop(context);
-                
-                try {
-                  await ApiService().createBookBatch(eventToFinish);
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A2E),
+            title: const Text('Finalizar Lote/Evento',
+                style: TextStyle(color: Colors.white)),
+            content: Text(
+                'Deseja realmente finalizar a produção do Evento $_currentEventName (Lote: $_currentCityLote)? O admin será notificado na tela de liberação.',
+                style: const TextStyle(color: Colors.white70)),
+            actionsAlignment: MainAxisAlignment.end,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white54)),
+              ),
+              LedButton(
+                onPressed: () async {
+                  final eventToFinish = _currentEventName!;
+                  Navigator.pop(context);
 
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.remove('lote_city');
-                  await prefs.remove('lote_event_name');
-                  await prefs.remove('lote_sequence_count');
+                  try {
+                    await ApiService().createBookBatch(eventToFinish);
 
-                  if (mounted) {
-                    setState(() {
-                      _currentCityLote = null;
-                      _currentEventName = null;
-                      _sequenceCount = 1;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lote finalizado com sucesso! Admin notificado.'), backgroundColor: Colors.green));
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.remove('lote_city');
+                    await prefs.remove('lote_event_name');
+                    await prefs.remove('lote_sequence_count');
 
-                    // Automatically open config dialog for next event session
-                    _showLoteConfigDialog();
+                    if (mounted) {
+                      setState(() {
+                        _currentCityLote = null;
+                        _currentEventName = null;
+                        _sequenceCount = 1;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text(
+                              'Lote finalizado com sucesso! Admin notificado.'),
+                          backgroundColor: Colors.green));
+
+                      // Automatically open config dialog for next event session
+                      _showLoteConfigDialog();
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('Erro ao finalizar lote: $e'),
+                          backgroundColor: Colors.red));
+                    }
                   }
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao finalizar lote: $e'), backgroundColor: Colors.red));
-                  }
-                }
-              },
-              style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
-              child: const Text('Finalizar Lote', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-      }
-    );
+                },
+                style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFFCE93D8)),
+                child: const Text('Finalizar Lote',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        });
   }
 
   void _showSettingsMenuModal() {
@@ -957,45 +1083,84 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   Container(
                     width: 40,
                     height: 4,
-                    decoration: BoxDecoration(color: Colors.white30, borderRadius: BorderRadius.circular(2)),
+                    decoration: BoxDecoration(
+                        color: Colors.white30,
+                        borderRadius: BorderRadius.circular(2)),
                   ),
                   const SizedBox(height: 16),
-                  const Text('Menu de Configurações & Ações', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text('Menu de Configurações & Ações',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 20),
                   ListTile(
-                    leading: const CircleAvatar(backgroundColor: Colors.white12, child: Icon(Icons.print, color: Colors.orangeAccent)),
-                    title: const Text('Imprimir Lote Atual', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text('Imprime o relatório de fechamento do lote em uso', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const CircleAvatar(
+                        backgroundColor: Colors.white12,
+                        child: Icon(Icons.print, color: Colors.orangeAccent)),
+                    title: const Text('Imprimir Lote Atual',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text(
+                        'Imprime o relatório de fechamento do lote em uso',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
                       Navigator.pop(ctx);
                       _printLote();
                     },
                   ),
                   ListTile(
-                    leading: const CircleAvatar(backgroundColor: Colors.white12, child: Icon(Icons.done_all_rounded, color: Color(0xFFCE93D8))),
-                    title: const Text('Finalizar Fechamento do Evento', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text('Notifica o admin e encerra a produção deste lote', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const CircleAvatar(
+                        backgroundColor: Colors.white12,
+                        child: Icon(Icons.done_all_rounded,
+                            color: Color(0xFFCE93D8))),
+                    title: const Text('Finalizar Fechamento do Evento',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text(
+                        'Notifica o admin e encerra a produção deste lote',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
                       Navigator.pop(ctx);
                       _showFechamentoDialog();
                     },
                   ),
                   ListTile(
-                    leading: const CircleAvatar(backgroundColor: Colors.white12, child: Icon(Icons.sync, color: Colors.blueAccent)),
-                    title: const Text('Sincronização Offline', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text('Sincroniza fichas e fotos locais com o servidor', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const CircleAvatar(
+                        backgroundColor: Colors.white12,
+                        child: Icon(Icons.sync, color: Colors.blueAccent)),
+                    title: const Text('Sincronização Offline',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text(
+                        'Sincroniza fichas e fotos locais com o servidor',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
                       Navigator.pop(ctx);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const tela_sincronizacao.SyncScreen()));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) =>
+                                  const tela_sincronizacao.SyncScreen()));
                     },
                   ),
                   ListTile(
-                    leading: const CircleAvatar(backgroundColor: Colors.white12, child: Icon(Icons.settings, color: Colors.white70)),
-                    title: const Text('Configurações do App & Impressora', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text('Configurar impressora bluetooth e parâmetros', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    leading: const CircleAvatar(
+                        backgroundColor: Colors.white12,
+                        child: Icon(Icons.settings, color: Colors.white70)),
+                    title: const Text('Configurações do App & Impressora',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    subtitle: const Text(
+                        'Configurar impressora bluetooth e parâmetros',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                     onTap: () {
                       Navigator.pop(ctx);
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen(canManageRoi: false, isFotografo: true)));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const SettingsScreen(
+                                  canManageRoi: false, isFotografo: true)));
                     },
                   ),
                   const SizedBox(height: 12),
@@ -1019,9 +1184,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           children: [
             _buildHeader(),
             Expanded(
-              child: _generatedQrCodeData != null 
-                ? _buildQrCodeScreen()
-                : _buildRegistrationForm(),
+              child: _generatedQrCodeData != null
+                  ? _buildQrCodeScreen()
+                  : _buildRegistrationForm(),
             ),
           ],
         ),
@@ -1035,7 +1200,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF2A0D2E), Color(0xFF4A0E4E)], // Purple tint for photographer
+          colors: [
+            Color(0xFF2A0D2E),
+            Color(0xFF4A0E4E)
+          ], // Purple tint for photographer
         ),
       ),
       child: SafeArea(
@@ -1050,13 +1218,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [Color(0xFFCE93D8), Color(0xFF8E24AA)]),
+                      gradient: const LinearGradient(
+                          colors: [Color(0xFFCE93D8), Color(0xFF8E24AA)]),
                       borderRadius: BorderRadius.circular(14),
                       boxShadow: [
-                        BoxShadow(color: const Color(0xFF8E24AA).withOpacity(0.4), blurRadius: 12, offset: const Offset(0, 4)),
+                        BoxShadow(
+                            color: const Color(0xFF8E24AA).withOpacity(0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4)),
                       ],
                     ),
-                    child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 22),
+                    child: const Icon(Icons.camera_alt_rounded,
+                        color: Colors.white, size: 22),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -1066,9 +1239,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                         FittedBox(
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
-                          child: Text('$_greeting, $_userName', style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                          child: Text('$_greeting, $_userName',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold)),
                         ),
-                        const Text('Painel do Fotógrafo', style: TextStyle(color: Color(0xFFE1BEE7), fontSize: 12)),
+                        const Text('Painel do Fotógrafo',
+                            style: TextStyle(
+                                color: Color(0xFFE1BEE7), fontSize: 12)),
                         const SizedBox(height: 4),
                         Text(_verse,
                             style: const TextStyle(
@@ -1080,9 +1259,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                   IconButton(
                     onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => const ListaFichasFotografo()));
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const ListaFichasFotografo()));
                     },
-                    icon: const Icon(Icons.list_alt_rounded, color: Color(0xFFCE93D8)),
+                    icon: const Icon(Icons.list_alt_rounded,
+                        color: Color(0xFFCE93D8)),
                     tooltip: 'Fichas Produzidas',
                   ),
                   IconButton(
@@ -1097,7 +1280,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               GestureDetector(
                 onTap: _showLoteConfigDialog,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.black26,
                     borderRadius: BorderRadius.circular(8),
@@ -1108,11 +1292,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.event_note, color: Colors.white70, size: 16),
+                          const Icon(Icons.event_note,
+                              color: Colors.white70, size: 16),
                           const SizedBox(width: 8),
                           Text(
-                            _currentCityLote == null ? 'Lote Não Configurado' : 'Lote: $_currentCityLote | Evento: $_currentEventName',
-                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                            _currentCityLote == null
+                                ? 'Lote Não Configurado'
+                                : 'Lote: $_currentCityLote | Evento: $_currentEventName',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
@@ -1121,13 +1311,21 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                           if (_currentCityLote != null)
                             IconButton(
                               onPressed: _printLote,
-                              icon: const Icon(Icons.print, color: Color(0xFF4FC3F7), size: 20),
+                              icon: const Icon(Icons.print,
+                                  color: Color(0xFF4FC3F7), size: 20),
                               tooltip: 'Imprimir Fechamento de Lote',
                             ),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: const Color(0xFFCE93D8).withOpacity(0.2), borderRadius: BorderRadius.circular(4)),
-                            child: Text('$_fichasHojeCount Fichas Hoje', style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: const Color(0xFFCE93D8).withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(4)),
+                            child: Text('$_fichasHojeCount Fichas Hoje',
+                                style: const TextStyle(
+                                    color: Color(0xFFCE93D8),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold)),
                           ),
                         ],
                       )
@@ -1151,9 +1349,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Nova Ficha de Cadastro', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            const Text('Nova Ficha de Cadastro',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            
+
             // ── Dados Básicos
             _buildSectionTitle('Dados Básicos'),
             _buildTextField(
@@ -1161,15 +1363,22 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               'Nome do Responsável',
               Icons.person,
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Nome do responsável é obrigatório';
+                if (v == null || v.trim().isEmpty)
+                  return 'Nome do responsável é obrigatório';
                 final words = v.trim().split(RegExp(r'\s+'));
-                if (words.length < 2) return 'Informe Nome e Sobrenome (mínimo 2 palavras)';
+                if (words.length < 2)
+                  return 'Informe Nome e Sobrenome (mínimo 2 palavras)';
                 return null;
               },
             ),
             const Padding(
               padding: EdgeInsets.only(top: 4, left: 4),
-              child: Text('Só preencha se for PAI, MÃE, AVÓ, AVÕ OU TUTOR LEGAL.', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+              child: Text(
+                  'Só preencha se for PAI, MÃE, AVÓ, AVÕ OU TUTOR LEGAL.',
+                  style: TextStyle(
+                      color: Colors.red,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 12),
             _buildTextField(
@@ -1179,9 +1388,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               keyboardType: TextInputType.phone,
               inputFormatters: [PhoneInputFormatter()],
               validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'WhatsApp 1 é obrigatório';
+                if (v == null || v.trim().isEmpty)
+                  return 'WhatsApp 1 é obrigatório';
                 final digits = v.replaceAll(RegExp(r'\D'), '');
-                if (digits.length < 10) return 'WhatsApp inválido (mínimo 10 dígitos com DDD)';
+                if (digits.length < 10)
+                  return 'WhatsApp inválido (mínimo 10 dígitos com DDD)';
                 return null;
               },
             ),
@@ -1195,7 +1406,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               validator: (v) {
                 if (v != null && v.trim().isNotEmpty) {
                   final digits = v.replaceAll(RegExp(r'\D'), '');
-                  if (digits.length < 10) return 'WhatsApp inválido (mínimo 10 dígitos com DDD)';
+                  if (digits.length < 10)
+                    return 'WhatsApp inválido (mínimo 10 dígitos com DDD)';
                 }
                 return null;
               },
@@ -1206,12 +1418,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               focusNode: FocusNode(),
               optionsBuilder: (TextEditingValue textEditingValue) {
                 if (textEditingValue.text.isEmpty) return _professionsCache;
-                return _professionsCache.where((String option) => option.toLowerCase().contains(textEditingValue.text.toLowerCase()));
+                return _professionsCache.where((String option) => option
+                    .toLowerCase()
+                    .contains(textEditingValue.text.toLowerCase()));
               },
               onSelected: (String selection) {
                 _professionController.text = selection;
               },
-              optionsViewBuilder: (BuildContext context, AutocompleteOnSelected<String> onSelected, Iterable<String> options) {
+              optionsViewBuilder: (BuildContext context,
+                  AutocompleteOnSelected<String> onSelected,
+                  Iterable<String> options) {
                 return Align(
                   alignment: Alignment.topLeft,
                   child: Material(
@@ -1228,7 +1444,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                           return GestureDetector(
                             onTap: () => onSelected(option),
                             child: ListTile(
-                              title: Text(option, style: const TextStyle(color: Colors.white)),
+                              title: Text(option,
+                                  style: const TextStyle(color: Colors.white)),
                             ),
                           );
                         },
@@ -1237,7 +1454,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   ),
                 );
               },
-              fieldViewBuilder: (BuildContext context, TextEditingController textEditingController, FocusNode focusNode, VoidCallback onFieldSubmitted) {
+              fieldViewBuilder: (BuildContext context,
+                  TextEditingController textEditingController,
+                  FocusNode focusNode,
+                  VoidCallback onFieldSubmitted) {
                 return TextFormField(
                   controller: textEditingController,
                   focusNode: focusNode,
@@ -1247,17 +1467,23 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                     labelStyle: const TextStyle(color: Colors.white54),
                     filled: true,
                     fillColor: const Color(0xFF1A2535),
-                    prefixIcon: const Icon(Icons.work, color: Colors.white54, size: 20),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFCE93D8), width: 1.5)),
+                    prefixIcon:
+                        const Icon(Icons.work, color: Colors.white54, size: 20),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.white12)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                            color: Color(0xFFCE93D8), width: 1.5)),
                   ),
                   onFieldSubmitted: (String value) => onFieldSubmitted(),
                 );
               },
             ),
-            
+
             const SizedBox(height: 24),
-            
+
             // ── Endereço
             _buildSectionTitle('Endereço & Localização'),
             // GPS Button
@@ -1265,51 +1491,80 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _fetchGpsAddress,
-                icon: const Icon(Icons.my_location, color: Color(0xFF80DEEA), size: 18),
-                label: const Text('📍 Usar minha localização GPS', style: TextStyle(color: Color(0xFF80DEEA), fontWeight: FontWeight.bold)),
+                icon: const Icon(Icons.my_location,
+                    color: Color(0xFF80DEEA), size: 18),
+                label: const Text('📍 Usar minha localização GPS',
+                    style: TextStyle(
+                        color: Color(0xFF80DEEA), fontWeight: FontWeight.bold)),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Color(0xFF80DEEA), width: 1.2),
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
             ),
             const Padding(
               padding: EdgeInsets.only(top: 4, left: 4, bottom: 8),
-              child: Text('Toque para preencher endereço automaticamente pelo GPS do celular.', style: TextStyle(color: Colors.white38, fontSize: 11)),
+              child: Text(
+                  'Toque para preencher endereço automaticamente pelo GPS do celular.',
+                  style: TextStyle(color: Colors.white38, fontSize: 11)),
             ),
-            _buildTextField(_cepController, 'CEP', Icons.map, keyboardType: TextInputType.number, onChanged: _onCepChanged),
+            _buildTextField(_cepController, 'CEP', Icons.map,
+                keyboardType: TextInputType.number, onChanged: _onCepChanged),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(flex: 3, child: _buildTextField(_streetController, 'Rua/Av', Icons.location_on)),
+                Expanded(
+                    flex: 3,
+                    child: _buildTextField(
+                        _streetController, 'Rua/Av', Icons.location_on)),
                 const SizedBox(width: 8),
-                Expanded(flex: 1, child: _buildTextField(_numberController, 'Num', Icons.numbers)),
+                Expanded(
+                    flex: 1,
+                    child: _buildTextField(
+                        _numberController, 'Num', Icons.numbers)),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _buildTextField(_neighborhoodController, 'Bairro', Icons.holiday_village)),
+                Expanded(
+                    child: _buildTextField(_neighborhoodController, 'Bairro',
+                        Icons.holiday_village)),
                 const SizedBox(width: 8),
-                Expanded(child: _buildTextField(_cityController, 'Cidade', Icons.location_city)),
+                Expanded(
+                    child: _buildTextField(
+                        _cityController, 'Cidade', Icons.location_city)),
                 const SizedBox(width: 8),
-                Expanded(flex: 0, child: SizedBox(width: 70, child: _buildTextField(_stateController, 'UF', Icons.flag))),
+                Expanded(
+                    flex: 0,
+                    child: SizedBox(
+                        width: 70,
+                        child: _buildTextField(
+                            _stateController, 'UF', Icons.flag))),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _buildTextField(_condoController, 'Condomínio (Opcional)', Icons.apartment)),
+                Expanded(
+                    child: _buildTextField(_condoController,
+                        'Condomínio (Opcional)', Icons.apartment)),
                 const SizedBox(width: 8),
-                Expanded(child: _buildTextField(_blockController, 'Bloco (Opcional)', null)),
+                Expanded(
+                    child: _buildTextField(
+                        _blockController, 'Bloco (Opcional)', null)),
                 const SizedBox(width: 8),
-                Expanded(child: _buildTextField(_aptController, 'Apto (Opcional)', null)),
+                Expanded(
+                    child: _buildTextField(
+                        _aptController, 'Apto (Opcional)', null)),
               ],
             ),
             const SizedBox(height: 12),
-            _buildTextField(_referenceController, 'Ponto de Referência (Pesquisa de Local)', Icons.place),
-            
+            _buildTextField(_referenceController,
+                'Ponto de Referência (Pesquisa de Local)', Icons.place),
+
             const SizedBox(height: 24),
 
             // ── Cor da Casa (Visual)
@@ -1330,10 +1585,27 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                       decoration: BoxDecoration(
                         color: color,
                         shape: BoxShape.circle,
-                        border: Border.all(color: isSelected ? const Color(0xFFCE93D8) : Colors.white24, width: isSelected ? 3 : 1),
-                        boxShadow: isSelected ? [BoxShadow(color: const Color(0xFFCE93D8).withOpacity(0.5), blurRadius: 8)] : [],
+                        border: Border.all(
+                            color: isSelected
+                                ? const Color(0xFFCE93D8)
+                                : Colors.white24,
+                            width: isSelected ? 3 : 1),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                    color: const Color(0xFFCE93D8)
+                                        .withOpacity(0.5),
+                                    blurRadius: 8)
+                              ]
+                            : [],
                       ),
-                      child: isSelected ? Icon(Icons.check, color: color.computeLuminance() > 0.5 ? Colors.black : Colors.white, size: 20) : null,
+                      child: isSelected
+                          ? Icon(Icons.check,
+                              color: color.computeLuminance() > 0.5
+                                  ? Colors.black
+                                  : Colors.white,
+                              size: 20)
+                          : null,
                     ),
                   );
                 },
@@ -1359,17 +1631,35 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                       decoration: BoxDecoration(
                         color: color,
                         shape: BoxShape.circle,
-                        border: Border.all(color: isSelected ? const Color(0xFFCE93D8) : Colors.white24, width: isSelected ? 3 : 1),
-                        boxShadow: isSelected ? [BoxShadow(color: const Color(0xFFCE93D8).withOpacity(0.5), blurRadius: 8)] : [],
+                        border: Border.all(
+                            color: isSelected
+                                ? const Color(0xFFCE93D8)
+                                : Colors.white24,
+                            width: isSelected ? 3 : 1),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                    color: const Color(0xFFCE93D8)
+                                        .withOpacity(0.5),
+                                    blurRadius: 8)
+                              ]
+                            : [],
                       ),
-                      child: isSelected ? Icon(Icons.check, color: color.computeLuminance() > 0.5 ? Colors.black : Colors.white, size: 20) : null,
+                      child: isSelected
+                          ? Icon(Icons.check,
+                              color: color.computeLuminance() > 0.5
+                                  ? Colors.black
+                                  : Colors.white,
+                              size: 20)
+                          : null,
                     ),
                   );
                 },
               ),
             ),
             const SizedBox(height: 12),
-            _buildTextField(_gateObservationController, 'Observação sobre o Portão (Opcional)', Icons.edit_note),
+            _buildTextField(_gateObservationController,
+                'Observação sobre o Portão (Opcional)', Icons.edit_note),
 
             const SizedBox(height: 24),
 
@@ -1378,16 +1668,26 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             GestureDetector(
               onTap: _pickTime,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                decoration: BoxDecoration(color: const Color(0xFF1A2535), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF1A2535),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12)),
                 child: Row(
                   children: [
                     const Icon(Icons.access_time, color: Colors.white54),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        _visitTime == null ? 'Melhor horário de visita' : 'Horário: ${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}',
-                        style: TextStyle(color: _visitTime == null ? Colors.white54 : Colors.white, fontSize: 16),
+                        _visitTime == null
+                            ? 'Melhor horário de visita'
+                            : 'Horário: ${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}',
+                        style: TextStyle(
+                            color: _visitTime == null
+                                ? Colors.white54
+                                : Colors.white,
+                            fontSize: 16),
                       ),
                     ),
                   ],
@@ -1397,7 +1697,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: const Color(0xFF1A2535), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF1A2535),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white12)),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1406,38 +1709,52 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                       const Expanded(
                         child: Text(
                           'Crianças / Identificação',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14),
                         ),
                       ),
                       InkWell(
                         onTap: _addChild,
                         borderRadius: BorderRadius.circular(20),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
                             color: const Color(0xFFCE93D8).withOpacity(0.2),
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFCE93D8), width: 1.5),
+                            border: Border.all(
+                                color: const Color(0xFFCE93D8), width: 1.5),
                           ),
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.add_rounded, color: Color(0xFFCE93D8), size: 16),
+                              Icon(Icons.add_rounded,
+                                  color: Color(0xFFCE93D8), size: 16),
                               SizedBox(width: 4),
-                              Text('Adicionar Criança', style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold, fontSize: 12)),
+                              Text('Adicionar Criança',
+                                  style: TextStyle(
+                                      color: Color(0xFFCE93D8),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12)),
                             ],
                           ),
                         ),
                       ),
                     ],
                   ),
-                  if (_children.isEmpty) const Text('Nenhuma criança adicionada.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  if (_children.isEmpty)
+                    const Text('Nenhuma criança adicionada.',
+                        style: TextStyle(color: Colors.white54, fontSize: 12)),
                   ..._children.map((c) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text('• ${c['name']} (${c['age']} anos)', style: const TextStyle(color: Colors.white70)),
-                  )),
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('• ${c['name']} (${c['age']} anos)',
+                            style: const TextStyle(color: Colors.white70)),
+                      )),
                   const SizedBox(height: 12),
-                  _buildTextField(_clothesColorController, 'Cores de Roupa da(s) criança(s)', Icons.checkroom),
+                  _buildTextField(_clothesColorController,
+                      'Cores de Roupa da(s) criança(s)', Icons.checkroom),
                 ],
               ),
             ),
@@ -1447,10 +1764,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
             // ── Assinatura
             _buildSectionTitle('Assinatura do Responsável'),
             Container(
-              decoration: BoxDecoration(border: Border.all(color: const Color(0xFFCE93D8), width: 2), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFCE93D8), width: 2),
+                  borderRadius: BorderRadius.circular(12)),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: Signature(controller: _signatureController, height: 260, backgroundColor: Colors.white),
+                child: Signature(
+                    controller: _signatureController,
+                    height: 260,
+                    backgroundColor: Colors.white),
               ),
             ),
             Align(
@@ -1458,7 +1780,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               child: TextButton.icon(
                 onPressed: () => _signatureController.clear(),
                 icon: const Icon(Icons.clear, color: Colors.white54, size: 16),
-                label: const Text('Limpar Assinatura', style: TextStyle(color: Colors.white54)),
+                label: const Text('Limpar Assinatura',
+                    style: TextStyle(color: Colors.white54)),
               ),
             ),
 
@@ -1468,11 +1791,20 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
               style: LedButton.styleFrom(
                 backgroundColor: const Color(0xFFCE93D8),
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
-              child: _isLoading 
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
-                : const Text('Finalizar e Gerar QR Code', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+              child: _isLoading
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Text('Finalizar e Gerar QR Code',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 40),
           ],
@@ -1487,7 +1819,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       child: Row(
         children: [
           const Icon(Icons.arrow_right, color: Color(0xFFCE93D8)),
-          Text(title, style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 14, fontWeight: FontWeight.bold)),
+          Text(title,
+              style: const TextStyle(
+                  color: Color(0xFFCE93D8),
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold)),
         ],
       ),
     );
@@ -1513,13 +1849,25 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
         labelStyle: const TextStyle(color: Colors.white54),
         filled: true,
         fillColor: const Color(0xFF1A2535),
-        prefixIcon: icon != null ? Icon(icon, color: Colors.white54, size: 20) : null,
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white12)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFCE93D8), width: 1.5)),
-        errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.redAccent, width: 1.5)),
-        focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.redAccent, width: 2)),
+        prefixIcon:
+            icon != null ? Icon(icon, color: Colors.white54, size: 20) : null,
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.white12)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFCE93D8), width: 1.5)),
+        errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.redAccent, width: 1.5)),
+        focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.redAccent, width: 2)),
       ),
-      validator: validator ?? (v) => label.contains('Opcional') ? null : (v == null || v.trim().isEmpty ? 'Obrigatório' : null),
+      validator: validator ??
+          (v) => label.contains('Opcional')
+              ? null
+              : (v == null || v.trim().isEmpty ? 'Obrigatório' : null),
     );
   }
 
@@ -1532,25 +1880,50 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
           children: [
             Container(
               padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(color: const Color(0xFF1A1A2E), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.green.withOpacity(0.5), width: 2)),
+              decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2E),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: Colors.green.withOpacity(0.5), width: 2)),
               child: Column(
                 children: [
-                  const Icon(Icons.check_circle_rounded, color: Colors.green, size: 60),
+                  const Icon(Icons.check_circle_rounded,
+                      color: Colors.green, size: 60),
                   const SizedBox(height: 16),
-                  const Text('Ficha Gerada com Sucesso!', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const Text('Ficha Gerada com Sucesso!',
+                      style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white)),
                   const SizedBox(height: 8),
-                  const Text('Peça para o fotógrafo tirar uma book deste QR Code na casa do cliente.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
+                  const Text(
+                      'Peça para o fotógrafo tirar uma book deste QR Code na casa do cliente.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                    child: QrImageView(data: _generatedQrCodeData!, version: QrVersions.auto, size: 220.0),
+                    decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16)),
+                    child: QrImageView(
+                        data: _generatedQrCodeData!,
+                        version: QrVersions.auto,
+                        size: 220.0),
                   ),
                   const SizedBox(height: 24),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
-                    child: Text('Ficha: $_generatedQrCodeData', style: const TextStyle(color: Color(0xFF4FC3F7), fontWeight: FontWeight.bold, fontSize: 18, fontFamily: 'monospace')),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Text('Ficha: $_generatedQrCodeData',
+                        style: const TextStyle(
+                            color: Color(0xFF4FC3F7),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            fontFamily: 'monospace')),
                   ),
                 ],
               ),
@@ -1562,8 +1935,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   child: LedButton.icon(
                     onPressed: _printFicha,
                     icon: const Icon(Icons.print, color: Colors.white),
-                    label: const Text('Imprimir Ficha', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    label: const Text('Imprimir Ficha',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: LedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4FC3F7),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -1571,8 +1950,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
                   child: LedButton.icon(
                     onPressed: _resetForm,
                     icon: const Icon(Icons.add, color: Colors.white),
-                    label: const Text('Nova Ficha', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8), padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    label: const Text('Nova Ficha',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: LedButton.styleFrom(
+                        backgroundColor: const Color(0xFFCE93D8),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
                   ),
                 ),
               ],
@@ -1582,5 +1967,4 @@ class _PhotographerDashboardState extends State<PhotographerDashboard> with Sing
       ),
     );
   }
-
 }
