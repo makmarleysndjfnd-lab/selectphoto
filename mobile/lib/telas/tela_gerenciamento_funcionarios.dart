@@ -69,13 +69,15 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
   }
 
   void _showEmployeeForm([Map<String, dynamic>? employee]) {
-    showDialog(
-      context: context,
-      builder: (context) => _EmployeeFormDialog(
-        employee: employee,
-        teams: _teams,
-        cars: _cars,
-        onSaved: _fetchData,
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _EmployeeFormScreen(
+          employee: employee,
+          teams: _teams,
+          cars: _cars,
+          onSaved: _fetchData,
+        ),
       ),
     );
   }
@@ -185,19 +187,19 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
   }
 }
 
-class _EmployeeFormDialog extends StatefulWidget {
+class _EmployeeFormScreen extends StatefulWidget {
   final Map<String, dynamic>? employee;
   final List<dynamic> teams;
   final List<dynamic> cars;
   final VoidCallback onSaved;
 
-  const _EmployeeFormDialog({this.employee, required this.teams, required this.cars, required this.onSaved});
+  const _EmployeeFormScreen({this.employee, required this.teams, required this.cars, required this.onSaved});
 
   @override
-  State<_EmployeeFormDialog> createState() => _EmployeeFormDialogState();
+  State<_EmployeeFormScreen> createState() => _EmployeeFormScreenState();
 }
 
-class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
+class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
   final ApiService _apiService = ApiService();
   final _formKey = GlobalKey<FormState>();
 
@@ -362,32 +364,104 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
     }
   }
 
+  Future<bool> _onWillPop() async {
+    final hasContent = _nameCtrl.text.trim().isNotEmpty ||
+        _passwordCtrl.text.trim().isNotEmpty ||
+        _cpfCtrl.text.trim().isNotEmpty ||
+        _rgCtrl.text.trim().isNotEmpty ||
+        _phoneCtrl.text.trim().isNotEmpty ||
+        _emergencyCtrl.text.trim().isNotEmpty ||
+        _addressCtrl.text.trim().isNotEmpty ||
+        _profilePhoto != null ||
+        _criminalRecord != null;
+    if (!hasContent) return true;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Descartar alterações?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text(
+          'Você tem dados preenchidos. Se sair agora, as informações serão perdidas.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Continuar editando', style: TextStyle(color: Color(0xFFCE93D8))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Descartar e Sair', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    return confirm ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isNarrow = screenWidth < 600;
-    final dialogWidth = isNarrow ? screenWidth * 0.94 : 600.0;
-
-    return Dialog(
-      backgroundColor: const Color(0xFF1A1A2E),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        width: dialogWidth,
-        padding: EdgeInsets.all(isNarrow ? 16 : 24),
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  widget.employee == null ? 'Novo Funcionário' : 'Editar Funcionário',
-                  style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
+    final isNarrow = MediaQuery.of(context).size.width < 600;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldPop = await _onWillPop();
+        if (shouldPop && context.mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF121224),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF1A1A2E),
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () async {
+              final shouldPop = await _onWillPop();
+              if (shouldPop && context.mounted) {
+                Navigator.of(context).pop();
+              }
+            },
+          ),
+          title: Text(
+            widget.employee == null ? 'Novo Funcionário' : 'Editar Funcionário',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            if (_isSaving)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(color: Color(0xFFCE93D8), strokeWidth: 2),
+                  ),
                 ),
-                const SizedBox(height: 16),
+              )
+            else
+              TextButton.icon(
+                onPressed: _save,
+                icon: const Icon(Icons.check, color: Color(0xFFCE93D8)),
+                label: const Text(
+                  'Salvar',
+                  style: TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold),
+                ),
+              ),
+          ],
+        ),
+        body: SafeArea(
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 
                 // ── Bloco de Fotos (Perfil somente câmera | Antecedentes câmera ou galeria)
                 Container(
@@ -686,7 +760,14 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                         minimumSize: const Size(80, 48),
                       ),
-                      onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+                      onPressed: _isSaving
+                          ? null
+                          : () async {
+                              final shouldPop = await _onWillPop();
+                              if (shouldPop && context.mounted) {
+                                Navigator.of(context).pop();
+                              }
+                            },
                       child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                     ),
                     const SizedBox(width: 12),
@@ -699,19 +780,25 @@ class _EmployeeFormDialogState extends State<_EmployeeFormDialog> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                       onPressed: _isSaving ? null : _save,
-                      child: _isSaving 
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                            )
+                          : const Text('Salvar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ),
                   ],
-                )
+                ),
+                const SizedBox(height: 24),
               ],
             ),
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _FleetChecklistTab extends StatefulWidget {

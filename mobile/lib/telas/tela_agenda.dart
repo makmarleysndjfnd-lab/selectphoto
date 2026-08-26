@@ -6,6 +6,8 @@ import '../servicos/servico_api.dart';
 import '../utils/ui_helpers.dart';
 import 'dart:math';
 
+import '../servicos/servico_notificacoes_agenda.dart';
+
 class TelaAgenda extends StatefulWidget {
   final Map<String, dynamic> initialClientData;
 
@@ -22,53 +24,23 @@ class _TelaAgendaState extends State<TelaAgenda> {
   Map<DateTime, List<dynamic>> _events = {};
   bool _isLoading = true;
 
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  final ServicoNotificacoesAgenda _servicoNotificacoes = ServicoNotificacoesAgenda();
 
   @override
   void initState() {
     super.initState();
-    _initializeNotifications();
+    _servicoNotificacoes.inicializar();
     _fetchAgenda();
   }
 
-  Future<void> _initializeNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initializationSettings = InitializationSettings(
-        android: initializationSettingsAndroid);
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-  }
-
   Future<void> _scheduleNotification(String title, String body, DateTime scheduledTime) async {
-    final notificationTime = scheduledTime.subtract(const Duration(minutes: 30));
-    
-    // Se o evento já está a menos de 30 minutos, não agenda.
-    if (notificationTime.isBefore(DateTime.now())) return;
-
-    final androidPlatformChannelSpecifics = AndroidNotificationDetails(
-      'agenda_channel_id',
-      'Lembretes da Agenda',
-      channelDescription: 'Lembretes para agendamentos pessoais e clientes.',
-      importance: Importance.max,
-      priority: Priority.high,
-      ticker: 'ticker',
-      enableVibration: true,
-    );
-    
-    final platformChannelSpecifics = NotificationDetails(android: androidPlatformChannelSpecifics);
-
     final notificationId = Random().nextInt(100000);
-
-    final delay = notificationTime.difference(DateTime.now());
-    
-    Future.delayed(delay, () {
-      flutterLocalNotificationsPlugin.show(
-        notificationId,
-        title,
-        body,
-        platformChannelSpecifics,
-      );
-    });
+    await _servicoNotificacoes.agendarLembreteCompromisso(
+      id: notificationId,
+      titulo: title,
+      descricao: body,
+      horarioCompromisso: scheduledTime,
+    );
   }
 
   Future<void> _fetchAgenda() async {
@@ -99,6 +71,8 @@ class _TelaAgendaState extends State<TelaAgenda> {
           });
         }
       }
+
+      _servicoNotificacoes.sincronizarLembretesLista(appointments);
 
       if (mounted) {
         setState(() {
