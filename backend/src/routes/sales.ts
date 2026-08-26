@@ -1,5 +1,6 @@
 import { NextFunction, Response, Router } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
 
@@ -34,6 +35,7 @@ async function finalizeSaleWithReceipt(params: {
   sellerId: string;
   companyId: string;
   receiptUrl: string;
+  correlationId?: string;
 }) {
   const input = parseSaleInput(params.body);
 
@@ -44,42 +46,108 @@ async function finalizeSaleWithReceipt(params: {
     if (!client) throw { status: 404, message: 'Ficha não encontrada na sua empresa' };
     if (client.cityClosedAt) throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
 
-    const existing = await tx.sale.findFirst({
+    // Buscar todas as vendas existentes para esta ficha na empresa
+    const allSalesForClient = await tx.sale.findMany({
       where: {
         clientId: input.clientId,
         companyId: params.companyId,
-        sellerId: params.sellerId,
       },
-      orderBy: { date: 'desc' },
+      orderBy: { date: 'asc' },
     });
 
-    // Retentativa idempotente: se a venda já estiver concluída, devolve a mesma.
-    if (existing?.receiptUrl) return existing;
+    // Cenário 5: Venda válida com comprovante já existente
+    const existingWithReceipt = allSalesForClient.find((s) => Boolean(s.receiptUrl));
+    if (existingWithReceipt) {
+      if (existingWithReceipt.sellerId === params.sellerId) {
+        // Retentativa idêntica do mesmo vendedor: devolve a mesma venda sem duplicar
+        return existingWithReceipt;
+      }
+      // Venda pertence a outro vendedor
+      throw {
+        status: 409,
+        code: 'SALE_ALREADY_EXISTS',
+        message: 'Venda com comprovante já registrada para esta ficha por outro vendedor',
+      };
+    }
 
-    const sale = existing
-      ? await tx.sale.update({
-          where: { id: existing.id },
-          data: {
-            value: input.value,
-            city: input.city,
-            product: input.product,
-            fichaNumber: input.fichaNumber,
-            paymentMethod: input.paymentMethod,
-            paymentStatus: 'PAID',
-            status: 'PRONTO',
-            receiptUrl: params.receiptUrl,
-          },
-        })
-      : await tx.sale.create({
-          data: {
-            ...input,
-            sellerId: params.sellerId,
+    // Cenário 4: Mais de uma venda incompleta (sem comprovante) para a mesma ficha
+    if (allSalesForClient.length > 1) {
+      throw {
+        status: 409,
+        code: 'LEGACY_SALE_REQUIRES_RECONCILIATION',
+        message: 'Ficha possui múltiplos registros antigos sem comprovante e requer reconciliação manual',
+      };
+    }
+
+    // Cenário 3: Exatamente uma venda incompleta antiga
+    if (allSalesForClient.length === 1) {
+      const existingSingle = allSalesForClient[0];
+      if (existingSingle.sellerId !== params.sellerId) {
+        // Pertence a outro vendedor -> Cenário 6: bloquear sem vazar dados
+        throw {
+          status: 403,
+          code: 'SELLER_MISMATCH',
+          message: 'Acesso negado: a ficha possui registro vinculado a outro vendedor',
+        };
+      }
+
+      // Pertence ao mesmo vendedor: anexar o comprovante à venda existente de forma atômica
+      const updatedSale = await tx.sale.update({
+        where: { id: existingSingle.id },
+        data: {
+          value: input.value,
+          city: input.city,
+          product: input.product,
+          fichaNumber: input.fichaNumber,
+          paymentMethod: input.paymentMethod,
+          paymentStatus: 'PAID',
+          status: 'PRONTO',
+          receiptUrl: params.receiptUrl,
+        },
+      });
+
+      if (client.outcomeStatus === 'NON_SALE') {
+        await tx.nonSale.updateMany({
+          where: {
+            clientId: input.clientId,
             companyId: params.companyId,
-            paymentStatus: 'PAID',
-            status: 'PRONTO',
-            receiptUrl: params.receiptUrl,
+            supersededAt: null,
           },
+          data: { supersededAt: updatedSale.date, supersededBySaleId: updatedSale.id },
         });
+      }
+
+      await tx.client.update({
+        where: { id: input.clientId },
+        data: {
+          outcomeStatus: 'SOLD',
+          outcomeUpdatedAt: updatedSale.date,
+          bookStatus: 'SOLD',
+        },
+      });
+
+      return updatedSale;
+    }
+
+    // Cenário 1: Ficha limpa + comprovante (zero vendas existentes)
+    if (client.outcomeStatus === 'SOLD') {
+      throw {
+        status: 409,
+        code: 'CLIENT_ALREADY_SOLD',
+        message: 'Ficha já está marcada como vendida no sistema',
+      };
+    }
+
+    const sale = await tx.sale.create({
+      data: {
+        ...input,
+        sellerId: params.sellerId,
+        companyId: params.companyId,
+        paymentStatus: 'PAID',
+        status: 'PRONTO',
+        receiptUrl: params.receiptUrl,
+      },
+    });
 
     if (client.outcomeStatus === 'NON_SALE') {
       await tx.nonSale.updateMany({
@@ -107,6 +175,7 @@ async function finalizeSaleWithReceipt(params: {
 
 // Register a Sale
 router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
+  const correlationId = (req.headers['x-correlation-id'] as string) || uuidv4().substring(0, 8);
   try {
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
@@ -136,18 +205,41 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
       }
 
-      // Retentativas podem ocorrer quando o servidor confirma a gravação, mas a
-      // resposta não chega ao celular. Devolver o mesmo ID evita venda duplicada.
-      const existingSale = await tx.sale.findFirst({
-        where: { clientId: input.clientId, companyId, sellerId },
-        orderBy: { date: 'desc' },
+      // 3. Buscar todas as vendas da ficha na empresa
+      const allSales = await tx.sale.findMany({
+        where: { clientId: input.clientId, companyId },
+        orderBy: { date: 'asc' },
       });
-      if (existingSale) return { sale: existingSale, created: false };
+
+      const existingWithReceipt = allSales.find((s) => Boolean(s.receiptUrl));
+      if (existingWithReceipt) {
+        if (existingWithReceipt.sellerId === sellerId) {
+          return { sale: existingWithReceipt, created: false };
+        }
+        throw { status: 409, message: 'Venda já registrada para esta ficha por outro vendedor' };
+      }
+
+      if (allSales.length > 1) {
+        throw {
+          status: 409,
+          code: 'LEGACY_SALE_REQUIRES_RECONCILIATION',
+          message: 'Ficha possui múltiplos registros antigos sem comprovante e requer reconciliação manual',
+        };
+      }
+
+      if (allSales.length === 1) {
+        const single = allSales[0];
+        if (single.sellerId === sellerId) {
+          return { sale: single, created: false };
+        }
+        throw { status: 403, message: 'Acesso negado: a ficha possui registro vinculado a outro vendedor' };
+      }
+
       if (client.outcomeStatus === 'SOLD') {
         throw { status: 409, message: 'Venda já registrada para esta ficha por outro fluxo' };
       }
 
-      // 4. Criar a venda
+      // 4. Criar a venda pendente de comprovante
       const sale = await tx.sale.create({
         data: {
           ...input,
@@ -158,16 +250,27 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         },
       });
 
-      // A ficha continua pendente até o comprovante ser persistido.
       return { sale, created: true };
     });
 
+    console.info('[SALES] Venda processada via POST /sales:', {
+      correlationId,
+      saleId: result.sale.id,
+      created: result.created,
+    });
     res.status(result.created ? 201 : 200).json(result.sale);
   } catch (error: any) {
     if (error && error.status && error.message) {
-      return res.status(error.status).json({ error: error.message });
+      return res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
     }
-    console.error('Create sale error:', error);
+    console.error('[SALES] Erro ao registrar venda:', {
+      correlationId,
+      name: error?.name,
+      code: error?.code,
+    });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -175,6 +278,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
 // Fluxo atômico recomendado: comprovante obrigatório e venda concluída em uma
 // única chamada lógica. Sem comprovante não existe venda finalizada.
 router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
+  const correlationId = (req.headers['x-correlation-id'] as string) || uuidv4().substring(0, 8);
   const companyId = req.user?.companyId;
   const sellerId = req.user?.id;
   try {
@@ -184,19 +288,36 @@ router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receip
 
     const receiptUrl = getUploadedFileUrl(req.file);
     if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
-    const sale = await finalizeSaleWithReceipt({ body: req.body, sellerId, companyId, receiptUrl });
+    const sale = await finalizeSaleWithReceipt({
+      body: req.body,
+      sellerId,
+      companyId,
+      receiptUrl,
+      correlationId,
+    });
 
     // Em retentativa idempotente, o arquivo recém-enviado não é o persistido.
     if (sale.receiptUrl !== receiptUrl) {
       await removeUploadedFile(req, req.file).catch(() => undefined);
     }
+    console.info('[SALES] Venda com comprovante finalizada com sucesso:', {
+      correlationId,
+      saleId: sale.id,
+    });
     return res.status(201).json(sale);
   } catch (error: any) {
     await removeUploadedFile(req, req.file).catch(() => undefined);
     if (error?.status && error?.message) {
-      return res.status(error.status).json({ error: error.message });
+      return res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
     }
-    console.error('Create sale with receipt error:', { name: error?.name, code: error?.code });
+    console.error('[SALES] Falha ao concluir venda com comprovante:', {
+      correlationId,
+      name: error?.name,
+      code: error?.code,
+    });
     return res.status(500).json({ error: 'Não foi possível concluir a venda' });
   }
 });
