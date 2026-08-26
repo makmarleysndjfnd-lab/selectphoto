@@ -32,6 +32,7 @@ class SellerClientDetailScreen extends StatefulWidget {
 class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  bool _isDetailsCollapsed = false;
 
   final _tabs = const [
     Tab(icon: Icon(Icons.attach_money_rounded), text: 'Venda'),
@@ -44,6 +45,11 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging && !_isDetailsCollapsed) {
+        setState(() => _isDetailsCollapsed = true);
+      }
+    });
   }
 
   @override
@@ -239,7 +245,6 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
         final val = colorStr.split('(0x')[1].split(')')[0];
         return Color(int.parse(val, radix: 16));
       }
-      // handle integer string
       final intVal = int.tryParse(colorStr);
       if (intVal != null) return Color(intVal);
       return null;
@@ -249,16 +254,21 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
     Color? parsedGateColor = parseColor(client['gateColor']);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      padding: EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: _isDetailsCollapsed ? 8 : 12,
+      ),
       decoration:
           UIHelpers.getLedDecoration(client['bookStatus']?.toString()).copyWith(
         border:
             Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08))),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Resumo sempre visível com botão de recolher / expandir (>= 48px target)
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 child: Column(
@@ -277,47 +287,20 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                             await launchUrl(uri,
                                 mode: LaunchMode.externalApplication);
                           } else {
-                            if (mounted)
+                            if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
                                       content: Text(
                                           'Não foi possível abrir o WhatsApp'),
                                       backgroundColor: Colors.red));
+                            }
                           }
                         },
                         child: Container(
                           color: Colors.transparent,
-                          padding: const EdgeInsets.only(bottom: 4),
+                          padding: const EdgeInsets.only(bottom: 2),
                           child: _infoRow(FontAwesomeIcons.whatsapp,
                               client['phone1'].toString()),
-                        ),
-                      ),
-                    if (client['phone2'] != null &&
-                        client['phone2'].toString().isNotEmpty)
-                      GestureDetector(
-                        onTap: () async {
-                          final num = client['phone2']
-                              .toString()
-                              .replaceAll(RegExp(r'\D'), '');
-                          final fullNum = num.startsWith('55') ? num : '55$num';
-                          final uri = Uri.parse('https://wa.me/$fullNum');
-                          if (await canLaunchUrl(uri)) {
-                            await launchUrl(uri,
-                                mode: LaunchMode.externalApplication);
-                          } else {
-                            if (mounted)
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text(
-                                          'Não foi possível abrir o WhatsApp'),
-                                      backgroundColor: Colors.red));
-                          }
-                        },
-                        child: Container(
-                          color: Colors.transparent,
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: _infoRow(FontAwesomeIcons.whatsapp,
-                              client['phone2'].toString()),
                         ),
                       ),
                     GestureDetector(
@@ -345,199 +328,296 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                         }
                       },
                       child: Container(
-                        color: Colors.transparent, // to make it tappable
+                        color: Colors.transparent,
                         child: _infoRow(Icons.location_on_rounded,
-                            "${client['street']}, ${client['number']} — ${client['city']}"),
+                            "${client['street'] ?? ''}, ${client['number'] ?? ''} — ${client['city'] ?? ''}"),
                       ),
                     ),
-                    if (client['referencePoint'] != null &&
-                        client['referencePoint'].toString().isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      _infoRow(Icons.place, "Ref: ${client['referencePoint']}"),
-                    ],
                   ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Botão para alternar recolhimento com área de toque mínima de 48px
+              InkWell(
+                key: const ValueKey('toggle_client_details_button'),
+                borderRadius: BorderRadius.circular(8),
+                onTap: () {
+                  setState(() => _isDetailsCollapsed = !_isDetailsCollapsed);
+                },
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _isDetailsCollapsed ? 'Ver detalhes' : 'Ocultar',
+                        style: const TextStyle(
+                          color: Color(0xFF4FC3F7),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        _isDetailsCollapsed
+                            ? Icons.keyboard_arrow_down_rounded
+                            : Icons.keyboard_arrow_up_rounded,
+                        color: const Color(0xFF4FC3F7),
+                        size: 18,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
 
-          // Additional Info Row (Cor da Casa, Cor do Portão, Profissao, Horario, Criancas)
-          if (parsedHouseColor != null ||
-              parsedGateColor != null ||
-              client['visitTime'] != null ||
-              client['profession'] != null ||
-              (client['children'] != null &&
-                  client['children'] is List &&
-                  (client['children'] as List).isNotEmpty)) ...[
-            const SizedBox(height: 12),
-            const Divider(color: Colors.white12),
-            if (parsedHouseColor != null || parsedGateColor != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (parsedHouseColor != null) ...[
-                    Column(
+          // Detalhes estendidos recolhíveis com animação suave
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeInOut,
+            alignment: Alignment.topCenter,
+            child: _isDetailsCollapsed
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Cor da Casa',
-                            style:
-                                TextStyle(color: Colors.white54, fontSize: 10)),
-                        const SizedBox(height: 4),
-                        Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: parsedHouseColor,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white30),
+                        if (client['phone2'] != null &&
+                            client['phone2'].toString().isNotEmpty)
+                          GestureDetector(
+                            onTap: () async {
+                              final num = client['phone2']
+                                  .toString()
+                                  .replaceAll(RegExp(r'\D'), '');
+                              final fullNum =
+                                  num.startsWith('55') ? num : '55$num';
+                              final uri = Uri.parse('https://wa.me/$fullNum');
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(uri,
+                                    mode: LaunchMode.externalApplication);
+                              } else {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text(
+                                              'Não foi possível abrir o WhatsApp'),
+                                          backgroundColor: Colors.red));
+                                }
+                              }
+                            },
+                            child: Container(
+                              color: Colors.transparent,
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: _infoRow(FontAwesomeIcons.whatsapp,
+                                  client['phone2'].toString()),
+                            ),
                           ),
-                        )
-                      ],
-                    ),
-                    const SizedBox(width: 16),
-                  ],
-                  if (parsedGateColor != null) ...[
-                    Column(
-                      children: [
-                        const Text('Cor do Portão',
-                            style:
-                                TextStyle(color: Colors.white54, fontSize: 10)),
-                        const SizedBox(height: 4),
-                        Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: parsedGateColor,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white30),
+                        if (client['referencePoint'] != null &&
+                            client['referencePoint'].toString().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          _infoRow(
+                              Icons.place, "Ref: ${client['referencePoint']}"),
+                        ],
+                        if (parsedHouseColor != null ||
+                            parsedGateColor != null ||
+                            client['visitTime'] != null ||
+                            client['profession'] != null ||
+                            (client['children'] != null &&
+                                client['children'] is List &&
+                                (client['children'] as List).isNotEmpty)) ...[
+                          const SizedBox(height: 8),
+                          const Divider(color: Colors.white12),
+                          if (parsedHouseColor != null ||
+                              parsedGateColor != null) ...[
+                            const SizedBox(height: 6),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (parsedHouseColor != null) ...[
+                                  Column(
+                                    children: [
+                                      const Text('Cor da Casa',
+                                          style: TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 10)),
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        width: 22,
+                                        height: 22,
+                                        decoration: BoxDecoration(
+                                          color: parsedHouseColor,
+                                          shape: BoxShape.circle,
+                                          border:
+                                              Border.all(color: Colors.white30),
+                                        ),
+                                      )
+                                    ],
+                                  ),
+                                  const SizedBox(width: 16),
+                                ],
+                                if (parsedGateColor != null) ...[
+                                  Column(
+                                    children: [
+                                      const Text('Cor do Portão',
+                                          style: TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 10)),
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        width: 22,
+                                        height: 22,
+                                        decoration: BoxDecoration(
+                                          color: parsedGateColor,
+                                          shape: BoxShape.circle,
+                                          border:
+                                              Border.all(color: Colors.white30),
+                                        ),
+                                      )
+                                    ],
+                                  ),
+                                  const SizedBox(width: 16),
+                                ],
+                              ],
+                            ),
+                          ],
+                          if (client['profession'] != null &&
+                              client['profession'].toString().isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            _infoRow(
+                                Icons.work, client['profession'].toString()),
+                          ],
+                          if (client['visitTime'] != null) ...[
+                            const SizedBox(height: 4),
+                            _infoRow(Icons.access_time,
+                                "Visita: ${client['visitTime']}"),
+                          ],
+                          if (client['children'] != null &&
+                              client['children'] is List &&
+                              (client['children'] as List).isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            _infoRow(Icons.child_care,
+                                "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
+                          ],
+                        ],
+                        if (client['signatureUrl'] != null &&
+                            client['signatureUrl']
+                                .toString()
+                                .trim()
+                                .isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Divider(color: Colors.white12),
+                          const SizedBox(height: 6),
+                          const Text('Assinatura do Cliente (Ficha)',
+                              style: TextStyle(
+                                  color: Colors.white54, fontSize: 10)),
+                          const SizedBox(height: 4),
+                          Container(
+                            height: 70,
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: AuthenticatedImage(
+                              url: client['signatureUrl'].toString(),
+                              fit: BoxFit.contain,
+                            ),
                           ),
-                        )
+                        ],
+                        if (client['nonSales'] != null &&
+                            client['nonSales'] is List &&
+                            (client['nonSales'] as List).isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: Colors.redAccent.withOpacity(0.4)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: const [
+                                    Icon(Icons.report_problem_rounded,
+                                        color: Colors.redAccent, size: 16),
+                                    SizedBox(width: 8),
+                                    Text('Histórico de Não-Venda (Rebolo)',
+                                        style: TextStyle(
+                                            color: Colors.redAccent,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12)),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                ...(client['nonSales'] as List).map((ns) {
+                                  final reason = ns['reason'] ??
+                                      'Motivo não especificado';
+                                  final sellerName = ns['seller']?['name'] ??
+                                      ns['sellerName'] ??
+                                      'Vendedor';
+                                  final dateStr = ns['date'] != null
+                                      ? ns['date'].toString().split('T')[0]
+                                      : '';
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: Text(
+                                        '• Motivo: "$reason" | Vendedor: $sellerName ($dateStr)',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500)),
+                                  );
+                                }).toList(),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (client['cityClosedAt'] != null) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: Colors.amberAccent.withOpacity(0.6)),
+                            ),
+                            child: Row(
+                              children: const [
+                                Icon(Icons.lock_rounded,
+                                    color: Colors.amberAccent, size: 18),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Cidade Encerrada: Bloqueado para novas vendas e não-vendas.',
+                                    style: TextStyle(
+                                        color: Colors.amberAccent,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
-                    const SizedBox(width: 16),
-                  ],
-                ],
-              ),
-            ],
-            // Profissão e Horário em linhas separadas (evita espremimento e overflow)
-            if (client['profession'] != null &&
-                client['profession'].toString().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              _infoRow(Icons.work, client['profession'].toString()),
-            ],
-            if (client['visitTime'] != null) ...[
-              const SizedBox(height: 4),
-              _infoRow(Icons.access_time, "Visita: ${client['visitTime']}"),
-            ],
-            if (client['children'] != null &&
-                client['children'] is List &&
-                (client['children'] as List).isNotEmpty) ...[
-              const SizedBox(height: 8),
-              _infoRow(Icons.child_care,
-                  "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
-            ],
-            if (client['signatureUrl'] != null &&
-                client['signatureUrl'].toString().trim().isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Divider(color: Colors.white12),
-              const SizedBox(height: 8),
-              const Text('Assinatura do Cliente (Ficha)',
-                  style: TextStyle(color: Colors.white54, fontSize: 10)),
-              const SizedBox(height: 4),
-              Container(
-                height: 80,
-                width: double.infinity,
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: AuthenticatedImage(
-                  url: client['signatureUrl'].toString(),
-                  fit: BoxFit.contain,
-                ),
-              ),
-            ],
-            if (client['nonSales'] != null &&
-                client['nonSales'] is List &&
-                (client['nonSales'] as List).isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: const [
-                        Icon(Icons.report_problem_rounded,
-                            color: Colors.redAccent, size: 18),
-                        SizedBox(width: 8),
-                        Text('Histórico de Não-Venda (Rebolo)',
-                            style: TextStyle(
-                                color: Colors.redAccent,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    ...(client['nonSales'] as List).map((ns) {
-                      final reason = ns['reason'] ?? 'Motivo não especificado';
-                      final sellerName = ns['seller']?['name'] ??
-                          ns['sellerName'] ??
-                          'Vendedor';
-                      final dateStr = ns['date'] != null
-                          ? ns['date'].toString().split('T')[0]
-                          : '';
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
-                            '• Motivo: "$reason" | Vendedor: $sellerName ($dateStr)',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500)),
-                      );
-                    }).toList(),
-                  ],
-                ),
-              ),
-            ],
-            if (client['cityClosedAt'] != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border:
-                      Border.all(color: Colors.amberAccent.withOpacity(0.6)),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.lock_rounded,
-                        color: Colors.amberAccent, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Cidade Encerrada: O registro de novas vendas e não-vendas está bloqueado para esta ficha.',
-                        style: TextStyle(
-                            color: Colors.amberAccent,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ]
+                  ),
+          ),
         ],
       ),
     );
@@ -559,6 +639,11 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       color: const Color(0xFF1A2535),
       child: TabBar(
         controller: _tabController,
+        onTap: (index) {
+          if (!_isDetailsCollapsed) {
+            setState(() => _isDetailsCollapsed = true);
+          }
+        },
         tabs: _tabs,
         labelColor: const Color(0xFF4FC3F7),
         unselectedLabelColor: const Color(0xFF546E7A),
@@ -1700,12 +1785,14 @@ class _ScheduleTabState extends State<_ScheduleTab> {
     ];
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 8,
             children: [
               const Text('Agendamento',
                   style: TextStyle(
@@ -1742,69 +1829,65 @@ class _ScheduleTabState extends State<_ScheduleTab> {
                 ),
               ],
             ),
-            child: TableCalendar(
-              firstDay: DateTime.utc(2020, 10, 16),
-              lastDay: DateTime.utc(2030, 3, 14),
-              focusedDay: _focusedDay,
-              calendarFormat: _calendarFormat,
-              selectedDayPredicate: (day) {
-                return isSameDay(_selectedDay, day);
-              },
-              onDaySelected: (selectedDay, focusedDay) {
-                setState(() {
-                  _selectedDay = selectedDay;
-                  _focusedDay = focusedDay;
-                });
-              },
-              onFormatChanged: (format) {
-                if (_calendarFormat != format) {
-                  setState(() {
-                    _calendarFormat = format;
-                  });
-                }
-              },
-              onPageChanged: (focusedDay) {
-                _focusedDay = focusedDay;
-              },
-              calendarStyle: CalendarStyle(
-                defaultTextStyle: const TextStyle(color: Colors.white),
-                weekendTextStyle: const TextStyle(color: Color(0xFFFF8A65)),
-                outsideTextStyle:
-                    TextStyle(color: Colors.white.withOpacity(0.3)),
-                selectedDecoration: const BoxDecoration(
-                  color: Color(0xFF00E676),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(color: Color(0xFF00E676), blurRadius: 10)
-                  ],
-                ),
-                todayDecoration: BoxDecoration(
-                  color: Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF00B0FF), width: 2),
-                ),
-              ),
-              headerStyle: HeaderStyle(
-                titleTextStyle: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold),
-                formatButtonTextStyle:
-                    const TextStyle(color: Colors.white, fontSize: 13),
-                formatButtonDecoration: BoxDecoration(
-                  color: const Color(0xFF00B0FF).withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF00B0FF)),
-                ),
-                leftChevronIcon:
-                    const Icon(Icons.chevron_left, color: Colors.white),
-                rightChevronIcon:
-                    const Icon(Icons.chevron_right, color: Colors.white),
-              ),
-              daysOfWeekStyle: const DaysOfWeekStyle(
-                weekdayStyle: TextStyle(color: Colors.white70),
-                weekendStyle: TextStyle(color: Color(0xFFFF8A65)),
-              ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: LayoutBuilder(builder: (context, constraints) {
+                return TableCalendar(
+                  firstDay: DateTime.utc(2020, 10, 16),
+                  lastDay: DateTime.utc(2030, 3, 14),
+                  focusedDay: _focusedDay,
+                  calendarFormat: _calendarFormat,
+                  selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                  onDaySelected: (selectedDay, focusedDay) {
+                    setState(() {
+                      _selectedDay = selectedDay;
+                      _focusedDay = focusedDay;
+                    });
+                  },
+                  onFormatChanged: (format) {
+                    if (_calendarFormat != format) {
+                      setState(() => _calendarFormat = format);
+                    }
+                  },
+                  onPageChanged: (focusedDay) => _focusedDay = focusedDay,
+                  calendarStyle: CalendarStyle(
+                    defaultTextStyle: const TextStyle(color: Colors.white),
+                    weekendTextStyle:
+                        const TextStyle(color: Color(0xFFFF8A65)),
+                    outsideTextStyle:
+                        TextStyle(color: Colors.white.withOpacity(0.3)),
+                    selectedDecoration: const BoxDecoration(
+                      color: Color(0xFF00E676),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(color: Color(0xFF00E676), blurRadius: 10)
+                      ],
+                    ),
+                    todayDecoration: BoxDecoration(
+                      color: Colors.transparent,
+                      shape: BoxShape.circle,
+                      border:
+                          Border.all(color: const Color(0xFF00B0FF), width: 2),
+                    ),
+                  ),
+                  headerStyle: const HeaderStyle(
+                    formatButtonVisible: false,
+                    titleCentered: true,
+                    titleTextStyle: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold),
+                    leftChevronIcon:
+                        Icon(Icons.chevron_left, color: Colors.white),
+                    rightChevronIcon:
+                        Icon(Icons.chevron_right, color: Colors.white),
+                  ),
+                  daysOfWeekStyle: const DaysOfWeekStyle(
+                    weekdayStyle: TextStyle(color: Colors.white70),
+                    weekendStyle: TextStyle(color: Color(0xFFFF8A65)),
+                  ),
+                );
+              }),
             ),
           ),
           const SizedBox(height: 24),
