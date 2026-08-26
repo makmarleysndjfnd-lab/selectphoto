@@ -3,8 +3,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-export const CURRENT_APP_VERSION = '1.0.6';
-export const CURRENT_BUILD_NUMBER = 7;
+export const CURRENT_APP_VERSION = '1.0.7';
+export const CURRENT_BUILD_NUMBER = 8;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -20,9 +20,9 @@ export interface ApkReleaseDescriptor {
  * endpoint exclusivamente ao artefato que passou pela auditoria do manifesto.
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
-  version: '1.0.6',
-  buildNumber: 7,
-  sha256: 'B6F42E5F7BC3B9FEE115D7285187855A4344B4142EC56A0B9235FFB3B6BF74F9',
+  version: '1.0.7',
+  buildNumber: 8,
+  sha256: '76F14CE55A5470CED18491866175F84DC9FC5F48429C3E0197E32198B552B60A',
   packageName: 'com.example.mobile',
 });
 
@@ -190,7 +190,7 @@ export function createAppRouter(options: AppRouterOptions = {}): Router {
     if (!validation.valid || !validation.apkPath) {
       res.status(404).json({
         error:
-          'Nenhum APK de atualização validado para a versão 1.0.6+7 está disponível no servidor no momento.',
+          'Nenhum APK de atualização validado para a versão 1.0.7+8 está disponível no servidor no momento.',
         reason: validation.reason,
         expectedSha256: validation.expectedSha256,
       });

@@ -273,14 +273,14 @@ describe('Middleware safeUpload e Granularidade de Erros de Armazenamento', { co
       assert.match(data.error, /Nenhum arquivo enviado/i);
     });
 
-    it('Rota /api/sales/:id/receipt sem arquivo retorna 400', async () => {
+    it('Rota /api/sales/:id/receipt valida a venda antes de iniciar upload', async () => {
       const res = await fetch(`${baseUrl}/api/sales/sale_123/receipt`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
       const data: any = await res.json();
-      assert.equal(res.status, 400, `Expected 400 got ${res.status}: ${JSON.stringify(data)}`);
-      assert.match(data.error, /Receipt photo is required/i);
+      assert.equal(res.status, 404, `Expected 404 got ${res.status}: ${JSON.stringify(data)}`);
+      assert.match(data.error, /Sale not found/i);
     });
   });
 });

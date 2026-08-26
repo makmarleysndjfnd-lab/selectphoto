@@ -1,7 +1,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { resolveSellerCommissionRate } from '../src/utils/commission';
 
 describe('Financial Closing & Repasse Calculation Logic', () => {
+  it('Regra automática: carro da empresa recebe 20%', () => {
+    assert.strictEqual(resolveSellerCommissionRate({ usesOwnCar: false }), 0.20);
+  });
+
+  it('Regra automática: carro próprio recebe 25%', () => {
+    assert.strictEqual(resolveSellerCommissionRate({ usesOwnCar: true }), 0.25);
+  });
   function calculateRepasse(
     sales: Array<{ value: number; paymentMethod: string }>,
     commissionRate: number,

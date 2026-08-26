@@ -16,7 +16,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
 
     // Agregação total de vendas (entradas) de toda a empresa
     const salesAggregate = await prisma.sale.aggregate({
-      where: { companyId: userCompanyId },
+      where: { companyId: userCompanyId, receiptUrl: { not: null } },
       _sum: { value: true }
     });
 
@@ -34,7 +34,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
 
     // Listas recentes limitadas a 50 itens apenas para exibição visual
     const recentSales = await prisma.sale.findMany({
-      where: { companyId: userCompanyId },
+      where: { companyId: userCompanyId, receiptUrl: { not: null } },
       orderBy: { date: 'desc' },
       take: 50,
       include: {
@@ -169,7 +169,7 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
     }
 
     const sales = await prisma.sale.findMany({
-      where: { companyId: userCompanyId },
+      where: { companyId: userCompanyId, receiptUrl: { not: null } },
       include: {
         seller: { select: { name: true } }
       }

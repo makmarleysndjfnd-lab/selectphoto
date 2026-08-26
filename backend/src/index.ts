@@ -68,7 +68,7 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '1.0.6',
+    version: '1.0.7',
     commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'unknown',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),

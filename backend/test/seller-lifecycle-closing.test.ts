@@ -14,6 +14,7 @@ const jwtSecret = envConfig.JWT_SECRET || 'test_secret_for_lifecycle';
 
 process.env.DATABASE_URL = databaseUrl;
 process.env.JWT_SECRET = jwtSecret;
+process.env.EXTERNAL_SERVICES_DISABLED = 'true';
 
 import clientRoutes from '../src/routes/clients';
 import salesRoutes from '../src/routes/sales';
@@ -147,6 +148,70 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
     assert.equal(updatedClient?.bookStatus, 'AWAITING_RETURN');
   });
 
+  it('2.1 Venda sem comprovante não é concluída nem altera a ficha', async () => {
+    const client = await prisma.client.create({
+      data: {
+        sequenceNumber: `SEQ-NO-RECEIPT-${uid}`,
+        name: 'Cliente Sem Comprovante',
+        city: 'Londrina',
+        companyId: compA_Id,
+        assignedSellerId: sellerA_Id,
+      },
+    });
+    const form = new FormData();
+    form.set('clientId', client.id);
+    form.set('value', '900');
+    form.set('city', 'Londrina');
+    const response = await fetch(`${baseUrl}/api/sales/with-receipt`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenSellerA}` },
+      body: form,
+    });
+    assert.equal(response.status, 400);
+    assert.equal(await prisma.sale.count({ where: { clientId: client.id } }), 0);
+    const unchanged = await prisma.client.findUnique({ where: { id: client.id } });
+    assert.equal(unchanged?.outcomeStatus, 'PENDING');
+  });
+
+  it('2.2 Fluxo legado é idempotente e só conclui a ficha após o comprovante', async () => {
+    const client = await prisma.client.create({
+      data: {
+        sequenceNumber: `SEQ-IDEMPOTENT-${uid}`,
+        name: 'Cliente Retentativa',
+        city: 'Londrina',
+        companyId: compA_Id,
+        assignedSellerId: sellerA_Id,
+      },
+    });
+    const payload = { clientId: client.id, value: 850, city: 'Londrina' };
+    const requestSale = () => fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenSellerA}` },
+      body: JSON.stringify(payload),
+    });
+    const first = await requestSale();
+    const firstSale = await first.json();
+    const retry = await requestSale();
+    const retrySale = await retry.json();
+    assert.equal(first.status, 201);
+    assert.equal(retry.status, 200);
+    assert.equal(retrySale.id, firstSale.id);
+    assert.equal(await prisma.sale.count({ where: { clientId: client.id } }), 1);
+    let pendingClient = await prisma.client.findUnique({ where: { id: client.id } });
+    assert.equal(pendingClient?.outcomeStatus, 'PENDING');
+
+    const receipt = new FormData();
+    receipt.set('receipt', new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }), 'receipt.jpg');
+    const receiptResponse = await fetch(`${baseUrl}/api/sales/${firstSale.id}/receipt`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenSellerA}` },
+      body: receipt,
+    });
+    assert.equal(receiptResponse.status, 200);
+    pendingClient = await prisma.client.findUnique({ where: { id: client.id } });
+    assert.equal(pendingClient?.outcomeStatus, 'SOLD');
+  });
+
   it('3. Ficha NON_SALE pode ser convertida em SOLD antes do fechamento (superando a não-venda)', async () => {
     const client = await prisma.client.create({
       data: {
@@ -168,19 +233,19 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
       },
     });
 
-    // Registrar venda agora (revisita convertida em venda)
-    const res = await fetch(`${baseUrl}/api/sales`, {
+    // Registrar venda com comprovante obrigatório (revisita convertida em venda)
+    const form = new FormData();
+    form.set('clientId', client.id);
+    form.set('value', '1200');
+    form.set('city', 'Londrina');
+    form.set('product', 'Book completo');
+    form.set('receipt', new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }), 'receipt.jpg');
+    const res = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         Authorization: `Bearer ${tokenSellerA}`,
       },
-      body: JSON.stringify({
-        clientId: client.id,
-        value: 1200.0,
-        city: 'Londrina',
-        product: 'Book completo',
-      }),
+      body: form,
     });
 
     assert.equal(res.status, 201);
@@ -309,8 +374,22 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
 
     await prisma.sale.createMany({
       data: [
-        { clientId: c3.id, sellerId: sellerA_Id, companyId: compA_Id, value: 500.0, city },
-        { clientId: c4.id, sellerId: sellerA_Id, companyId: compA_Id, value: 750.0, city },
+        {
+          clientId: c3.id,
+          sellerId: sellerA_Id,
+          companyId: compA_Id,
+          value: 500.0,
+          city,
+          receiptUrl: 'https://storage.test/receipt-c3.jpg',
+        },
+        {
+          clientId: c4.id,
+          sellerId: sellerA_Id,
+          companyId: compA_Id,
+          value: 750.0,
+          city,
+          receiptUrl: 'https://storage.test/receipt-c4.jpg',
+        },
       ],
     });
 
@@ -473,18 +552,18 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
       },
     });
 
-    // Realizar venda
-    const saleRes = await fetch(`${baseUrl}/api/sales`, {
+    // Realizar venda completa com comprovante
+    const form = new FormData();
+    form.set('clientId', client.id);
+    form.set('value', '1500');
+    form.set('city', city);
+    form.set('receipt', new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }), 'receipt.jpg');
+    const saleRes = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         Authorization: `Bearer ${tokenSellerA}`,
       },
-      body: JSON.stringify({
-        clientId: client.id,
-        value: 1500.0,
-        city,
-      }),
+      body: form,
     });
     assert.equal(saleRes.status, 201);
 

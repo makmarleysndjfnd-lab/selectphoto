@@ -294,6 +294,21 @@ export const upload = multer({
   storage: dynamicStorage,
 });
 
+/**
+ * Remove um arquivo que já foi recebido pelo Multer quando a operação de banco
+ * falha depois do upload. Isso evita objetos órfãos no B2 e arquivos locais
+ * abandonados em staging/testes.
+ */
+export async function removeUploadedFile(req: any, file?: Express.Multer.File): Promise<void> {
+  if (!file) return;
+  await new Promise<void>((resolve, reject) => {
+    dynamicStorage._removeFile(req, file, (error?: unknown) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 // ── Sanitizador de mensagem de erro (sem vazar segredos) ──────────────────────
 function sanitizeErrorMessage(msg: string): string {
   return msg

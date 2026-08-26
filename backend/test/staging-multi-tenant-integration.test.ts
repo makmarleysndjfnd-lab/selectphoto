@@ -314,6 +314,7 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
         companyId: compAlphaId,
         sellerId: userAlphaSeller.id,
         clientId: clientAlphaId,
+        receiptUrl: `https://storage.test/alpha-${i}.jpg`,
         date: new Date(Date.now() - i * 1000),
       });
     }
@@ -330,6 +331,7 @@ describe('Ambiente de Staging Local — Testes de Integração e Isolamento Mult
         companyId: compBetaId,
         sellerId: userBetaSeller.id,
         clientId: clientBetaId,
+        receiptUrl: `https://storage.test/beta-${i}.jpg`,
         date: new Date(Date.now() - i * 1000),
       });
     }

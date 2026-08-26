@@ -89,6 +89,7 @@ model User {
   coverBalance            SellerCoverBalance?
   dailyClosings           DailyClosing[]
   fcmToken                String?
+  pixKey                  String?
   notificationsSent       Notification[]        @relation("NotificationsSent")
   notificationsReceived   Notification[]        @relation("NotificationsReceived")
   clientEditRequests      ClientEditRequest[]

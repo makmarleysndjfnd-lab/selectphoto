@@ -3,52 +3,52 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 
-describe('ALINHAMENTO DE VERSO  Consistncia Multi-Camadas (1.0.6+7)', { concurrency: 1 }, () => {
+describe('ALINHAMENTO DE VERSO  Consistncia Multi-Camadas (1.0.7+8)', { concurrency: 1 }, () => {
   const rootDir = path.resolve(__dirname, '../..');
 
-  it('1. backend/package.json possui verso 1.0.6', () => {
+  it('1. backend/package.json possui verso 1.0.7', () => {
     const pkgPath = path.join(rootDir, 'backend/package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    assert.equal(pkg.version, '1.0.6');
+    assert.equal(pkg.version, '1.0.7');
   });
 
-  it('2. backend/src/index.ts retorna verso 1.0.6 no /health', () => {
+  it('2. backend/src/index.ts retorna verso 1.0.7 no /health', () => {
     const indexPath = path.join(rootDir, 'backend/src/index.ts');
     const content = fs.readFileSync(indexPath, 'utf8');
     const match = content.match(/version:\s*['"]([^'"]+)['"]/);
     assert.ok(match, 'Campo version deve existir no /health de index.ts');
-    assert.equal(match[1], '1.0.6');
+    assert.equal(match[1], '1.0.7');
   });
 
-  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION 1.0.6 e CURRENT_BUILD_NUMBER 7', () => {
+  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION 1.0.7 e CURRENT_BUILD_NUMBER 8', () => {
     const appRoutePath = path.join(rootDir, 'backend/src/routes/app.ts');
     const content = fs.readFileSync(appRoutePath, 'utf8');
     const vMatch = content.match(/CURRENT_APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
     const bMatch = content.match(/CURRENT_BUILD_NUMBER\s*=\s*(\d+)/);
     assert.ok(vMatch, 'CURRENT_APP_VERSION deve existir');
     assert.ok(bMatch, 'CURRENT_BUILD_NUMBER deve existir');
-    assert.equal(vMatch[1], '1.0.6');
-    assert.equal(bMatch[1], '7');
+    assert.equal(vMatch[1], '1.0.7');
+    assert.equal(bMatch[1], '8');
   });
 
-  it('4. mobile/pubspec.yaml define verso 1.0.6+7', () => {
+  it('4. mobile/pubspec.yaml define verso 1.0.7+8', () => {
     const pubspecPath = path.join(rootDir, 'mobile/pubspec.yaml');
     const content = fs.readFileSync(pubspecPath, 'utf8');
     const match = content.match(/^version:\s*([0-9.]+)\+(\d+)/m);
     assert.ok(match, 'Campo version deve existir no pubspec.yaml');
-    assert.equal(match[1], '1.0.6');
-    assert.equal(match[2], '7');
+    assert.equal(match[1], '1.0.7');
+    assert.equal(match[2], '8');
   });
 
-  it('5. mobile/lib/config/app_config.dart define appVersion 1.0.6 e buildNumber 7', () => {
+  it('5. mobile/lib/config/app_config.dart define appVersion 1.0.7 e buildNumber 8', () => {
     const configPath = path.join(rootDir, 'mobile/lib/config/app_config.dart');
     const content = fs.readFileSync(configPath, 'utf8');
     const vMatch = content.match(/static const String appVersion = '([^']+)';/);
     const bMatch = content.match(/static const int buildNumber = (\d+);/);
     assert.ok(vMatch, 'appVersion deve existir no AppConfig');
     assert.ok(bMatch, 'buildNumber deve existir no AppConfig');
-    assert.equal(vMatch[1], '1.0.6');
-    assert.equal(bMatch[1], '7');
+    assert.equal(vMatch[1], '1.0.7');
+    assert.equal(bMatch[1], '8');
   });
 
   it('6. TODAS as camadas (package.json, health, app.ts, pubspec, AppConfig) esto 100% alinhadas', () => {

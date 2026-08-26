@@ -1,15 +1,113 @@
-import { Router } from 'express';
+import { NextFunction, Response, Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
-import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
+import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
 
 const router = Router();
 const prisma = new PrismaClient();
 
+const SALE_MANAGER_ROLES = ['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'];
+
+function parseSaleInput(body: any) {
+  const { clientId, value, city, product, fichaNumber, paymentMethod } = body;
+  const parsedValue = Number(value);
+
+  if (!clientId || value === undefined || !city) {
+    throw { status: 400, message: 'Cliente, valor e cidade são obrigatórios' };
+  }
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    throw { status: 400, message: 'O valor da venda deve ser maior que zero' };
+  }
+
+  return {
+    clientId: String(clientId),
+    value: parsedValue,
+    city: String(city).trim(),
+    product: product ? String(product).trim() : 'Mídias fotográficas',
+    fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
+    paymentMethod: paymentMethod ? String(paymentMethod).trim() : 'CASH',
+  };
+}
+
+async function finalizeSaleWithReceipt(params: {
+  body: any;
+  sellerId: string;
+  companyId: string;
+  receiptUrl: string;
+}) {
+  const input = parseSaleInput(params.body);
+
+  return prisma.$transaction(async (tx) => {
+    const client = await tx.client.findFirst({
+      where: { id: input.clientId, companyId: params.companyId },
+    });
+    if (!client) throw { status: 404, message: 'Ficha não encontrada na sua empresa' };
+    if (client.cityClosedAt) throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
+
+    const existing = await tx.sale.findFirst({
+      where: {
+        clientId: input.clientId,
+        companyId: params.companyId,
+        sellerId: params.sellerId,
+      },
+      orderBy: { date: 'desc' },
+    });
+
+    // Retentativa idempotente: se a venda já estiver concluída, devolve a mesma.
+    if (existing?.receiptUrl) return existing;
+
+    const sale = existing
+      ? await tx.sale.update({
+          where: { id: existing.id },
+          data: {
+            value: input.value,
+            city: input.city,
+            product: input.product,
+            fichaNumber: input.fichaNumber,
+            paymentMethod: input.paymentMethod,
+            paymentStatus: 'PAID',
+            status: 'PRONTO',
+            receiptUrl: params.receiptUrl,
+          },
+        })
+      : await tx.sale.create({
+          data: {
+            ...input,
+            sellerId: params.sellerId,
+            companyId: params.companyId,
+            paymentStatus: 'PAID',
+            status: 'PRONTO',
+            receiptUrl: params.receiptUrl,
+          },
+        });
+
+    if (client.outcomeStatus === 'NON_SALE') {
+      await tx.nonSale.updateMany({
+        where: {
+          clientId: input.clientId,
+          companyId: params.companyId,
+          supersededAt: null,
+        },
+        data: { supersededAt: sale.date, supersededBySaleId: sale.id },
+      });
+    }
+
+    await tx.client.update({
+      where: { id: input.clientId },
+      data: {
+        outcomeStatus: 'SOLD',
+        outcomeUpdatedAt: sale.date,
+        bookStatus: 'SOLD',
+      },
+    });
+
+    return sale;
+  });
+}
+
 // Register a Sale
 router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
-    const { clientId, value, city, product, status, paymentStatus, fichaNumber, paymentMethod } = req.body;
     const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
 
@@ -17,20 +115,14 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       return res.status(403).json({ error: 'Empresa não identificada' });
     }
 
-    if (!clientId || value === undefined || !city) {
-      return res.status(400).json({ error: 'Client ID, Value, and City are required' });
-    }
-
-    const parsedValue = Number(value);
-    if (!Number.isFinite(parsedValue) || parsedValue < 0) {
-      return res.status(400).json({ error: 'Invalid sale value: must be a positive finite number' });
-    }
+    if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
+    const input = parseSaleInput(req.body);
 
     const result = await prisma.$transaction(async (tx) => {
       // 1. Confirmar ficha e empresa
       const client = await tx.client.findFirst({
         where: {
-          id: clientId,
+          id: input.clientId,
           companyId,
         },
       });
@@ -44,62 +136,68 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
       }
 
-      // 3. Rejeitar se já estiver vendida (evitar duplicação)
+      // Retentativas podem ocorrer quando o servidor confirma a gravação, mas a
+      // resposta não chega ao celular. Devolver o mesmo ID evita venda duplicada.
+      const existingSale = await tx.sale.findFirst({
+        where: { clientId: input.clientId, companyId, sellerId },
+        orderBy: { date: 'desc' },
+      });
+      if (existingSale) return { sale: existingSale, created: false };
       if (client.outcomeStatus === 'SOLD') {
-        throw { status: 409, message: 'Venda já registrada para esta ficha' };
+        throw { status: 409, message: 'Venda já registrada para esta ficha por outro fluxo' };
       }
 
       // 4. Criar a venda
       const sale = await tx.sale.create({
         data: {
-          clientId,
-          sellerId: sellerId as string,
-          value: parsedValue,
-          city: String(city).trim(),
-          product: product ? String(product).trim() : "Mídias fotográficas",
-          status: status || "PRONTO",
-          paymentStatus: paymentStatus || "PAID",
-          fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
-          paymentMethod: paymentMethod || "CASH",
+          ...input,
+          sellerId,
+          status: 'PENDING_RECEIPT',
+          paymentStatus: 'PENDING_RECEIPT',
           companyId,
         },
       });
 
-      // 5. Se o status anterior era NON_SALE, marcar a não-venda ativa como superada
-      if (client.outcomeStatus === 'NON_SALE') {
-        await tx.nonSale.updateMany({
-          where: {
-            clientId,
-            companyId,
-            supersededAt: null,
-          },
-          data: {
-            supersededAt: sale.date,
-            supersededBySaleId: sale.id,
-          },
-        });
-      }
-
-      // 6. Atualizar o Client
-      const updatedClient = await tx.client.update({
-        where: { id: clientId },
-        data: {
-          outcomeStatus: 'SOLD',
-          outcomeUpdatedAt: sale.date,
-          bookStatus: 'SOLD',
-        },
-      });
-
-      return { sale, client: updatedClient };
+      // A ficha continua pendente até o comprovante ser persistido.
+      return { sale, created: true };
     });
 
-    res.status(201).json(result.sale);
+    res.status(result.created ? 201 : 200).json(result.sale);
   } catch (error: any) {
     if (error && error.status && error.message) {
       return res.status(error.status).json({ error: error.message });
     }
     console.error('Create sale error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Fluxo atômico recomendado: comprovante obrigatório e venda concluída em uma
+// única chamada lógica. Sem comprovante não existe venda finalizada.
+router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  const sellerId = req.user?.id;
+  try {
+    if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+    if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
+    if (!req.file) return res.status(400).json({ error: 'O comprovante é obrigatório para concluir a venda' });
+
+    const receiptUrl = getUploadedFileUrl(req.file);
+    if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
+    const sale = await finalizeSaleWithReceipt({ body: req.body, sellerId, companyId, receiptUrl });
+
+    // Em retentativa idempotente, o arquivo recém-enviado não é o persistido.
+    if (sale.receiptUrl !== receiptUrl) {
+      await removeUploadedFile(req, req.file).catch(() => undefined);
+    }
+    return res.status(201).json(sale);
+  } catch (error: any) {
+    await removeUploadedFile(req, req.file).catch(() => undefined);
+    if (error?.status && error?.message) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Create sale with receipt error:', { name: error?.name, code: error?.code });
+    return res.status(500).json({ error: 'Não foi possível concluir a venda' });
   }
 });
 
@@ -165,11 +263,28 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
   }
 });
 
-// Upload a receipt for a Sale
-router.post('/:id/receipt', authenticateToken, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
+async function validateSaleReceiptAccess(req: AuthRequest, res: Response, next: NextFunction) {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const sale = await prisma.sale.findFirst({
+    where: { id: req.params.id as string, companyId },
+  });
+  if (!sale) return res.status(404).json({ error: 'Sale not found' });
+  if (sale.sellerId !== req.user?.id && !SALE_MANAGER_ROLES.includes(req.user?.role || '')) {
+    return res.status(403).json({ error: 'Access denied to this sale' });
+  }
+  // Retentativa segura: não recebe outro arquivo se o comprovante já existe.
+  if (sale.receiptUrl) return res.json(sale);
+  (req as any).validatedSale = sale;
+  return next();
+}
+
+// Compatibilidade com APKs anteriores: valida a venda antes de enviar ao B2 e
+// só então conclui a ficha como vendida.
+router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
   try {
     const id = req.params.id as string;
-    const sellerId = req.user?.id;
     const companyId = req.user?.companyId;
 
     if (!companyId) {
@@ -180,31 +295,28 @@ router.post('/:id/receipt', authenticateToken, safeUpload(upload.single('receipt
       return res.status(400).json({ error: 'Receipt photo is required' });
     }
 
-    const sale = await prisma.sale.findFirst({
-      where: {
-        id,
-        companyId,
-      }
-    });
-
-    if (!sale) {
-      return res.status(404).json({ error: 'Sale not found' });
-    }
-
-    if (sale.sellerId !== sellerId && !['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'].includes(req.user?.role || '')) {
-      return res.status(403).json({ error: 'Access denied to this sale' });
-    }
-
     const receiptUrl = getUploadedFileUrl(req.file);
-
-    const updatedSale = await prisma.sale.update({
-      where: { id },
-      data: { receiptUrl }
+    const sale = (req as any).validatedSale;
+    const updatedSale = await prisma.$transaction(async (tx) => {
+      const updated = await tx.sale.update({
+        where: { id },
+        data: { receiptUrl, status: 'PRONTO', paymentStatus: 'PAID' },
+      });
+      await tx.client.update({
+        where: { id: sale.clientId },
+        data: {
+          outcomeStatus: 'SOLD',
+          outcomeUpdatedAt: updated.date,
+          bookStatus: 'SOLD',
+        },
+      });
+      return updated;
     });
 
     res.json(updatedSale);
-  } catch (error) {
-    console.error('Upload receipt error:', error);
+  } catch (error: any) {
+    await removeUploadedFile(req, req.file).catch(() => undefined);
+    console.error('Upload receipt error:', { name: error?.name, code: error?.code });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -312,7 +424,7 @@ router.get('/metrics', authenticateToken, async (req: AuthRequest, res: any) => 
     if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
     const sales = await prisma.sale.findMany({
-      where: { companyId },
+      where: { companyId, receiptUrl: { not: null } },
       include: {
         seller: {
           select: { name: true }

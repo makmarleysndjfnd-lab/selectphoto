@@ -29,6 +29,45 @@ router.put('/profile', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
+const PIX_MANAGER_ROLES = ['SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER'];
+
+router.get('/me/pix-key', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (!PIX_MANAGER_ROLES.includes(req.user.role || '')) {
+      return res.status(403).json({ error: 'Sem permissão para gerenciar a chave PIX de repasse' });
+    }
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { pixKey: true },
+    });
+    return res.json({ pixKey: user?.pixKey || '' });
+  } catch (_) {
+    return res.status(500).json({ error: 'Falha ao carregar chave PIX' });
+  }
+});
+
+router.put('/me/pix-key', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: 'Unauthorized' });
+    if (!PIX_MANAGER_ROLES.includes(req.user.role || '')) {
+      return res.status(403).json({ error: 'Sem permissão para gerenciar a chave PIX de repasse' });
+    }
+    const pixKey = typeof req.body?.pixKey === 'string' ? req.body.pixKey.trim() : '';
+    if (pixKey.length > 140) {
+      return res.status(400).json({ error: 'Chave PIX excede o tamanho permitido' });
+    }
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { pixKey: pixKey || null },
+      select: { pixKey: true },
+    });
+    return res.json({ pixKey: user.pixKey || '' });
+  } catch (_) {
+    return res.status(500).json({ error: 'Falha ao salvar chave PIX' });
+  }
+});
+
 // Get all users in the same company (accessible by any logged in user)
 router.get('/company', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -42,7 +81,8 @@ router.get('/company', authenticateToken, async (req: AuthRequest, res: Response
         id: true,
         name: true,
         role: true,
-        email: true
+        email: true,
+        active: true
       },
       orderBy: { name: 'asc' }
     });

@@ -252,4 +252,40 @@ describe('ETAPA 1 — Testes de Autenticação, Autorização e Prevenção de E
     assert.ok(Array.isArray(data));
     assert.ok(data.some((u: any) => u.id === activeSellerId));
   });
+
+  it('10. Chave PIX: admin salva e recupera a própria chave de repasse', async () => {
+    const saveRes = await fetch(`${baseUrl}/api/users/me/pix-key`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${tokenAdmin}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pixKey: 'pix-admin-teste@example.com' }),
+    });
+    assert.equal(saveRes.status, 200);
+    assert.equal((await saveRes.json()).pixKey, 'pix-admin-teste@example.com');
+
+    const getRes = await fetch(`${baseUrl}/api/users/me/pix-key`, {
+      headers: { Authorization: `Bearer ${tokenAdmin}` },
+    });
+    assert.equal(getRes.status, 200);
+    assert.equal((await getRes.json()).pixKey, 'pix-admin-teste@example.com');
+  });
+
+  it('11. Chave PIX: vendedor comum não pode consultar nem alterar', async () => {
+    const getRes = await fetch(`${baseUrl}/api/users/me/pix-key`, {
+      headers: { Authorization: `Bearer ${tokenActiveSeller}` },
+    });
+    assert.equal(getRes.status, 403);
+
+    const putRes = await fetch(`${baseUrl}/api/users/me/pix-key`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${tokenActiveSeller}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pixKey: 'nao-autorizado' }),
+    });
+    assert.equal(putRes.status, 403);
+  });
 });

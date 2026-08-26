@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import { resolveSellerCommissionRate } from '../utils/commission';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -64,12 +65,12 @@ router.get('/city/preview', authenticateToken, async (req: AuthRequest, res: any
     let pendingReceiptsCount = 0;
 
     for (const c of clients) {
-      if (c.outcomeStatus === 'SOLD') {
-        for (const s of c.sales) {
+      for (const s of c.sales) {
+        if (!s.receiptUrl) {
+          pendingReceiptsCount++;
+        }
+        if (c.outcomeStatus === 'SOLD' && s.receiptUrl) {
           totalSalesValue += s.value;
-          if (!s.receiptUrl) {
-            pendingReceiptsCount++;
-          }
         }
       }
     }
@@ -134,6 +135,17 @@ router.post('/city', authenticateToken, async (req: AuthRequest, res: any) => {
         throw { status: 409, message: 'Esta cidade já foi encerrada anteriormente' };
       }
 
+      const pendingReceiptsCount = clients.reduce(
+        (count, client) => count + client.sales.filter((sale) => !sale.receiptUrl).length,
+        0,
+      );
+      if (pendingReceiptsCount > 0) {
+        throw {
+          status: 409,
+          message: `Existem ${pendingReceiptsCount} venda(s) aguardando comprovante. Conclua os envios antes de fechar a cidade.`,
+        };
+      }
+
       // 3. Calcular totais reais
       const pendingCount = clients.filter((c) => c.outcomeStatus === 'PENDING').length;
       const nonSaleCount = clients.filter((c) => c.outcomeStatus === 'NON_SALE').length;
@@ -142,7 +154,7 @@ router.post('/city', authenticateToken, async (req: AuthRequest, res: any) => {
       let totalSalesValue = 0;
       for (const c of clients) {
         if (c.outcomeStatus === 'SOLD') {
-          for (const s of c.sales) {
+          for (const s of c.sales.filter((sale) => sale.receiptUrl)) {
             totalSalesValue += s.value;
           }
         }
@@ -227,6 +239,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             where: {
                 sellerId: sellerId as string,
                 companyId: userCompanyId,
+                receiptUrl: { not: null },
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -287,9 +300,11 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const seller = await prisma.user.findUnique({
             where: { id: sellerId }
         });
+        const requester = req.user?.id
+          ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
+          : null;
 
-        let commissionRate = 0.15; // default 15%
-        if (seller?.salesType === 'EXPERIENCED') commissionRate = 0.20;
+        const commissionRate = resolveSellerCommissionRate(seller);
 
         const commissionAmount = Number((totalSalesValue * commissionRate).toFixed(2));
 
@@ -343,6 +358,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             historicalBalance,
             finalDirection,
             finalAmount,
+            adminPixKey: requester?.pixKey || null,
             // Aliases de compatibilidade retroativa
             calculatedCommission: commissionAmount,
             commission: commissionAmount,
@@ -397,6 +413,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
             where: {
                 sellerId,
                 companyId: userCompanyId,
+                receiptUrl: { not: null },
                 date: { gte: startDate, lte: endDate }
             }
         });
@@ -418,8 +435,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
         });
 
         const seller = await prisma.user.findUnique({ where: { id: sellerId } });
-        let commRate = 0.15;
-        if (seller?.salesType === 'EXPERIENCED') commRate = 0.20;
+        const commRate = resolveSellerCommissionRate(seller);
         const commAmt = Number((totalSalesVal * commRate).toFixed(2));
         const netRepasse = Number((cashVal - commAmt).toFixed(2));
 
@@ -445,7 +461,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
 // Pay/Clear repasse (Admin or Supervisor)
 router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
-        const { sellerId, amount, commissionToLog } = req.body;
+        const { sellerId, amount, direction = 'SELLER_PAYS_COMPANY' } = req.body;
         const userCompanyId = req.user?.companyId;
         if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
           return res.status(403).json({ error: 'Empresa não identificada' });
@@ -467,6 +483,9 @@ router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (
         if (isNaN(parsedAmount) || parsedAmount <= 0) {
             return res.status(400).json({ error: 'Valor inválido para repasse' });
         }
+        if (!['SELLER_PAYS_COMPANY', 'COMPANY_PAYS_SELLER'].includes(direction)) {
+            return res.status(400).json({ error: 'Direção de repasse inválida' });
+        }
 
         const result = await prisma.$transaction(async (tx) => {
             const closing = await tx.dailyClosing.create({
@@ -478,16 +497,18 @@ router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (
                     debitValue: 0,
                     creditValue: 0,
                     commission: 0,
-                    repasseDebt: -parsedAmount
+                    repasseDebt: direction === 'SELLER_PAYS_COMPANY' ? -parsedAmount : parsedAmount
                 }
             });
 
-            if (commissionToLog && parseFloat(commissionToLog) > 0) {
+            // Somente o pagamento feito pela empresa ao vendedor é uma saída
+            // real de caixa. Recebimento do vendedor apenas quita o repasse.
+            if (direction === 'COMPANY_PAYS_SELLER') {
                 await tx.cost.create({
                     data: {
                         companyId: seller.companyId || userCompanyId,
                         userId: sellerId,
-                        amount: parseFloat(commissionToLog),
+                        amount: parsedAmount,
                         category: 'COMMISSION',
                         description: `Comissão fechamento de ${seller.name}`,
                         date: new Date(),
@@ -567,6 +588,7 @@ router.get('/custom', authenticateToken, async (req: AuthRequest, res: Response)
 
         let whereSale: any = {
             companyId: userCompanyId,
+            receiptUrl: { not: null },
         };
         let whereNonSale: any = {
             companyId: userCompanyId,
@@ -626,6 +648,7 @@ router.get('/city/:city', authenticateToken, async (req: AuthRequest, res: Respo
         let whereSale: any = {
             city,
             companyId: userCompanyId,
+            receiptUrl: { not: null },
         };
         let whereNonSale: any = {
             client: { city },

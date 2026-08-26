@@ -27,7 +27,7 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     const dateFilter: any = {};
     if (from) dateFilter.gte = new Date(from as string);
     if (to) dateFilter.lte = new Date(to as string);
-    const saleWhere: any = { companyId };
+    const saleWhere: any = { companyId, receiptUrl: { not: null } };
     if (Object.keys(dateFilter).length) saleWhere.date = dateFilter;
     if (city) saleWhere.city = city as string;
 
@@ -279,7 +279,7 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     let allEvents: any[] = [];
     let allBatches: any[] = [];
     try {
-      allCities = await prisma.sale.findMany({ where: { companyId }, select: { city: true }, distinct: ['city'] });
+      allCities = await prisma.sale.findMany({ where: { companyId, receiptUrl: { not: null } }, select: { city: true }, distinct: ['city'] });
       const clientsWithEvents = await prisma.client.findMany({ where: { companyId }, select: { event: true } });
       allEvents = Array.from(new Set(clientsWithEvents.map(c => c.event).filter(Boolean)));
       allBatches = await prisma.bookBatch.findMany({ where: { companyId }, select: { id: true, name: true } });
