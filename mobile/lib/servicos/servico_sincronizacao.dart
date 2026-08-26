@@ -60,6 +60,29 @@ class SyncService extends ChangeNotifier {
   List<SyncRequest> get pendingRequests => _pendingRequests;
   bool get isOnline => _isOnline;
 
+  @visibleForTesting
+  static bool skipFileExistenceCheckForTesting = false;
+
+  bool isLegacyRequest(SyncRequest req) {
+    if (req.type == 'REGISTER_SALE') {
+      final path = req.payload['pendingReceiptPath'] as String?;
+      if (path == null || path.trim().isEmpty) return true;
+      if (skipFileExistenceCheckForTesting) return false;
+      try {
+        if (!File(path).existsSync()) return true;
+      } catch (_) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  List<SyncRequest> get syncableRequests =>
+      _pendingRequests.where((req) => !isLegacyRequest(req)).toList();
+
+  List<SyncRequest> get legacyRequests =>
+      _pendingRequests.where((req) => isLegacyRequest(req)).toList();
+
   bool _isDisposed = false;
 
   @visibleForTesting
@@ -195,11 +218,25 @@ class SyncService extends ChangeNotifier {
   Future<void> addPendingRequest(
       String type, Map<String, dynamic> payload) async {
     await _initialization;
-    if (type == 'REGISTER_SALE' && payload['clientId'] != null) {
-      _pendingRequests.removeWhere((request) =>
-          request.type == 'REGISTER_SALE' &&
-          request.payload['clientId']?.toString() ==
-              payload['clientId']?.toString());
+    // Venda sem arquivo de comprovante local nunca deve entrar na fila offline
+    if (type == 'REGISTER_SALE') {
+      final pendingReceiptPath = payload['pendingReceiptPath'] as String?;
+      if (pendingReceiptPath == null ||
+          pendingReceiptPath.trim().isEmpty ||
+          (!skipFileExistenceCheckForTesting &&
+              !File(pendingReceiptPath).existsSync())) {
+        if (kDebugMode) {
+          print(
+              '[SyncService] Venda sem arquivo de comprovante local não pode ser enfileirada offline.');
+        }
+        return;
+      }
+      if (payload['clientId'] != null) {
+        _pendingRequests.removeWhere((request) =>
+            request.type == 'REGISTER_SALE' &&
+            request.payload['clientId']?.toString() ==
+                payload['clientId']?.toString());
+      }
     }
     final req = SyncRequest(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -232,6 +269,15 @@ class SyncService extends ChangeNotifier {
     }
   }
 
+  Future<void> removeLegacyRequests() async {
+    await _initialization;
+    _pendingRequests.removeWhere((e) => isLegacyRequest(e));
+    await _savePendingRequests();
+    if (_pendingRequests.isEmpty) {
+      _cancelRetryTimer();
+    }
+  }
+
   bool _isSyncing = false;
 
   Future<void> syncAllPending() async {
@@ -245,6 +291,14 @@ class SyncService extends ChangeNotifier {
       bool hasErrors = false;
 
       for (var req in requestsToSync) {
+        // Se for registro legado sem comprovante local, não tenta enviar automaticamente em loop
+        if (isLegacyRequest(req)) {
+          req.lastError =
+              'Registro antigo sem a fotografia do comprovante. Não pode ser enviado automaticamente.';
+          hasChanges = true;
+          continue;
+        }
+
         // Se excedeu o número máximo de tentativas, ignora
         if (req.retryCount >= maxRetries) continue;
         if (req.isSyncing) continue;
@@ -260,17 +314,19 @@ class SyncService extends ChangeNotifier {
           } else if (req.type == 'REGISTER_SALE') {
             final pendingReceiptPath =
                 req.payload['pendingReceiptPath'] as String?;
-            if (pendingReceiptPath != null && pendingReceiptPath.isNotEmpty) {
+            if (pendingReceiptPath != null &&
+                pendingReceiptPath.isNotEmpty &&
+                (skipFileExistenceCheckForTesting ||
+                    File(pendingReceiptPath).existsSync())) {
               await apiService.registerSaleWithReceipt(
                   req.payload, pendingReceiptPath);
+              success = true;
+              try {
+                await File(pendingReceiptPath).delete();
+              } catch (_) {}
             } else {
-              throw StateError(
-                  'Venda antiga sem comprovante. Exclua este envio e refaça a venda com a foto obrigatória.');
+              throw StateError('Comprovante local ausente ou inacessível.');
             }
-            success = true;
-            try {
-              await File(pendingReceiptPath).delete();
-            } catch (_) {}
           } else if (req.type == 'UPLOAD_RECEIPT') {
             final saleId = req.payload['saleId']?.toString();
             final filePath = req.payload['filePath']?.toString();
@@ -295,6 +351,10 @@ class SyncService extends ChangeNotifier {
         } catch (e) {
           hasErrors = true;
           failureError = e.toString();
+          // Erros não retentáveis (400, 401, 403, 404, 409) encerram tentativas automáticas
+          if (e is ApiRequestException && !e.retryable) {
+            req.retryCount = maxRetries;
+          }
           if (kDebugMode) {
             print(
                 '[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
@@ -315,7 +375,7 @@ class SyncService extends ChangeNotifier {
 
       if (_pendingRequests.isEmpty) {
         _cancelRetryTimer();
-      } else if (hasErrors) {
+      } else if (hasErrors && syncableRequests.isNotEmpty) {
         _scheduleNextRetry();
       }
 

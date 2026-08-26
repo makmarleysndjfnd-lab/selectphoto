@@ -44,6 +44,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     fakeApi = FakeApiService();
+    SyncService.skipFileExistenceCheckForTesting = true;
   });
 
   group('SyncRequest Model Tests', () {
@@ -294,6 +295,80 @@ void main() {
       expect(fakeApi.registerSaleWithReceiptCalls, 1);
       expect(fakeApi.registerSaleCalls, 0);
       expect(service.pendingRequests, isEmpty);
+      service.dispose();
+    });
+
+    test('12. Distingue requisições sincronizáveis de itens legados', () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+
+      // Item sincronizável (com comprovante)
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'c-syncable',
+        'value': 100,
+        'pendingReceiptPath': 'receipt.jpg',
+      });
+
+      // Item legado (venda antiga sem comprovante)
+      service.pendingRequests.add(SyncRequest(
+        id: 'legacy-1',
+        type: 'REGISTER_SALE',
+        payload: {'clientId': 'c-legacy', 'value': 250},
+        createdAt: DateTime.now(),
+      ));
+
+      expect(service.syncableRequests.length, 1);
+      expect(service.legacyRequests.length, 1);
+      expect(service.syncableRequests.first.payload['clientId'], 'c-syncable');
+      expect(service.legacyRequests.first.payload['clientId'], 'c-legacy');
+      service.dispose();
+    });
+
+    test('13. Itens legados sem foto não entram em loop infinito no syncAllPending', () async {
+      final service = SyncService(fakeApi, initialOnline: true);
+
+      // Item legado inserido diretamente na fila
+      service.pendingRequests.add(SyncRequest(
+        id: 'legacy-loop-test',
+        type: 'REGISTER_SALE',
+        payload: {'clientId': 'c-legacy-loop', 'value': 300},
+        createdAt: DateTime.now(),
+      ));
+
+      await service.syncAllPending();
+
+      // Nenhuma chamada feita para API
+      expect(fakeApi.registerSaleWithReceiptCalls, 0);
+      expect(fakeApi.registerSaleCalls, 0);
+      // Registro continua identificado como legado sem agendar retry infinito
+      expect(service.legacyRequests.length, 1);
+      expect(service.retryTimer, isNull);
+      expect(service.legacyRequests.first.lastError, contains('Registro antigo sem a fotografia'));
+      service.dispose();
+    });
+
+    test('14. removeLegacyRequests remove apenas legados mantendo sincronizáveis', () async {
+      final service = SyncService(fakeApi, initialOnline: false);
+
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'c-keep',
+        'value': 150,
+        'pendingReceiptPath': 'receipt.jpg',
+      });
+
+      service.pendingRequests.add(SyncRequest(
+        id: 'legacy-delete-test',
+        type: 'REGISTER_SALE',
+        payload: {'clientId': 'c-delete', 'value': 400},
+        createdAt: DateTime.now(),
+      ));
+
+      expect(service.pendingRequests.length, 2);
+
+      await service.removeLegacyRequests();
+
+      expect(service.pendingRequests.length, 1);
+      expect(service.pendingRequests.first.payload['clientId'], 'c-keep');
+      expect(service.legacyRequests, isEmpty);
       service.dispose();
     });
   });

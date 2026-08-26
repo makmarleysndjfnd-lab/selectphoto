@@ -13,6 +13,7 @@ import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 import 'tela_agenda.dart';
+import 'tela_sincronizacao.dart';
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -250,28 +251,67 @@ class _SellerDashboardState extends State<SellerDashboard>
   void _showFechamentoCidadeDialog() async {
     // 1. Verificar conectividade e fila offline pendente
     final syncService = Provider.of<SyncService>(context, listen: false);
-    if (syncService.pendingRequests.isNotEmpty) {
+    final syncables = syncService.syncableRequests;
+    final legacys = syncService.legacyRequests;
+
+    if (syncables.isNotEmpty || legacys.isNotEmpty) {
       showDialog(
         context: context,
         builder: (_) => AlertDialog(
           backgroundColor: const Color(0xFF1A2535),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.sync_problem_rounded, color: Colors.orangeAccent),
-              SizedBox(width: 8),
-              Text('Operações Pendentes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+              Icon(
+                syncables.isNotEmpty ? Icons.sync_problem_rounded : Icons.warning_amber_rounded,
+                color: Colors.orangeAccent,
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'Operações Pendentes',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
             ],
           ),
-          content: Text(
-            'Você possui ${syncService.pendingRequests.length} operação(ões) offline pendente(s) na fila. '
-            'Por favor, sincronize seus dados antes de realizar o fechamento da cidade.',
-            style: const TextStyle(color: Colors.white70),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (syncables.isNotEmpty) ...[
+                Text(
+                  'Você possui ${syncables.length} operação(ões) com comprovante aguardando sincronização com a internet.',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (legacys.isNotEmpty) ...[
+                Text(
+                  'Você possui ${legacys.length} registro(s) antigo(s) sem foto de comprovante neste aparelho. Eles não podem ser enviados automaticamente e exigem reconciliação ou remoção.',
+                  style: const TextStyle(color: Colors.amber),
+                ),
+                const SizedBox(height: 8),
+              ],
+              const Text(
+                'Abra a tela de Envios Pendentes para verificar e gerenciar suas pendências.',
+                style: TextStyle(color: Colors.white54, fontSize: 13),
+              ),
+            ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('OK', style: TextStyle(color: Color(0xFF4FC3F7))),
+              child: const Text('Fechar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4FC3F7),
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncScreen()));
+              },
+              child: const Text('Ver Envios Pendentes', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         ),

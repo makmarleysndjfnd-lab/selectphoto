@@ -694,6 +694,7 @@ class _SaleTabState extends State<_SaleTab> {
   String? _saleId;
 
   void _submit() async {
+    if (_isLoading) return;
     final cleanAmount = _valorVendaController.text
         .replaceAll(RegExp(r'[^0-9,]'), '')
         .replaceAll(',', '.');
