@@ -18,9 +18,16 @@ class ApiService {
   String _baseUrl = AppConfig.serverUrl;
   String? _token;
 
+  static ApiService? _mockInstance;
+  @visibleForTesting
+  static void setMockInstance(ApiService? mock) {
+    _mockInstance = mock;
+  }
+
   // Singleton pattern for easy global access (optional, but good for backward compatibility)
   static final ApiService _instance = ApiService._internal();
   factory ApiService({String? customBaseUrl}) {
+    if (_mockInstance != null) return _mockInstance!;
     if (customBaseUrl != null) {
       _instance.updateBaseUrl(customBaseUrl);
     }

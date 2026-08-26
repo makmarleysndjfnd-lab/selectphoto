@@ -45,6 +45,30 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   DateTimeRange? _selectedDateRangeCustom;
   String? _selectedCityCustom;
   bool _isRepasseSubmitting = false;
+  bool _hasExecutedCustomSearch = false;
+  Future<Map<String, dynamic>>? _customMetricsFuture;
+
+  void _executeCustomSearch() {
+    setState(() {
+      _hasExecutedCustomSearch = true;
+      _customMetricsFuture = ApiService().getCustomMetrics(
+        sellerIds: _selectedSellersCustom,
+        startDate: _selectedDateRangeCustom?.start.toIso8601String(),
+        endDate: _selectedDateRangeCustom?.end.toIso8601String(),
+        city: _selectedCityCustom,
+      );
+    });
+  }
+
+  void _clearCustomSearch() {
+    setState(() {
+      _selectedDateRangeCustom = null;
+      _selectedSellersCustom = [];
+      _selectedCityCustom = null;
+      _hasExecutedCustomSearch = false;
+      _customMetricsFuture = null;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -599,7 +623,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                             );
                           });
                       if (range != null) {
-                        setState(() => _selectedDateRangeCustom = range);
+                        setState(() {
+                          _selectedDateRangeCustom = range;
+                          _hasExecutedCustomSearch = false;
+                          _customMetricsFuture = null;
+                        });
                       }
                     },
                     icon: const Icon(Icons.date_range, size: 16),
@@ -616,8 +644,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                 if (_selectedDateRangeCustom != null)
                   IconButton(
                     icon: const Icon(Icons.clear, color: Colors.white54),
-                    onPressed: () =>
-                        setState(() => _selectedDateRangeCustom = null),
+                    onPressed: () => setState(() {
+                      _selectedDateRangeCustom = null;
+                      _hasExecutedCustomSearch = false;
+                      _customMetricsFuture = null;
+                    }),
                   ),
               ],
             ),
@@ -629,7 +660,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   _sellers,
                   _selectedSellersCustom,
                   (List<String> results) {
-                    setState(() => _selectedSellersCustom = results);
+                    setState(() {
+                      _selectedSellersCustom = results;
+                      _hasExecutedCustomSearch = false;
+                      _customMetricsFuture = null;
+                    });
                   },
                 );
               },
@@ -664,6 +699,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                 final citiesList = citiesSet.toList()..sort();
 
                 return DropdownButtonFormField<String>(
+                  key: const ValueKey('cidade_finalizada_dropdown'),
                   value: _selectedCityCustom,
                   isExpanded: true,
                   dropdownColor: const Color(0xFF1E1E2C),
@@ -683,8 +719,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                         ? IconButton(
                             icon: const Icon(Icons.clear,
                                 color: Colors.white54, size: 18),
-                            onPressed: () =>
-                                setState(() => _selectedCityCustom = null),
+                            onPressed: () => setState(() {
+                              _selectedCityCustom = null;
+                              _hasExecutedCustomSearch = false;
+                              _customMetricsFuture = null;
+                            }),
                           )
                         : null,
                   ),
@@ -700,7 +739,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                               style: const TextStyle(color: Colors.white)),
                         )),
                   ],
-                  onChanged: (val) => setState(() => _selectedCityCustom = val),
+                  onChanged: (val) => setState(() {
+                    _selectedCityCustom = val;
+                    _hasExecutedCustomSearch = false;
+                    _customMetricsFuture = null;
+                  }),
                 );
               },
             ),
@@ -709,15 +752,13 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
+                key: const ValueKey('limpar_pesquisa_btn'),
                 onPressed: (_selectedDateRangeCustom == null &&
                         _selectedSellersCustom.isEmpty &&
-                        _selectedCityCustom == null)
+                        _selectedCityCustom == null &&
+                        !_hasExecutedCustomSearch)
                     ? null
-                    : () => setState(() {
-                          _selectedDateRangeCustom = null;
-                          _selectedSellersCustom = [];
-                          _selectedCityCustom = null;
-                        }),
+                    : _clearCustomSearch,
                 icon: const Icon(Icons.filter_alt_off),
                 label: const Text('Limpar pesquisa'),
               ),
@@ -725,9 +766,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             SizedBox(
               width: double.infinity,
               child: LedButton(
-                onPressed: () {
-                  setState(() {}); // refresh
-                },
+                key: const ValueKey('buscar_metricas_btn'),
+                onPressed: _executeCustomSearch,
                 style: LedButton.styleFrom(
                     backgroundColor: const Color(0xFFCE93D8)),
                 child:
@@ -735,13 +775,20 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               ),
             ),
             const SizedBox(height: 16),
-            FutureBuilder<Map<String, dynamic>>(
-                future: ApiService().getCustomMetrics(
-                  sellerIds: _selectedSellersCustom,
-                  startDate: _selectedDateRangeCustom?.start.toIso8601String(),
-                  endDate: _selectedDateRangeCustom?.end.toIso8601String(),
-                  city: _selectedCityCustom,
+            if (!_hasExecutedCustomSearch || _customMetricsFuture == null)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Text(
+                    'Selecione os filtros e toque em Buscar.',
+                    key: ValueKey('mensagem_neutra_busca'),
+                    style: TextStyle(color: Colors.white54, fontSize: 14),
+                  ),
                 ),
+              )
+            else
+              FutureBuilder<Map<String, dynamic>>(
+                future: _customMetricsFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
