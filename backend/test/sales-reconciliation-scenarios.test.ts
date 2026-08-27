@@ -158,7 +158,7 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
       headers: { Authorization: `Bearer ${tokenSellerA}` },
       body: createSaleFormData(client.id, 600),
     });
-    assert.equal(res2.status, 201);
+    assert.equal(res2.status, 200, 'Retentativa idêntica deve retornar 200 OK');
     const sale2 = await res2.json();
 
     // Devolve o mesmo ID
@@ -300,10 +300,10 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
     assert.equal(body.code, 'SALE_ALREADY_EXISTS');
   });
 
-  it('6. Script de reconciliação gera relatório detalhado em modo dry-run sem alterar banco', async () => {
-    const report = await runReconciliationAnalysis({ allowWrite: false, prismaClient: prisma });
+  it('6. Script de reconciliação gera relatório detalhado em modo somente leitura sem alterar banco', async () => {
+    const report = await runReconciliationAnalysis(prisma);
 
-    assert.equal(report.isDryRun, true);
+    assert.equal(report.isReadOnly, true);
     assert.ok(typeof report.totalSalesCount === 'number');
     assert.ok(typeof report.salesWithReceiptCount === 'number');
     assert.ok(typeof report.salesWithoutReceiptCount === 'number');

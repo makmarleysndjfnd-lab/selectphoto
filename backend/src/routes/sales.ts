@@ -1,5 +1,5 @@
 import { NextFunction, Response, Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
@@ -30,16 +30,83 @@ function parseSaleInput(body: any) {
   };
 }
 
+/**
+ * Executa uma transação no PostgreSQL com nível de isolamento Serializable.
+ * Caso ocorra erro de concorrência/serialização (P2034 / 40001), retenta de forma controlada.
+ */
+async function runSerializableTransaction<T>(
+  action: (tx: Prisma.TransactionClient) => Promise<T>,
+  maxRetries = 3
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    try {
+      return await prisma.$transaction(action, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 5000,
+        timeout: 10000,
+      });
+    } catch (err: any) {
+      const isSerializationConflict =
+        err?.code === 'P2034' ||
+        err?.code === '40001' ||
+        (typeof err?.message === 'string' &&
+          (err.message.includes('could not serialize access') ||
+            err.message.includes('serialization_failure') ||
+            err.message.includes('deadlock detected') ||
+            err.message.includes('Transaction failed due to a write conflict')));
+
+      if (isSerializationConflict && attempt <= maxRetries) {
+        const delayMs = 20 * attempt + Math.floor(Math.random() * 30);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Verifica se os dados comerciais de uma venda existente coincidem estritamente com os dados recebidos.
+ */
+function areCommercialFieldsIdentical(
+  existing: any,
+  input: {
+    clientId: string;
+    value: number;
+    city: string;
+    product: string;
+    fichaNumber: string | null;
+    paymentMethod: string;
+  },
+  clientSequenceNumber?: string
+): boolean {
+  const valueMatches = Math.abs(Number(existing.value) - Number(input.value)) < 0.001;
+  const cityMatches =
+    (existing.city || '').trim().toLowerCase() === input.city.trim().toLowerCase();
+  const productMatches =
+    (existing.product || '').trim().toLowerCase() === input.product.trim().toLowerCase();
+  const paymentMatches =
+    (existing.paymentMethod || '').trim().toUpperCase() === input.paymentMethod.trim().toUpperCase();
+
+  const existingFicha = (existing.fichaNumber || clientSequenceNumber || '').trim();
+  const inputFicha = (input.fichaNumber || clientSequenceNumber || '').trim();
+  const fichaMatches = !inputFicha || !existingFicha || inputFicha === existingFicha;
+
+  return valueMatches && cityMatches && productMatches && paymentMatches && fichaMatches;
+}
+
 async function finalizeSaleWithReceipt(params: {
   body: any;
   sellerId: string;
   companyId: string;
   receiptUrl: string;
   correlationId?: string;
-}) {
+}): Promise<{ sale: any; created: boolean }> {
   const input = parseSaleInput(params.body);
 
-  return prisma.$transaction(async (tx) => {
+  return runSerializableTransaction(async (tx) => {
     const client = await tx.client.findFirst({
       where: { id: input.clientId, companyId: params.companyId },
     });
@@ -58,15 +125,24 @@ async function finalizeSaleWithReceipt(params: {
     // Cenário 5: Venda válida com comprovante já existente
     const existingWithReceipt = allSalesForClient.find((s) => Boolean(s.receiptUrl));
     if (existingWithReceipt) {
-      if (existingWithReceipt.sellerId === params.sellerId) {
-        // Retentativa idêntica do mesmo vendedor: devolve a mesma venda sem duplicar
-        return existingWithReceipt;
+      if (existingWithReceipt.sellerId !== params.sellerId) {
+        throw {
+          status: 409,
+          code: 'SALE_ALREADY_EXISTS',
+          message: 'Venda com comprovante já registrada para esta ficha por outro vendedor',
+        };
       }
-      // Venda pertence a outro vendedor
+
+      // Venda pertence ao mesmo vendedor: verificar coincidência estrita dos dados comerciais
+      const isIdentical = areCommercialFieldsIdentical(existingWithReceipt, input, client.sequenceNumber);
+      if (isIdentical) {
+        return { sale: existingWithReceipt, created: false };
+      }
+
       throw {
         status: 409,
         code: 'SALE_ALREADY_EXISTS',
-        message: 'Venda com comprovante já registrada para esta ficha por outro vendedor',
+        message: 'Venda já registrada para esta ficha com dados comerciais divergentes',
       };
     }
 
@@ -83,7 +159,6 @@ async function finalizeSaleWithReceipt(params: {
     if (allSalesForClient.length === 1) {
       const existingSingle = allSalesForClient[0];
       if (existingSingle.sellerId !== params.sellerId) {
-        // Pertence a outro vendedor -> Cenário 6: bloquear sem vazar dados
         throw {
           status: 403,
           code: 'SELLER_MISMATCH',
@@ -126,7 +201,7 @@ async function finalizeSaleWithReceipt(params: {
         },
       });
 
-      return updatedSale;
+      return { sale: updatedSale, created: true };
     }
 
     // Cenário 1: Ficha limpa + comprovante (zero vendas existentes)
@@ -169,7 +244,7 @@ async function finalizeSaleWithReceipt(params: {
       },
     });
 
-    return sale;
+    return { sale, created: true };
   });
 }
 
@@ -187,7 +262,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
     const input = parseSaleInput(req.body);
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await runSerializableTransaction(async (tx) => {
       // 1. Confirmar ficha e empresa
       const client = await tx.client.findFirst({
         where: {
@@ -213,10 +288,18 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
 
       const existingWithReceipt = allSales.find((s) => Boolean(s.receiptUrl));
       if (existingWithReceipt) {
-        if (existingWithReceipt.sellerId === sellerId) {
+        if (existingWithReceipt.sellerId !== sellerId) {
+          throw { status: 409, message: 'Venda já registrada para esta ficha por outro vendedor' };
+        }
+        const isIdentical = areCommercialFieldsIdentical(existingWithReceipt, input, client.sequenceNumber);
+        if (isIdentical) {
           return { sale: existingWithReceipt, created: false };
         }
-        throw { status: 409, message: 'Venda já registrada para esta ficha por outro vendedor' };
+        throw {
+          status: 409,
+          code: 'SALE_ALREADY_EXISTS',
+          message: 'Venda já registrada para esta ficha com dados comerciais divergentes',
+        };
       }
 
       if (allSales.length > 1) {
@@ -229,10 +312,18 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
 
       if (allSales.length === 1) {
         const single = allSales[0];
-        if (single.sellerId === sellerId) {
+        if (single.sellerId !== sellerId) {
+          throw { status: 403, message: 'Acesso negado: a ficha possui registro vinculado a outro vendedor' };
+        }
+        const isIdentical = areCommercialFieldsIdentical(single, input, client.sequenceNumber);
+        if (isIdentical) {
           return { sale: single, created: false };
         }
-        throw { status: 403, message: 'Acesso negado: a ficha possui registro vinculado a outro vendedor' };
+        throw {
+          status: 409,
+          code: 'SALE_ALREADY_EXISTS',
+          message: 'Venda já registrada para esta ficha com dados comerciais divergentes',
+        };
       }
 
       if (client.outcomeStatus === 'SOLD') {
@@ -288,7 +379,8 @@ router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receip
 
     const receiptUrl = getUploadedFileUrl(req.file);
     if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
-    const sale = await finalizeSaleWithReceipt({
+
+    const result = await finalizeSaleWithReceipt({
       body: req.body,
       sellerId,
       companyId,
@@ -296,16 +388,20 @@ router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receip
       correlationId,
     });
 
-    // Em retentativa idempotente, o arquivo recém-enviado não é o persistido.
-    if (sale.receiptUrl !== receiptUrl) {
+    // Se a venda for reutilizada (repetição idêntica) ou não foi criada agora,
+    // remove o novo arquivo recém-enviado para não deixar arquivo órfão no disco/storage.
+    if (!result.created || result.sale.receiptUrl !== receiptUrl) {
       await removeUploadedFile(req, req.file).catch(() => undefined);
     }
+
     console.info('[SALES] Venda com comprovante finalizada com sucesso:', {
       correlationId,
-      saleId: sale.id,
+      saleId: result.sale.id,
+      created: result.created,
     });
-    return res.status(201).json(sale);
+    return res.status(result.created ? 201 : 200).json(result.sale);
   } catch (error: any) {
+    // Em caso de erro ou conflito, sempre remove o arquivo enviado
     await removeUploadedFile(req, req.file).catch(() => undefined);
     if (error?.status && error?.message) {
       return res.status(error.status).json({
