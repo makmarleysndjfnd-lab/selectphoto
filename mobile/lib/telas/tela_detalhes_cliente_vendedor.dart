@@ -826,8 +826,9 @@ class _SaleTabState extends State<_SaleTab> {
         final pendingDir = Directory(
             '${storageDir.path}${Platform.pathSeparator}pending_receipts');
         await pendingDir.create(recursive: true);
+        SyncService.setDefaultControlledDirectory(pendingDir.path);
         final persistedReceipt = await _receiptPhoto!.copy(
-          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${SyncService.generateUuid()}.jpg',
         );
         final queued = await syncService.addPendingRequest('REGISTER_SALE', {
           ...payload,
