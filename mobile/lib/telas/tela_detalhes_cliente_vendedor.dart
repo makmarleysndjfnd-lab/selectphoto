@@ -266,14 +266,15 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Resumo sempre visível com botão de recolher / expandir (>= 48px target)
+          // Resumo sempre visível com dados essenciais e botão de recolher / expandir (>= 48px target)
           Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Telefone Principal com WhatsApp
                     if (client['phone1'] != null &&
                         client['phone1'].toString().isNotEmpty)
                       GestureDetector(
@@ -303,6 +304,38 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                               client['phone1'].toString()),
                         ),
                       ),
+                    // Telefone Secundário com WhatsApp (quando existir)
+                    if (client['phone2'] != null &&
+                        client['phone2'].toString().isNotEmpty)
+                      GestureDetector(
+                        onTap: () async {
+                          final num = client['phone2']
+                              .toString()
+                              .replaceAll(RegExp(r'\D'), '');
+                          final fullNum =
+                              num.startsWith('55') ? num : '55$num';
+                          final uri = Uri.parse('https://wa.me/$fullNum');
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
+                          } else {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Não foi possível abrir o WhatsApp'),
+                                      backgroundColor: Colors.red));
+                            }
+                          }
+                        },
+                        child: Container(
+                          color: Colors.transparent,
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: _infoRow(FontAwesomeIcons.whatsapp,
+                              client['phone2'].toString()),
+                        ),
+                      ),
+                    // Endereço com Google Maps
                     GestureDetector(
                       onTap: () async {
                         final street = client['street']?.toString() ?? '';
@@ -329,14 +362,23 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                       },
                       child: Container(
                         color: Colors.transparent,
+                        padding: const EdgeInsets.only(bottom: 2),
                         child: _infoRow(Icons.location_on_rounded,
                             "${client['street'] ?? ''}, ${client['number'] ?? ''} — ${client['city'] ?? ''}"),
                       ),
                     ),
+                    // Ponto de Referência (quando existir)
+                    if (client['referencePoint'] != null &&
+                        client['referencePoint'].toString().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: _infoRow(
+                            Icons.place, "Ref: ${client['referencePoint']}"),
+                      ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               // Botão para alternar recolhimento com área de toque mínima de 48px
               InkWell(
                 key: const ValueKey('toggle_client_details_button'),
@@ -346,7 +388,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 },
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   decoration: BoxDecoration(
                     color: Colors.white.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(8),
@@ -386,46 +428,10 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
             child: _isDetailsCollapsed
                 ? const SizedBox.shrink()
                 : Padding(
-                    padding: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.only(top: 4),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (client['phone2'] != null &&
-                            client['phone2'].toString().isNotEmpty)
-                          GestureDetector(
-                            onTap: () async {
-                              final num = client['phone2']
-                                  .toString()
-                                  .replaceAll(RegExp(r'\D'), '');
-                              final fullNum =
-                                  num.startsWith('55') ? num : '55$num';
-                              final uri = Uri.parse('https://wa.me/$fullNum');
-                              if (await canLaunchUrl(uri)) {
-                                await launchUrl(uri,
-                                    mode: LaunchMode.externalApplication);
-                              } else {
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text(
-                                              'Não foi possível abrir o WhatsApp'),
-                                          backgroundColor: Colors.red));
-                                }
-                              }
-                            },
-                            child: Container(
-                              color: Colors.transparent,
-                              padding: const EdgeInsets.only(bottom: 4),
-                              child: _infoRow(FontAwesomeIcons.whatsapp,
-                                  client['phone2'].toString()),
-                            ),
-                          ),
-                        if (client['referencePoint'] != null &&
-                            client['referencePoint'].toString().isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          _infoRow(
-                              Icons.place, "Ref: ${client['referencePoint']}"),
-                        ],
                         if (parsedHouseColor != null ||
                             parsedGateColor != null ||
                             client['visitTime'] != null ||
@@ -433,15 +439,17 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                             (client['children'] != null &&
                                 client['children'] is List &&
                                 (client['children'] as List).isNotEmpty)) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 6),
                           const Divider(color: Colors.white12),
                           if (parsedHouseColor != null ||
                               parsedGateColor != null) ...[
                             const SizedBox(height: 6),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            Wrap(
+                              spacing: 16,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.start,
                               children: [
-                                if (parsedHouseColor != null) ...[
+                                if (parsedHouseColor != null)
                                   Column(
                                     children: [
                                       const Text('Cor da Casa',
@@ -461,9 +469,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                                       )
                                     ],
                                   ),
-                                  const SizedBox(width: 16),
-                                ],
-                                if (parsedGateColor != null) ...[
+                                if (parsedGateColor != null)
                                   Column(
                                     children: [
                                       const Text('Cor do Portão',
@@ -483,8 +489,6 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                                       )
                                     ],
                                   ),
-                                  const SizedBox(width: 16),
-                                ],
                               ],
                             ),
                           ],
@@ -825,17 +829,33 @@ class _SaleTabState extends State<_SaleTab> {
         final persistedReceipt = await _receiptPhoto!.copy(
           '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${DateTime.now().millisecondsSinceEpoch}.jpg',
         );
-        await syncService.addPendingRequest('REGISTER_SALE', {
+        final queued = await syncService.addPendingRequest('REGISTER_SALE', {
           ...payload,
           'pendingReceiptPath': persistedReceipt.path,
         });
-        if (mounted) {
-          setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(
-                'Sem confirmação do servidor. Venda e comprovante ficaram aguardando sincronização.'),
-            backgroundColor: Colors.orange,
-          ));
+        if (queued) {
+          if (mounted) {
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Sem confirmação do servidor. Venda e comprovante ficaram aguardando sincronização.'),
+              backgroundColor: Colors.orange,
+            ));
+          }
+        } else {
+          try {
+            if (await persistedReceipt.exists()) {
+              await persistedReceipt.delete();
+            }
+          } catch (_) {}
+          if (mounted) {
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Falha ao enfileirar venda offline. Tente novamente com conexão.'),
+              backgroundColor: Colors.red,
+            ));
+          }
         }
         return;
       }

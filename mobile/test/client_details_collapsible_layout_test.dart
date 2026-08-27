@@ -20,8 +20,11 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     testApi = MockApiService();
-    testSync = SyncService(testApi, initialOnline: true);
-    SyncService.skipFileExistenceCheckForTesting = true;
+    testSync = SyncService(
+      testApi,
+      initialOnline: true,
+      fileExistsChecker: (path) => true,
+    );
   });
 
   tearDown(() {
@@ -31,9 +34,12 @@ void main() {
   final mockClient = {
     'id': 'cli-999',
     'name': 'Mariana Souza dos Santos',
+    'phone1': '(41) 99999-1111',
+    'phone2': '(41) 98888-2222',
     'city': 'Curitiba',
     'street': 'Rua XV de Novembro',
     'number': '1500',
+    'referencePoint': 'Próximo à Praça Osório',
     'sequenceNumber': 'SEQ-12345',
     'profession': 'Engenheira Civil',
     'visitTime': '15:00',
@@ -42,7 +48,7 @@ void main() {
     'bookStatus': 'IN_STOCK',
   };
 
-  Widget buildTestScreen(Size size) {
+  Widget buildTestScreen(Size size, {double textScale = 1.0}) {
     return MultiProvider(
       providers: [
         Provider<ApiService>.value(value: testApi),
@@ -53,7 +59,7 @@ void main() {
         home: MediaQuery(
           data: MediaQueryData(
             size: size,
-            textScaler: const TextScaler.linear(1.0),
+            textScaler: TextScaler.linear(textScale),
             padding: const EdgeInsets.only(top: 24, bottom: 16),
             viewInsets: EdgeInsets.zero,
           ),
@@ -83,9 +89,14 @@ void main() {
         expect(toggleBtn, findsOneWidget);
         expect(find.text('Ocultar'), findsOneWidget);
 
-        // Informações estendidas visíveis
+        // Informações estendidas visíveis inicialmente
         expect(find.text('Engenheira Civil'), findsOneWidget);
         expect(find.text('Visita: 15:00'), findsOneWidget);
+
+        // Dados essenciais visíveis
+        expect(find.text('(41) 99999-1111'), findsOneWidget);
+        expect(find.text('(41) 98888-2222'), findsOneWidget);
+        expect(find.text('Ref: Próximo à Praça Osório'), findsOneWidget);
 
         // 2. Alvo de toque do botão de alternância possui no mínimo 48x48px
         final btnSize = tester.getSize(toggleBtn);
@@ -100,6 +111,12 @@ void main() {
         // Texto do botão mudou para "Ver detalhes"
         expect(find.text('Ver detalhes'), findsOneWidget);
         expect(find.text('Ocultar'), findsNothing);
+
+        // DADOS ESSENCIAIS CONTINUAM VISÍVEIS MESMO QUANDO RECOLHIDA:
+        // telefone principal, secundário, WhatsApp, endereço e ponto de referência
+        expect(find.text('(41) 99999-1111'), findsOneWidget);
+        expect(find.text('(41) 98888-2222'), findsOneWidget);
+        expect(find.text('Ref: Próximo à Praça Osório'), findsOneWidget);
 
         // 4. Toca no botão para expandir novamente
         await tester.tap(toggleBtn);
@@ -138,5 +155,30 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    testWidgets('Sem overflow em tela compacta 360x800 com escala de texto ampliada 1.3', (tester) async {
+      const size = Size(360, 800);
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(buildTestScreen(size, textScale: 1.3));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Não pode haver overflow em 360x800 com escala 1.3');
+
+      final toggleBtn = find.byKey(const ValueKey('toggle_client_details_button'));
+      expect(toggleBtn, findsOneWidget);
+
+      // Alterna recolhimento com escala 1.3
+      await tester.tap(toggleBtn);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(tester.takeException(), isNull, reason: 'Não pode haver overflow ao recolher em 360x800 escala 1.3');
+      expect(find.text('Ver detalhes'), findsOneWidget);
+      expect(find.text('(41) 99999-1111'), findsOneWidget);
+      expect(find.text('(41) 98888-2222'), findsOneWidget);
+      expect(find.text('Ref: Próximo à Praça Osório'), findsOneWidget);
+    });
   });
 }
