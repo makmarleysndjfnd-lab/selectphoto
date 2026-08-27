@@ -4,15 +4,66 @@
  * REGRAS CRÍTICAS DE SEGURANÇA:
  * 1. Operação estritamente SOMENTE LEITURA (Audit-Only).
  * 2. Nenhuma alteração ou remoção é realizada no banco de dados.
- * 3. Todos os dados sensíveis e identificadores são mascarados (LGPD).
+ * 3. Todos os dados sensíveis, identificadores, valores financeiros e datas são mascarados (LGPD).
  * 4. Não realiza premissas de exclusão em massa; apresenta cenários condicionais transparentes.
+ * 5. Não carrega automaticamente backend/.env; exige DATABASE_URL explícita do ambiente local (127.0.0.1/localhost).
  */
 
 import { PrismaClient } from '@prisma/client';
-import dotenv from 'dotenv';
-import path from 'path';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+export interface DatabaseConnectionInfo {
+  host: string;
+  port: string;
+  database: string;
+}
+
+/**
+ * Valida formato da DATABASE_URL sem expor credenciais sensíveis.
+ */
+export function parseAndValidateDatabaseUrl(url?: string): DatabaseConnectionInfo {
+  if (!url || !url.trim()) {
+    throw new Error('DATABASE_URL não configurada no ambiente. Execução abortada por segurança.');
+  }
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const port = parsed.port || '5432';
+    const database = parsed.pathname.replace(/^\//, '');
+    return { host, port, database };
+  } catch (e) {
+    throw new Error(`DATABASE_URL com formato inválido: ${e}`);
+  }
+}
+
+/**
+ * Validação rigorosa: bloqueia categoricamente qualquer host remoto ou banco de produção.
+ */
+export function validateLocalDatabaseUrl(url?: string): DatabaseConnectionInfo {
+  const info = parseAndValidateDatabaseUrl(url);
+  const isLocalHost =
+    info.host === '127.0.0.1' ||
+    info.host === 'localhost' ||
+    info.host === '::1';
+
+  if (!isLocalHost) {
+    throw new Error(
+      `[SEGURANÇA] Host remoto recusado (${info.host}). O reconciliador só pode ser executado em 127.0.0.1 ou localhost.`
+    );
+  }
+
+  const isAllowedDatabase =
+    info.database === 'selectphoto_staging_local' ||
+    info.database.includes('staging') ||
+    info.database.includes('test');
+
+  if (!isAllowedDatabase) {
+    throw new Error(
+      `[SEGURANÇA] Banco recusado (${info.database}). O reconciliador local só aceita 'selectphoto_staging_local' ou bancos de teste/staging.`
+    );
+  }
+
+  return info;
+}
 
 const defaultPrisma = new PrismaClient();
 
@@ -29,6 +80,18 @@ function maskName(name: string | null | undefined): string {
   if (!name) return 'Nome Oculto';
   const parts = name.trim().split(/\s+/);
   return parts.map((p) => (p.length > 2 ? `${p.substring(0, 2)}***` : '***')).join(' ');
+}
+
+function maskValue(val: number | string | null | undefined): string {
+  return 'R$***';
+}
+
+function maskDate(date: Date | string | null | undefined): string {
+  if (!date) return '****-**-**';
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return '****-**-**';
+  const year = d.getUTCFullYear();
+  return `${year}-**-**`;
 }
 
 export interface PossibleScenarios {
@@ -71,8 +134,8 @@ export interface ReconciliationReport {
     sales: Array<{
       saleMaskedId: string;
       sellerMaskedName: string;
-      value: number;
-      date: string;
+      maskedValue: string;
+      maskedDate: string;
       hasReceipt: boolean;
       paymentStatus: string;
       status: string;
@@ -182,8 +245,8 @@ export async function runReconciliationAnalysis(options?: {
       sales: clientSales.map((s) => ({
         saleMaskedId: maskString(s.id, 4),
         sellerMaskedName: maskName(s.seller?.name),
-        value: s.value,
-        date: s.date.toISOString().split('T')[0],
+        maskedValue: maskValue(s.value),
+        maskedDate: maskDate(s.date),
         hasReceipt: Boolean(s.receiptUrl),
         paymentStatus: s.paymentStatus,
         status: s.status,
@@ -225,41 +288,67 @@ export async function runReconciliationAnalysis(options?: {
   return report;
 }
 
-// Execução CLI (estritamente somente leitura)
+// Execução CLI (estritamente somente leitura em banco local)
 if (require.main === module) {
-  runReconciliationAnalysis()
-    .then((report) => {
-      console.log('\n═══════════════════════════════════════════════════════════════════════════');
-      console.log('📋 RELATÓRIO DE AUDITORIA DE VENDAS LEGADAS (MODO SOMENTE LEITURA)');
-      console.log('═══════════════════════════════════════════════════════════════════════════');
-      console.log(`📅 Data/Hora: ${report.timestamp}`);
-      console.log(`📊 Vendas no banco: Total=${report.totalSalesCount} | Com Comprovante=${report.salesWithReceiptCount} | Sem Comprovante=${report.salesWithoutReceiptCount}`);
-      console.log(`📑 Fichas afetadas: ${report.clientsWithSalesWithoutReceipt} | Fichas com vendas duplicadas: ${report.clientsWithDuplicateSales}`);
-      console.log('\n--- DETALHES POR FICHA AFETADA (DADOS MASCARADOS - LGPD) ---');
+  try {
+    const dbInfo = validateLocalDatabaseUrl(process.env.DATABASE_URL);
+    console.log(
+      `[RECONCILIADOR] Conectando com segurança em: Host=${dbInfo.host}:${dbInfo.port}, Banco=${dbInfo.database}`
+    );
+  } catch (err: any) {
+    console.error(`❌ ${err.message}`);
+    process.exitCode = 1;
+  }
 
-      for (const d of report.details) {
-        console.log(`\n• Ficha: [${d.maskedSequenceNumber}] ID=${d.clientMaskedId} Cliente=${d.clientMaskedName} Cidade=${d.maskedCity}`);
-        console.log(`  Situação logística: ${d.logisticsDiagnosis}`);
-        console.log(`  Vendas associadas (${d.totalSales}):`);
-        for (const s of d.sales) {
-          console.log(`    - ID=${s.saleMaskedId} Vendedor=${s.sellerMaskedName} Valor=R$${s.value.toFixed(2)} Data=${s.date} Comprovante=${s.hasReceipt ? 'SIM' : 'NÃO'} Status=${s.paymentStatus}/${s.status}`);
+  if (process.exitCode !== 1) {
+    runReconciliationAnalysis()
+      .then((report) => {
+        console.log('\n═══════════════════════════════════════════════════════════════════════════');
+        console.log('📋 RELATÓRIO DE AUDITORIA DE VENDAS LEGADAS (MODO SOMENTE LEITURA)');
+        console.log('═══════════════════════════════════════════════════════════════════════════');
+        console.log(`📅 Data/Hora: ${report.timestamp}`);
+        console.log(
+          `📊 Vendas no banco: Total=${report.totalSalesCount} | Com Comprovante=${report.salesWithReceiptCount} | Sem Comprovante=${report.salesWithoutReceiptCount}`
+        );
+        console.log(
+          `📑 Fichas afetadas: ${report.clientsWithSalesWithoutReceipt} | Fichas com vendas duplicadas: ${report.clientsWithDuplicateSales}`
+        );
+        console.log('\n--- DETALHES POR FICHA AFETADA (DADOS MASCARADOS - LGPD) ---');
+
+        for (const d of report.details) {
+          console.log(
+            `\n• Ficha: [${d.maskedSequenceNumber}] ID=${d.clientMaskedId} Cliente=${d.clientMaskedName} Cidade=${d.maskedCity}`
+          );
+          console.log(`  Situação logística: ${d.logisticsDiagnosis}`);
+          console.log(`  Vendas associadas (${d.totalSales}):`);
+          for (const s of d.sales) {
+            console.log(
+              `    - ID=${s.saleMaskedId} Vendedor=${s.sellerMaskedName} Valor=${s.maskedValue} Data=${s.maskedDate} Comprovante=${s.hasReceipt ? 'SIM' : 'NÃO'} Status=${s.paymentStatus}/${s.status}`
+            );
+          }
+          console.log(`  💡 Ação sugerida: ${d.suggestedAction}`);
+          console.log(`  ⚠️ ${d.pendingDecision}`);
         }
-        console.log(`  💡 Ação sugerida: ${d.suggestedAction}`);
-        console.log(`  ⚠️ ${d.pendingDecision}`);
-      }
 
-      console.log('\n--- CENÁRIOS POSSÍVEIS DE RECONCILIAÇÃO (CONDICIONAIS) ---');
-      console.log(`• Cenário A (Regularização com comprovante): Total Vendas=${report.scenarios.scenarioA_regularization.totalSales}, Incompletas=${report.scenarios.scenarioA_regularization.incompleteSales}`);
-      console.log(`• Cenário B (Cancelamento/estorno administrativo): Total Vendas=${report.scenarios.scenarioB_cancellation.totalSales}, Incompletas=${report.scenarios.scenarioB_cancellation.incompleteSales}`);
-      console.log(`• Cenário C (Manutenção do estado atual): Total Vendas=${report.scenarios.scenarioC_maintenance.totalSales}, Incompletas=${report.scenarios.scenarioC_maintenance.incompleteSales}`);
-      console.log('═══════════════════════════════════════════════════════════════════════════\n');
-      console.log('🔒 Auditoria somente leitura concluída: nenhuma modificação de banco executada.');
-    })
-    .catch((err) => {
-      console.error('❌ Erro na auditoria:', err.message);
-      process.exit(1);
-    })
-    .finally(async () => {
-      await defaultPrisma.$disconnect();
-    });
+        console.log('\n--- CENÁRIOS POSSÍVEIS DE RECONCILIAÇÃO (CONDICIONAIS) ---');
+        console.log(
+          `• Cenário A (Regularização com comprovante): Total Vendas=${report.scenarios.scenarioA_regularization.totalSales}, Incompletas=${report.scenarios.scenarioA_regularization.incompleteSales}`
+        );
+        console.log(
+          `• Cenário B (Cancelamento/estorno administrativo): Total Vendas=${report.scenarios.scenarioB_cancellation.totalSales}, Incompletas=${report.scenarios.scenarioB_cancellation.incompleteSales}`
+        );
+        console.log(
+          `• Cenário C (Manutenção do estado atual): Total Vendas=${report.scenarios.scenarioC_maintenance.totalSales}, Incompletas=${report.scenarios.scenarioC_maintenance.incompleteSales}`
+        );
+        console.log('═══════════════════════════════════════════════════════════════════════════\n');
+        console.log('🔒 Auditoria somente leitura concluída: nenhuma modificação de banco executada.');
+      })
+      .catch((err) => {
+        console.error('❌ Erro na auditoria:', err.message);
+        process.exitCode = 1;
+      })
+      .finally(async () => {
+        await defaultPrisma.$disconnect();
+      });
+  }
 }
