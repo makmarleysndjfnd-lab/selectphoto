@@ -50,6 +50,7 @@ class SyncRequest {
 
 class SyncService extends ChangeNotifier {
   final ApiService apiService;
+  final bool Function(String path)? fileExistsChecker;
   List<SyncRequest> _pendingRequests = [];
   Timer? _retryTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
@@ -60,19 +61,50 @@ class SyncService extends ChangeNotifier {
   List<SyncRequest> get pendingRequests => _pendingRequests;
   bool get isOnline => _isOnline;
 
-  @visibleForTesting
-  static bool skipFileExistenceCheckForTesting = false;
+  bool _checkFileExists(String path) {
+    if (fileExistsChecker != null) {
+      return fileExistsChecker!(path);
+    }
+    try {
+      return File(path).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Remove com segurança apenas arquivos da pasta controlada 'pending_receipts'
+  Future<void> _safeDeleteControlledReceipt(String? path) async {
+    if (path == null || path.trim().isEmpty) return;
+    try {
+      final normalized = path.replaceAll('\\', '/');
+      if (!normalized.contains('/pending_receipts/') &&
+          !normalized.contains('pending_receipts')) {
+        if (kDebugMode) {
+          print(
+              '[SyncService] Segurança: exclusão fora da pasta pending_receipts bloqueada: $path');
+        }
+        return;
+      }
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        if (kDebugMode) {
+          print(
+              '[SyncService] Comprovante local da pasta controlada excluído: $path');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('[SyncService] Erro ao excluir comprovante controlado: $e');
+      }
+    }
+  }
 
   bool isLegacyRequest(SyncRequest req) {
     if (req.type == 'REGISTER_SALE') {
       final path = req.payload['pendingReceiptPath'] as String?;
       if (path == null || path.trim().isEmpty) return true;
-      if (skipFileExistenceCheckForTesting) return false;
-      try {
-        if (!File(path).existsSync()) return true;
-      } catch (_) {
-        return true;
-      }
+      return !_checkFileExists(path);
     }
     return false;
   }
@@ -114,7 +146,7 @@ class SyncService extends ChangeNotifier {
     return (15 * (1 << (retryLevel > 3 ? 3 : retryLevel))).clamp(15, 120);
   }
 
-  SyncService(this.apiService, {bool? initialOnline}) {
+  SyncService(this.apiService, {bool? initialOnline, this.fileExistsChecker}) {
     if (initialOnline != null) _isOnline = initialOnline;
     _initialization = _loadPendingRequests();
     _initConnectivityListener();
@@ -215,7 +247,10 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  Future<void> addPendingRequest(
+  /// Adiciona uma nova requisição na fila offline.
+  /// Retorna true se a requisição foi validada e persistida com sucesso na fila;
+  /// retorna false caso contrário.
+  Future<bool> addPendingRequest(
       String type, Map<String, dynamic> payload) async {
     await _initialization;
     // Venda sem arquivo de comprovante local nunca deve entrar na fila offline
@@ -223,21 +258,37 @@ class SyncService extends ChangeNotifier {
       final pendingReceiptPath = payload['pendingReceiptPath'] as String?;
       if (pendingReceiptPath == null ||
           pendingReceiptPath.trim().isEmpty ||
-          (!skipFileExistenceCheckForTesting &&
-              !File(pendingReceiptPath).existsSync())) {
+          !_checkFileExists(pendingReceiptPath)) {
         if (kDebugMode) {
           print(
               '[SyncService] Venda sem arquivo de comprovante local não pode ser enfileirada offline.');
         }
-        return;
+        return false;
       }
+
+      // Substituição segura: se já existia pendência deste cliente, apaga a cópia antiga controlada
       if (payload['clientId'] != null) {
+        final existingSales = _pendingRequests
+            .where((request) =>
+                request.type == 'REGISTER_SALE' &&
+                request.payload['clientId']?.toString() ==
+                    payload['clientId']?.toString())
+            .toList();
+
+        for (final oldSale in existingSales) {
+          final oldPath = oldSale.payload['pendingReceiptPath'] as String?;
+          if (oldPath != null && oldPath != pendingReceiptPath) {
+            await _safeDeleteControlledReceipt(oldPath);
+          }
+        }
+
         _pendingRequests.removeWhere((request) =>
             request.type == 'REGISTER_SALE' &&
             request.payload['clientId']?.toString() ==
                 payload['clientId']?.toString());
       }
     }
+
     final req = SyncRequest(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       type: type,
@@ -246,7 +297,15 @@ class SyncService extends ChangeNotifier {
       retryCount: 0,
     );
     _pendingRequests.add(req);
-    await _savePendingRequests();
+
+    try {
+      await _savePendingRequests();
+    } catch (e) {
+      if (kDebugMode) {
+        print('[SyncService] Falha ao persistir requisição pendente: $e');
+      }
+      return false;
+    }
 
     // Também persiste no SQLite local através do DbHelper
     try {
@@ -258,10 +317,21 @@ class SyncService extends ChangeNotifier {
     } else {
       _scheduleNextRetry();
     }
+
+    return true;
   }
 
+  /// Remove manualmente um envio pendente.
+  /// Se houver comprovante local na pasta controlada, apaga o arquivo físico com segurança.
   Future<void> removePendingRequest(String id) async {
     await _initialization;
+    final toRemove = _pendingRequests.where((e) => e.id == id).toList();
+    for (final req in toRemove) {
+      if (req.type == 'REGISTER_SALE') {
+        final path = req.payload['pendingReceiptPath'] as String?;
+        await _safeDeleteControlledReceipt(path);
+      }
+    }
     _pendingRequests.removeWhere((e) => e.id == id);
     await _savePendingRequests();
     if (_pendingRequests.isEmpty) {
@@ -316,14 +386,11 @@ class SyncService extends ChangeNotifier {
                 req.payload['pendingReceiptPath'] as String?;
             if (pendingReceiptPath != null &&
                 pendingReceiptPath.isNotEmpty &&
-                (skipFileExistenceCheckForTesting ||
-                    File(pendingReceiptPath).existsSync())) {
+                _checkFileExists(pendingReceiptPath)) {
               await apiService.registerSaleWithReceipt(
                   req.payload, pendingReceiptPath);
               success = true;
-              try {
-                await File(pendingReceiptPath).delete();
-              } catch (_) {}
+              await _safeDeleteControlledReceipt(pendingReceiptPath);
             } else {
               throw StateError('Comprovante local ausente ou inacessível.');
             }

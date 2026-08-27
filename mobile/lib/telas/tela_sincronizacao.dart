@@ -51,7 +51,8 @@ class SyncScreen extends StatelessWidget {
           isLegacy
               ? 'Esta ação remove o registro apenas da memória deste aparelho. '
                 'Ela não altera nem confirma dados no servidor.'
-              : 'Deseja realmente remover este envio da fila de sincronização deste aparelho?',
+              : 'Deseja realmente remover este envio da fila de sincronização deste aparelho? '
+                'O arquivo local do comprovante também será excluído com segurança para liberar espaço.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
