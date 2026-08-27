@@ -778,9 +778,7 @@ class _SaleTabState extends State<_SaleTab> {
   double _photoRating = 0;
   double _contactRating = 0;
 
-  bool _saleFinalized = false;
   File? _receiptPhoto;
-  String? _saleId;
 
   void _submit() async {
     if (_isLoading) return;
@@ -826,7 +824,6 @@ class _SaleTabState extends State<_SaleTab> {
         final pendingDir = Directory(
             '${storageDir.path}${Platform.pathSeparator}pending_receipts');
         await pendingDir.create(recursive: true);
-        SyncService.setDefaultControlledDirectory(pendingDir.path);
         final persistedReceipt = await _receiptPhoto!.copy(
           '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${SyncService.generateUuid()}.jpg',
         );
@@ -864,9 +861,7 @@ class _SaleTabState extends State<_SaleTab> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _saleFinalized = false;
         _receiptPhoto = null;
-        _saleId = null;
       });
       _valorVendaController.clear();
       _numeroFichaController.clear();
@@ -917,35 +912,7 @@ class _SaleTabState extends State<_SaleTab> {
     }
   }
 
-  void _sendReceipt() async {
-    if (_receiptPhoto == null || _saleId == null) return;
-    setState(() => _isLoading = true);
 
-    try {
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      await apiService.uploadSaleReceipt(_saleId!, _receiptPhoto!.path);
-
-      if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _saleFinalized = false;
-        _receiptPhoto = null;
-        _saleId = null;
-      });
-      _valorVendaController.clear();
-      _numeroFichaController.clear();
-      widget.onSuccess('Comprovante anexado com sucesso!');
-    } catch (e) {
-      setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Erro ao anexar comprovante: $e'),
-              backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1222,123 +1189,45 @@ class _SaleTabState extends State<_SaleTab> {
           const SizedBox(height: 12),
           _buildRatingField('O Contato', (r) => _contactRating = r),
           const SizedBox(height: 24),
-          if (!_saleFinalized) ...[
-            const Text('Comprovante de pagamento (obrigatório)',
-                style: TextStyle(
-                    color: Color(0xFF90CAF9),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14)),
-            const SizedBox(height: 12),
-            if (_receiptPhoto != null) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(_receiptPhoto!,
-                    height: 140, width: double.infinity, fit: BoxFit.cover),
-              ),
-              TextButton.icon(
-                onPressed: _takeReceiptPhoto,
-                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
-                label: const Text('Tirar outra foto',
-                    style: TextStyle(color: Color(0xFF4FC3F7))),
-              ),
-            ] else ...[
-              OutlinedButton.icon(
-                onPressed: _takeReceiptPhoto,
-                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
-                label: const Text('Tirar foto do comprovante',
-                    style: TextStyle(color: Color(0xFF4FC3F7))),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 56),
-                  side: const BorderSide(color: Color(0xFF4FC3F7)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            _confirmButton(
-              isLoading: _isLoading,
-              onPressed: _submit,
-              label: 'Confirmar Venda com Comprovante',
-              colors: const [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+          const Text('Comprovante de pagamento (obrigatório)',
+              style: TextStyle(
+                  color: Color(0xFF90CAF9),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14)),
+          const SizedBox(height: 12),
+          if (_receiptPhoto != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(_receiptPhoto!,
+                  height: 140, width: double.infinity, fit: BoxFit.cover),
+            ),
+            TextButton.icon(
+              onPressed: _takeReceiptPhoto,
+              icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+              label: const Text('Tirar outra foto',
+                  style: TextStyle(color: Color(0xFF4FC3F7))),
             ),
           ] else ...[
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2E7D32).withOpacity(0.15),
-                borderRadius: BorderRadius.circular(16),
-                border:
-                    Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3)),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.check_circle_outline,
-                      color: Color(0xFF81C784), size: 40),
-                  const SizedBox(height: 8),
-                  const Text('Venda Finalizada!',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
-                  const Text('Deseja anexar o comprovante de pagamento?',
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 16),
-                  if (_receiptPhoto != null) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(_receiptPhoto!,
-                          height: 120,
-                          width: double.infinity,
-                          fit: BoxFit.cover),
-                    ),
-                    const SizedBox(height: 16),
-                    _confirmButton(
-                      isLoading: _isLoading,
-                      onPressed: _sendReceipt,
-                      label: 'Enviar Comprovante',
-                      colors: const [Color(0xFF0277BD), Color(0xFF29B6F6)],
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: () => setState(() => _receiptPhoto = null),
-                      child: const Text('Tirar outra foto',
-                          style: TextStyle(color: Color(0xFFEF5350))),
-                    )
-                  ] else ...[
-                    OutlinedButton.icon(
-                      onPressed: _takeReceiptPhoto,
-                      icon: const Icon(Icons.camera_alt,
-                          color: Color(0xFF4FC3F7)),
-                      label: const Text('Tirar Foto do Comprovante',
-                          style: TextStyle(color: Color(0xFF4FC3F7))),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFF4FC3F7)),
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 14, horizontal: 20),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _saleFinalized = false;
-                          _valorVendaController.clear();
-                          _numeroFichaController.clear();
-                        });
-                      },
-                      child: const Text('Pular / Fechar',
-                          style: TextStyle(color: Colors.white54)),
-                    )
-                  ],
-                ],
+            OutlinedButton.icon(
+              onPressed: _takeReceiptPhoto,
+              icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+              label: const Text('Tirar foto do comprovante',
+                  style: TextStyle(color: Color(0xFF4FC3F7))),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 56),
+                side: const BorderSide(color: Color(0xFF4FC3F7)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ],
+          const SizedBox(height: 16),
+          _confirmButton(
+            isLoading: _isLoading,
+            onPressed: _submit,
+            label: 'Confirmar Venda com Comprovante',
+            colors: const [Color(0xFF2E7D32), Color(0xFF66BB6A)],
+          ),
         ],
       ),
     );

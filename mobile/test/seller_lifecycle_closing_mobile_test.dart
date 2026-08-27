@@ -61,6 +61,10 @@ void main() {
     });
 
     testWidgets('4. Diálogo de Fechamento de Cidade exibe alerta se houver operações pendentes', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
       final syncService = SyncService(ApiService(), initialOnline: false);
       // Simula uma requisição offline pendente
       await syncService.addPendingRequest(
@@ -73,14 +77,15 @@ void main() {
 
       final fechamentoBtn = find.text('Fechamento de Cidade');
       expect(fechamentoBtn, findsOneWidget);
-      await tester.ensureVisible(fechamentoBtn);
       await tester.tap(fechamentoBtn);
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 500));
 
       // Diálogo de bloqueio por operações offline
       expect(find.text('Operações Pendentes'), findsOneWidget);
       expect(find.textContaining('aguardando sincronização com a internet'), findsOneWidget);
       expect(find.text('Ver Envios Pendentes'), findsOneWidget);
+
+      syncService.dispose();
     });
 
     test('5. Ficha vendida sem comprovante é classificada nas pendentes com trava', () {

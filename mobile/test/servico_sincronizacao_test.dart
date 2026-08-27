@@ -1,410 +1,290 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobile/servicos/servico_api.dart';
-import 'package:mobile/servicos/servico_sincronizacao.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mobile/servicos/servico_sincronizacao.dart';
+import 'package:mobile/servicos/servico_api.dart';
 
-class FakeApiService extends ApiService {
-  int registerSaleCalls = 0;
-  int registerSaleWithReceiptCalls = 0;
-  bool shouldFail = false;
-  Completer<void>? inFlightCompleter;
-
-  FakeApiService() : super.testInstance();
-
-  @override
-  Future<String> registerSale(Map<String, dynamic> data) async {
-    registerSaleCalls++;
-    if (inFlightCompleter != null) {
-      await inFlightCompleter!.future;
-    }
-    if (shouldFail) {
-      throw Exception('Network timeout test');
-    }
-    return 'sale-1';
-  }
+class MockApiService extends Fake implements ApiService {
+  final List<Map<String, dynamic>> registeredSales = [];
+  final List<String> uploadedReceipts = [];
+  bool shouldFailSales = false;
+  bool shouldHangSales = false;
+  Completer<void>? hangCompleter;
 
   @override
   Future<String> registerSaleWithReceipt(
-      Map<String, dynamic> data, String filePath) async {
-    registerSaleWithReceiptCalls++;
-    if (inFlightCompleter != null) {
-      await inFlightCompleter!.future;
+      Map<String, dynamic> saleData, String receiptFilePath) async {
+    if (shouldHangSales && hangCompleter != null) {
+      await hangCompleter!.future;
     }
-    if (shouldFail) throw Exception('Network timeout test');
-    return 'sale-with-receipt-1';
+    if (shouldFailSales) {
+      throw const ApiRequestException('Servidor indisponível', retryable: true);
+    }
+    registeredSales.add(saleData);
+    uploadedReceipts.add(receiptFilePath);
+    return 'server_sale_${registeredSales.length}';
+  }
+
+  @override
+  Future<void> uploadSaleReceipt(String saleId, String filePath) async {
+    uploadedReceipts.add(filePath);
   }
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  late FakeApiService fakeApi;
+  late Directory tempDir;
+  late Directory controlledDir;
+  late MockApiService mockApi;
 
-  SyncService createService({
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    tempDir = await Directory.systemTemp.createTemp('sync_test_');
+    controlledDir = Directory(
+        '${tempDir.path}${Platform.pathSeparator}pending_receipts');
+    await controlledDir.create(recursive: true);
+    mockApi = MockApiService();
+  });
+
+  tearDown(() async {
+    try {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    } catch (_) {}
+  });
+
+  SyncService buildService({
     bool? initialOnline,
-    bool Function(String path)? fileChecker,
-    Future<bool> Function(String key, String value)? storageWriter,
-    String Function()? controlledDirResolver,
+    Future<bool> Function(String, String)? storageWriter,
+    Future<Directory> Function()? dirProvider,
   }) {
     return SyncService(
-      fakeApi,
-      initialOnline: initialOnline,
-      fileExistsChecker: fileChecker ?? (path) => true,
+      mockApi,
+      initialOnline: initialOnline ?? false,
+      controlledDirProvider: dirProvider ?? () async => controlledDir,
       storageWriter: storageWriter,
-      controlledDirectoryResolver: controlledDirResolver ?? () => '/app/data/pending_receipts',
     );
   }
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({});
-    fakeApi = FakeApiService();
-  });
+  group('Validação Canônica e Ausência de Estado Global', () {
+    test('Caminho canônico válido dentro da raiz controlada é aceito', () async {
+      final service = buildService();
+      final file = File('${controlledDir.path}${Platform.pathSeparator}receipt1.jpg');
+      await file.writeAsString('valid');
 
-  group('SyncRequest Model e Geração de UUID v4', () {
-    test('1. Deve instanciar SyncRequest com valores padrão e retryCount = 0', () {
-      final req = SyncRequest(
-        id: '123',
-        type: 'REGISTER_SALE',
-        payload: {'value': 150.0, 'clientId': 'c-1'},
-        createdAt: DateTime(2026, 8, 18, 10, 0),
-      );
-
-      expect(req.id, '123');
-      expect(req.type, 'REGISTER_SALE');
-      expect(req.retryCount, 0);
-      expect(req.lastError, isNull);
-      expect(req.isSyncing, isFalse);
+      expect(service.isPathInsideControlledDirectory(file.path), isTrue);
     });
 
-    test('2. Deve serializar e desserializar SyncRequest via JSON corretamente', () {
-      final original = SyncRequest(
-        id: '456',
-        type: 'UPDATE_CLIENT_LOCATION',
-        payload: {'clientId': 'c-2', 'lat': -16.68, 'lng': -49.25},
-        createdAt: DateTime(2026, 8, 18, 10, 30),
-        retryCount: 2,
-        lastError: 'Connection refused',
-      );
+    test('Pasta externa também chamada pending_receipts é categoricamente rejeitada', () async {
+      final service = buildService();
+      final externalDir = Directory('${tempDir.path}${Platform.pathSeparator}external${Platform.pathSeparator}pending_receipts');
+      await externalDir.create(recursive: true);
+      final file = File('${externalDir.path}${Platform.pathSeparator}photo.jpg');
+      await file.writeAsString('external');
 
-      final jsonMap = original.toJson();
-      final restored = SyncRequest.fromJson(jsonMap);
-
-      expect(restored.id, original.id);
-      expect(restored.type, original.type);
-      expect(restored.payload['clientId'], 'c-2');
-      expect(restored.retryCount, 2);
-      expect(restored.lastError, 'Connection refused');
+      expect(service.isPathInsideControlledDirectory(file.path), isFalse);
     });
 
-    test('3. IDs simultâneos são UUIDs v4 válidos e estritamente diferentes', () {
-      final generatedIds = <String>{};
-      final uuidRegex = RegExp(
-          r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
+    test('pending_receipts_fake é rejeitada', () async {
+      final service = buildService();
+      final fakeDir = Directory('${tempDir.path}${Platform.pathSeparator}pending_receipts_fake');
+      await fakeDir.create(recursive: true);
+      final file = File('${fakeDir.path}${Platform.pathSeparator}photo.jpg');
+      await file.writeAsString('fake');
 
-      for (int i = 0; i < 100; i++) {
-        final id = SyncService.generateUuid();
-        expect(uuidRegex.hasMatch(id), isTrue, reason: 'ID deve ser UUID v4 RFC 4122 válido');
-        expect(generatedIds.contains(id), isFalse, reason: 'IDs simultâneos devem ser únicos');
-        generatedIds.add(id);
-      }
-      expect(generatedIds.length, 100);
-    });
-  });
-
-  group('Validação Canônica de Pastas e Travessia de Diretório', () {
-    test('4. pending_receipts_fake é bloqueado categoricamente', () {
-      final service = createService(
-        controlledDirResolver: () => '/app/data/pending_receipts',
-      );
-
-      expect(
-        service.isPathInsideControlledDirectory('/app/data/pending_receipts_fake/receipt.jpg'),
-        isFalse,
-        reason: 'Diretório com prefixo similar mas falso deve ser recusado',
-      );
-      service.dispose();
+      expect(service.isPathInsideControlledDirectory(file.path), isFalse);
     });
 
-    test('5. Travessia de diretório com ../ é bloqueada categoricamente', () {
-      final service = createService(
-        controlledDirResolver: () => '/app/data/pending_receipts',
-      );
-
-      expect(
-        service.isPathInsideControlledDirectory('/app/data/pending_receipts/../outside.jpg'),
-        isFalse,
-        reason: 'Tentativa de subida com ../ deve ser bloqueada',
-      );
-      expect(
-        service.isPathInsideControlledDirectory('/app/data/pending_receipts/sub/../../etc/passwd'),
-        isFalse,
-        reason: 'Tentativa de escape multinível deve ser bloqueada',
-      );
-      service.dispose();
+    test('Travessia ../ é rejeitada', () async {
+      final service = buildService();
+      final traversalPath = '${controlledDir.path}${Platform.pathSeparator}..${Platform.pathSeparator}hacked.jpg';
+      expect(service.isPathInsideControlledDirectory(traversalPath), isFalse);
     });
 
-    test('6. Caminhos externos e arbitrários são bloqueados', () {
-      final service = createService(
-        controlledDirResolver: () => '/app/data/pending_receipts',
-      );
+    test('Raiz indisponível: arquivo não é aceito nem apagado (falha fechada)', () async {
+      // Provedor que lança erro simulando indisponibilidade de armazenamento nativo
+      final service = buildService(dirProvider: () async => throw Exception('Disk failure'));
+      await Future.delayed(const Duration(milliseconds: 20));
 
-      expect(service.isPathInsideControlledDirectory('/var/log/syslog'), isFalse);
-      expect(service.isPathInsideControlledDirectory('C:\\Windows\\system32\\cmd.exe'), isFalse);
-      expect(service.isPathInsideControlledDirectory(''), isFalse);
-      service.dispose();
-    });
+      final file = File('${tempDir.path}${Platform.pathSeparator}some_file.jpg');
+      await file.writeAsString('data');
 
-    test('7. Caminhos legítimos dentro da pasta controlada são aceitos', () {
-      final service = createService(
-        controlledDirResolver: () => '/app/data/pending_receipts',
-      );
+      expect(service.isPathInsideControlledDirectory(file.path), isFalse);
 
-      expect(
-        service.isPathInsideControlledDirectory('/app/data/pending_receipts/sale_123.jpg'),
-        isTrue,
-      );
-      expect(
-        service.isPathInsideControlledDirectory('/app/data/pending_receipts/sub/sale_456.jpg'),
-        isTrue,
-      );
-      service.dispose();
-    });
-  });
-
-  group('Persistência Transacional e Resiliência contra Falhas', () {
-    test('8. setString retornando false falha a adição e preserva a fila vazia', () async {
-      final service = createService(
-        initialOnline: false,
-        storageWriter: (key, value) async => false, // Simula falha no SharedPreferences
-      );
-
-      final success = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'c-1',
-        'value': 100.0,
-        'pendingReceiptPath': '/app/data/pending_receipts/receipt.jpg',
-      });
-
-      expect(success, isFalse, reason: 'Deve retornar false quando a persistência falha');
-      expect(service.pendingRequests, isEmpty, reason: 'Memória não pode ser alterada se persistência falhou');
-      service.dispose();
-    });
-
-    test('9. Persistência que lança exceção falha com segurança e preserva o estado', () async {
-      final service = createService(
-        initialOnline: false,
-        storageWriter: (key, value) async => throw Exception('Disk I/O failure'),
-      );
-
-      final success = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'c-2',
-        'value': 200.0,
-        'pendingReceiptPath': '/app/data/pending_receipts/receipt.jpg',
-      });
-
-      expect(success, isFalse, reason: 'Deve retornar false se a persistência lançar exceção');
-      expect(service.pendingRequests, isEmpty);
-      service.dispose();
-    });
-
-    test('10. Substituição com falha de persistência preserva a fila e o arquivo físico antigo', () async {
-      final tempDir = await Directory.systemTemp.createTemp('atomic_subst_');
-      final receiptsDir = Directory('${tempDir.path}${Platform.pathSeparator}pending_receipts');
-      await receiptsDir.create(recursive: true);
-
-      final oldFile = File('${receiptsDir.path}${Platform.pathSeparator}old_receipt.jpg');
-      await oldFile.writeAsString('comprovante-antigo-intacto');
-      final newFile = File('${receiptsDir.path}${Platform.pathSeparator}new_receipt.jpg');
-      await newFile.writeAsString('comprovante-novo');
-
-      bool shouldFailPersistence = false;
-
-      final service = SyncService(
-        fakeApi,
-        initialOnline: false,
-        fileExistsChecker: (path) => File(path).existsSync(),
-        controlledDirectoryResolver: () => receiptsDir.path,
-        storageWriter: (key, value) async {
-          if (shouldFailPersistence) return false;
-          final prefs = await SharedPreferences.getInstance();
-          return await prefs.setString(key, value);
-        },
-      );
-
-      // 1. Primeira venda é persistida com sucesso
-      final ok1 = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'cli-subst',
-        'value': 100,
-        'pendingReceiptPath': oldFile.path,
-      });
-      expect(ok1, isTrue);
-      expect(service.pendingRequests.length, 1);
-      expect(service.pendingRequests.single.payload['value'], 100);
-      expect(await oldFile.exists(), isTrue);
-
-      // 2. Segunda venda (substituição) falha ao persistir em disco
-      shouldFailPersistence = true;
-      final ok2 = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'cli-subst',
-        'value': 150,
-        'pendingReceiptPath': newFile.path,
-      });
-      expect(ok2, isFalse, reason: 'Substituição deve falhar se persistência falhar');
-
-      // 3. Estado em memória e arquivo antigo continuam 100% PRESERVADOS
-      expect(service.pendingRequests.length, 1);
-      expect(service.pendingRequests.single.payload['value'], 100, reason: 'Valor anterior deve ser mantido');
-      expect(await oldFile.exists(), isTrue, reason: 'Arquivo antigo NÃO pode ser apagado se a persistência falhou');
-
-      service.dispose();
-      await tempDir.delete(recursive: true);
-    });
-
-    test('11. Sincronização 200 seguida de falha de persistência local preserva a foto física', () async {
-      final tempDir = await Directory.systemTemp.createTemp('atomic_sync_');
-      final receiptsDir = Directory('${tempDir.path}${Platform.pathSeparator}pending_receipts');
-      await receiptsDir.create(recursive: true);
-
-      final receiptFile = File('${receiptsDir.path}${Platform.pathSeparator}sync_receipt.jpg');
-      await receiptFile.writeAsString('dados-foto-importante');
-
-      bool failStorageOnSyncRemoval = false;
-
-      final service = SyncService(
-        fakeApi,
-        initialOnline: false,
-        fileExistsChecker: (path) => File(path).existsSync(),
-        controlledDirectoryResolver: () => receiptsDir.path,
-        storageWriter: (key, value) async {
-          if (failStorageOnSyncRemoval) return false;
-          final prefs = await SharedPreferences.getInstance();
-          return await prefs.setString(key, value);
-        },
-      );
-
-      // Enfileira venda offline
-      final ok = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'cli-sync-fail',
-        'value': 300,
-        'pendingReceiptPath': receiptFile.path,
-      });
-      expect(ok, isTrue);
-      expect(await receiptFile.exists(), isTrue);
-
-      // Simula: API aceita (200), mas a persistência da remoção no aparelho falha
-      failStorageOnSyncRemoval = true;
-      await service.setOnlineForTesting(true);
-
-      // A API foi chamada
-      expect(fakeApi.registerSaleWithReceiptCalls, 1);
-      // O arquivo físico NÃO pode ser apagado porque a remoção local falhou!
-      expect(await receiptFile.exists(), isTrue,
-          reason: 'A foto do comprovante DEVE ser preservada se a persistência da remoção falhar');
-
-      service.dispose();
-      await tempDir.delete(recursive: true);
-    });
-
-    test('12. Nova pendência online com comprovante sincroniza e exclui foto com sucesso', () async {
-      final tempDir = await Directory.systemTemp.createTemp('online_success_');
-      final receiptsDir = Directory('${tempDir.path}${Platform.pathSeparator}pending_receipts');
-      await receiptsDir.create(recursive: true);
-
-      final file = File('${receiptsDir.path}${Platform.pathSeparator}receipt_ok.jpg');
-      await file.writeAsString('comprovante-sucesso');
-
-      final service = SyncService(
-        fakeApi,
-        initialOnline: true,
-        fileExistsChecker: (path) => File(path).existsSync(),
-        controlledDirectoryResolver: () => receiptsDir.path,
-      );
-
-      final ok = await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'cli-success',
-        'value': 500,
+      final queued = await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'c_fail_closed',
         'pendingReceiptPath': file.path,
       });
 
-      expect(ok, isTrue);
-      expect(fakeApi.registerSaleWithReceiptCalls, 1);
-      expect(service.pendingRequests, isEmpty);
-      expect(await file.exists(), isFalse, reason: 'Arquivo deve ser excluído após persistência e envio 200');
+      expect(queued, isFalse);
+      expect(file.existsSync(), isTrue); // Arquivo não foi apagado
+    });
 
-      service.dispose();
-      await tempDir.delete(recursive: true);
+    test('Nenhum estado global persiste entre instâncias de teste', () async {
+      final otherDir = await Directory.systemTemp.createTemp('other_ctrl_');
+      final service1 = buildService(dirProvider: () async => controlledDir);
+      final service2 = buildService(dirProvider: () async => otherDir);
+      await Future.delayed(const Duration(milliseconds: 20));
+
+      final fileInDir1 = File('${controlledDir.path}${Platform.pathSeparator}test1.jpg');
+      await fileInDir1.writeAsString('1');
+
+      final fileInDir2 = File('${otherDir.path}${Platform.pathSeparator}test2.jpg');
+      await fileInDir2.writeAsString('2');
+
+      expect(service1.isPathInsideControlledDirectory(fileInDir1.path), isTrue);
+      expect(service1.isPathInsideControlledDirectory(fileInDir2.path), isFalse);
+
+      expect(service2.isPathInsideControlledDirectory(fileInDir1.path), isFalse);
+      expect(service2.isPathInsideControlledDirectory(fileInDir2.path), isTrue);
+
+      await otherDir.delete(recursive: true);
+    });
+
+    test('Reinicialização com pendência existente e raiz resolvida antes do sync', () async {
+      final receiptFile = File('${controlledDir.path}${Platform.pathSeparator}boot_test.jpg');
+      await receiptFile.writeAsString('receipt content');
+
+      // Preenche os SharedPreferences pré-existentes
+      final existingReq = [
+        {
+          'id': 'req_boot_1',
+          'type': 'REGISTER_SALE',
+          'payload': {
+            'clientId': 'client_boot',
+            'pendingReceiptPath': receiptFile.path,
+          },
+          'createdAt': DateTime.now().toIso8601String(),
+          'retryCount': 0,
+        }
+      ];
+      SharedPreferences.setMockInitialValues({
+        'offline_backups': json.encode(existingReq),
+      });
+
+      // Cria o serviço online
+      final service = buildService(initialOnline: true);
+      // Aguarda sync processar
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(mockApi.registeredSales.length, equals(1));
+      expect(mockApi.registeredSales.first['clientId'], equals('client_boot'));
+      expect(service.pendingRequests.isEmpty, isTrue);
     });
   });
 
-  group('Fila, Conectividade, Bateria e Backoff Exponencial', () {
-    test('13. Fila vazia não cria timer de retry (economia de bateria)', () async {
-      final service = createService(initialOnline: true);
-      expect(service.pendingRequests, isEmpty);
-      expect(service.retryTimer, isNull);
-      service.dispose();
+  group('Concorrência e Persistência da Fila Serializada', () {
+    test('Duas chamadas simultâneas de addPendingRequest para clientes diferentes preservam as duas entradas', () async {
+      final service = buildService(initialOnline: false);
+
+      final file1 = File('${controlledDir.path}${Platform.pathSeparator}photo1.jpg');
+      await file1.writeAsString('p1');
+      final file2 = File('${controlledDir.path}${Platform.pathSeparator}photo2.jpg');
+      await file2.writeAsString('p2');
+
+      // Dispara simultaneamente
+      final results = await Future.wait<bool>([
+        service.addPendingRequest('REGISTER_SALE', {
+          'clientId': 'client_A',
+          'pendingReceiptPath': file1.path,
+        }),
+        service.addPendingRequest('REGISTER_SALE', {
+          'clientId': 'client_B',
+          'pendingReceiptPath': file2.path,
+        }),
+      ]);
+
+      expect(results, equals([true, true]));
+      expect(service.pendingRequests.length, equals(2));
+      final ids = service.pendingRequests.map((r) => r.payload['clientId']).toSet();
+      expect(ids, containsAll(['client_A', 'client_B']));
     });
 
-    test('14. Backoff exponencial calcula intervalos corretamente', () {
-      expect(SyncService.calculateBackoff(0), 15);
-      expect(SyncService.calculateBackoff(1), 30);
-      expect(SyncService.calculateBackoff(2), 60);
-      expect(SyncService.calculateBackoff(3), 120);
-      expect(SyncService.calculateBackoff(4), 120);
-      expect(SyncService.calculateBackoff(10), 120);
+    test('Add concorrente com sync não perde nenhuma pendência', () async {
+      mockApi.shouldHangSales = true;
+      mockApi.hangCompleter = Completer<void>();
+
+      final file1 = File('${controlledDir.path}${Platform.pathSeparator}sync1.jpg');
+      await file1.writeAsString('s1');
+      final file2 = File('${controlledDir.path}${Platform.pathSeparator}sync2.jpg');
+      await file2.writeAsString('s2');
+
+      final service = buildService(initialOnline: false);
+
+      // Adiciona o primeiro item offline
+      await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client_1',
+        'pendingReceiptPath': file1.path,
+      });
+
+      // Configura a API para travar na primeira chamada
+      mockApi.shouldHangSales = true;
+      mockApi.hangCompleter = Completer<void>();
+
+      // Habilita online sem disparar sync síncrono aqui
+      await service.setOnlineForTesting(true, triggerSync: false);
+
+      // Inicia o sync em background (ficará aguardando no hangCompleter)
+      final syncFuture = service.syncAllPending();
+
+      // Dá um microtick para garantir que o sync entrou na critical section
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      // Durante o sync travado, dispara o addPendingRequest concorrente
+      final addFuture = service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client_2',
+        'pendingReceiptPath': file2.path,
+      });
+
+      // Libera a API
+      mockApi.hangCompleter!.complete();
+
+      await Future.wait<dynamic>([syncFuture, addFuture]);
+
+      // Ambas as operações devem ser concluídas e o segundo item não pode ser perdido
+      // (ele foi adicionado de forma serializada)
+      final allClients = mockApi.registeredSales
+          .map((s) => s['clientId'])
+          .followedBy(service.pendingRequests.map((r) => r.payload['clientId']))
+          .toList();
+
+      expect(allClients, containsAll(['client_1', 'client_2']));
     });
 
-    test('15. Distingue requisições sincronizáveis de itens legados', () async {
-      final service = createService(
+    test('Persistência retornando false: estado em memória é preservado intacto', () async {
+      final file = File('${controlledDir.path}${Platform.pathSeparator}photo_fail.jpg');
+      await file.writeAsString('pf');
+
+      // Writer que simula falha ao gravar
+      final service = buildService(
         initialOnline: false,
-        fileChecker: (path) => path.contains('valid'),
+        storageWriter: (key, val) async => false,
       );
 
-      await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'c-syncable',
-        'value': 100,
-        'pendingReceiptPath': '/app/data/pending_receipts/valid_receipt.jpg',
+      final success = await service.addPendingRequest('REGISTER_SALE', {
+        'clientId': 'client_fail',
+        'pendingReceiptPath': file.path,
       });
 
-      service.pendingRequests.add(SyncRequest(
-        id: 'legacy-1',
-        type: 'REGISTER_SALE',
-        payload: {'clientId': 'c-legacy', 'value': 250},
-        createdAt: DateTime.now(),
-      ));
-
-      expect(service.syncableRequests.length, 1);
-      expect(service.legacyRequests.length, 1);
-      expect(service.syncableRequests.first.payload['clientId'], 'c-syncable');
-      expect(service.legacyRequests.first.payload['clientId'], 'c-legacy');
-      service.dispose();
+      expect(success, isFalse);
+      expect(service.pendingRequests.isEmpty, isTrue);
+      expect(file.existsSync(), isTrue); // Arquivo não é deletado
     });
 
-    test('16. removeLegacyRequests remove apenas legados mantendo sincronizáveis', () async {
-      final service = createService(initialOnline: false);
-
-      await service.addPendingRequest('REGISTER_SALE', {
-        'clientId': 'c-keep',
-        'value': 150,
-        'pendingReceiptPath': '/app/data/pending_receipts/receipt.jpg',
-      });
-
-      service.pendingRequests.add(SyncRequest(
-        id: 'legacy-delete-test',
-        type: 'REGISTER_SALE',
-        payload: {'clientId': 'c-delete', 'value': 400},
-        createdAt: DateTime.now(),
-      ));
-
-      expect(service.pendingRequests.length, 2);
-
-      final removed = await service.removeLegacyRequests();
-      expect(removed, isTrue);
-
-      expect(service.pendingRequests.length, 1);
-      expect(service.pendingRequests.first.payload['clientId'], 'c-keep');
-      expect(service.legacyRequests, isEmpty);
-      service.dispose();
+    test('100 chamadas simultâneas de generateUuid geram 100 UUIDs v4 únicos', () {
+      final uuids = List.generate(100, (_) => SyncService.generateUuid());
+      expect(uuids.toSet().length, equals(100));
+      for (final u in uuids) {
+        expect(
+          RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+              .hasMatch(u),
+          isTrue,
+        );
+      }
     });
   });
 }

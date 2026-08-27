@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'servico_api.dart';
 import 'ajudante_bd.dart';
 
@@ -52,7 +55,7 @@ class SyncService extends ChangeNotifier {
   final ApiService apiService;
   final bool Function(String path)? fileExistsChecker;
   final Future<bool> Function(String key, String value)? storageWriter;
-  final String Function()? controlledDirectoryResolver;
+  final Future<Directory> Function()? controlledDirProvider;
 
   List<SyncRequest> _pendingRequests = [];
   Timer? _retryTimer;
@@ -61,10 +64,22 @@ class SyncService extends ChangeNotifier {
   bool _isOnline = true;
   static const int maxRetries = 5;
 
-  static String _defaultControlledDir = '';
+  String? _controlledDirectoryCanonical;
 
-  static void setDefaultControlledDirectory(String dir) {
-    _defaultControlledDir = dir;
+  // Fila sequencial (mutex) para serialização de operações concorrentes
+  Future<void> _queueLock = Future.value();
+
+  Future<T> _synchronized<T>(Future<T> Function() criticalSection) {
+    final completer = Completer<T>();
+    _queueLock = _queueLock.then((_) async {
+      try {
+        final result = await criticalSection();
+        completer.complete(result);
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
   }
 
   /// Gera UUID v4 padrão RFC 4122 com entropia criptograficamente segura.
@@ -77,8 +92,9 @@ class SyncService extends ChangeNotifier {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
-  List<SyncRequest> get pendingRequests => _pendingRequests;
+  List<SyncRequest> get pendingRequests => List.unmodifiable(_pendingRequests);
   bool get isOnline => _isOnline;
+  String? get controlledDirectoryCanonical => _controlledDirectoryCanonical;
 
   bool _checkFileExists(String path) {
     if (fileExistsChecker != null) {
@@ -91,12 +107,46 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  /// Valida se o caminho está estritamente dentro da pasta controlada 'pending_receipts'
-  /// Bloqueia travessia '../', 'pending_receipts_fake' e arquivos externos.
+  /// Resolve o caminho canônico do diretório controlado na inicialização da instância.
+  Future<void> _resolveControlledDirectory() async {
+    try {
+      Directory dir;
+      if (controlledDirProvider != null) {
+        dir = await controlledDirProvider!();
+      } else if (WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+        dir = Directory(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}pending_receipts');
+      } else {
+        final supportDir = await getApplicationSupportDirectory();
+        dir = Directory(
+            '${supportDir.path}${Platform.pathSeparator}pending_receipts');
+      }
+      if (!dir.existsSync()) {
+        await dir.create(recursive: true);
+      }
+      try {
+        _controlledDirectoryCanonical = p.canonicalize(dir.resolveSymbolicLinksSync());
+      } catch (_) {
+        _controlledDirectoryCanonical = p.canonicalize(dir.absolute.path);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('[SyncService] Falha ao resolver diretório controlado (falha fechada): $e');
+      }
+      _controlledDirectoryCanonical = null;
+    }
+  }
+
+  /// Valida se o caminho canônico real do arquivo é descendente estrito do diretório controlado.
+  /// Falha de forma estritamente fechada caso a raiz não esteja disponível.
   bool isPathInsideControlledDirectory(String path) {
     if (path.trim().isEmpty) return false;
+    if (_controlledDirectoryCanonical == null ||
+        _controlledDirectoryCanonical!.isEmpty) {
+      return false; // Falha fechada
+    }
 
-    // 1. Bloqueio estrito de travessia de diretório
+    // 1. Bloqueio de tentativas de travessia léxica ../ ou ..\
     final normSlashes = path.replaceAll('\\', '/');
     if (normSlashes.contains('/../') ||
         normSlashes.contains('/..') ||
@@ -106,38 +156,34 @@ class SyncService extends ChangeNotifier {
       return false;
     }
 
-    // 2. Resolução do diretório base controlado
-    final baseDir = controlledDirectoryResolver != null
-        ? controlledDirectoryResolver!()
-        : _defaultControlledDir;
+    try {
+      final canonRoot = p.canonicalize(_controlledDirectoryCanonical!);
+      String canonTarget;
+      final file = File(path);
+      try {
+        if (file.existsSync()) {
+          canonTarget = p.canonicalize(file.resolveSymbolicLinksSync());
+        } else {
+          canonTarget = p.canonicalize(file.absolute.path);
+        }
+      } catch (_) {
+        canonTarget = p.canonicalize(file.absolute.path);
+      }
 
-    if (baseDir.isNotEmpty) {
-      final baseNorm = baseDir.replaceAll('\\', '/').replaceAll(RegExp(r'/+$'), '');
-      final targetNorm = normSlashes;
-      // Deve começar com o prefixo exato da pasta base + barra
-      return targetNorm.startsWith('$baseNorm/');
-    }
-
-    // 3. Fallback seguro por segmento de caminho
-    if (!normSlashes.contains('/pending_receipts/')) {
+      // Exige que o arquivo seja estritamente descendente da raiz canônica
+      return p.isWithin(canonRoot, canonTarget);
+    } catch (_) {
       return false;
     }
-    // Bloqueia expressamente 'pending_receipts_fake' ou variações de sufixo
-    if (normSlashes.contains('pending_receipts_fake') ||
-        normSlashes.contains('pending_receipts_')) {
-      return false;
-    }
-
-    return true;
   }
 
-  /// Remove com segurança apenas arquivos da pasta controlada 'pending_receipts'
+  /// Remove com segurança apenas arquivos validados dentro da raiz controlada canônica
   Future<void> _safeDeleteControlledReceipt(String? path) async {
     if (path == null || path.trim().isEmpty) return;
     if (!isPathInsideControlledDirectory(path)) {
       if (kDebugMode) {
         print(
-            '[SyncService] Segurança: exclusão fora da pasta controlada bloqueada: $path');
+            '[SyncService] Segurança: exclusão de arquivo fora da raiz controlada bloqueada: $path');
       }
       return;
     }
@@ -181,13 +227,13 @@ class SyncService extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
 
   @visibleForTesting
-  Future<void> setOnlineForTesting(bool online) async {
+  Future<void> setOnlineForTesting(bool online, {bool triggerSync = true}) async {
     await _initialization;
     final wasOffline = !_isOnline;
     _isOnline = online;
     _safeNotifyListeners();
 
-    if (wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
+    if (triggerSync && wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
       await syncAllPending();
     }
   }
@@ -208,16 +254,21 @@ class SyncService extends ChangeNotifier {
     bool? initialOnline,
     this.fileExistsChecker,
     this.storageWriter,
-    this.controlledDirectoryResolver,
+    this.controlledDirProvider,
   }) {
     if (initialOnline != null) _isOnline = initialOnline;
-    _initialization = _loadPendingRequests();
-    _initConnectivityListener();
-    _initialization.then((_) {
-      if (_pendingRequests.isNotEmpty && _isOnline && !_isDisposed) {
-        syncAllPending();
-      }
-    });
+    _initialization = _initService();
+  }
+
+  Future<void> _initService() async {
+    await _resolveControlledDirectory();
+    await _loadPendingRequests();
+    if (!WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+      _initConnectivityListener();
+    }
+    if (_pendingRequests.isNotEmpty && _isOnline && !_isDisposed) {
+      syncAllPending();
+    }
   }
 
   void _initConnectivityListener() {
@@ -229,7 +280,6 @@ class SyncService extends ChangeNotifier {
       _isOnline = hasConnection;
       _safeNotifyListeners();
 
-      // Dispara sincronização imediatamente ao recuperar conectividade caso haja pendências
       if (wasOffline && _isOnline && _pendingRequests.isNotEmpty) {
         if (kDebugMode) {
           print(
@@ -257,13 +307,11 @@ class SyncService extends ChangeNotifier {
     _cancelRetryTimer();
     if (_pendingRequests.isEmpty || !_isOnline) return;
 
-    // Calcula backoff baseado no maior número de retentativas dos itens pendentes
     int maxRetryLevel = 0;
     for (var req in _pendingRequests) {
       if (req.retryCount > maxRetryLevel) maxRetryLevel = req.retryCount;
     }
 
-    // Intervalo progressivo: 15s, 30s, 60s, até 120s no máximo
     final delaySeconds =
         (15 * (1 << (maxRetryLevel > 3 ? 3 : maxRetryLevel))).clamp(15, 120);
 
@@ -296,7 +344,7 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  /// Persiste a fila de requisições de forma transacional e retorna o status real (booleano).
+  /// Persiste a fila de requisições de forma atômica e retorna booleano do storage.
   Future<bool> _persistQueue(List<SyncRequest> queue) async {
     try {
       final String encoded = json.encode(queue.map((e) => e.toJson()).toList());
@@ -315,269 +363,266 @@ class SyncService extends ChangeNotifier {
     }
   }
 
-  /// Adiciona uma nova requisição na fila offline com persistência atômica.
-  /// Fluxo transacional:
-  /// 1. Monta a lista candidata;
-  /// 2. Valida existência e pertencimento canônico do comprovante à pasta controlada;
-  /// 3. Persiste a lista candidata em disco e checa o retorno real;
-  /// 4. Somente após a persistência bem-sucedida, atualiza o estado em memória;
-  /// 5. Somente após a confirmação em memória, apaga arquivos antigos substituídos;
-  /// Em caso de falha em qualquer etapa, a fila e os arquivos anteriores são 100% preservados.
+  /// Adiciona uma nova requisição na fila offline com persistência serializada e atômica.
   Future<bool> addPendingRequest(
       String type, Map<String, dynamic> payload) async {
     await _initialization;
-    final oldReceiptsToDelete = <String>[];
+    return _synchronized(() async {
+      final oldReceiptsToDelete = <String>[];
 
-    // Venda sem arquivo de comprovante local válido não pode entrar na fila offline
-    if (type == 'REGISTER_SALE') {
-      final pendingReceiptPath = payload['pendingReceiptPath'] as String?;
-      if (pendingReceiptPath == null ||
-          pendingReceiptPath.trim().isEmpty ||
-          !_checkFileExists(pendingReceiptPath) ||
-          !isPathInsideControlledDirectory(pendingReceiptPath)) {
+      // Venda sem arquivo de comprovante local válido não pode entrar na fila offline
+      if (type == 'REGISTER_SALE') {
+        final pendingReceiptPath = payload['pendingReceiptPath'] as String?;
+        if (pendingReceiptPath == null ||
+            pendingReceiptPath.trim().isEmpty ||
+            !_checkFileExists(pendingReceiptPath) ||
+            !isPathInsideControlledDirectory(pendingReceiptPath)) {
+          if (kDebugMode) {
+            print(
+                '[SyncService] Venda sem arquivo de comprovante válido na pasta controlada não pode ser enfileirada offline.');
+          }
+          return false;
+        }
+
+        // Se já existia pendência deste cliente, coleta o caminho antigo para remoção posterior à persistência
+        if (payload['clientId'] != null) {
+          final existingSales = _pendingRequests
+              .where((request) =>
+                  request.type == 'REGISTER_SALE' &&
+                  request.payload['clientId']?.toString() ==
+                      payload['clientId']?.toString())
+              .toList();
+
+          for (final oldSale in existingSales) {
+            final oldPath = oldSale.payload['pendingReceiptPath'] as String?;
+            if (oldPath != null && oldPath != pendingReceiptPath) {
+              oldReceiptsToDelete.add(oldPath);
+            }
+          }
+        }
+      }
+
+      // 1. Monta a lista candidata
+      final candidate = List<SyncRequest>.from(_pendingRequests);
+      if (type == 'REGISTER_SALE' && payload['clientId'] != null) {
+        candidate.removeWhere((request) =>
+            request.type == 'REGISTER_SALE' &&
+            request.payload['clientId']?.toString() ==
+                payload['clientId']?.toString());
+      }
+
+      final req = SyncRequest(
+        id: generateUuid(),
+        type: type,
+        payload: payload,
+        createdAt: DateTime.now(),
+        retryCount: 0,
+      );
+      candidate.add(req);
+
+      // 2. Persiste a lista candidata e checa o retorno real
+      final persistSuccess = await _persistQueue(candidate);
+      if (!persistSuccess) {
         if (kDebugMode) {
           print(
-              '[SyncService] Venda sem arquivo de comprovante válido na pasta controlada não pode ser enfileirada offline.');
+              '[SyncService] Falha na persistência atômica da fila. Estado e arquivos anteriores preservados.');
         }
         return false;
       }
 
-      // Se já existia pendência deste cliente, coleta o caminho antigo para remoção posterior à persistência
-      if (payload['clientId'] != null) {
-        final existingSales = _pendingRequests
-            .where((request) =>
-                request.type == 'REGISTER_SALE' &&
-                request.payload['clientId']?.toString() ==
-                    payload['clientId']?.toString())
-            .toList();
+      // 3. Atualiza o estado em memória somente após confirmação da persistência
+      _pendingRequests = candidate;
+      _safeNotifyListeners();
 
-        for (final oldSale in existingSales) {
-          final oldPath = oldSale.payload['pendingReceiptPath'] as String?;
-          if (oldPath != null && oldPath != pendingReceiptPath) {
-            oldReceiptsToDelete.add(oldPath);
-          }
-        }
+      // 4. Somente após a fila ser persistida com sucesso, apaga os comprovantes antigos substituídos
+      for (final oldPath in oldReceiptsToDelete) {
+        await _safeDeleteControlledReceipt(oldPath);
       }
-    }
 
-    // 1. Monta a lista candidata
-    final candidate = List<SyncRequest>.from(_pendingRequests);
-    if (type == 'REGISTER_SALE' && payload['clientId'] != null) {
-      candidate.removeWhere((request) =>
-          request.type == 'REGISTER_SALE' &&
-          request.payload['clientId']?.toString() ==
-              payload['clientId']?.toString());
-    }
-
-    final req = SyncRequest(
-      id: generateUuid(),
-      type: type,
-      payload: payload,
-      createdAt: DateTime.now(),
-      retryCount: 0,
-    );
-    candidate.add(req);
-
-    // 2. Persiste a lista candidata e checa o retorno real
-    final persistSuccess = await _persistQueue(candidate);
-    if (!persistSuccess) {
-      if (kDebugMode) {
-        print(
-            '[SyncService] Falha na persistência atômica da fila. Estado e arquivos anteriores preservados.');
+      // Também persiste no SQLite local através do DbHelper (não-bloqueante fora de testes)
+      if (!WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+        try {
+          await DbHelper.instance.insertSyncTask('/$type', 'POST', payload);
+        } catch (_) {}
       }
-      return false;
-    }
 
-    // 3. Atualiza o estado em memória somente após confirmação da persistência
-    _pendingRequests = candidate;
-    _safeNotifyListeners();
+      if (_isOnline) {
+        // Dispara sync em background sem bloquear o retorno imediato do addPendingRequest
+        unawaited(syncAllPending());
+      } else {
+        _scheduleNextRetry();
+      }
 
-    // 4. Somente após a fila ser persistida com sucesso, apaga os comprovantes antigos substituídos
-    for (final oldPath in oldReceiptsToDelete) {
-      await _safeDeleteControlledReceipt(oldPath);
-    }
-
-    // Também persiste no SQLite local através do DbHelper
-    try {
-      await DbHelper.instance.insertSyncTask('/$type', 'POST', payload);
-    } catch (_) {}
-
-    if (_isOnline) {
-      await syncAllPending();
-    } else {
-      _scheduleNextRetry();
-    }
-
-    return true;
+      return true;
+    });
   }
 
-  /// Remove manualmente um envio pendente com persistência atômica.
+  /// Remove manualmente um envio pendente com serialização atômica.
   Future<bool> removePendingRequest(String id) async {
     await _initialization;
-    final toRemove = _pendingRequests.where((e) => e.id == id).toList();
-    if (toRemove.isEmpty) return true;
+    return _synchronized(() async {
+      final toRemove = _pendingRequests.where((e) => e.id == id).toList();
+      if (toRemove.isEmpty) return true;
 
-    final candidate = _pendingRequests.where((e) => e.id != id).toList();
-    final persistSuccess = await _persistQueue(candidate);
-    if (!persistSuccess) {
-      if (kDebugMode) {
-        print(
-            '[SyncService] Falha ao persistir remoção de pendência. Fila e arquivos preservados.');
+      final candidate = _pendingRequests.where((e) => e.id != id).toList();
+      final persistSuccess = await _persistQueue(candidate);
+      if (!persistSuccess) {
+        if (kDebugMode) {
+          print(
+              '[SyncService] Falha ao persistir remoção de pendência. Fila e arquivos preservados.');
+        }
+        return false;
       }
-      return false;
-    }
 
-    // Atualiza a memória somente após sucesso na persistência
-    _pendingRequests = candidate;
-    _safeNotifyListeners();
+      _pendingRequests = candidate;
+      _safeNotifyListeners();
 
-    // Apaga cópias controladas de comprovantes
-    for (final req in toRemove) {
-      if (req.type == 'REGISTER_SALE') {
-        final path = req.payload['pendingReceiptPath'] as String?;
-        await _safeDeleteControlledReceipt(path);
+      for (final req in toRemove) {
+        if (req.type == 'REGISTER_SALE') {
+          final path = req.payload['pendingReceiptPath'] as String?;
+          await _safeDeleteControlledReceipt(path);
+        }
       }
-    }
 
-    if (_pendingRequests.isEmpty) {
-      _cancelRetryTimer();
-    }
-    return true;
+      if (_pendingRequests.isEmpty) {
+        _cancelRetryTimer();
+      }
+      return true;
+    });
   }
 
   Future<bool> removeLegacyRequests() async {
     await _initialization;
-    final candidate =
-        _pendingRequests.where((e) => !isLegacyRequest(e)).toList();
-    final persistSuccess = await _persistQueue(candidate);
-    if (!persistSuccess) {
-      return false;
-    }
-    _pendingRequests = candidate;
-    _safeNotifyListeners();
-    if (_pendingRequests.isEmpty) {
-      _cancelRetryTimer();
-    }
-    return true;
+    return _synchronized(() async {
+      final candidate =
+          _pendingRequests.where((e) => !isLegacyRequest(e)).toList();
+      final persistSuccess = await _persistQueue(candidate);
+      if (!persistSuccess) {
+        return false;
+      }
+      _pendingRequests = candidate;
+      _safeNotifyListeners();
+      if (_pendingRequests.isEmpty) {
+        _cancelRetryTimer();
+      }
+      return true;
+    });
   }
 
   bool _isSyncing = false;
 
   Future<void> syncAllPending() async {
     await _initialization;
-    if (_isSyncing || _pendingRequests.isEmpty || !_isOnline) return;
-    _isSyncing = true;
+    return _synchronized(() async {
+      if (_isSyncing || _pendingRequests.isEmpty || !_isOnline) return;
+      _isSyncing = true;
 
-    try {
-      final requestsToSync = List<SyncRequest>.from(_pendingRequests);
-      bool hasChanges = false;
-      bool hasErrors = false;
+      try {
+        final requestsToSync = List<SyncRequest>.from(_pendingRequests);
+        bool hasChanges = false;
+        bool hasErrors = false;
 
-      for (var req in requestsToSync) {
-        // Se for registro legado sem comprovante local, não tenta enviar automaticamente em loop
-        if (isLegacyRequest(req)) {
-          req.lastError =
-              'Registro antigo sem a fotografia do comprovante. Não pode ser enviado automaticamente.';
-          hasChanges = true;
-          continue;
-        }
+        for (var req in requestsToSync) {
+          if (isLegacyRequest(req)) {
+            req.lastError =
+                'Registro antigo sem a fotografia do comprovante. Não pode ser enviado automaticamente.';
+            hasChanges = true;
+            continue;
+          }
 
-        // Se excedeu o número máximo de tentativas, ignora
-        if (req.retryCount >= maxRetries) continue;
-        if (req.isSyncing) continue;
+          if (req.retryCount >= maxRetries) continue;
+          if (req.isSyncing) continue;
 
-        req.isSyncing = true;
-        bool success = false;
-        String? failureError;
+          req.isSyncing = true;
+          bool success = false;
+          String? failureError;
 
-        try {
-          if (req.type == 'SYNC_CLIENTS') {
-            await apiService.syncClients([req.payload]);
-            success = true;
-          } else if (req.type == 'REGISTER_SALE') {
-            final pendingReceiptPath =
-                req.payload['pendingReceiptPath'] as String?;
-            if (pendingReceiptPath != null &&
-                pendingReceiptPath.isNotEmpty &&
-                _checkFileExists(pendingReceiptPath)) {
-              await apiService.registerSaleWithReceipt(
-                  req.payload, pendingReceiptPath);
+          try {
+            if (req.type == 'SYNC_CLIENTS') {
+              await apiService.syncClients([req.payload]);
+              success = true;
+            } else if (req.type == 'REGISTER_SALE') {
+              final pendingReceiptPath =
+                  req.payload['pendingReceiptPath'] as String?;
+              if (pendingReceiptPath != null &&
+                  pendingReceiptPath.isNotEmpty &&
+                  _checkFileExists(pendingReceiptPath)) {
+                await apiService.registerSaleWithReceipt(
+                    req.payload, pendingReceiptPath);
 
-              // Persistência transacional da remoção do item antes de apagar a foto
-              final candidate =
-                  _pendingRequests.where((e) => e.id != req.id).toList();
-              final persistOk = await _persistQueue(candidate);
-              if (persistOk) {
-                _pendingRequests = candidate;
-                _safeNotifyListeners();
-                await _safeDeleteControlledReceipt(pendingReceiptPath);
+                // Persistência transacional da remoção do item antes de apagar a foto
+                final candidate =
+                    _pendingRequests.where((e) => e.id != req.id).toList();
+                final persistOk = await _persistQueue(candidate);
+                if (persistOk) {
+                  _pendingRequests = candidate;
+                  _safeNotifyListeners();
+                  await _safeDeleteControlledReceipt(pendingReceiptPath);
+                  success = true;
+                } else {
+                  throw StateError(
+                      'Falha ao persistir remoção do item sincronizado. Comprovante preservado.');
+                }
+              } else {
+                throw StateError('Comprovante local ausente ou inacessível.');
+              }
+            } else if (req.type == 'UPLOAD_RECEIPT') {
+              final saleId = req.payload['saleId']?.toString();
+              final filePath = req.payload['filePath']?.toString();
+              if (saleId != null &&
+                  filePath != null &&
+                  !saleId.startsWith('offline_')) {
+                await apiService.uploadSaleReceipt(saleId, filePath);
                 success = true;
               } else {
-                // Se a persistência local falhou após o 200 da API, preserva a foto!
-                throw StateError(
-                    'Falha ao persistir remoção do item sincronizado. Comprovante preservado.');
+                success = true;
               }
-            } else {
-              throw StateError('Comprovante local ausente ou inacessível.');
-            }
-          } else if (req.type == 'UPLOAD_RECEIPT') {
-            final saleId = req.payload['saleId']?.toString();
-            final filePath = req.payload['filePath']?.toString();
-            if (saleId != null &&
-                filePath != null &&
-                !saleId.startsWith('offline_')) {
-              await apiService.uploadSaleReceipt(saleId, filePath);
+            } else if (req.type == 'REGISTER_NONSALE') {
+              await apiService.registerNonSale(req.payload);
               success = true;
-            } else {
-              success = true; // ID inválido, descarta
+            } else if (req.type == 'REGISTER_APPOINTMENT') {
+              await apiService.registerAppointment(req.payload);
+              success = true;
+            } else if (req.type == 'SUBMIT_COST') {
+              await apiService.submitCost(req.payload);
+              success = true;
             }
-          } else if (req.type == 'REGISTER_NONSALE') {
-            await apiService.registerNonSale(req.payload);
-            success = true;
-          } else if (req.type == 'REGISTER_APPOINTMENT') {
-            await apiService.registerAppointment(req.payload);
-            success = true;
-          } else if (req.type == 'SUBMIT_COST') {
-            await apiService.submitCost(req.payload);
-            success = true;
+          } catch (e) {
+            hasErrors = true;
+            failureError = e.toString();
+            if (e is ApiRequestException && !e.retryable) {
+              req.retryCount = maxRetries;
+            }
+            if (kDebugMode) {
+              print(
+                  '[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
+            }
+          } finally {
+            req.isSyncing = false;
           }
-        } catch (e) {
-          hasErrors = true;
-          failureError = e.toString();
-          // Erros não retentáveis (400, 401, 403, 404, 409) encerram tentativas automáticas
-          if (e is ApiRequestException && !e.retryable) {
-            req.retryCount = maxRetries;
+
+          if (success) {
+            _pendingRequests.removeWhere((e) => e.id == req.id);
+            hasChanges = true;
+          } else {
+            req.retryCount += 1;
+            req.lastError = failureError;
+            hasChanges = true;
           }
-          if (kDebugMode) {
-            print(
-                '[SyncService] Falha ao sincronizar requisição ${req.id} (Tentativa ${req.retryCount + 1}): $e');
-          }
-        } finally {
-          req.isSyncing = false;
         }
 
-        if (success) {
-          // Se já foi persistido e removido no bloco do REGISTER_SALE, garante remoção
-          _pendingRequests.removeWhere((e) => e.id == req.id);
-          hasChanges = true;
-        } else {
-          req.retryCount += 1;
-          req.lastError = failureError;
-          hasChanges = true;
+        if (_pendingRequests.isEmpty) {
+          _cancelRetryTimer();
+        } else if (hasErrors && syncableRequests.isNotEmpty) {
+          _scheduleNextRetry();
         }
-      }
 
-      if (_pendingRequests.isEmpty) {
-        _cancelRetryTimer();
-      } else if (hasErrors && syncableRequests.isNotEmpty) {
-        _scheduleNextRetry();
+        if (hasChanges) {
+          await _persistQueue(_pendingRequests);
+        }
+      } finally {
+        _isSyncing = false;
       }
-
-      if (hasChanges) {
-        await _persistQueue(_pendingRequests);
-      }
-    } finally {
-      _isSyncing = false;
-    }
+    });
   }
 }

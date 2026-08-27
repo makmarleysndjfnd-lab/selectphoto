@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'servicos/servico_api.dart';
 import 'servicos/servico_sincronizacao.dart';
+import 'servicos/servico_notificacoes_agenda.dart';
 import 'provedores/provedor_configuracoes.dart';
 import 'telas/tela_login.dart';
 import 'widgets/led_input_decoration.dart';
@@ -39,6 +40,10 @@ void main() async {
   } catch (e) {
     // Silent fail for missing Firebase in local environment
   }
+
+  try {
+    await ServicoNotificacoesAgenda().inicializar();
+  } catch (_) {}
 
   runApp(
     MultiProvider(

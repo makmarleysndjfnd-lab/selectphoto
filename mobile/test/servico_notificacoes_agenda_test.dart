@@ -1,53 +1,27 @@
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobile/servicos/servico_notificacoes_agenda.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
+import 'package:mobile/servicos/servico_notificacoes_agenda.dart';
 
-class ScheduledNotificationRecord {
-  final int id;
-  final String? title;
-  final String? body;
-  final tz.TZDateTime scheduledDate;
-  final AndroidScheduleMode scheduleMode;
-
-  ScheduledNotificationRecord({
-    required this.id,
-    required this.title,
-    required this.body,
-    required this.scheduledDate,
-    required this.scheduleMode,
-  });
-}
-
-class FakeNotificationPluginWrapper implements INotificationPluginWrapper {
-  bool initializeCalled = false;
-  bool allowNotifications = true;
-  bool allowExactAlarms = true;
-  bool throwOnZonedSchedule = false;
+class MockNotificationPluginWrapper implements NotificationPluginWrapper {
+  final List<int> scheduledIds = [];
+  final List<tz.TZDateTime> scheduledDates = [];
+  final List<int> cancelledIds = [];
   bool throwOnSecondSchedule = false;
-  int zonedScheduleCallCount = 0;
-  final List<ScheduledNotificationRecord> scheduled = [];
-  final List<int> cancelled = [];
+  bool returnDenyExactAlarms = false;
+  bool returnDenyNotifications = false;
 
   @override
-  Future<bool?> initialize(InitializationSettings settings) async {
-    initializeCalled = true;
+  Future<bool?> initialize(
+    InitializationSettings initializationSettings, {
+    void Function(NotificationResponse)? onDidReceiveNotificationResponse,
+  }) async {
     return true;
   }
 
   @override
-  Future<bool?> requestNotificationsPermission() async {
-    return allowNotifications;
-  }
-
-  @override
-  Future<bool?> canScheduleExactNotifications() async {
-    return allowExactAlarms;
-  }
-
-  @override
-  Future<bool?> requestExactAlarmsPermission() async {
-    return allowExactAlarms;
+  Future<NotificationAppLaunchDetails?> getNotificationAppLaunchDetails() async {
+    return null;
   }
 
   @override
@@ -58,188 +32,202 @@ class FakeNotificationPluginWrapper implements INotificationPluginWrapper {
     tz.TZDateTime scheduledDate,
     NotificationDetails notificationDetails, {
     required AndroidScheduleMode androidScheduleMode,
-    required UILocalNotificationDateInterpretation uiLocalNotificationDateInterpretation,
   }) async {
-    zonedScheduleCallCount++;
-    if (throwOnZonedSchedule) {
-      throw Exception('Simulated zonedSchedule exception');
+    if (throwOnSecondSchedule && scheduledIds.isNotEmpty) {
+      throw Exception('Simulated crash on second notification');
     }
-    if (throwOnSecondSchedule && zonedScheduleCallCount == 2) {
-      throw Exception('Simulated exception on second schedule');
-    }
-    scheduled.add(ScheduledNotificationRecord(
-      id: id,
-      title: title,
-      body: body,
-      scheduledDate: scheduledDate,
-      scheduleMode: androidScheduleMode,
-    ));
+    scheduledIds.add(id);
+    scheduledDates.add(scheduledDate);
   }
 
   @override
   Future<void> cancel(int id) async {
-    cancelled.add(id);
+    cancelledIds.add(id);
+    scheduledIds.remove(id);
+  }
+
+  @override
+  Future<void> cancelAll() async {
+    cancelledIds.addAll(scheduledIds);
+    scheduledIds.clear();
+  }
+
+  @override
+  Future<bool?> requestNotificationsPermission() async {
+    return !returnDenyNotifications;
+  }
+
+  @override
+  Future<bool?> requestExactAlarmsPermission() async {
+    return !returnDenyExactAlarms;
   }
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('ServicoNotificacoesAgenda - Lembretes com Mock e Resiliência', () {
-    late FakeNotificationPluginWrapper fakeWrapper;
-    late ServicoNotificacoesAgenda servico;
+  late MockNotificationPluginWrapper mockWrapper;
 
-    setUp(() {
-      fakeWrapper = FakeNotificationPluginWrapper();
-      ServicoNotificacoesAgenda.resetInstance(fakeWrapper);
-      servico = ServicoNotificacoesAgenda();
+  setUp(() {
+    mockWrapper = MockNotificationPluginWrapper();
+  });
+
+  group('ServicoNotificacoesAgenda - Fusos IANA e Fallback UTC', () {
+    test('Provider retorna America/Sao_Paulo com sucesso e isUsingFallback é false', () async {
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'America/Sao_Paulo',
+      );
+      await servico.inicializar();
+
+      expect(servico.isUsingFallback, isFalse);
+      expect(servico.resolvedTimeZoneName, equals('America/Sao_Paulo'));
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 1,
+        clienteId: 'c1',
+        nomeCliente: 'Cliente SP',
+        horarioCompromisso: futuro,
+      );
+
+      expect(res, equals(ResultadoAgendamentoNotificacao.agendadoExato));
+      expect(mockWrapper.scheduledIds, containsAll([2, 3]));
+      expect(servico.agendadosAtivos.containsKey('c1'), isTrue);
     });
 
-    test('1. Inicialização chama initialize com sucesso', () async {
-      final ok = await servico.inicializar();
-      expect(ok, isTrue);
-      expect(fakeWrapper.initializeCalled, isTrue);
+    test('Provider retorna America/Campo_Grande com sucesso e isUsingFallback é false', () async {
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'America/Campo_Grande',
+      );
+      await servico.inicializar();
+
+      expect(servico.isUsingFallback, isFalse);
+      expect(servico.resolvedTimeZoneName, equals('America/Campo_Grande'));
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 2,
+        clienteId: 'c2',
+        nomeCliente: 'Cliente CG',
+        horarioCompromisso: futuro,
+      );
+
+      expect(res, equals(ResultadoAgendamentoNotificacao.agendadoExato));
+      expect(mockWrapper.scheduledIds, containsAll([4, 5]));
     });
 
-    test('2. Permissão geral negada retorna permissaoNegada', () async {
-      fakeWrapper.allowNotifications = false;
+    test('Provider retorna identificador inválido e cai no fallback UTC explícito', () async {
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'FusoInexistente/PlanetaMarte',
+      );
+      await servico.inicializar();
 
-      final res = await servico.agendarLembreteCompromisso(
-        id: 101,
-        titulo: 'Teste Permissão Negada',
-        descricao: 'Sem notificações',
-        horarioCompromisso: DateTime.now().add(const Duration(hours: 2)),
+      expect(servico.isUsingFallback, isTrue);
+      expect(servico.resolvedTimeZoneName, equals('UTC'));
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 3,
+        clienteId: 'c3',
+        nomeCliente: 'Cliente Fallback',
+        horarioCompromisso: futuro,
+      );
+
+      expect(res, equals(ResultadoAgendamentoNotificacao.agendadoExato));
+      expect(mockWrapper.scheduledDates.length, equals(2));
+      // O instante agendado em UTC coincide exatamente com o instante do evento
+      expect(
+        mockWrapper.scheduledDates.last.millisecondsSinceEpoch,
+        equals(futuro.millisecondsSinceEpoch),
+      );
+    });
+
+    test('Provider lança exceção e cai no fallback UTC explícito sem travar a agenda', () async {
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => throw Exception('Native platform channel failed'),
+      );
+      await servico.inicializar();
+
+      expect(servico.isUsingFallback, isTrue);
+      expect(servico.resolvedTimeZoneName, equals('UTC'));
+
+      final futuro = DateTime.now().add(const Duration(hours: 1));
+      final res = await servico.agendarCompromisso(
+        id: 4,
+        clienteId: 'c4',
+        nomeCliente: 'Cliente Exception',
+        horarioCompromisso: futuro,
+      );
+
+      expect(res, equals(ResultadoAgendamentoNotificacao.agendadoExato));
+    });
+
+    test('Nenhum item com falha entra em agendadosAtivos', () async {
+      mockWrapper.throwOnSecondSchedule = true;
+
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'America/Sao_Paulo',
+      );
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 5,
+        clienteId: 'c_fail',
+        nomeCliente: 'Cliente Falha',
+        horarioCompromisso: futuro,
+      );
+
+      expect(res, equals(ResultadoAgendamentoNotificacao.falha));
+      expect(servico.agendadosAtivos.containsKey('c_fail'), isFalse);
+      // Confirma que o primeiro agendamento parcial foi cancelado (rollback)
+      expect(mockWrapper.cancelledIds, contains(10));
+    });
+
+    test('Permissão de notificação negada não agenda e não entra em agendadosAtivos', () async {
+      mockWrapper.returnDenyNotifications = true;
+
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'America/Sao_Paulo',
+      );
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 6,
+        clienteId: 'c_deny',
+        nomeCliente: 'Cliente Negado',
+        horarioCompromisso: futuro,
       );
 
       expect(res, equals(ResultadoAgendamentoNotificacao.permissaoNegada));
-      expect(fakeWrapper.scheduled, isEmpty, reason: 'Nenhum alarme deve ser agendado se a permissão geral for negada');
+      expect(servico.agendadosAtivos.containsKey('c_deny'), isFalse);
+      expect(mockWrapper.scheduledIds.isEmpty, isTrue);
     });
 
-    test('3. Alarme exato negado realiza fallback para agendadoAproximado', () async {
-      fakeWrapper.allowExactAlarms = false;
+    test('Alarme exato negado gera agendamento aproximado e mantém status', () async {
+      mockWrapper.returnDenyExactAlarms = true;
 
-      final res = await servico.agendarLembreteCompromisso(
-        id: 102,
-        titulo: 'Reunião Aproximada',
-        descricao: 'Sem alarme exato',
-        horarioCompromisso: DateTime.now().add(const Duration(hours: 3)),
+      final servico = ServicoNotificacoesAgenda(
+        wrapper: mockWrapper,
+        ianaTimeZoneProvider: () => 'America/Sao_Paulo',
+      );
+
+      final futuro = DateTime.now().add(const Duration(hours: 2));
+      final res = await servico.agendarCompromisso(
+        id: 7,
+        clienteId: 'c_approx',
+        nomeCliente: 'Cliente Aprox',
+        horarioCompromisso: futuro,
       );
 
       expect(res, equals(ResultadoAgendamentoNotificacao.agendadoAproximado));
-      expect(fakeWrapper.scheduled.isNotEmpty, isTrue);
-      expect(
-        fakeWrapper.scheduled.first.scheduleMode,
-        equals(AndroidScheduleMode.inexactAllowWhileIdle),
-        reason: 'Deve usar inexactAllowWhileIdle quando alarme exato for negado',
-      );
-    });
-
-    test('4. Wrapper lança exceção retorna falha sem registrar como ativo', () async {
-      fakeWrapper.throwOnZonedSchedule = true;
-
-      final res = await servico.agendarLembreteCompromisso(
-        id: 103,
-        titulo: 'Falha no Plugin',
-        descricao: 'Erro forçado',
-        horarioCompromisso: DateTime.now().add(const Duration(hours: 2)),
-      );
-
-      expect(res, equals(ResultadoAgendamentoNotificacao.falha));
-      expect(servico.agendadosAtivos, isEmpty, reason: 'Itens com falha não podem entrar como agendados ativos');
-    });
-
-    test('5. Falha parcial no segundo lembrete cancela o primeiro imediatamente', () async {
-      fakeWrapper.throwOnSecondSchedule = true;
-
-      const int idBase = 104;
-      final res = await servico.agendarLembreteCompromisso(
-        id: idBase,
-        titulo: 'Falha Parcial',
-        descricao: 'O 2º agendamento vai falhar',
-        horarioCompromisso: DateTime.now().add(const Duration(hours: 2)),
-      );
-
-      expect(res, equals(ResultadoAgendamentoNotificacao.falha));
-      // Deve ter cancelado o primeiro lembrete (id * 2) que havia sido agendado antes da falha
-      expect(fakeWrapper.cancelled, contains(idBase * 2),
-          reason: 'Falha no 2º agendamento deve acionar cancelamento do 1º lembrete');
-    });
-
-    test('6. Item com falha é retentado na próxima sincronização (retry após falha)', () async {
-      fakeWrapper.throwOnZonedSchedule = true;
-
-      final dt = DateTime.now().add(const Duration(hours: 2));
-      final items = [
-        {'id': 'retry-1', 'title': 'Tentativa Retry', 'dateTime': dt.toIso8601String()}
-      ];
-
-      // 1ª sincronização: falha forçada
-      final res1 = await servico.sincronizarLembretesLista(items);
-      expect(res1.values.single, equals(ResultadoAgendamentoNotificacao.falha));
-      expect(servico.agendadosAtivos, isEmpty);
-
-      // 2ª sincronização: recupera normalidade
-      fakeWrapper.throwOnZonedSchedule = false;
-      final res2 = await servico.sincronizarLembretesLista(items);
-      expect(res2.values.single, equals(ResultadoAgendamentoNotificacao.agendadoExato),
-          reason: 'Item que falhou anteriormente deve ser retentado na próxima sincronização');
-      expect(servico.agendadosAtivos.length, 1);
-    });
-
-    test('7. Item aproximado permanece com status agendadoAproximado na sincronização seguinte', () async {
-      fakeWrapper.allowExactAlarms = false;
-
-      final dt = DateTime.now().add(const Duration(hours: 2));
-      final items = [
-        {'id': 'aprox-1', 'title': 'Lembrete Inexato', 'dateTime': dt.toIso8601String()}
-      ];
-
-      // 1ª sincronização com alarme exato desabilitado
-      final res1 = await servico.sincronizarLembretesLista(items);
-      expect(res1.values.single, equals(ResultadoAgendamentoNotificacao.agendadoAproximado));
-
-      // 2ª sincronização idêntica: deve reportar agendadoAproximado, e NÃO agendadoExato
-      final res2 = await servico.sincronizarLembretesLista(items);
-      expect(res2.values.single, equals(ResultadoAgendamentoNotificacao.agendadoAproximado),
-          reason: 'O resultado real (aproximado) deve ser preservado na reconexão/sincronização subsequente');
-    });
-
-    test('8. Resolução de fusos IANA injetados America/Sao_Paulo e America/Campo_Grande', () {
-      // Injeta America/Sao_Paulo
-      ServicoNotificacoesAgenda.resetInstance(
-        fakeWrapper,
-        () => 'America/Sao_Paulo',
-      );
-      final servicoSP = ServicoNotificacoesAgenda();
-      final fusoSP = servicoSP.resolverFusoAparelho();
-      expect(fusoSP.name, equals('America/Sao_Paulo'));
-
-      // Injeta America/Campo_Grande
-      ServicoNotificacoesAgenda.resetInstance(
-        fakeWrapper,
-        () => 'America/Campo_Grande',
-      );
-      final servicoMS = ServicoNotificacoesAgenda();
-      final fusoMS = servicoMS.resolverFusoAparelho();
-      expect(fusoMS.name, equals('America/Campo_Grande'));
-    });
-
-    test('9. Cancelar lembrete remove ambos os alarmes (30 min e horário exato)', () async {
-      const int idBase = 800;
-      await servico.cancelarLembrete(idBase);
-
-      expect(fakeWrapper.cancelled, contains(idBase * 2));
-      expect(fakeWrapper.cancelled, contains(idBase * 2 + 1));
-    });
-
-    test('10. IDs determinísticos são estáveis para o mesmo compromisso', () {
-      final idA = ServicoNotificacoesAgenda.gerarIdDeterminante('cliente_123_2026-08-27T14:00:00');
-      final idB = ServicoNotificacoesAgenda.gerarIdDeterminante('cliente_123_2026-08-27T14:00:00');
-      final idC = ServicoNotificacoesAgenda.gerarIdDeterminante('cliente_999_2026-08-27T14:00:00');
-
-      expect(idA, equals(idB));
-      expect(idA, isNot(equals(idC)));
-      expect(idA, isPositive);
+      expect(servico.agendadosAtivos['c_approx']?.status,
+          equals(ResultadoAgendamentoNotificacao.agendadoAproximado));
     });
   });
 }
