@@ -1,12 +1,11 @@
 /**
- * Script de Auditoria e Reconciliação de Vendas Legadas / Incompletas
- * 
+ * Script de Auditoria de Vendas Legadas e Incompletas
+ *
  * REGRAS CRÍTICAS DE SEGURANÇA:
- * 1. Executa em MODO DRY-RUN por padrão.
- * 2. Nenhuma alteração de dados é feita sem as flags explícitas:
- *    --apply-live-changes --confirm-reconciliation=SIM
- * 3. TRAVA DE PRODUÇÃO: Bloqueado contra execução em produção ou URLs externas.
- * 4. Dados pessoais são totalmente mascarados nos relatórios (LGPD).
+ * 1. Operação estritamente SOMENTE LEITURA (Audit-Only).
+ * 2. Nenhuma alteração ou remoção é realizada no banco de dados.
+ * 3. Todos os dados sensíveis e identificadores são mascarados (LGPD).
+ * 4. Não realiza premissas de exclusão em massa; apresenta cenários condicionais transparentes.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -29,12 +28,30 @@ function maskString(str: string | null | undefined, visibleChars = 3): string {
 function maskName(name: string | null | undefined): string {
   if (!name) return 'Nome Oculto';
   const parts = name.trim().split(/\s+/);
-  return parts.map(p => (p.length > 2 ? `${p.substring(0, 2)}***` : '***')).join(' ');
+  return parts.map((p) => (p.length > 2 ? `${p.substring(0, 2)}***` : '***')).join(' ');
+}
+
+export interface PossibleScenarios {
+  scenarioA_regularization: {
+    description: string;
+    totalSales: number;
+    incompleteSales: number;
+  };
+  scenarioB_cancellation: {
+    description: string;
+    totalSales: number;
+    incompleteSales: number;
+  };
+  scenarioC_maintenance: {
+    description: string;
+    totalSales: number;
+    incompleteSales: number;
+  };
 }
 
 export interface ReconciliationReport {
   timestamp: string;
-  isDryRun: boolean;
+  isReadOnly: boolean;
   totalSalesCount: number;
   salesWithReceiptCount: number;
   salesWithoutReceiptCount: number;
@@ -42,9 +59,9 @@ export interface ReconciliationReport {
   clientsWithDuplicateSales: number;
   details: Array<{
     clientMaskedId: string;
-    sequenceNumber: string;
+    maskedSequenceNumber: string;
     clientMaskedName: string;
-    city: string;
+    maskedCity: string;
     bookStatus: string;
     outcomeStatus: string;
     cityClosedAt: string | null;
@@ -64,34 +81,13 @@ export interface ReconciliationReport {
     suggestedAction: string;
     pendingDecision: string;
   }>;
-  predictedBeforeAfter: {
-    before: { totalSales: number; incompleteSales: number };
-    afterPredicted: { totalSales: number; incompleteSales: number };
-  };
+  scenarios: PossibleScenarios;
 }
 
 export async function runReconciliationAnalysis(options?: {
-  allowWrite?: boolean;
   prismaClient?: PrismaClient;
 }): Promise<ReconciliationReport> {
   const prisma = options?.prismaClient || defaultPrisma;
-  const isDryRun = !(options?.allowWrite === true);
-
-  // Verificação de segurança: não permitir escrita acidental
-  if (!isDryRun) {
-    const dbUrl = (process.env.DATABASE_URL || '').toLowerCase();
-    const isProd = process.env.NODE_ENV === 'production' ||
-      dbUrl.includes('render.com') ||
-      dbUrl.includes('supabase') ||
-      dbUrl.includes('neon.tech') ||
-      dbUrl.includes('oregon-postgres');
-
-    if (isProd) {
-      throw new Error(
-        '🛑 BLOQUEIO DE SEGURANÇA: Execução com gravação estritamente proibida no banco de dados de produção.'
-      );
-    }
-  }
 
   // 1. Contagens gerais agregadas
   const totalSales = await prisma.sale.count();
@@ -174,9 +170,9 @@ export async function runReconciliationAnalysis(options?: {
 
     details.push({
       clientMaskedId: maskString(client.id, 4),
-      sequenceNumber: client.sequenceNumber || 'S/N',
+      maskedSequenceNumber: maskString(client.sequenceNumber || 'S/N', 2),
       clientMaskedName: maskName(client.name),
-      city: client.city || 'Desconhecida',
+      maskedCity: maskString(client.city || 'Desconhecida', 3),
       bookStatus: client.bookStatus,
       outcomeStatus: client.outcomeStatus,
       cityClosedAt: client.cityClosedAt ? client.cityClosedAt.toISOString() : null,
@@ -200,21 +196,28 @@ export async function runReconciliationAnalysis(options?: {
 
   const report: ReconciliationReport = {
     timestamp: new Date().toISOString(),
-    isDryRun,
+    isReadOnly: true,
     totalSalesCount: totalSales,
     salesWithReceiptCount: salesWithReceipt,
     salesWithoutReceiptCount: salesWithoutReceipt,
     clientsWithSalesWithoutReceipt: affectedClientIds.length,
     clientsWithDuplicateSales: clientsWithDuplicatesCount,
     details,
-    predictedBeforeAfter: {
-      before: {
+    scenarios: {
+      scenarioA_regularization: {
+        description: 'Vendas incompletas são regularizadas mediante upload legítimo de comprovante',
+        totalSales,
+        incompleteSales: 0,
+      },
+      scenarioB_cancellation: {
+        description: 'Vendas incompletas sem confirmação comercial são estornadas/canceladas pela administração',
+        totalSales: Math.max(0, totalSales - salesWithoutReceipt),
+        incompleteSales: 0,
+      },
+      scenarioC_maintenance: {
+        description: 'Registros permanecem como estão aguardando resolução individual de cada vendedor',
         totalSales,
         incompleteSales: salesWithoutReceipt,
-      },
-      afterPredicted: {
-        totalSales: totalSales - salesWithoutReceipt, // se autorizada a remoção/conclusão
-        incompleteSales: 0,
       },
     },
   };
@@ -222,15 +225,12 @@ export async function runReconciliationAnalysis(options?: {
   return report;
 }
 
-// Execução CLI
+// Execução CLI (estritamente somente leitura)
 if (require.main === module) {
-  const args = process.argv.slice(2);
-  const allowWrite = args.includes('--apply-live-changes') && args.includes('--confirm-reconciliation=SIM');
-
-  runReconciliationAnalysis({ allowWrite })
+  runReconciliationAnalysis()
     .then((report) => {
       console.log('\n═══════════════════════════════════════════════════════════════════════════');
-      console.log(`📋 RELATÓRIO DE RECONCILIAÇÃO DE VENDAS LEGADAS (${report.isDryRun ? 'MODO DRY-RUN' : 'MODO GRAVAÇÃO'})`);
+      console.log('📋 RELATÓRIO DE AUDITORIA DE VENDAS LEGADAS (MODO SOMENTE LEITURA)');
       console.log('═══════════════════════════════════════════════════════════════════════════');
       console.log(`📅 Data/Hora: ${report.timestamp}`);
       console.log(`📊 Vendas no banco: Total=${report.totalSalesCount} | Com Comprovante=${report.salesWithReceiptCount} | Sem Comprovante=${report.salesWithoutReceiptCount}`);
@@ -238,7 +238,7 @@ if (require.main === module) {
       console.log('\n--- DETALHES POR FICHA AFETADA (DADOS MASCARADOS - LGPD) ---');
 
       for (const d of report.details) {
-        console.log(`\n• Ficha: [${d.sequenceNumber}] ID=${d.clientMaskedId} Cliente=${d.clientMaskedName} Cidade=${d.city}`);
+        console.log(`\n• Ficha: [${d.maskedSequenceNumber}] ID=${d.clientMaskedId} Cliente=${d.clientMaskedName} Cidade=${d.maskedCity}`);
         console.log(`  Situação logística: ${d.logisticsDiagnosis}`);
         console.log(`  Vendas associadas (${d.totalSales}):`);
         for (const s of d.sales) {
@@ -248,20 +248,18 @@ if (require.main === module) {
         console.log(`  ⚠️ ${d.pendingDecision}`);
       }
 
-      console.log('\n--- PROJEÇÃO DE CONTAGENS (ANTES vs DEPOIS PREVISTO) ---');
-      console.log(`• ANTES: Total Vendas=${report.predictedBeforeAfter.before.totalSales}, Incompletas=${report.predictedBeforeAfter.before.incompleteSales}`);
-      console.log(`• APÓS RECONCILIAÇÃO AUTORIZADA: Total Vendas=${report.predictedBeforeAfter.afterPredicted.totalSales}, Incompletas=${report.predictedBeforeAfter.afterPredicted.incompleteSales}`);
+      console.log('\n--- CENÁRIOS POSSÍVEIS DE RECONCILIAÇÃO (CONDICIONAIS) ---');
+      console.log(`• Cenário A (Regularização com comprovante): Total Vendas=${report.scenarios.scenarioA_regularization.totalSales}, Incompletas=${report.scenarios.scenarioA_regularization.incompleteSales}`);
+      console.log(`• Cenário B (Cancelamento/estorno administrativo): Total Vendas=${report.scenarios.scenarioB_cancellation.totalSales}, Incompletas=${report.scenarios.scenarioB_cancellation.incompleteSales}`);
+      console.log(`• Cenário C (Manutenção do estado atual): Total Vendas=${report.scenarios.scenarioC_maintenance.totalSales}, Incompletas=${report.scenarios.scenarioC_maintenance.incompleteSales}`);
       console.log('═══════════════════════════════════════════════════════════════════════════\n');
-
-      if (report.isDryRun) {
-        console.log('🔒 Modo Dry-Run ativo: nenhuma alteração foi gravada no banco de dados.');
-      }
+      console.log('🔒 Auditoria somente leitura concluída: nenhuma modificação de banco executada.');
     })
     .catch((err) => {
-      console.error('❌ Erro na reconciliação:', err.message);
+      console.error('❌ Erro na auditoria:', err.message);
       process.exit(1);
     })
     .finally(async () => {
-      await prisma.$disconnect();
+      await defaultPrisma.$disconnect();
     });
 }

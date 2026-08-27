@@ -22,7 +22,7 @@ export interface ApkReleaseDescriptor {
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
   version: '1.0.8',
   buildNumber: 9,
-  sha256: 'AAB516C7FE156DF03B5E7B9F5F22BAC2040880E4AD1475383032CDFE1A6DD20C',
+  sha256: '0A558C646EA20754791B713370605EBDA8EA9D0E16C9894578D38D36D07B50CE',
   packageName: 'com.example.mobile',
 });
 
