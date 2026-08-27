@@ -1424,6 +1424,9 @@ class _NonSaleTabState extends State<_NonSaleTab> {
         'clientId': widget.client['id'],
         'reason': reasonToSubmit,
         'signatureBase64': 'fictitious_signature',
+        'sellerRating': _sellerRating,
+        'photoRating': _photoRating,
+        'contactRating': _contactRating,
       };
 
       try {

@@ -33,21 +33,7 @@ class MockFechamentoApiService extends ApiService {
     return [];
   }
 
-  @override
-  Future<Map<String, dynamic>> getClosingSummary({
-    DateTime? startDate,
-    DateTime? endDate,
-    String? sellerId,
-  }) async {
-    return {
-      'totalGrossSales': 0,
-      'totalCommission': 0,
-      'totalAdvances': 0,
-      'netToPay': 0,
-      'sales': [],
-      'advances': [],
-    };
-  }
+
 
   @override
   Future<Map<String, dynamic>> getCustomMetrics({

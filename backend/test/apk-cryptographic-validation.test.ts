@@ -16,7 +16,7 @@ import appRoutes, {
   createAppRouter,
 } from '../src/routes/app';
 
-describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.7+8)', { concurrency: 1 }, () => {
+describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+9)', { concurrency: 1 }, () => {
   const tmpDir = path.join(__dirname, `tmp_apk_test_${Date.now()}`);
   let server: http.Server;
   let baseUrl: string;
@@ -103,8 +103,8 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.7+8)'
     const versionRes = await makeRequest('/version');
     assert.equal(versionRes.status, 200);
     assert.deepEqual(versionRes.body, {
-      version: '1.0.7',
-      buildNumber: 8,
+      version: '1.0.8',
+      buildNumber: 9,
       mandatory: false,
       downloadUrl: '',
       apkAvailable: false,
@@ -177,8 +177,8 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.7+8)'
 
     const result = await getApkValidationStatus(validPath, descriptorFor(content));
     assert.equal(result.valid, true);
-    assert.equal(result.version, '1.0.7');
-    assert.equal(result.buildNumber, 8);
+    assert.equal(result.version, '1.0.8');
+    assert.equal(result.buildNumber, 9);
     assert.equal(result.packageName, 'com.example.mobile');
     assert.equal(result.foundSha256, sha256(content));
   });
@@ -239,9 +239,9 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.7+8)'
 
   it('10. Manifesto confiável da release possui versão, build, pacote e hash auditados', () => {
     assert.deepEqual(RELEASE_APK, {
-      version: '1.0.7',
-      buildNumber: 8,
-      sha256: '76F14CE55A5470CED18491866175F84DC9FC5F48429C3E0197E32198B552B60A',
+      version: '1.0.8',
+      buildNumber: 9,
+      sha256: 'AAB516C7FE156DF03B5E7B9F5F22BAC2040880E4AD1475383032CDFE1A6DD20C',
       packageName: 'com.example.mobile',
     });
   });

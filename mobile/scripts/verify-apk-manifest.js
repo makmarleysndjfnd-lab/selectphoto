@@ -6,7 +6,7 @@
  * 3. Ausência de classes inexistentes (ex: io.flutter.app.FlutterMultiDexApplication)
  * 4. Validação de que a classe Application é válida e existente no runtime
  * 5. Ausência da flag android:debuggable / application-debuggable
- * 6. Versão versionName = 1.0.7 e versionCode = 8
+ * 6. Versão versionName = 1.0.8 e versionCode = 9
  */
 
 const fs = require('fs');
@@ -66,8 +66,8 @@ function verifyApk() {
   console.log(`🏷️  Package: ${packageName}`);
   console.log(`🏷️  Version: ${versionName} (code ${versionCode})`);
 
-  if (versionName !== '1.0.7' || versionCode !== '8') {
-    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.7', versionCode='8'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
+  if (versionName !== '1.0.8' || versionCode !== '9') {
+    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.8', versionCode='9'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
     process.exit(1);
   }
 

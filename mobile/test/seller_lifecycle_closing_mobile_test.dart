@@ -23,11 +23,11 @@ void main() {
     );
   }
 
-  group('Escopo 5 e 6: Ciclo de Vida das Fichas e Agenda Mobile (1.0.7+8)', () {
-    test('1. Versão compilada e build number do AppConfig estão em 1.0.7+8', () {
-      expect(AppConfig.appVersion, equals('1.0.7'));
-      expect(AppConfig.buildNumber, equals(8));
-      expect(AppConfig.fullVersion, equals('1.0.7+8'));
+  group('Escopo 5 e 6: Ciclo de Vida das Fichas e Agenda Mobile (1.0.8+9)', () {
+    test('1. Versão compilada e build number do AppConfig estão em 1.0.8+9', () {
+      expect(AppConfig.appVersion, equals('1.0.8'));
+      expect(AppConfig.buildNumber, equals(9));
+      expect(AppConfig.fullVersion, equals('1.0.8+9'));
     });
 
     testWidgets('2. SellerDashboard renderiza cabeçalhos de grupos de fichas (Pendentes e Atendidas)', (tester) async {
@@ -64,8 +64,8 @@ void main() {
       final syncService = SyncService(ApiService(), initialOnline: false);
       // Simula uma requisição offline pendente
       await syncService.addPendingRequest(
-        'REGISTER_SALE',
-        {'clientId': 'c-1', 'value': 100},
+        'UPDATE_CLIENT_LOCATION',
+        {'clientId': 'c-1', 'latitude': -16.68, 'longitude': -49.25},
       );
 
       await tester.pumpWidget(buildTestableWidget(child: const SellerDashboard(), syncService: syncService));
@@ -79,7 +79,8 @@ void main() {
 
       // Diálogo de bloqueio por operações offline
       expect(find.text('Operações Pendentes'), findsOneWidget);
-      expect(find.textContaining('Você possui 1 operação(ões) offline pendente(s)'), findsOneWidget);
+      expect(find.textContaining('aguardando sincronização com a internet'), findsOneWidget);
+      expect(find.text('Ver Envios Pendentes'), findsOneWidget);
     });
 
     test('5. Ficha vendida sem comprovante é classificada nas pendentes com trava', () {
