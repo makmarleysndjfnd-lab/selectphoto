@@ -30,8 +30,8 @@ export function parseAndValidateDatabaseUrl(url?: string): DatabaseConnectionInf
     const port = parsed.port || '5432';
     const database = parsed.pathname.replace(/^\//, '');
     return { host, port, database };
-  } catch (e) {
-    throw new Error(`DATABASE_URL com formato inválido: ${e}`);
+  } catch {
+    throw new Error('DATABASE_URL com formato inválido. Não foi possível analisar a URL de conexão.');
   }
 }
 
@@ -51,21 +51,26 @@ export function validateLocalDatabaseUrl(url?: string): DatabaseConnectionInfo {
     );
   }
 
+  const db = info.database.toLowerCase();
+  const isForbidden = db.includes('prod') || db.includes('live');
   const isAllowedDatabase =
-    info.database === 'selectphoto_staging_local' ||
-    info.database.includes('staging') ||
-    info.database.includes('test');
+    !isForbidden &&
+    (db === 'selectphoto_staging_local' ||
+      db === 'selectphoto_test' ||
+      db === 'selectphoto_test_db' ||
+      db === 'test' ||
+      db === 'staging' ||
+      /^(test|staging)_[a-z0-9_]+$/.test(db) ||
+      /^[a-z0-9_]+_(test|staging)$/.test(db));
 
   if (!isAllowedDatabase) {
     throw new Error(
-      `[SEGURANÇA] Banco recusado (${info.database}). O reconciliador local só aceita 'selectphoto_staging_local' ou bancos de teste/staging.`
+      `[SEGURANÇA] Banco recusado (${info.database}). O reconciliador local só aceita 'selectphoto_staging_local' ou bancos estritos de teste/staging.`
     );
   }
 
   return info;
 }
-
-const defaultPrisma = new PrismaClient();
 
 function maskString(str: string | null | undefined, visibleChars = 3): string {
   if (!str) return 'N/D';
@@ -127,6 +132,7 @@ export interface ReconciliationReport {
     maskedCity: string;
     bookStatus: string;
     outcomeStatus: string;
+    hasCityClosed: boolean;
     cityClosedAt: string | null;
     totalSales: number;
     salesWithReceipt: number;
@@ -150,142 +156,159 @@ export interface ReconciliationReport {
 export async function runReconciliationAnalysis(options?: {
   prismaClient?: PrismaClient;
 }): Promise<ReconciliationReport> {
-  const prisma = options?.prismaClient || defaultPrisma;
+  let prisma: PrismaClient;
+  let isInternalPrisma = false;
 
-  // 1. Contagens gerais agregadas
-  const totalSales = await prisma.sale.count();
-  const salesWithReceipt = await prisma.sale.count({ where: { receiptUrl: { not: null } } });
-  const salesWithoutReceipt = await prisma.sale.count({ where: { receiptUrl: null } });
-
-  // 2. Buscar todas as vendas sem comprovante agrupadas por ficha
-  const incompleteSales = await prisma.sale.findMany({
-    where: { receiptUrl: null },
-    include: {
-      client: true,
-      seller: { select: { id: true, name: true } },
-    },
-    orderBy: { date: 'asc' },
-  });
-
-  const clientMap = new Map<string, typeof incompleteSales>();
-  for (const sale of incompleteSales) {
-    const list = clientMap.get(sale.clientId) || [];
-    list.push(sale);
-    clientMap.set(sale.clientId, list);
+  if (options?.prismaClient) {
+    prisma = options.prismaClient;
+  } else {
+    // Valida DATABASE_URL antes de instanciar ou conectar o cliente Prisma padrão
+    validateLocalDatabaseUrl(process.env.DATABASE_URL);
+    prisma = new PrismaClient();
+    isInternalPrisma = true;
   }
 
-  // Buscar todas as vendas das fichas afetadas para verificação de duplicidades
-  const affectedClientIds = Array.from(clientMap.keys());
-  const allSalesForAffectedClients = await prisma.sale.findMany({
-    where: { clientId: { in: affectedClientIds } },
-    include: {
-      client: true,
-      seller: { select: { id: true, name: true } },
-    },
-    orderBy: { date: 'asc' },
-  });
+  try {
+    // 1. Contagens gerais agregadas
+    const totalSales = await prisma.sale.count();
+    const salesWithReceipt = await prisma.sale.count({ where: { receiptUrl: { not: null } } });
+    const salesWithoutReceipt = await prisma.sale.count({ where: { receiptUrl: null } });
 
-  const allSalesByClient = new Map<string, typeof allSalesForAffectedClients>();
-  for (const sale of allSalesForAffectedClients) {
-    const list = allSalesByClient.get(sale.clientId) || [];
-    list.push(sale);
-    allSalesByClient.set(sale.clientId, list);
-  }
-
-  const details: ReconciliationReport['details'] = [];
-  let clientsWithDuplicatesCount = 0;
-
-  for (const clientId of affectedClientIds) {
-    const clientSales = allSalesByClient.get(clientId) || [];
-    const client = clientSales[0]?.client;
-    if (!client) continue;
-
-    const withRec = clientSales.filter((s) => Boolean(s.receiptUrl)).length;
-    const withoutRec = clientSales.filter((s) => !s.receiptUrl).length;
-    if (clientSales.length > 1) {
-      clientsWithDuplicatesCount++;
-    }
-
-    const hasCompletedSale = withRec > 0;
-    let logisticsDiagnosis = `bookStatus: ${client.bookStatus}; outcome: ${client.outcomeStatus}; cidadeFechada: ${Boolean(client.cityClosedAt)}`;
-    let suggestedAction = '';
-    let pendingDecision = '';
-
-    if (withoutRec > 1 && !hasCompletedSale) {
-      logisticsDiagnosis += ' | Ficha com múltiplas vendas incompletas e nenhuma concluída.';
-      suggestedAction =
-        'Manter bloqueio contra novas vendas (código LEGACY_SALE_REQUIRES_RECONCILIATION). ' +
-        'Auditar com o vendedor se houve recebimento físico em espécie ou se a ficha deve ser revertida.';
-      pendingDecision =
-        'DECISÃO PENDENTE: Definir com a administração se a ficha deve retornar ao estado PENDING ou DISTRIBUTED, ' +
-        'ou se o vendedor apresentará comprovante físico para uma das vendas.';
-    } else if (withoutRec === 1 && !hasCompletedSale) {
-      suggestedAction =
-        'Permitir que o mesmo vendedor anexe o comprovante atômico na próxima tentativa, ou cancelar registro se não houver venda.';
-      pendingDecision =
-        'DECISÃO PENDENTE: Confirmar se o vendedor ainda possui a posse física ou fotografia do comprovante.';
-    } else if (hasCompletedSale) {
-      suggestedAction =
-        'A ficha já possui uma venda com comprovante válida. Os registros excedentes sem comprovante foram gerados por duplicidade de requisição.';
-      pendingDecision =
-        'DECISÃO PENDENTE: Autorizar o cancelamento/arquivamento das vendas órfãs mantendo apenas a venda concluída com comprovante.';
-    }
-
-    details.push({
-      clientMaskedId: maskString(client.id, 4),
-      maskedSequenceNumber: maskString(client.sequenceNumber || 'S/N', 2),
-      clientMaskedName: maskName(client.name),
-      maskedCity: maskString(client.city || 'Desconhecida', 3),
-      bookStatus: client.bookStatus,
-      outcomeStatus: client.outcomeStatus,
-      cityClosedAt: client.cityClosedAt ? client.cityClosedAt.toISOString() : null,
-      totalSales: clientSales.length,
-      salesWithReceipt: withRec,
-      salesWithoutReceipt: withoutRec,
-      sales: clientSales.map((s) => ({
-        saleMaskedId: maskString(s.id, 4),
-        sellerMaskedName: maskName(s.seller?.name),
-        maskedValue: maskValue(s.value),
-        maskedDate: maskDate(s.date),
-        hasReceipt: Boolean(s.receiptUrl),
-        paymentStatus: s.paymentStatus,
-        status: s.status,
-      })),
-      logisticsDiagnosis,
-      suggestedAction,
-      pendingDecision,
+    // 2. Buscar todas as vendas sem comprovante agrupadas por ficha
+    const incompleteSales = await prisma.sale.findMany({
+      where: { receiptUrl: null },
+      include: {
+        client: true,
+        seller: { select: { id: true, name: true } },
+      },
+      orderBy: { date: 'asc' },
     });
+
+    const clientMap = new Map<string, typeof incompleteSales>();
+    for (const sale of incompleteSales) {
+      const list = clientMap.get(sale.clientId) || [];
+      list.push(sale);
+      clientMap.set(sale.clientId, list);
+    }
+
+    // Buscar todas as vendas das fichas afetadas para verificação de duplicidades
+    const affectedClientIds = Array.from(clientMap.keys());
+    const allSalesForAffectedClients = await prisma.sale.findMany({
+      where: { clientId: { in: affectedClientIds } },
+      include: {
+        client: true,
+        seller: { select: { id: true, name: true } },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    const allSalesByClient = new Map<string, typeof allSalesForAffectedClients>();
+    for (const sale of allSalesForAffectedClients) {
+      const list = allSalesByClient.get(sale.clientId) || [];
+      list.push(sale);
+      allSalesByClient.set(sale.clientId, list);
+    }
+
+    const details: ReconciliationReport['details'] = [];
+    let clientsWithDuplicatesCount = 0;
+
+    for (const clientId of affectedClientIds) {
+      const clientSales = allSalesByClient.get(clientId) || [];
+      const client = clientSales[0]?.client;
+      if (!client) continue;
+
+      const withRec = clientSales.filter((s) => Boolean(s.receiptUrl)).length;
+      const withoutRec = clientSales.filter((s) => !s.receiptUrl).length;
+      if (clientSales.length > 1) {
+        clientsWithDuplicatesCount++;
+      }
+
+      const hasCompletedSale = withRec > 0;
+      let logisticsDiagnosis = `bookStatus: ${client.bookStatus}; outcome: ${client.outcomeStatus}; cidadeFechada: ${Boolean(client.cityClosedAt)}`;
+      let suggestedAction = '';
+      let pendingDecision = '';
+
+      if (withoutRec > 1 && !hasCompletedSale) {
+        logisticsDiagnosis += ' | Ficha com múltiplas vendas incompletas e nenhuma concluída.';
+        suggestedAction =
+          'Manter bloqueio contra novas vendas (código LEGACY_SALE_REQUIRES_RECONCILIATION). ' +
+          'Auditar com o vendedor se houve recebimento físico em espécie ou se a ficha deve ser revertida.';
+        pendingDecision =
+          'DECISÃO PENDENTE: Definir com a administração se a ficha deve retornar ao estado PENDING ou DISTRIBUTED, ' +
+          'ou se o vendedor apresentará comprovante físico para uma das vendas.';
+      } else if (withoutRec === 1 && !hasCompletedSale) {
+        suggestedAction =
+          'Permitir que o mesmo vendedor anexe o comprovante atômico na próxima tentativa, ou cancelar registro se não houver venda.';
+        pendingDecision =
+          'DECISÃO PENDENTE: Confirmar se o vendedor ainda possui a posse física ou fotografia do comprovante.';
+      } else if (hasCompletedSale) {
+        suggestedAction =
+          'A ficha já possui uma venda com comprovante válida. Os registros excedentes sem comprovante foram gerados por duplicidade de requisição.';
+        pendingDecision =
+          'DECISÃO PENDENTE: Autorizar o cancelamento/arquivamento das vendas órfãs mantendo apenas a venda concluída com comprovante.';
+      }
+
+      details.push({
+        clientMaskedId: maskString(client.id, 4),
+        maskedSequenceNumber: maskString(client.sequenceNumber || 'S/N', 2),
+        clientMaskedName: maskName(client.name),
+        maskedCity: maskString(client.city || 'Desconhecida', 3),
+        bookStatus: client.bookStatus,
+        outcomeStatus: client.outcomeStatus,
+        hasCityClosed: Boolean(client.cityClosedAt),
+        cityClosedAt: client.cityClosedAt ? 'FECHADA' : null,
+        totalSales: clientSales.length,
+        salesWithReceipt: withRec,
+        salesWithoutReceipt: withoutRec,
+        sales: clientSales.map((s) => ({
+          saleMaskedId: maskString(s.id, 4),
+          sellerMaskedName: maskName(s.seller?.name),
+          maskedValue: maskValue(s.value),
+          maskedDate: maskDate(s.date),
+          hasReceipt: Boolean(s.receiptUrl),
+          paymentStatus: s.paymentStatus,
+          status: s.status,
+        })),
+        logisticsDiagnosis,
+        suggestedAction,
+        pendingDecision,
+      });
+    }
+
+    const report: ReconciliationReport = {
+      timestamp: new Date().toISOString(),
+      isReadOnly: true,
+      totalSalesCount: totalSales,
+      salesWithReceiptCount: salesWithReceipt,
+      salesWithoutReceiptCount: salesWithoutReceipt,
+      clientsWithSalesWithoutReceipt: affectedClientIds.length,
+      clientsWithDuplicateSales: clientsWithDuplicatesCount,
+      details,
+      scenarios: {
+        scenarioA_regularization: {
+          description: 'Vendas incompletas são regularizadas mediante upload legítimo de comprovante',
+          totalSales,
+          incompleteSales: 0,
+        },
+        scenarioB_cancellation: {
+          description: 'Vendas incompletas sem confirmação comercial são estornadas/canceladas pela administração',
+          totalSales: Math.max(0, totalSales - salesWithoutReceipt),
+          incompleteSales: 0,
+        },
+        scenarioC_maintenance: {
+          description: 'Registros permanecem como estão aguardando resolução individual de cada vendedor',
+          totalSales,
+          incompleteSales: salesWithoutReceipt,
+        },
+      },
+    };
+
+    return report;
+  } finally {
+    if (isInternalPrisma) {
+      await prisma.$disconnect();
+    }
   }
-
-  const report: ReconciliationReport = {
-    timestamp: new Date().toISOString(),
-    isReadOnly: true,
-    totalSalesCount: totalSales,
-    salesWithReceiptCount: salesWithReceipt,
-    salesWithoutReceiptCount: salesWithoutReceipt,
-    clientsWithSalesWithoutReceipt: affectedClientIds.length,
-    clientsWithDuplicateSales: clientsWithDuplicatesCount,
-    details,
-    scenarios: {
-      scenarioA_regularization: {
-        description: 'Vendas incompletas são regularizadas mediante upload legítimo de comprovante',
-        totalSales,
-        incompleteSales: 0,
-      },
-      scenarioB_cancellation: {
-        description: 'Vendas incompletas sem confirmação comercial são estornadas/canceladas pela administração',
-        totalSales: Math.max(0, totalSales - salesWithoutReceipt),
-        incompleteSales: 0,
-      },
-      scenarioC_maintenance: {
-        description: 'Registros permanecem como estão aguardando resolução individual de cada vendedor',
-        totalSales,
-        incompleteSales: salesWithoutReceipt,
-      },
-    },
-  };
-
-  return report;
 }
 
 // Execução CLI (estritamente somente leitura em banco local)
@@ -346,9 +369,6 @@ if (require.main === module) {
       .catch((err) => {
         console.error('❌ Erro na auditoria:', err.message);
         process.exitCode = 1;
-      })
-      .finally(async () => {
-        await defaultPrisma.$disconnect();
       });
   }
 }
