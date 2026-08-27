@@ -166,15 +166,21 @@ async function finalizeSaleWithReceipt(params: {
         };
       }
 
-      // Pertence ao mesmo vendedor: anexar o comprovante à venda existente de forma atômica
+      // Comparar os dados da venda incompleta com a nova tentativa
+      const isIdentical = areCommercialFieldsIdentical(existingSingle, input, client.sequenceNumber);
+      if (!isIdentical) {
+        throw {
+          status: 409,
+          code: 'LEGACY_SALE_DATA_MISMATCH',
+          message:
+            'Dados comerciais da venda diferem da venda incompleta anterior. Regularização requer reconciliação administrativa.',
+        };
+      }
+
+      // Pertence ao mesmo vendedor e dados são equivalentes: anexar o comprovante à venda existente de forma atômica
       const updatedSale = await tx.sale.update({
         where: { id: existingSingle.id },
         data: {
-          value: input.value,
-          city: input.city,
-          product: input.product,
-          fichaNumber: input.fichaNumber,
-          paymentMethod: input.paymentMethod,
           paymentStatus: 'PAID',
           status: 'PRONTO',
           receiptUrl: params.receiptUrl,

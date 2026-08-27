@@ -19,6 +19,7 @@ import { runReconciliationAnalysis } from '../scripts/reconcile-legacy-sales';
 
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET;
+const uploadsDir = path.resolve(__dirname, '../uploads');
 
 describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { concurrency: 1 }, () => {
   let app: express.Application;
@@ -167,7 +168,7 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
     assert.equal(totalSales, 1, 'Não pode haver duplicidade de venda no banco');
   });
 
-  it('3. Uma venda incompleta antiga do mesmo vendedor: anexa comprovante e conclui com segurança', async () => {
+  it('3. Uma venda incompleta antiga do mesmo vendedor: rejeita divergência (409 LEGACY_SALE_DATA_MISMATCH) e anexa se idêntica (201)', async () => {
     const client = await prisma.client.create({
       data: {
         sequenceNumber: `SEQ-INCOMPL-${uuidv4().substring(0, 6)}`,
@@ -180,7 +181,7 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
       },
     });
 
-    // Cria venda legada antiga sem comprovante (receiptUrl: null)
+    // Cria venda legada antiga sem comprovante com valor 300
     const legacySale = await prisma.sale.create({
       data: {
         clientId: client.id,
@@ -188,21 +189,53 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
         companyId: compId,
         value: 300,
         city: 'Londrina',
+        product: 'Book Completo',
+        paymentMethod: 'CASH',
         status: 'PENDING_RECEIPT',
         paymentStatus: 'PENDING_RECEIPT',
         receiptUrl: null,
       },
     });
 
-    const res = await fetch(`${baseUrl}/api/sales/with-receipt`, {
+    const companyUploads = path.join(uploadsDir, compId);
+    const filesBefore = new Set(fs.existsSync(companyUploads) ? fs.readdirSync(companyUploads) : []);
+
+    // A. Nova tentativa divergente: valor 350 em vez de 300
+    const resDivergent = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${tokenSellerA}` },
       body: createSaleFormData(client.id, 350),
     });
 
-    assert.equal(res.status, 201);
-    const finalSale = await res.json();
+    assert.equal(resDivergent.status, 409, 'Tentativa de alterar valor silenciosamente deve retornar 409');
+    const errBody = await resDivergent.json();
+    assert.equal(errBody.code, 'LEGACY_SALE_DATA_MISMATCH');
+
+    // Valida que a venda não foi alterada no banco
+    const saleAfterDivergent = await prisma.sale.findUnique({ where: { id: legacySale.id } });
+    assert.equal(Number(saleAfterDivergent?.value), 300, 'Valor da venda deve continuar 300');
+    assert.equal(saleAfterDivergent?.receiptUrl, null, 'receiptUrl deve continuar null');
+
+    // Valida que a ficha continua PENDING (não fica SOLD)
+    const clientAfterDivergent = await prisma.client.findUnique({ where: { id: client.id } });
+    assert.equal(clientAfterDivergent?.outcomeStatus, 'PENDING', 'Ficha não pode ficar SOLD após rejeição');
+
+    // Valida que o arquivo de upload rejeitado foi removido
+    const filesAfterDivergent = fs.existsSync(companyUploads) ? fs.readdirSync(companyUploads) : [];
+    const newFilesDivergent = filesAfterDivergent.filter((f) => !filesBefore.has(f));
+    assert.equal(newFilesDivergent.length, 0, 'Upload da tentativa rejeitada deve ter sido removido');
+
+    // B. Nova tentativa com dados comerciais idênticos: valor 300
+    const resIdentical = await fetch(`${baseUrl}/api/sales/with-receipt`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenSellerA}` },
+      body: createSaleFormData(client.id, 300),
+    });
+
+    assert.equal(resIdentical.status, 201, 'Tentativa idêntica regulariza a venda e retorna 201');
+    const finalSale = await resIdentical.json();
     assert.equal(finalSale.id, legacySale.id, 'Deve reaproveitar e atualizar o registro existente');
+    assert.equal(Number(finalSale.value), 300);
     assert.equal(finalSale.paymentStatus, 'PAID');
     assert.ok(finalSale.receiptUrl);
 

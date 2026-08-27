@@ -126,13 +126,16 @@ describe('CONCORRÊNCIA REAL E IDEMPOTÊNCIA ESTRITA EM VENDAS (HOTFIX 1.0.8)', 
     ]);
 
     const statuses = [resA.status, resB.status].sort();
-    // Exatamente uma requisição deve criar a venda (201)
-    // A outra requisição deve retornar a venda idempotente (200) ou conflito controlado (409)
-    assert.ok(
-      (statuses[0] === 200 && statuses[1] === 201) ||
-      (statuses[0] === 201 && statuses[1] === 409),
-      `Esperado [200, 201] ou [201, 409], mas obteve: [${resA.status}, ${resB.status}]`
+    // Exatamente uma requisição deve criar a venda (201) e a outra deve retornar idempotência (200)
+    assert.deepEqual(
+      statuses,
+      [200, 201],
+      `Esperado estritamente [200, 201], sem aceitar 409 para solicitações idênticas. Obteve: [${resA.status}, ${resB.status}]`
     );
+
+    const jsonA = await resA.json();
+    const jsonB = await resB.json();
+    assert.equal(jsonA.id, jsonB.id, 'Ambas as respostas (201 e 200) devem retornar exatamente o mesmo sale.id');
 
     // Banco de dados deve ter rigorosamente UMA única venda
     const salesInDb = await prisma.sale.findMany({ where: { clientId: client.id } });
