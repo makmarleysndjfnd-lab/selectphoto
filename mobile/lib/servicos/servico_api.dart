@@ -1386,6 +1386,32 @@ class ApiService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getCitiesClosingPreview() async {
+    try {
+      final response = await _dio.get('/closing/cities/preview');
+      final list = response.data as List<dynamic>;
+      return list.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar prévia de fechamento de cidades');
+    }
+  }
+
+  Future<Map<String, dynamic>> closeMultipleCities(List<String> cities, {String? event}) async {
+    try {
+      final response = await _dio.post('/closing/cities', data: {
+        'cities': cities,
+        if (event != null && event.trim().isNotEmpty) 'event': event.trim(),
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao realizar fechamento de cidades');
+    }
+  }
+
   Future<List<dynamic>> getPendingEditRequests() async {
     try {
       final response = await _dio.get('/edit-requests/pending');

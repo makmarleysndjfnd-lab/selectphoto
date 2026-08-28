@@ -51,10 +51,18 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   void _executeCustomSearch() {
     setState(() {
       _hasExecutedCustomSearch = true;
+      String? startIso;
+      String? endIso;
+      if (_selectedDateRangeCustom != null) {
+        final s = _selectedDateRangeCustom!.start;
+        final e = _selectedDateRangeCustom!.end;
+        startIso = DateTime.utc(s.year, s.month, s.day, 0, 0, 0).toIso8601String();
+        endIso = DateTime.utc(e.year, e.month, e.day, 23, 59, 59, 999).toIso8601String();
+      }
       _customMetricsFuture = ApiService().getCustomMetrics(
         sellerIds: _selectedSellersCustom,
-        startDate: _selectedDateRangeCustom?.start.toIso8601String(),
-        endDate: _selectedDateRangeCustom?.end.toIso8601String(),
+        startDate: startIso,
+        endDate: endIso,
         city: _selectedCityCustom,
       );
     });
@@ -402,6 +410,46 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                     'Total de Vendas', 'R\$ ${totalVendas.toStringAsFixed(2)}'),
                 _infoRow('Comissão do Dia (${percentual.toInt()}%)',
                     'R\$ ${comissao.toStringAsFixed(2)}'),
+
+                // Demonstrativo Matemático Claro do Dia
+                Container(
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Cálculo do Repasse do Dia',
+                        style: TextStyle(
+                            color: Color(0xFF4FC3F7),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13),
+                      ),
+                      const SizedBox(height: 8),
+                      _infoRow('Dinheiro recebido em mãos:', 'R\$ ${dinheiro.toStringAsFixed(2)}'),
+                      _infoRow('(-) Comissão (${percentual.toInt()}%):', 'R\$ ${comissao.toStringAsFixed(2)}',
+                          color: const Color(0xFFFFB74D)),
+                      const Divider(color: Colors.white12, height: 16),
+                      if (dinheiro > comissao)
+                        _infoRow('(=) Vendedor repassa à empresa:',
+                            'R\$ ${(dinheiro - comissao).toStringAsFixed(2)}',
+                            color: Colors.redAccent, isBold: true)
+                      else if (comissao > dinheiro)
+                        _infoRow('(=) Empresa paga ao vendedor:',
+                            'R\$ ${(comissao - dinheiro).toStringAsFixed(2)}',
+                            color: const Color(0xFF00E676), isBold: true)
+                      else
+                        _infoRow('(=) Saldo do dia:', 'Tudo quitado no dia (R\$ 0,00)',
+                            color: const Color(0xFF40C4FF), isBold: true),
+                    ],
+                  ),
+                ),
+
                 if (saldoHistorico != 0)
                   _infoRow('Saldo Histórico Acumulado',
                       'R\$ ${saldoHistorico.toStringAsFixed(2)}',
@@ -806,7 +854,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   final sumValorTotal =
                       (data['totalSalesValue'] ?? 0).toDouble();
                   double ticketMedio =
-                      totalFichas > 0 ? (sumValorTotal / totalFichas) : 0;
+                      salesCount > 0 ? (sumValorTotal / salesCount) : 0;
 
                   return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -901,14 +949,17 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
     );
   }
 
-  Widget _infoRow(String label, String value, {Color? color}) {
+  Widget _infoRow(String label, String value, {Color? color, bool isBold = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label,
-              style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: isBold ? FontWeight.bold : FontWeight.normal)),
           Text(value,
               style: TextStyle(
                   color: color ?? Colors.white,

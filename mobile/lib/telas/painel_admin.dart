@@ -3414,10 +3414,11 @@ class _AdminDashboardState extends State<AdminDashboard>
   void _atribuirBookDialog(
       Map<String, dynamic> book, String? rotaId, bool isRebolo) {
     String? selectedSeller;
+    bool isSubmitting = false;
     showDialog(
         context: context,
         builder: (context) => StatefulBuilder(
-            builder: (context, setDialogState) => AlertDialog(
+            builder: (dialogCtx, setDialogState) => AlertDialog(
                   backgroundColor: const Color(0xFF1E1E2C),
                   title: const Text('Atribuir Book Individual',
                       style: TextStyle(color: Colors.white)),
@@ -3442,49 +3443,82 @@ class _AdminDashboardState extends State<AdminDashboard>
                                           const TextStyle(color: Colors.white)),
                                 ))
                             .toList(),
-                        onChanged: (v) =>
-                            setDialogState(() => selectedSeller = v),
+                        onChanged: isSubmitting
+                            ? null
+                            : (v) =>
+                                setDialogState(() => selectedSeller = v),
                       ),
                     ],
                   ),
                   actions: [
                     TextButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
                         child: const Text('Cancelar',
                             style: TextStyle(color: Colors.white54))),
                     LedButton(
-                      onPressed: selectedSeller == null
+                      onPressed: (selectedSeller == null || isSubmitting)
                           ? null
                           : () async {
+                              setDialogState(() => isSubmitting = true);
                               final sellerId = selectedSeller!;
                               final clientId =
                                   (book['rawClientData']?['id'] ?? book['id'])
                                       ?.toString();
-                              if (clientId == null || clientId.isEmpty) return;
+                              if (clientId == null || clientId.isEmpty) {
+                                setDialogState(() => isSubmitting = false);
+                                return;
+                              }
                               try {
                                 await ApiService()
                                     .batchAssignSeller([clientId], sellerId);
-                                if (!context.mounted) return;
-                                Navigator.pop(context);
+                                if (!dialogCtx.mounted) return;
+                                Navigator.pop(dialogCtx, true);
+
+                                // Remover da lista local imediatamente
+                                setState(() {
+                                  if (rotaId != null) {
+                                    final rotas = isRebolo ? _rotasRebolo : _rotasManuais;
+                                    final idx = rotas.indexWhere((r) => r['id'] == rotaId);
+                                    if (idx != -1 && rotas[idx]['books'] is List) {
+                                      (rotas[idx]['books'] as List).removeWhere(
+                                          (b) => (b['id'] == clientId || b['ficha'] == book['ficha']));
+                                    }
+                                  } else {
+                                    (isRebolo ? _rebolosNaoAtribuidos : _booksNaoAtribuidos)
+                                        .removeWhere((b) => (b['id'] == clientId || b['ficha'] == book['ficha']));
+                                  }
+                                });
+
                                 await _loadClients();
-                                if (mounted)
+                                if (mounted) {
                                   ScaffoldMessenger.of(this.context)
                                       .showSnackBar(SnackBar(
                                           content: Text(
                                               '${isRebolo ? "Rebolo" : "Book"} atribuído para ${_sellerName(sellerId)}!'),
                                           backgroundColor: Colors.green));
+                                }
                               } catch (e) {
-                                if (context.mounted)
+                                if (dialogCtx.mounted) {
+                                  setDialogState(() => isSubmitting = false);
+                                }
+                                if (context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                           content: Text('Erro ao atribuir: $e'),
                                           backgroundColor: Colors.red));
+                                }
                               }
                             },
                       style: LedButton.styleFrom(
                           backgroundColor: Colors.greenAccent),
-                      child: const Text('Atribuir',
-                          style: TextStyle(color: Colors.white)),
+                      child: isSubmitting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  color: Colors.black, strokeWidth: 2))
+                          : const Text('Atribuir',
+                              style: TextStyle(color: Colors.white)),
                     )
                   ],
                 )));

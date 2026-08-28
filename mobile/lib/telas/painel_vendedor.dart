@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'tela_configuracoes.dart';
 import 'tela_detalhes_cliente_vendedor.dart';
@@ -14,6 +15,13 @@ import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 import 'tela_agenda.dart';
 import 'tela_sincronizacao.dart';
+
+double normalizeCommissionPercentage(dynamic rate, dynamic percentage) {
+  final raw = rate is num
+      ? rate.toDouble()
+      : (percentage is num ? percentage.toDouble() : 0.0);
+  return raw <= 1.0 ? raw * 100 : raw;
+}
 
 class SellerDashboard extends StatefulWidget {
   const SellerDashboard({super.key});
@@ -239,9 +247,10 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   List<Map<String, dynamic>> get _filteredClients {
-    if (_searchQuery.isEmpty) return _sellerClients;
+    final activeClients = _sellerClients.where((c) => c['cityClosedAt'] == null).toList();
+    if (_searchQuery.isEmpty) return activeClients;
     final q = _searchQuery.toLowerCase();
-    return _sellerClients.where((c) {
+    return activeClients.where((c) {
       return (c['name'] as String).toLowerCase().contains(q) ||
           (c['sequenceNumber'] as String).toLowerCase().contains(q) ||
           ((c['city'] as String?) ?? '').toLowerCase().contains(q);
@@ -319,25 +328,11 @@ class _SellerDashboardState extends State<SellerDashboard>
       return;
     }
 
-    final cities = _sellerClients
-        .map((c) => (c['city'] as String?)?.trim())
-        .where((c) => c != null && c.isNotEmpty)
-        .cast<String>()
-        .toSet()
-        .toList();
-
-    if (cities.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nenhuma cidade encontrada nas suas fichas.')),
-      );
-      return;
-    }
-
-    String selectedCity = cities.first;
-    bool isLoadingPreview = true;
+    bool isLoadingPreviews = true;
     bool isSubmitting = false;
-    Map<String, dynamic>? previewData;
-    String? previewError;
+    List<Map<String, dynamic>> previews = [];
+    String? loadError;
+    final Set<String> selectedCities = {};
 
     await showDialog(
       context: context,
@@ -345,43 +340,39 @@ class _SellerDashboardState extends State<SellerDashboard>
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            void loadPreview(String city) async {
+            void loadPreviews() async {
               setDialogState(() {
-                isLoadingPreview = true;
-                previewError = null;
+                isLoadingPreviews = true;
+                loadError = null;
               });
               try {
-                final preview = await ApiService().getCityClosingPreview(city);
+                final list = await ApiService().getCitiesClosingPreview();
                 if (context.mounted) {
                   setDialogState(() {
-                    previewData = preview;
-                    isLoadingPreview = false;
+                    previews = list;
+                    isLoadingPreviews = false;
+                    for (final p in list) {
+                      final canClose = p['canClose'] == true;
+                      final isClosed = p['isAlreadyClosed'] == true;
+                      if (canClose && !isClosed) {
+                        selectedCities.add(p['city'].toString());
+                      }
+                    }
                   });
                 }
               } catch (e) {
                 if (context.mounted) {
                   setDialogState(() {
-                    previewError = e.toString().replaceAll('Exception: ', '');
-                    isLoadingPreview = false;
+                    loadError = e.toString().replaceAll('Exception: ', '');
+                    isLoadingPreviews = false;
                   });
                 }
               }
             }
 
-            if (isLoadingPreview && previewData == null && previewError == null) {
-              loadPreview(selectedCity);
+            if (isLoadingPreviews && previews.isEmpty && loadError == null) {
+              loadPreviews();
             }
-
-            final pendingCount = previewData?['pendingCount'] ?? 0;
-            final nonSaleCount = previewData?['nonSaleCount'] ?? 0;
-            final soldCount = previewData?['soldCount'] ?? 0;
-            final totalCount = previewData?['totalCount'] ?? 0;
-            final totalSalesVal = (previewData?['totalSalesValue'] is num)
-                ? (previewData!['totalSalesValue'] as num).toDouble()
-                : (double.tryParse(previewData?['totalSalesValue']?.toString() ?? '0') ?? 0.0);
-            final pendingReceipts = previewData?['pendingReceiptsCount'] ?? 0;
-            final isAlreadyClosed = previewData?['isAlreadyClosed'] == true;
-            final hasUnresolved = (pendingCount + nonSaleCount) > 0;
 
             return AlertDialog(
               backgroundColor: const Color(0xFF1A2535),
@@ -392,121 +383,185 @@ class _SellerDashboardState extends State<SellerDashboard>
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Fechamento de Cidade',
+                      'Fechamento de Cidades',
                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                     ),
                   ),
                 ],
               ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Selecione a cidade:', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(height: 6),
-                    DropdownButtonFormField<String>(
-                      value: selectedCity,
-                      dropdownColor: const Color(0xFF1A2535),
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withOpacity(0.05),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                      ),
-                      items: cities.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                      onChanged: isSubmitting ? null : (val) {
-                        if (val != null && val != selectedCity) {
-                          selectedCity = val;
-                          loadPreview(val);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    if (isLoadingPreview) ...[
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(16),
-                          child: CircularProgressIndicator(color: Color(0xFF4FC3F7)),
-                        ),
-                      ),
-                    ] else if (previewError != null) ...[
-                      Text('Erro ao carregar prévia: $previewError', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                    ] else ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white12),
-                        ),
-                        child: Column(
-                          children: [
-                            _buildStatRow('Total de Fichas:', '$totalCount'),
-                            const SizedBox(height: 6),
-                            _buildStatRow('Fichas Pendentes:', '$pendingCount', color: pendingCount > 0 ? const Color(0xFF40C4FF) : Colors.white70),
-                            const SizedBox(height: 6),
-                            _buildStatRow('Revisitas / Não-Venda:', '$nonSaleCount', color: nonSaleCount > 0 ? const Color(0xFFFFB74D) : Colors.white70),
-                            const SizedBox(height: 6),
-                            _buildStatRow('Fichas Vendidas:', '$soldCount', color: const Color(0xFF00E676)),
-                            const Divider(color: Colors.white12, height: 16),
-                            _buildStatRow('Total Vendido (R\$):', 'R\$ ${totalSalesVal.toStringAsFixed(2)}', isBold: true, color: const Color(0xFF00E676)),
-                            if (pendingReceipts > 0) ...[
-                              const SizedBox(height: 6),
-                              _buildStatRow('Comprovantes Pendentes:', '$pendingReceipts', color: Colors.orangeAccent),
-                            ],
-                          ],
-                        ),
-                      ),
-                      if (isAlreadyClosed) ...[
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isLoadingPreviews) ...[
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: CircularProgressIndicator(color: Color(0xFF4FC3F7)),
                           ),
-                          child: const Row(
-                            children: [
-                              Icon(Icons.info_outline, color: Colors.amberAccent, size: 16),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text('Esta cidade já foi encerrada anteriormente.',
-                                    style: TextStyle(color: Colors.amberAccent, fontSize: 11)),
+                        ),
+                      ] else if (loadError != null) ...[
+                        Text('Erro ao carregar cidades: $loadError',
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                        const SizedBox(height: 8),
+                        TextButton(onPressed: loadPreviews, child: const Text('Tentar novamente')),
+                      ] else if (previews.isEmpty) ...[
+                        const Text('Nenhuma cidade encontrada para fechamento.',
+                            style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      ] else ...[
+                        const Text(
+                          'Selecione as cidades que deseja encerrar:',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(height: 12),
+                        ...previews.map((preview) {
+                          final cityName = preview['city']?.toString() ?? 'Cidade';
+                          final canClose = preview['canClose'] == true;
+                          final isAlreadyClosed = preview['isAlreadyClosed'] == true;
+                          final pendingReceipts = preview['pendingReceiptsCount'] ?? 0;
+                          final pendingCount = preview['pendingCount'] ?? 0;
+                          final nonSaleCount = preview['nonSaleCount'] ?? 0;
+                          final soldCount = preview['soldCount'] ?? 0;
+                          final totalCount = preview['totalCount'] ?? (preview['totalClients'] ?? 0);
+                          final totalSalesVal = (preview['totalSalesValue'] is num)
+                              ? (preview['totalSalesValue'] as num).toDouble()
+                              : (double.tryParse(preview['totalSalesValue']?.toString() ?? '0') ?? 0.0);
+                          final isChecked = selectedCities.contains(cityName);
+                          final pendingClientsList = (preview['pendingClients'] as List?) ?? [];
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isAlreadyClosed
+                                  ? Colors.white.withOpacity(0.02)
+                                  : (canClose
+                                      ? (isChecked
+                                          ? const Color(0xFF4FC3F7).withOpacity(0.08)
+                                          : Colors.white.withOpacity(0.04))
+                                      : Colors.redAccent.withOpacity(0.06)),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isAlreadyClosed
+                                    ? Colors.white10
+                                    : (canClose
+                                        ? (isChecked ? const Color(0xFF4FC3F7) : Colors.white12)
+                                        : Colors.redAccent.withOpacity(0.4)),
                               ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      if (!isAlreadyClosed && hasUnresolved) ...[
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 18),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Atenção: Existem ${pendingCount + nonSaleCount} fichas sem venda nesta cidade. '
-                                  'Ao confirmar o fechamento, elas serão encerradas definitivamente e não poderão mais ser alteradas.',
-                                  style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.w500),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Checkbox(
+                                      value: isChecked,
+                                      activeColor: const Color(0xFF4FC3F7),
+                                      checkColor: Colors.black,
+                                      onChanged: (!canClose || isAlreadyClosed || isSubmitting)
+                                          ? null
+                                          : (val) {
+                                              setDialogState(() {
+                                                if (val == true) {
+                                                  selectedCities.add(cityName);
+                                                } else {
+                                                  selectedCities.remove(cityName);
+                                                }
+                                              });
+                                            },
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        cityName,
+                                        style: TextStyle(
+                                          color: isAlreadyClosed
+                                              ? Colors.white38
+                                              : (canClose ? Colors.white : Colors.redAccent),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                    if (isAlreadyClosed)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amber.withOpacity(0.2),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: const Text('Já Fechada',
+                                            style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                      ),
+                                  ],
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Total: $totalCount', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                    Text('Vendidas: $soldCount', style: const TextStyle(color: Color(0xFF00E676), fontSize: 11, fontWeight: FontWeight.bold)),
+                                    Text('Não Venda: $nonSaleCount', style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 11)),
+                                    Text('Pendentes: $pendingCount', style: const TextStyle(color: Color(0xFF40C4FF), fontSize: 11)),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text('Total Vendido: R\$ ${totalSalesVal.toStringAsFixed(2)}',
+                                        style: const TextStyle(color: Color(0xFF00E676), fontSize: 12, fontWeight: FontWeight.bold)),
+                                    if (pendingReceipts > 0)
+                                      Text('Comprovantes: $pendingReceipts pend.',
+                                          style: const TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                                if (!canClose && !isAlreadyClosed) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.redAccent.withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.error_outline, color: Colors.redAccent, size: 14),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            preview['blockReason']?.toString() ?? 'Existem vendas pendentes de comprovante.',
+                                            style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (pendingClientsList.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: () {
+                                          _mostrarDialogPendenciasCidade(dialogContext, cityName, pendingClientsList);
+                                        },
+                                        icon: const Icon(Icons.receipt_long, size: 14, color: Color(0xFF4FC3F7)),
+                                        label: Text('Ver pendências (${pendingClientsList.length})',
+                                            style: const TextStyle(color: Color(0xFF4FC3F7), fontSize: 11, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ],
+                            ),
+                          );
+                        }),
                       ],
                     ],
-                  ],
+                  ),
                 ),
               ),
               actions: [
@@ -515,19 +570,19 @@ class _SellerDashboardState extends State<SellerDashboard>
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
                 LedButton(
-                  onPressed: (isSubmitting || isLoadingPreview || isAlreadyClosed)
+                  onPressed: (isSubmitting || isLoadingPreviews || selectedCities.isEmpty)
                       ? null
                       : () async {
                           setDialogState(() => isSubmitting = true);
                           try {
-                            await ApiService().closeCity(selectedCity);
+                            await ApiService().closeMultipleCities(selectedCities.toList());
                             if (dialogContext.mounted) {
                               Navigator.pop(dialogContext);
                             }
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                  content: Text('Cidade $selectedCity encerrada com sucesso!'),
+                                  content: Text('${selectedCities.length} cidade(s) encerrada(s) com sucesso!'),
                                   backgroundColor: Colors.green,
                                 ),
                               );
@@ -548,13 +603,80 @@ class _SellerDashboardState extends State<SellerDashboard>
                   style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
                   child: isSubmitting
                       ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                      : const Text('Confirmar Fechamento'),
+                      : Text('Fechar Selecionadas (${selectedCities.length})',
+                          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ],
             );
           },
         );
       },
+    );
+  }
+
+  void _mostrarDialogPendenciasCidade(BuildContext parentDialogCtx, String cityName, List<dynamic> pendingClients) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2535),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.receipt_long, color: Colors.amberAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Pendências em $cityName',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: pendingClients.length,
+            itemBuilder: (context, index) {
+              final c = pendingClients[index] as Map<String, dynamic>;
+              return Card(
+                color: Colors.white.withOpacity(0.05),
+                margin: const EdgeInsets.only(bottom: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                child: ListTile(
+                  title: Text(c['name']?.toString() ?? 'Cliente',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                  subtitle: Text('Ficha ${c['sequenceNumber'] ?? ''} • ${c['neighborhood'] ?? ''}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  trailing: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4FC3F7),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      Navigator.pop(parentDialogCtx);
+                      final fullClient = _sellerClients.firstWhere(
+                        (sc) => sc['id'] == c['id'],
+                        orElse: () => c,
+                      );
+                      _openClientDetail(fullClient);
+                    },
+                    child: const Text('Anexar', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1384,7 +1506,271 @@ class _SellerDashboardState extends State<SellerDashboard>
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
+        const SizedBox(height: 8),
+        _buildFechamentoDoDiaCard(),
       ],
+    );
+  }
+
+  Widget _buildFechamentoDoDiaCard() {
+    return FutureBuilder<String?>(
+      future: UIHelpers.getUserId(),
+      builder: (context, userSnap) {
+        final sellerId = userSnap.data;
+        if (sellerId == null || sellerId.isEmpty) return const SizedBox.shrink();
+
+        return FutureBuilder<Map<String, dynamic>>(
+          future: ApiService().getSellerClosing(sellerId),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Container(
+                margin: const EdgeInsets.only(top: 16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: CircularProgressIndicator(color: Color(0xFF4FC3F7), strokeWidth: 2),
+                  ),
+                ),
+              );
+            }
+            if (snapshot.hasError || !snapshot.hasData) {
+              return const SizedBox.shrink();
+            }
+
+            final data = snapshot.data!;
+            final totalSalesVal = (data['totalSalesValue'] is num)
+                ? (data['totalSalesValue'] as num).toDouble()
+                : (double.tryParse(data['totalSalesValue']?.toString() ?? '0') ?? 0.0);
+            final salesCount = data['salesCount'] ?? 0;
+            final nonSalesCount = data['nonSalesCount'] ?? 0;
+            final cashVal = (data['cashValue'] is num)
+                ? (data['cashValue'] as num).toDouble()
+                : (double.tryParse(data['cashValue']?.toString() ?? '0') ?? 0.0);
+            final pixVal = (data['pixValue'] is num)
+                ? (data['pixValue'] as num).toDouble()
+                : (double.tryParse(data['pixValue']?.toString() ?? '0') ?? 0.0);
+            final creditVal = (data['creditValue'] is num)
+                ? (data['creditValue'] as num).toDouble()
+                : (double.tryParse(data['creditValue']?.toString() ?? '0') ?? 0.0);
+            final debitVal = (data['debitValue'] is num)
+                ? (data['debitValue'] as num).toDouble()
+                : (double.tryParse(data['debitValue']?.toString() ?? '0') ?? 0.0);
+
+            final comissao = (data['commissionAmount'] ??
+                    data['commission'] ??
+                    data['calculatedCommission'] ??
+                    0)
+                .toDouble();
+            final percentual = normalizeCommissionPercentage(
+                data['commissionRate'], data['commissionPercentage']);
+
+            final direction = data['finalDirection']?.toString() ??
+                (cashVal > comissao
+                    ? 'SELLER_PAYS_COMPANY'
+                    : (comissao > cashVal ? 'COMPANY_PAYS_SELLER' : 'SETTLED'));
+            final double repasseLiquido = (data['finalAmount'] != null)
+                ? (data['finalAmount'] as num).toDouble()
+                : (cashVal - comissao).abs();
+            final adminPixKey = data['adminPixKey']?.toString().trim();
+
+            return Container(
+              margin: const EdgeInsets.only(top: 16, bottom: 24),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.35)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.analytics_rounded, color: Color(0xFF4FC3F7), size: 20),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Fechamento do Dia',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4FC3F7).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.3)),
+                        ),
+                        child: const Text(
+                          'Somente Visualização',
+                          style: TextStyle(
+                            color: Color(0xFF4FC3F7),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Consolidação automática diária às 22:59 • Dados imutáveis',
+                    style: TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  const Divider(color: Colors.white12, height: 20),
+
+                  // Resumo Numérico
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Fichas Atendidas', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              const SizedBox(height: 4),
+                              Text('$salesCount vendidas • $nonSalesCount não vendas',
+                                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Total Vendido', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              const SizedBox(height: 4),
+                              Text('R\$ ${totalSalesVal.toStringAsFixed(2)}',
+                                  style: const TextStyle(color: Color(0xFF00E676), fontSize: 13, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Desdobramento por Método
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.02),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: Column(
+                      children: [
+                        _buildStatRow('Dinheiro em mãos:', 'R\$ ${cashVal.toStringAsFixed(2)}'),
+                        const SizedBox(height: 4),
+                        _buildStatRow('Pix recebido:', 'R\$ ${pixVal.toStringAsFixed(2)}'),
+                        const SizedBox(height: 4),
+                        _buildStatRow('Cartão (Crédito/Débito):', 'R\$ ${(creditVal + debitVal).toStringAsFixed(2)}'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Demonstrativo de Repasse e Comissão
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildStatRow(
+                          'Sua Comissão (${percentual.toInt()}%):',
+                          'R\$ ${comissao.toStringAsFixed(2)}',
+                          color: const Color(0xFFFFB74D),
+                          isBold: true,
+                        ),
+                        const Divider(color: Colors.white12, height: 16),
+                        if (direction == 'SELLER_PAYS_COMPANY' && repasseLiquido > 0) ...[
+                          _buildStatRow(
+                            'Repasse a Fazer à Empresa:',
+                            'R\$ ${repasseLiquido.toStringAsFixed(2)}',
+                            color: Colors.redAccent,
+                            isBold: true,
+                          ),
+                          if (adminPixKey != null && adminPixKey.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text('Chave Pix Empresa: $adminPixKey',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                                      overflow: TextOverflow.ellipsis),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy, size: 14, color: Color(0xFF4FC3F7)),
+                                  tooltip: 'Copiar Pix',
+                                  onPressed: () {
+                                    Clipboard.setData(ClipboardData(text: adminPixKey));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Chave Pix copiada!')),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
+                        ] else if (direction == 'COMPANY_PAYS_SELLER' && repasseLiquido > 0) ...[
+                          _buildStatRow(
+                            'Saldo a Receber da Empresa:',
+                            'R\$ ${repasseLiquido.toStringAsFixed(2)}',
+                            color: const Color(0xFF00E676),
+                            isBold: true,
+                          ),
+                        ] else ...[
+                          _buildStatRow(
+                            'Saldo do Dia:',
+                            'Tudo Quitado (R\$ 0,00)',
+                            color: const Color(0xFF40C4FF),
+                            isBold: true,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
