@@ -383,7 +383,7 @@ describe('Distribuição de Fichas (PATCH /batch-assign) e Confirmação de Grá
       const updated2 = await prisma.client.findUnique({ where: { id: client2.id } });
       assert.equal(updated1?.bookStatus, 'DISTRIBUTED');
       assert.equal(updated1?.assignedSellerId, activeSellerA_Id);
-      assert.equal(updated2?.bookStatus, 'DISTRIBUTED');
+      assert.equal(updated2?.bookStatus, 'DISTRIBUTED_REBOLO');
       assert.equal(updated2?.assignedSellerId, activeSellerA_Id);
     });
   });

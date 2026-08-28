@@ -106,7 +106,8 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
         }
 
         const client = await prisma.client.findUnique({
-            where: { sequenceNumber }
+            where: { sequenceNumber },
+            include: { nonSales: true }
         });
 
         if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN')) {
@@ -114,9 +115,12 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
         }
         if (client.bookStatus !== 'AWAITING_RETURN') return res.status(400).json({ error: 'Book is not awaiting return' });
 
+        const nonSalesCount = client.nonSales ? client.nonSales.length : 0;
+        const nextBookStatus = nonSalesCount >= 2 ? 'DISCARDED' : 'IN_STOCK_REBOLO';
+
         const updated = await prisma.client.update({
             where: { id: client.id },
-            data: { bookStatus: 'IN_STOCK_REBOLO', assignedSellerId: null }
+            data: { bookStatus: nextBookStatus, assignedSellerId: null }
         });
 
         res.json(updated);

@@ -334,9 +334,18 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
       return;
     }
 
+    let updateData: any = { assignedSellerId: sellerId };
+    if (existingClient.bookStatus === 'IN_STOCK_REBOLO') {
+      updateData.bookStatus = 'DISTRIBUTED_REBOLO';
+      updateData.outcomeStatus = 'PENDING';
+      updateData.cityClosedAt = null;
+    } else if (existingClient.bookStatus === 'IN_STOCK') {
+      updateData.bookStatus = 'DISTRIBUTED';
+    }
+
     const client = await prisma.client.update({
       where: { id: existingClient.id },
-      data: { assignedSellerId: sellerId },
+      data: updateData,
     });
     res.json({ success: true, client });
   } catch (error) {
@@ -465,27 +474,50 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
         };
       }
 
-      // Conditional atomic update
-      const updateResult = await tx.client.updateMany({
-        where: {
-          id: { in: uniqueClientIds },
-          companyId: userCompanyId,
-          bookStatus: { in: ['IN_STOCK', 'IN_STOCK_REBOLO'] }
-        },
-        data: {
-          assignedSellerId,
-          bookStatus: 'DISTRIBUTED'
-        }
-      });
+      const reboloIds = clientsInStock.filter(c => c.bookStatus === 'IN_STOCK_REBOLO').map(c => c.id);
+      const stockIds = clientsInStock.filter(c => c.bookStatus === 'IN_STOCK').map(c => c.id);
 
-      if (updateResult.count !== uniqueClientIds.length) {
+      let totalUpdated = 0;
+      if (reboloIds.length > 0) {
+        const reboloUpdate = await tx.client.updateMany({
+          where: {
+            id: { in: reboloIds },
+            companyId: userCompanyId,
+            bookStatus: 'IN_STOCK_REBOLO',
+          },
+          data: {
+            assignedSellerId,
+            bookStatus: 'DISTRIBUTED_REBOLO',
+            outcomeStatus: 'PENDING',
+            cityClosedAt: null,
+          }
+        });
+        totalUpdated += reboloUpdate.count;
+      }
+
+      if (stockIds.length > 0) {
+        const stockUpdate = await tx.client.updateMany({
+          where: {
+            id: { in: stockIds },
+            companyId: userCompanyId,
+            bookStatus: 'IN_STOCK',
+          },
+          data: {
+            assignedSellerId,
+            bookStatus: 'DISTRIBUTED',
+          }
+        });
+        totalUpdated += stockUpdate.count;
+      }
+
+      if (totalUpdated !== uniqueClientIds.length) {
         throw {
           status: 409,
           error: 'Conflito de concorrência: algumas fichas foram alteradas por outra operação durante a distribuição.'
         };
       }
 
-      return updateResult.count;
+      return totalUpdated;
     });
 
     res.json({ success: true, requested: uniqueClientIds.length, count: updatedCount });

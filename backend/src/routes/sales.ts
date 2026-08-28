@@ -198,12 +198,17 @@ async function finalizeSaleWithReceipt(params: {
         });
       }
 
+      const nextBookStatus =
+        client.bookStatus === 'DISTRIBUTED_REBOLO' || client.bookStatus === 'IN_STOCK_REBOLO'
+          ? 'REBOLO_SOLD'
+          : 'SOLD';
+
       await tx.client.update({
         where: { id: input.clientId },
         data: {
           outcomeStatus: 'SOLD',
           outcomeUpdatedAt: updatedSale.date,
-          bookStatus: 'SOLD',
+          bookStatus: nextBookStatus,
         },
       });
 
@@ -241,12 +246,17 @@ async function finalizeSaleWithReceipt(params: {
       });
     }
 
+    const nextBookStatus =
+      client.bookStatus === 'DISTRIBUTED_REBOLO' || client.bookStatus === 'IN_STOCK_REBOLO'
+        ? 'REBOLO_SOLD'
+        : 'SOLD';
+
     await tx.client.update({
       where: { id: input.clientId },
       data: {
         outcomeStatus: 'SOLD',
         outcomeUpdatedAt: sale.date,
-        bookStatus: 'SOLD',
+        bookStatus: nextBookStatus,
       },
     });
 
@@ -521,6 +531,12 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
     const receiptUrl = getUploadedFileUrl(req.file);
     const sale = (req as any).validatedSale;
     const updatedSale = await prisma.$transaction(async (tx) => {
+      const client = await tx.client.findUnique({ where: { id: sale.clientId } });
+      const nextBookStatus =
+        client?.bookStatus === 'DISTRIBUTED_REBOLO' || client?.bookStatus === 'IN_STOCK_REBOLO'
+          ? 'REBOLO_SOLD'
+          : 'SOLD';
+
       const updated = await tx.sale.update({
         where: { id },
         data: { receiptUrl, status: 'PRONTO', paymentStatus: 'PAID' },
@@ -530,7 +546,7 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
         data: {
           outcomeStatus: 'SOLD',
           outcomeUpdatedAt: updated.date,
-          bookStatus: 'SOLD',
+          bookStatus: nextBookStatus,
         },
       });
       return updated;
@@ -590,7 +606,23 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         throw { status: 409, message: 'Não é possível registrar não-venda para ficha já vendida' };
       }
 
-      // 4. Superar não-vendas anteriores ativas para esta ficha (evitar duplicidade ativa)
+      // 4. Idempotência: se já é não-venda aguardando devolução neste ciclo para o mesmo vendedor
+      if (client.outcomeStatus === 'NON_SALE' && client.bookStatus === 'AWAITING_RETURN') {
+        const activeNonSale = await tx.nonSale.findFirst({
+          where: {
+            clientId,
+            companyId,
+            supersededAt: null,
+          },
+          orderBy: { date: 'desc' },
+        });
+
+        if (activeNonSale && activeNonSale.sellerId === sellerId) {
+          return { nonSale: activeNonSale, client, created: false };
+        }
+      }
+
+      // 5. Superar não-vendas anteriores ativas para esta ficha (evitar duplicidade ativa entre ciclos)
       await tx.nonSale.updateMany({
         where: {
           clientId,
@@ -602,7 +634,7 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
-      // 5. Criar a nova Não-Venda
+      // 6. Criar a nova Não-Venda
       const nonSale = await tx.nonSale.create({
         data: {
           clientId,
@@ -613,7 +645,7 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
-      // 6. Atualizar Client
+      // 7. Atualizar Client
       const updatedClient = await tx.client.update({
         where: { id: clientId },
         data: {
@@ -623,10 +655,10 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
-      return { nonSale, client: updatedClient };
+      return { nonSale, client: updatedClient, created: true };
     });
 
-    res.status(201).json(result.nonSale);
+    res.status(result.created ? 201 : 200).json(result.nonSale);
   } catch (error: any) {
     if (error && error.status && error.message) {
       return res.status(error.status).json({ error: error.message });
