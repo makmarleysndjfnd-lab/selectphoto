@@ -239,11 +239,38 @@ router.put('/confirm-grafica', authenticateToken, requireAdminOrSupervisor, asyn
       }
     }
 
-    const updated = await prisma.client.updateMany({
-      where: whereClause,
-      data: {
-        bookStatus: 'IN_STOCK'
+    const updated = await prisma.$transaction(async (tx) => {
+      const clientsToUpdate = await tx.client.findMany({
+        where: whereClause,
+        select: { id: true, batchId: true }
+      });
+
+      if (clientsToUpdate.length === 0) {
+        return { count: 0 };
       }
+
+      const clientIdsToUpdate = clientsToUpdate.map(c => c.id);
+      const updateResult = await tx.client.updateMany({
+        where: { id: { in: clientIdsToUpdate } },
+        data: {
+          bookStatus: 'IN_STOCK'
+        }
+      });
+
+      const batchIds = Array.from(new Set(clientsToUpdate.map(c => c.batchId).filter(Boolean))) as string[];
+      for (const batchId of batchIds) {
+        const remainingUnreleased = await tx.client.count({
+          where: { batchId, bookStatus: { in: ['AWAITING_RELEASE', 'CREATED'] } }
+        });
+        if (remainingUnreleased === 0) {
+          await tx.bookBatch.updateMany({
+            where: { id: batchId },
+            data: { status: 'IN_STOCK' }
+          });
+        }
+      }
+
+      return { count: updateResult.count };
     });
 
     res.json({ message: `${updated.count} fichas movidas para estoque!`, count: updated.count });
@@ -276,19 +303,30 @@ router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
-// Get rebolos (clients with nonSales but no sales)
+// Get rebolos (clients with rebolo status or non-sales history)
 router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
+    const reboloStatuses = [
+      'AWAITING_RETURN',
+      'IN_STOCK_REBOLO',
+      'DISTRIBUTED_REBOLO',
+      'REBOLO_SOLD',
+      'DISCARDED'
+    ];
+
     const clients = await prisma.client.findMany({
       where: { 
         companyId: userCompanyId,
-        nonSales: { some: {} },
-        sales: { none: {} }
+        OR: [
+          { bookStatus: { in: reboloStatuses } },
+          { nonSales: { some: {} } }
+        ]
       },
-      include: { children: true, appointments: true, nonSales: true, photographer: true, assignedSeller: true }
+      include: { children: true, appointments: true, nonSales: true, photographer: true, assignedSeller: true },
+      orderBy: { createdAt: 'desc' }
     });
     res.json(clients);
   } catch (error) {

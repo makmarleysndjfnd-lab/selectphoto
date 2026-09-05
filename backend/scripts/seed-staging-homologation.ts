@@ -83,7 +83,41 @@ async function seedStagingHomologation() {
     });
     console.log(`✅ Administrador: ${admin.name} | CPF: ${admin.cpf} | Senha: Homologa123!`);
 
-    // 4. Inicializar Saldo de Capas e Clientes de Teste
+    // 4. Upsert Fotógrafo Fictício
+    const photographerCpf = '55544433322';
+    const photographer = await prisma.user.upsert({
+      where: { cpf: photographerCpf },
+      update: {
+        name: 'Fotógrafo Homologação',
+        email: 'fotografo.homolog@selectphoto.local',
+        password: passwordHash,
+        role: 'PHOTOGRAPHER',
+        active: true,
+        companyId: company.id,
+      },
+      create: {
+        name: 'Fotógrafo Homologação',
+        email: 'fotografo.homolog@selectphoto.local',
+        cpf: photographerCpf,
+        password: passwordHash,
+        role: 'PHOTOGRAPHER',
+        active: true,
+        companyId: company.id,
+      },
+    });
+    console.log(`✅ Fotógrafo: ${photographer.name} | CPF: ${photographer.cpf} | Senha: Homologa123!`);
+
+    // 5. Inicializar Saldo de Capas e Clientes de Teste
+    await prisma.coverStockBatch.upsert({
+      where: { id: 'batch_central_homolog_01' },
+      update: { quantity: 100 },
+      create: {
+        id: 'batch_central_homolog_01',
+        quantity: 100,
+        companyId: company.id,
+      },
+    });
+
     await prisma.sellerCoverBalance.upsert({
       where: { sellerId: seller.id },
       update: { balance: 25 },

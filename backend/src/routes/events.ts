@@ -660,4 +660,30 @@ router.put('/:id/prospect', authenticateToken, async (req: AuthRequest, res: Res
   }
 });
 
+// PATCH /api/events/:id/approve-roi
+// Tratar chamada de aprovação de ROI com regra financeira pendente sem lançamentos fictícios
+router.patch('/:id/approve-roi', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const companyId = req.user?.companyId;
+
+    const existing = await prisma.commercialEvent.findFirst({
+      where: { id: id as string, ...(companyId ? { companyId } : {}) }
+    });
+
+    if (!existing) {
+      res.status(404).json({ error: 'Evento não encontrado' });
+      return;
+    }
+
+    // Regra financeira pendente: informar pendência contábil sem simular lançamentos no caixa
+    res.status(501).json({
+      error: 'Regra financeira pendente de especificação contábil. A integração automática no fluxo de caixa está suspensa.',
+      code: 'FINANCIAL_RULE_PENDING'
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Erro ao processar aprovação de ROI' });
+  }
+});
+
 export default router;
