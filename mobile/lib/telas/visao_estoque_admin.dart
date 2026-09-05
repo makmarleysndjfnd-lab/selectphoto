@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_choice_chip.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -43,19 +46,63 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
     }
   }
 
+  Future<String> _resolveMovementId({
+    required String sellerId,
+    required int quantity,
+    required String operation,
+    required String origin,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('pending_cover_movement');
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = json.decode(raw);
+        if (decoded is Map &&
+            decoded['sellerId'] == sellerId &&
+            decoded['quantity'] == quantity &&
+            decoded['operation'] == operation &&
+            decoded['origin'] == origin &&
+            decoded['id'] is String &&
+            (decoded['id'] as String).isNotEmpty) {
+          return decoded['id'] as String;
+        }
+      } catch (_) {}
+    }
+
+    final newId = 'cov_${DateTime.now().millisecondsSinceEpoch}_${SyncService.generateUuid().substring(0, 8)}';
+    final payload = {
+      'id': newId,
+      'sellerId': sellerId,
+      'quantity': quantity,
+      'operation': operation,
+      'origin': origin,
+    };
+    await prefs.setString('pending_cover_movement', json.encode(payload));
+    return newId;
+  }
+
+  Future<void> _clearPendingMovement() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('pending_cover_movement');
+  }
+
   Future<void> _showTransferDialog(Map<String, dynamic>? seller) async {
     final TextEditingController quantityController = TextEditingController();
     int transferType = 0; // 0 = Admin -> Vend, 1 = Vend -> Admin, 2 = Defeituosa
+    final sellerInfo = seller != null && seller['seller'] is Map ? seller['seller'] as Map : null;
+    String? dialogSellerId = sellerInfo != null ? sellerInfo['id']?.toString() : null;
+    bool isSubmitting = false;
 
     await showDialog(
       context: context,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final sellerName = sellerInfo != null ? (sellerInfo['name'] ?? 'Vendedor') : 'Vendedor';
             return AlertDialog(
               backgroundColor: const Color(0xFF1E1E2C),
               title: Text(
-                seller != null ? 'Gerenciar Capas: ${seller['seller']?['name'] ?? 'Vendedor'}' : 'Nova Transferência',
+                seller != null ? 'Gerenciar Capas: $sellerName' : 'Nova Transferência',
                 style: const TextStyle(color: Colors.white),
               ),
               content: Column(
@@ -73,11 +120,13 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                       ),
                       items: _sellers.map((s) {
                         return DropdownMenuItem<String>(
-                          value: s['seller']?['id'],
+                          value: s['seller']?['id']?.toString(),
                           child: Text(s['seller']?['name'] ?? 'Sem Nome'),
                         );
                       }).toList(),
-                      onChanged: (val) {},
+                      onChanged: (val) {
+                        setDialogState(() => dialogSellerId = val);
+                      },
                     ),
                   const SizedBox(height: 16),
                   Wrap(
@@ -128,37 +177,102 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: isSubmitting ? null : () => Navigator.pop(context),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                 ),
-                LedButton(
-                  text: 'Confirmar',
-                  isSuccess: true,
-                  onPressed: () async {
-                    final qty = int.tryParse(quantityController.text) ?? 0;
-                    if (qty <= 0) return;
-                    
-                    try {
-                      if (transferType == 2) {
-                        await ApiService().returnDefectiveCovers(seller!['seller']['id'], qty);
-                      } else {
-                        final finalQty = transferType == 0 ? qty : -qty;
-                        await ApiService().transferCovers(seller!['seller']['id'], finalQty);
-                      }
-                      if (mounted) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sucesso!'), backgroundColor: Colors.green));
-                        setState(() => _isLoading = true);
-                        _loadCapas();
-                      }
-                    } catch (e) {
-                      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                    }
-                  },
-                ),
+                isSubmitting
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16.0),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFCE93D8)),
+                        ),
+                      )
+                    : LedButton(
+                        text: 'Confirmar',
+                        isSuccess: true,
+                        onPressed: () async {
+                          final targetId = sellerInfo != null ? sellerInfo['id']?.toString() : dialogSellerId;
+                          if (targetId == null) {
+                            ScaffoldMessenger.of(context).clearSnackBars();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Selecione um vendedor'), backgroundColor: Colors.orange),
+                            );
+                            return;
+                          }
+
+                          final qty = int.tryParse(quantityController.text) ?? 0;
+                          if (qty <= 0) {
+                            ScaffoldMessenger.of(context).clearSnackBars();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Informe uma quantidade válida maior que zero'), backgroundColor: Colors.orange),
+                            );
+                            return;
+                          }
+
+                          final opString = transferType == 2 ? 'DEFECTIVE' : (transferType == 1 ? 'RETURN' : 'SEND');
+                          final originString = transferType == 2 ? 'SELLER' : 'ADMIN';
+
+                          setDialogState(() => isSubmitting = true);
+                          final messenger = ScaffoldMessenger.of(context);
+
+                          try {
+                            final movementKey = await _resolveMovementId(
+                              sellerId: targetId,
+                              quantity: qty,
+                              operation: opString,
+                              origin: originString,
+                            );
+
+                            if (transferType == 2) {
+                              await ApiService().returnDefectiveCovers(
+                                targetId,
+                                qty,
+                                origin: 'SELLER',
+                                idempotencyKey: movementKey,
+                              );
+                            } else if (transferType == 1) {
+                              await ApiService().transferCovers(
+                                targetId,
+                                qty,
+                                operation: 'RETURN',
+                                idempotencyKey: movementKey,
+                              );
+                            } else {
+                              await ApiService().transferCovers(
+                                targetId,
+                                qty,
+                                operation: 'SEND',
+                                idempotencyKey: movementKey,
+                              );
+                            }
+
+                            await _clearPendingMovement();
+
+                            if (mounted) {
+                              Navigator.pop(context);
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('Movimentação realizada com sucesso!'), backgroundColor: Colors.green),
+                              );
+                              setState(() => _isLoading = true);
+                              _loadCapas();
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              setDialogState(() => isSubmitting = false);
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+                              );
+                            }
+                          }
+                        },
+                      ),
               ],
             );
-          }
+          },
         );
       },
     );
@@ -166,54 +280,86 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
 
   Future<void> _showAdminStockDialog(bool isAdding) async {
     final TextEditingController quantityController = TextEditingController();
+    bool isSubmitting = false;
 
     await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1E1E2C),
-          title: Text(
-            isAdding ? 'Inserir Capas no Admin' : 'Remover Capas do Admin',
-            style: const TextStyle(color: Colors.white),
-          ),
-          content: TextField(
-            controller: quantityController,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              labelText: 'Quantidade',
-              labelStyle: TextStyle(color: Colors.white54),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFCE93D8))),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            LedButton(
-              text: 'Confirmar',
-              isSuccess: true,
-              onPressed: () async {
-                final qty = int.tryParse(quantityController.text) ?? 0;
-                if (qty <= 0) return;
-                
-                try {
-                  final finalQty = isAdding ? qty : -qty;
-                  await ApiService().addAdminCoverStock(finalQty);
-                  if (mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estoque atualizado!'), backgroundColor: Colors.green));
-                    setState(() => _isLoading = true);
-                    _loadCapas();
-                  }
-                } catch (e) {
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                }
-              },
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E2C),
+              title: Text(
+                isAdding ? 'Inserir Capas no Admin' : 'Remover Capas do Admin',
+                style: const TextStyle(color: Colors.white),
+              ),
+              content: TextField(
+                controller: quantityController,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Quantidade',
+                  labelStyle: TextStyle(color: Colors.white54),
+                  enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                  focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFCE93D8))),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting ? null : () => Navigator.pop(context),
+                  child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                ),
+                isSubmitting
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16.0),
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFCE93D8)),
+                        ),
+                      )
+                    : LedButton(
+                        text: 'Confirmar',
+                        isSuccess: true,
+                        onPressed: () async {
+                          final qty = int.tryParse(quantityController.text) ?? 0;
+                          if (qty <= 0) {
+                            ScaffoldMessenger.of(context).clearSnackBars();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Informe uma quantidade válida maior que zero'), backgroundColor: Colors.orange),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() => isSubmitting = true);
+                          final messenger = ScaffoldMessenger.of(context);
+
+                          try {
+                            final finalQty = isAdding ? qty : -qty;
+                            await ApiService().addAdminCoverStock(finalQty);
+                            if (mounted) {
+                              Navigator.pop(context);
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('Estoque central atualizado!'), backgroundColor: Colors.green),
+                              );
+                              setState(() => _isLoading = true);
+                              _loadCapas();
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              setDialogState(() => isSubmitting = false);
+                              messenger.clearSnackBars();
+                              messenger.showSnackBar(
+                                SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+                              );
+                            }
+                          }
+                        },
+                      ),
+              ],
+            );
+          },
         );
       },
     );
@@ -397,7 +543,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                     gridData: FlGridData(
                       show: true,
                       drawVerticalLine: false,
-                      getDrawingHorizontalLine: (value) => FlLine(color: Colors.white12, strokeWidth: 1),
+                      getDrawingHorizontalLine: (value) => const FlLine(color: Colors.white12, strokeWidth: 1),
                     ),
                     borderData: FlBorderData(show: false),
                     barGroups: List.generate(_sellers.length, (i) {

@@ -512,7 +512,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                                           final query = Uri.encodeComponent('${evt['name'] ?? ''} ${_searchController.text} contato telefone sympla instagram');
                                           url = Uri.parse('https://www.google.com/search?q=$query');
                                         }
-                                        if (await canLaunchUrl(url!)) {
+                                        if (await canLaunchUrl(url)) {
                                           await launchUrl(url, mode: LaunchMode.externalApplication);
                                         }
                                       },

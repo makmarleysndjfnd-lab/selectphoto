@@ -774,8 +774,11 @@ class _SaleTabState extends State<_SaleTab> {
   String _product = 'Book completo capa +Book+mídias';
   String _paymentMethod = 'CASH';
   bool _hasCover = true;
+  // ignore: unused_field
   double _sellerRating = 0;
+  // ignore: unused_field
   double _photoRating = 0;
+  // ignore: unused_field
   double _contactRating = 0;
 
   File? _receiptPhoto;

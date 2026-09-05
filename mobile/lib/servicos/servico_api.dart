@@ -514,9 +514,29 @@ class ApiService {
 
   // ── Livros e Lotes (Book Batches) ───────────────────────────────────────
 
-  Future<void> createBookBatch(String eventName) async {
+  Future<Map<String, dynamic>> createBookBatch(
+    String eventName, {
+    String? city,
+    List<String>? clientIds,
+    String? batchId,
+    String? sessionId,
+  }) async {
     try {
-      await _dio.post('/books/close-event', data: {'eventName': eventName});
+      final Map<String, dynamic> data = {'eventName': eventName};
+      if (city != null && city.trim().isNotEmpty) {
+        data['city'] = city.trim();
+      }
+      if (clientIds != null && clientIds.isNotEmpty) {
+        data['clientIds'] = clientIds;
+      }
+      if (batchId != null && batchId.trim().isNotEmpty) {
+        data['batchId'] = batchId.trim();
+      }
+      if (sessionId != null && sessionId.trim().isNotEmpty) {
+        data['sessionId'] = sessionId.trim();
+      }
+      final res = await _dio.post('/books/close-event', data: data);
+      return res.data is Map ? Map<String, dynamic>.from(res.data) : {};
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
@@ -590,6 +610,16 @@ class ApiService {
     }
   }
 
+  Future<void> releaseBatchToStock(String batchId) async {
+    try {
+      await _dio.put('/books/batch/$batchId/release');
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao liberar lote para o estoque');
+    }
+  }
+
   Future<void> updateBookBatchStatus(String id, String status) async {
     try {
       await _dio.put('/books/batch/$id', data: {'status': status});
@@ -611,10 +641,23 @@ class ApiService {
     }
   }
 
-  Future<void> transferCovers(String sellerId, int quantity) async {
+  Future<void> transferCovers(
+    String sellerId,
+    int quantity, {
+    String operation = 'SEND',
+    String? idempotencyKey,
+  }) async {
     try {
-      await _dio.post('/stock/transfer',
-          data: {'sellerId': sellerId, 'quantity': quantity});
+      final Map<String, dynamic> data = {
+        'sellerId': sellerId,
+        'quantity': quantity.abs(),
+        'operation': operation,
+        'type': operation
+      };
+      if (idempotencyKey != null && idempotencyKey.trim().isNotEmpty) {
+        data['idempotencyKey'] = idempotencyKey.trim();
+      }
+      await _dio.post('/stock/transfer', data: data);
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
@@ -643,10 +686,22 @@ class ApiService {
     }
   }
 
-  Future<void> returnDefectiveCovers(String sellerId, int quantity) async {
+  Future<void> returnDefectiveCovers(
+    String sellerId,
+    int quantity, {
+    String origin = 'SELLER',
+    String? idempotencyKey,
+  }) async {
     try {
-      await _dio.post('/stock/defective',
-          data: {'sellerId': sellerId, 'quantity': quantity});
+      final Map<String, dynamic> data = {
+        'sellerId': sellerId,
+        'quantity': quantity.abs(),
+        'origin': origin,
+      };
+      if (idempotencyKey != null && idempotencyKey.trim().isNotEmpty) {
+        data['idempotencyKey'] = idempotencyKey.trim();
+      }
+      await _dio.post('/stock/defective', data: data);
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
@@ -1452,16 +1507,6 @@ class ApiService {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
               'Erro ao buscar livros');
-    }
-  }
-
-  Future<void> releaseBatchToStock(String id) async {
-    try {
-      await _dio.put('/books/batch/$id/release');
-    } on DioException catch (e) {
-      throw Exception(
-          (e.response?.data is Map ? e.response?.data['error'] : null) ??
-              'Erro ao liberar lote para estoque');
     }
   }
 

@@ -19,6 +19,38 @@ class ListaFichasFotografo extends StatefulWidget {
 class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
   bool _isLoading = true;
   List<dynamic> _fichas = [];
+  final Set<String> _sendingIds = {};
+
+  Map<String, dynamic> _getStatusDisplay(Map<String, dynamic> ficha) {
+    if (ficha['isOfflinePending'] == true) {
+      return {'label': '⚠️ Pendente de sincronização', 'color': Colors.amberAccent};
+    }
+    final status = (ficha['bookStatus'] ?? 'CREATED').toString();
+    switch (status) {
+      case 'CREATED':
+        return {'label': '📷 Produção do fotógrafo (Na Câmera)', 'color': Colors.orangeAccent};
+      case 'AWAITING_RELEASE':
+        return {'label': '⏳ Aguardando liberação (Admin)', 'color': const Color(0xFF64B5F6)};
+      case 'IN_STOCK':
+        return {'label': '📦 Em Estoque', 'color': const Color(0xFF81C784)};
+      case 'DISTRIBUTED':
+        return {'label': '🚗 Distribuída (Vendedor)', 'color': const Color(0xFF4DB6AC)};
+      case 'SOLD':
+        return {'label': '✅ Vendida', 'color': Colors.greenAccent};
+      case 'AWAITING_RETURN':
+        return {'label': '↩️ Aguardando devolução', 'color': const Color(0xFFBA68C8)};
+      case 'IN_STOCK_REBOLO':
+        return {'label': '🔄 Rebolo (Disponível)', 'color': const Color(0xFFFF8A65)};
+      case 'DISTRIBUTED_REBOLO':
+        return {'label': '🔄 Rebolo (Com vendedor)', 'color': const Color(0xFFFFB74D)};
+      case 'REBOLO_SOLD':
+        return {'label': '💰 Rebolo (Vendido)', 'color': Colors.greenAccent};
+      case 'DISCARDED':
+        return {'label': '🗑️ Descarte defeituoso', 'color': Colors.redAccent};
+      default:
+        return {'label': status, 'color': Colors.white70};
+    }
+  }
 
   @override
   void initState() {
@@ -109,6 +141,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
             tooltip: 'Imprimir Lote em PDF',
             onPressed: () async {
               if (_fichas.isEmpty) return;
+              ScaffoldMessenger.of(context).clearSnackBars();
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF do lote...')));
               final clients = _fichas.map((f) => Map<String, dynamic>.from(f as Map)).toList();
               await PdfGenerator.printBatch(clients, 'Fotografo');
@@ -155,21 +188,18 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                   style: const TextStyle(color: Colors.white54, fontSize: 12),
                                 ),
                               const SizedBox(height: 4),
-                              Text(
-                                isOffline
-                                    ? '⚠️ Offline (Pendente de Envio)'
-                                    : (ficha['bookStatus'] == 'CREATED'
-                                        ? '⚠️ Na Câmera / Pendente Liberação'
-                                        : '✅ Enviada / Em Rota'),
-                                style: TextStyle(
-                                  color: isOffline
-                                      ? Colors.amberAccent
-                                      : (ficha['bookStatus'] == 'CREATED'
-                                          ? Colors.orangeAccent
-                                          : Colors.greenAccent),
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
+                              Builder(
+                                builder: (context) {
+                                  final statusInfo = _getStatusDisplay(Map<String, dynamic>.from(ficha as Map));
+                                  return Text(
+                                    statusInfo['label'] as String,
+                                    style: TextStyle(
+                                      color: statusInfo['color'] as Color,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -181,6 +211,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 icon: const Icon(Icons.print, color: Colors.blueAccent),
                                 tooltip: 'Imprimir Ficha',
                                 onPressed: () async {
+                                  ScaffoldMessenger.of(context).clearSnackBars();
                                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Preparando PDF...')));
                                   await PdfGenerator.printFicha(Map<String, dynamic>.from(ficha as Map));
                                 },
@@ -190,31 +221,86 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                 tooltip: 'Imprimir Ticket (Bluetooth)',
                                 onPressed: () => _printUnidadeBluetooth(Map<String, dynamic>.from(ficha as Map)),
                               ),
-                              IconButton(
-                                  icon: const Icon(Icons.send_and_archive, color: Colors.greenAccent),
-                                  tooltip: 'Forçar Envio ao Admin',
-                                  onPressed: () async {
-                                    final confirm = await showDialog<bool>(
-                                      context: context,
-                                      builder: (_) => AlertDialog(
-                                        backgroundColor: const Color(0xFF1A1A2E),
-                                        title: const Text('Forçar Envio?', style: TextStyle(color: Colors.white)),
-                                        content: const Text('Isso enviará esta ficha avulsa para a tela de liberação do Admin. Deseja continuar?', style: TextStyle(color: Colors.white70)),
-                                        actions: [
-                                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-                                          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Enviar', style: TextStyle(color: Colors.greenAccent))),
-                                        ],
-                                      ),
-                                    );
-                                    if (confirm == true) {
-                                      try {
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enviando...')));
-                                        await ApiService().forceSendClient(ficha['id']);
-                                        _carregarFichas();
-                                      } catch (e) {
-                                        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
-                                      }
+                              if (!isOffline && (ficha['bookStatus'] == 'CREATED'))
+                                Builder(
+                                  builder: (context) {
+                                    final fichaId = ficha['id']?.toString();
+                                    final isSending = fichaId != null && _sendingIds.contains(fichaId);
+
+                                    if (isSending) {
+                                      return const Padding(
+                                        padding: EdgeInsets.all(12.0),
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.greenAccent),
+                                        ),
+                                      );
                                     }
+
+                                    return IconButton(
+                                      icon: const Icon(Icons.send_and_archive, color: Colors.greenAccent),
+                                      tooltip: 'Forçar Envio ao Admin',
+                                      onPressed: isSending
+                                          ? null
+                                          : () async {
+                                              final confirm = await showDialog<bool>(
+                                                context: context,
+                                                builder: (_) => AlertDialog(
+                                                  backgroundColor: const Color(0xFF1A1A2E),
+                                                  title: const Text('Forçar Envio?', style: TextStyle(color: Colors.white)),
+                                                  content: const Text(
+                                                    'Isso enviará esta ficha avulsa para a tela de liberação do Admin. Deseja continuar?',
+                                                    style: TextStyle(color: Colors.white70),
+                                                  ),
+                                                  actions: [
+                                                    TextButton(
+                                                      onPressed: () => Navigator.pop(context, false),
+                                                      child: const Text('Cancelar'),
+                                                    ),
+                                                    TextButton(
+                                                      onPressed: () => Navigator.pop(context, true),
+                                                      child: const Text('Enviar', style: TextStyle(color: Colors.greenAccent)),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                              if (confirm == true && fichaId != null) {
+                                                setState(() => _sendingIds.add(fichaId));
+                                                if (!mounted) return;
+                                                ScaffoldMessenger.of(context).clearSnackBars();
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  const SnackBar(content: Text('Enviando ficha ao Admin...'), duration: Duration(seconds: 1)),
+                                                );
+                                                try {
+                                                  await ApiService().forceSendClient(fichaId);
+                                                  if (mounted) {
+                                                    setState(() {
+                                                      ficha['bookStatus'] = 'AWAITING_RELEASE';
+                                                      _sendingIds.remove(fichaId);
+                                                    });
+                                                    ScaffoldMessenger.of(context).clearSnackBars();
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      const SnackBar(
+                                                        content: Text('Ficha enviada com sucesso! Aguardando liberação do Admin.'),
+                                                        backgroundColor: Colors.green,
+                                                        duration: Duration(seconds: 2),
+                                                      ),
+                                                    );
+                                                  }
+                                                  _carregarFichas();
+                                                } catch (e) {
+                                                  if (mounted) {
+                                                    setState(() => _sendingIds.remove(fichaId));
+                                                    ScaffoldMessenger.of(context).clearSnackBars();
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+                                                    );
+                                                  }
+                                                }
+                                              }
+                                            },
+                                    );
                                   },
                                 ),
                               IconButton(
@@ -251,7 +337,10 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     final bluetooth = BlueThermalPrinter.instance;
     bool? isConnected = await bluetooth.isConnected;
     if (isConnected != true) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nenhuma impressora conectada! Vá nas configurações.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red));
+      }
       return;
     }
 
@@ -278,6 +367,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     bluetooth.printNewLine();
 
     if (mounted) {
+      ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Imprimindo ticket...', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green));
     }
   }

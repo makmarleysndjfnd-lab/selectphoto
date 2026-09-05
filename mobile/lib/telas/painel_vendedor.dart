@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/ui_helpers.dart';
 import '../servicos/servico_sincronizacao.dart';
 
-import 'tela_cadastro_custos.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../servicos/servico_api.dart';
 import '../utils/km_request_dialog.dart';
@@ -43,10 +42,13 @@ class _SellerDashboardState extends State<SellerDashboard>
   String _verse = '';
   List<Map<String, dynamic>> _sellerClients = [];
   List<dynamic> _personalAppointments = [];
+  // ignore: unused_field
   bool _isLoadingClients = true;
   
   // Variáveis para a Agenda no Painel
+  // ignore: unused_field
   DateTime _selectedAgendaMonth = DateTime.now();
+  // ignore: unused_field
   DateTime _selectedAgendaDay = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
   // Variáveis para Distribuição de Equipe e Trocas
@@ -57,9 +59,11 @@ class _SellerDashboardState extends State<SellerDashboard>
   Map<String, dynamic>? _foundClient;
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
+  // ignore: unused_field
   final DateTime _selectedDate = DateTime.now();
 
   int _unreadNotifs = 0;
+  // ignore: unused_field
   bool _isQuickMenuOpen = false; // Proteção contra duplo clique no menu de ações
   bool _atendidasExpanded = false; // Controle da seção recolhida de fichas atendidas
 

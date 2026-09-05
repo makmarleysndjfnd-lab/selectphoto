@@ -528,24 +528,36 @@ class _MyProspectsScreenState extends State<MyProspectsScreen> {
                 if (!isApproved)
                   LedButton(
                     onPressed: () async {
-                      try {
-                        final api = Provider.of<ApiService>(context, listen: false);
-                        await api.approveEventRoi(prospect['id'], totalCost: custoTotal, expectedRevenue: receitaTotal);
-                        Navigator.pop(ctx);
-                        _loadProspects();
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Viagem Aprovada! Despesa enviada ao Fluxo de Caixa como PREVISTO.'), backgroundColor: Colors.green),
-                          );
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao aprovar ROI: $e'), backgroundColor: Colors.red));
-                        }
-                      }
+                      await showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          backgroundColor: const Color(0xFF1E1E2C),
+                          title: const Row(
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.orangeAccent),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text('Regra Financeira Pendente',
+                                    style: TextStyle(color: Colors.white, fontSize: 16)),
+                              ),
+                            ],
+                          ),
+                          content: const Text(
+                            'A integração automática da aprovação de viagem com o fluxo de caixa requer a definição das regras de contabilização e plano de contas da empresa. Esta ação permanecerá suspensa para evitar lançamentos contábeis fictícios.',
+                            style: TextStyle(color: Colors.white70, fontSize: 13),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Entendido', style: TextStyle(color: Color(0xFFCE93D8))),
+                            ),
+                          ],
+                        ),
+                      );
                     },
-                    style: LedButton.styleFrom(backgroundColor: Colors.green),
-                    child: const Text('Aprovar Viagem → Fluxo de Caixa', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    style: LedButton.styleFrom(backgroundColor: Colors.orange),
+                    child: const Text('Aprovar Viagem (Regra Pendente)',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
               ],
             );

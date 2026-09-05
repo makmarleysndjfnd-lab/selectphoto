@@ -203,6 +203,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   // Mock Rotas Inteligentes -> Nova Estrutura
   List<Map<String, dynamic>> _rotasManuais = [];
   List<Map<String, dynamic>> _booksNaoAtribuidos = [];
+  // ignore: unused_field
   Set<String> _pendingReleaseCities = {};
 
   final Map<String, List<Map<String, dynamic>>> _booksDistribuidos = {};
@@ -211,6 +212,12 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   List<Map<String, dynamic>> _rotasRebolo = [];
   List<Map<String, dynamic>> _rebolosNaoAtribuidos = [];
+  List<Map<String, dynamic>> _rebolosAwaitingReturn = [];
+  List<Map<String, dynamic>> _rebolosInStock = [];
+  List<Map<String, dynamic>> _rebolosInRoute = [];
+  List<Map<String, dynamic>> _rebolosHistory = [];
+  int _selectedReboloTab = 0; // 0 = Disponíveis, 1 = Aguardando Devolução, 2 = Em Rota, 3 = Histórico
+  // ignore: unused_field
   List<Map<String, dynamic>> _pendingReleaseBatches = [];
   List<Map<String, dynamic>> _companySellers = [];
 
@@ -373,49 +380,83 @@ class _AdminDashboardState extends State<AdminDashboard>
         colorIndex++;
       }
 
+      final List<Map<String, dynamic>> rebolosAwaitingReturn = [];
+      final List<Map<String, dynamic>> rebolosInStock = [];
+      final List<Map<String, dynamic>> rebolosInRoute = [];
+      final List<Map<String, dynamic>> rebolosHistory = [];
       final List<Map<String, dynamic>> rebolosUnassigned = [];
       final Map<String, List<Map<String, dynamic>>> rebolosCityGroups = {};
       final Map<String, List<Map<String, dynamic>>> rebolosDistributed = {};
 
       for (var client in rebolos) {
+        final raw = Map<String, dynamic>.from(client as Map);
+        final bookStatus = raw['bookStatus']?.toString() ?? 'IN_STOCK_REBOLO';
+        final rawCity = raw['city'];
+        final city = (rawCity != null && rawCity.toString().trim().isNotEmpty)
+            ? rawCity.toString().trim()
+            : 'Sem Cidade';
+        final seq = (raw['sequenceNumber'] ?? 'S/N').toString();
+        final clientName = (raw['name'] ?? raw['clientName'] ?? 'Cliente').toString();
+        final nonSales = (raw['nonSales'] as List?) ?? [];
+        final reason = nonSales.isNotEmpty
+            ? (nonSales.last['reason']?.toString() ?? 'Não-venda')
+            : (raw['outcomeStatus']?.toString() ?? bookStatus);
+
         final b = {
-          'id': client['id'],
-          'ficha': client['sequenceNumber'] ?? 'S/N',
-          'lote': 'N/A',
-          'qr': client['sequenceNumber'] ?? 'S/N',
-          'cliente': client['name'] ?? 'Cliente',
-          'city': client['city'],
-          'photographerId': client['photographerId'],
-          'rawClientData': client,
+          'id': raw['id']?.toString() ?? '',
+          'client': clientName,
+          'cliente': clientName,
+          'name': clientName,
+          'seq': seq,
+          'ficha': seq,
+          'sequenceNumber': seq,
+          'lote': raw['batch']?['name'] ?? raw['batchId'] ?? 'Rebolo',
+          'reason': reason,
+          'city': city,
+          'bookStatus': bookStatus,
+          'assignedSeller': raw['assignedSeller'],
+          'assignedSellerId': raw['assignedSellerId'],
+          'photographerId': raw['photographerId'],
+          'rawClientData': raw,
         };
 
-        final assignedSeller = client['assignedSeller']?['name'];
-        if (assignedSeller != null) {
-          if (!rebolosDistributed.containsKey(assignedSeller)) {
-            rebolosDistributed[assignedSeller] = [];
+        if (bookStatus == 'AWAITING_RETURN') {
+          rebolosAwaitingReturn.add(b);
+        } else if (bookStatus == 'DISTRIBUTED_REBOLO' || (raw['assignedSeller'] != null && bookStatus != 'IN_STOCK_REBOLO' && bookStatus != 'SOLD' && bookStatus != 'REBOLO_SOLD' && bookStatus != 'DISCARDED')) {
+          rebolosInRoute.add(b);
+          final sellerName = raw['assignedSeller']?['name']?.toString() ?? 'Vendedor';
+          if (!rebolosDistributed.containsKey(sellerName)) {
+            rebolosDistributed[sellerName] = [];
           }
-          rebolosDistributed[assignedSeller]!.add(b);
+          rebolosDistributed[sellerName]!.add(b);
+        } else if (bookStatus == 'REBOLO_SOLD' || bookStatus == 'SOLD' || bookStatus == 'DISCARDED') {
+          rebolosHistory.add(b);
         } else {
-          final city = client['city'];
-          if (city == null || city.toString().trim().isEmpty) {
+          // Disponível em estoque para redistribuição
+          rebolosInStock.add(b);
+          if (city == 'Sem Cidade') {
             rebolosUnassigned.add(b);
-          } else {
-            if (!rebolosCityGroups.containsKey(city)) {
-              rebolosCityGroups[city] = [];
-            }
-            rebolosCityGroups[city]!.add(b);
           }
+          if (!rebolosCityGroups.containsKey(city)) {
+            rebolosCityGroups[city] = [];
+          }
+          rebolosCityGroups[city]!.add(b);
         }
       }
 
       final List<Map<String, dynamic>> rRoutes = [];
       for (var entry in rebolosCityGroups.entries) {
+        final list = entry.value;
         rRoutes.add({
           'id': 'rr_${entry.key}',
+          'city': entry.key,
           'title': '${entry.key} (Revisitas)',
-          'books': entry.value,
+          'total': list.length,
+          'fichas': list,
+          'books': list,
         });
       }
+      rRoutes.sort((a, b) => (b['total'] as int).compareTo(a['total'] as int));
 
       if (mounted) {
         setState(() {
@@ -432,6 +473,10 @@ class _AdminDashboardState extends State<AdminDashboard>
 
           _rotasRebolo = rRoutes;
           _rebolosNaoAtribuidos = rebolosUnassigned;
+          _rebolosAwaitingReturn = rebolosAwaitingReturn;
+          _rebolosInStock = rebolosInStock;
+          _rebolosInRoute = rebolosInRoute;
+          _rebolosHistory = rebolosHistory;
         });
       }
     } catch (e) {
@@ -2495,92 +2540,307 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   // ABA 3 — ESTOQUE NÃO-VENDAS
   // ══════════════════════════════════════════════════════════════════════════
+  // ABA 3 — ESTOQUE NÃO-VENDAS (REBOLO)
+  // ══════════════════════════════════════════════════════════════════════════
+  void _showReboloOverviewModal() {
+    final totalGeral = _rebolosInStock.length +
+        _rebolosAwaitingReturn.length +
+        _rebolosInRoute.length +
+        _rebolosHistory.length;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.analytics_rounded, color: Color(0xFFEF5350), size: 24),
+                  const SizedBox(width: 10),
+                  Text('Detalhamento de Rebolos ($totalGeral)',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18)),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildOverviewRow('Disponíveis para Redistribuição', _rebolosInStock.length, Colors.greenAccent, Icons.inventory_2_rounded),
+              _buildOverviewRow('Aguardando Devolução do Vendedor', _rebolosAwaitingReturn.length, Colors.orangeAccent, Icons.assignment_return_rounded),
+              _buildOverviewRow('Em Rota com Novo Vendedor', _rebolosInRoute.length, Colors.blueAccent, Icons.local_shipping_rounded),
+              _buildOverviewRow('Histórico (Vendidas / Descarte)', _rebolosHistory.length, Colors.white70, Icons.history_rounded),
+              const SizedBox(height: 20),
+              if (_rebolosInStock.isNotEmpty)
+                LedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showBooksModal('Rebolo - Todas Cidades', _rebolosInStock);
+                  },
+                  icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+                  label: Text('Distribuir Fichas Disponíveis (${_rebolosInStock.length})',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFEF5350)),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildOverviewRow(String title, int count, Color color, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 12),
+          Expanded(child: Text(title, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+          Text('$count', style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStockTab() {
-    final totalFichas = _rotasRebolo.fold<int>(
-            0, (s, r) => s + (r['books'] as List).length) +
-        _rebolosNaoAtribuidos.length +
-        _rebolosDistribuidos.values.fold<int>(0, (s, list) => s + list.length);
+    final totalGeral = _rebolosInStock.length +
+        _rebolosAwaitingReturn.length +
+        _rebolosInRoute.length +
+        _rebolosHistory.length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Resumo total
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF1A0A00), Color(0xFF3A1000)],
+          // Resumo total interativo
+          GestureDetector(
+            onTap: _showReboloOverviewModal,
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1A0A00), Color(0xFF3A1000)],
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFEF5350).withOpacity(0.3)),
               ),
-              borderRadius: BorderRadius.circular(18),
-              border:
-                  Border.all(color: const Color(0xFFEF5350).withOpacity(0.3)),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF5350).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(Icons.inventory_2_rounded,
+                        color: Color(0xFFEF9A9A), size: 26),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Estoque de Não-Vendas (Rebolo)',
+                            style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
+                        Text('$totalGeral fichas',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold)),
+                        Text('${_rebolosInStock.length} disponíveis • ${_rotasRebolo.length} cidades',
+                            style: const TextStyle(color: Color(0xFFEF9A9A), fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  const Column(
+                    children: [
+                      Icon(Icons.touch_app_rounded, color: Color(0xFF90CAF9), size: 20),
+                      SizedBox(height: 2),
+                      Text('Toque para\nver detalhes',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
+                    ],
+                  ),
+                ],
+              ),
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // Seletor de Categorias
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEF5350).withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(Icons.inventory_2_rounded,
-                      color: Color(0xFFEF9A9A), size: 26),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Estoque de Não-Vendas',
-                        style:
-                            TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
-                    Text('$totalFichas fichas',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold)),
-                    Text('${_rotasRebolo.length} cidades',
-                        style: const TextStyle(
-                            color: Color(0xFFEF9A9A), fontSize: 12)),
-                  ],
-                ),
-                const Spacer(),
-                const Text('Toque para\nver detalhes',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
+                _buildReboloCategoryChip('Disponíveis (${_rebolosInStock.length})', 0, Colors.greenAccent),
+                const SizedBox(width: 8),
+                _buildReboloCategoryChip('Aguardando Devolução (${_rebolosAwaitingReturn.length})', 1, Colors.orangeAccent),
+                const SizedBox(width: 8),
+                _buildReboloCategoryChip('Em Rota (${_rebolosInRoute.length})', 2, Colors.blueAccent),
+                const SizedBox(width: 8),
+                _buildReboloCategoryChip('Histórico (${_rebolosHistory.length})', 3, Colors.white60),
               ],
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
-          const Text('Por Cidade',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          if (_rotasRebolo.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Text('Nenhum rebolo acumulado em estoque por enquanto.',
-                    style: TextStyle(color: Colors.white54)),
-              ),
-            )
-          else
-            ..._rotasRebolo.map((c) => _buildCityStockCard(c)),
+          // Conteúdo de acordo com a categoria selecionada
+          if (_selectedReboloTab == 0) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Disponíveis por Cidade',
+                    style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                if (_rebolosInStock.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () => _showBooksModal('Rebolo - Todas Cidades', _rebolosInStock),
+                    icon: const Icon(Icons.send_rounded, color: Color(0xFFCE93D8), size: 16),
+                    label: const Text('Distribuir Lote',
+                        style: TextStyle(color: Color(0xFFCE93D8), fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_rotasRebolo.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('Nenhuma ficha de rebolo disponível para redistribuição no momento.',
+                      style: TextStyle(color: Colors.white54)),
+                ),
+              )
+            else
+              ..._rotasRebolo.map((c) => _buildCityStockCard(c)),
+          ] else if (_selectedReboloTab == 1) ...[
+            const Text('Fichas com Vendedores Aguardando Devolução',
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (_rebolosAwaitingReturn.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('Nenhuma ficha aguardando devolução no momento.',
+                      style: TextStyle(color: Colors.white54)),
+                ),
+              )
+            else
+              ..._rebolosAwaitingReturn.map((b) => _buildReboloTile(b, const Color(0xFFFFA726))),
+          ] else if (_selectedReboloTab == 2) ...[
+            const Text('Fichas de Rebolo Distribuídas em Rota',
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (_rebolosInRoute.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('Nenhuma ficha de rebolo em rota com vendedor.',
+                      style: TextStyle(color: Colors.white54)),
+                ),
+              )
+            else
+              ..._rebolosInRoute.map((b) => _buildReboloTile(b, const Color(0xFF42A5F5))),
+          ] else ...[
+            const Text('Histórico de Rebolos (Vendidas e Descarte)',
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            if (_rebolosHistory.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('Nenhum registro histórico de rebolo encontrado.',
+                      style: TextStyle(color: Colors.white54)),
+                ),
+              )
+            else
+              ..._rebolosHistory.map((b) => _buildReboloTile(b, const Color(0xFFAB47BC))),
+          ],
           const SizedBox(height: 20),
         ],
       ),
     );
   }
 
+  Widget _buildReboloCategoryChip(String label, int index, Color accentColor) {
+    final isSelected = _selectedReboloTab == index;
+    return ChoiceChip(
+      label: Text(label,
+          style: TextStyle(
+              color: isSelected ? Colors.white : Colors.white60,
+              fontSize: 12,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+      selected: isSelected,
+      selectedColor: accentColor.withOpacity(0.3),
+      backgroundColor: const Color(0xFF1A1A2E),
+      side: BorderSide(color: isSelected ? accentColor : Colors.white12),
+      onSelected: (_) => setState(() => _selectedReboloTab = index),
+    );
+  }
+
+  Widget _buildReboloTile(Map<String, dynamic> b, Color color) {
+    final clientName = (b['client'] ?? b['cliente'] ?? b['name'] ?? 'Cliente').toString();
+    final seq = (b['seq'] ?? b['ficha'] ?? b['sequenceNumber'] ?? '-').toString();
+    final city = (b['city'] ?? 'Sem Cidade').toString();
+    final sellerName = b['assignedSeller']?['name']?.toString() ?? 'Não atribuído';
+    final reason = (b['reason'] ?? b['bookStatus'] ?? '').toString();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: color.withOpacity(0.15),
+            child: Text(seq, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(clientName,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 2),
+                Text('Cidade: $city | Vendedor: $sellerName',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                if (reason.isNotEmpty)
+                  Text('Motivo: $reason', style: TextStyle(color: color, fontSize: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCityStockCard(Map<String, dynamic> cityData) {
-    final total = cityData['total'] as int;
-    final city = cityData['city'] as String;
-    final fichas = cityData['fichas'] as List;
-    // barra de proporção (max 50 para referência)
+    final total = (cityData['total'] ?? (cityData['fichas'] as List?)?.length ?? (cityData['books'] as List?)?.length ?? 0) as int;
+    final city = (cityData['city'] ?? cityData['title'] ?? 'Sem Cidade').toString();
+    final fichas = (cityData['fichas'] ?? cityData['books'] ?? []) as List;
     const maxRef = 50;
     final barPct = (total / maxRef).clamp(0.0, 1.0);
 
@@ -2650,7 +2910,6 @@ class _AdminDashboardState extends State<AdminDashboard>
               ],
             ),
             const SizedBox(height: 12),
-            // Barra de volume
             Row(
               children: [
                 Expanded(
@@ -2684,7 +2943,15 @@ class _AdminDashboardState extends State<AdminDashboard>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _StockBottomSheet(city: city, fichas: fichas),
+      builder: (_) => _StockBottomSheet(
+        city: city,
+        fichas: fichas,
+        onDistribute: () {
+          Navigator.pop(context);
+          final books = fichas.map((f) => Map<String, dynamic>.from(f as Map)).toList();
+          _showBooksModal('Rebolo - $city', books);
+        },
+      ),
     );
   }
 
@@ -2826,8 +3093,8 @@ class _AdminDashboardState extends State<AdminDashboard>
         isRebolo ? _rebolosDistribuidos[seller] : _booksDistribuidos[seller];
     if (books != null && books.isNotEmpty) {
       final clients = books
-          .map((b) => b['rawClientData'] as Map<String, dynamic>)
-          .where((c) => c != null)
+          .map((b) => b['rawClientData'])
+          .whereType<Map<String, dynamic>>()
           .toList();
       if (clients.isNotEmpty) {
         await PdfGenerator.printBatch(clients, seller);
@@ -3550,7 +3817,13 @@ class _AdminDashboardState extends State<AdminDashboard>
 class _StockBottomSheet extends StatelessWidget {
   final String city;
   final List fichas;
-  const _StockBottomSheet({required this.city, required this.fichas});
+  final VoidCallback? onDistribute;
+
+  const _StockBottomSheet({
+    required this.city,
+    required this.fichas,
+    this.onDistribute,
+  });
 
   Color _reasonColor(String reason) {
     switch (reason) {
@@ -3573,7 +3846,7 @@ class _StockBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
       decoration: const BoxDecoration(
         color: Color(0xFF12122A),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -3622,6 +3895,21 @@ class _StockBottomSheet extends StatelessWidget {
               ],
             ),
           ),
+          if (onDistribute != null && fichas.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: LedButton.icon(
+                  onPressed: onDistribute,
+                  icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+                  label: Text('Distribuir Lote (${fichas.length} Fichas)',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  style: LedButton.styleFrom(backgroundColor: const Color(0xFFCE93D8)),
+                ),
+              ),
+            ),
+          ],
           const Divider(color: Color(0xFF2A2A4A), height: 1),
           // Lista de fichas
           Flexible(
@@ -3630,9 +3918,13 @@ class _StockBottomSheet extends StatelessWidget {
               itemCount: fichas.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
-                final f = fichas[i] as Map;
-                final reason = f['reason'] as String;
+                final f = fichas[i] is Map ? fichas[i] as Map : {};
+                final clientName = (f['client'] ?? f['cliente'] ?? f['name'] ?? 'Cliente').toString();
+                final seq = (f['seq'] ?? f['ficha'] ?? f['sequenceNumber'] ?? '-').toString();
+                final lote = (f['lote'] ?? f['batchId'] ?? 'Rebolo').toString();
+                final reason = (f['reason'] ?? f['nonSaleReason'] ?? f['bookStatus'] ?? 'Não-venda').toString();
                 final rColor = _reasonColor(reason);
+
                 return Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
@@ -3666,7 +3958,7 @@ class _StockBottomSheet extends StatelessWidget {
                             // Nome + ficha
                             Row(children: [
                               Expanded(
-                                child: Text(f['client'] as String,
+                                child: Text(clientName,
                                     style: const TextStyle(
                                         color: Colors.white,
                                         fontWeight: FontWeight.w600,
@@ -3679,7 +3971,7 @@ class _StockBottomSheet extends StatelessWidget {
                               const Icon(Icons.tag_rounded,
                                   color: Color(0xFF4FC3F7), size: 12),
                               const SizedBox(width: 3),
-                              Text(f['seq'] as String,
+                              Text(seq,
                                   style: const TextStyle(
                                       color: Color(0xFF4FC3F7),
                                       fontSize: 11,
@@ -3689,7 +3981,7 @@ class _StockBottomSheet extends StatelessWidget {
                               const Icon(Icons.inventory_rounded,
                                   color: Color(0xFF90CAF9), size: 12),
                               const SizedBox(width: 3),
-                              Text(f['lote'] as String,
+                              Text(lote,
                                   style: const TextStyle(
                                       color: Color(0xFF90CAF9), fontSize: 11)),
                             ]),

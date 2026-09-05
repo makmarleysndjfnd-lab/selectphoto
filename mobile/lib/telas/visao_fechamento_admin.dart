@@ -200,10 +200,12 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                   fontWeight: FontWeight.bold,
                                   fontSize: 16)),
                           onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             try {
                               await ApiService().releaseBatchToStock(batchId);
                               if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                messenger.clearSnackBars();
+                                messenger.showSnackBar(
                                     SnackBar(
                                         content: Text(
                                             'Lote $city liberado para estoque!'),
@@ -211,12 +213,14 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                 setState(() {});
                               }
                             } catch (e) {
-                              if (mounted)
-                                ScaffoldMessenger.of(context).showSnackBar(
+                              if (mounted) {
+                                messenger.clearSnackBars();
+                                messenger.showSnackBar(
                                     SnackBar(
                                         content:
                                             Text('Erro ao liberar $city: $e'),
                                         backgroundColor: Colors.red));
+                              }
                             }
                           },
                         ),

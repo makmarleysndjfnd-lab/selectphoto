@@ -86,6 +86,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   String? _currentEventName;
   int _sequenceCount = 1;
   int _fichasHojeCount = 0;
+  List<String> _sessionFichas = [];
 
   // Form State
   final _formKey = GlobalKey<FormState>();
@@ -178,12 +179,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     final city = prefs.getString('lote_city');
     final event = prefs.getString('lote_event_name');
     final seq = prefs.getInt('lote_sequence_count') ?? 1;
+    final fichas = prefs.getStringList('lote_session_fichas') ?? <String>[];
 
     if (mounted) {
       setState(() {
         _currentCityLote = city;
         _currentEventName = event;
         _sequenceCount = seq;
+        _sessionFichas = List<String>.from(fichas);
       });
     }
 
@@ -497,11 +500,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.setString('lote_city', city);
                     await prefs.setString('lote_event_name', event);
+                    await prefs.setStringList('lote_session_fichas', []);
 
                     if (mounted) {
                       setState(() {
                         _currentCityLote = city;
                         _currentEventName = event;
+                        _sessionFichas = [];
                       });
                       Navigator.pop(context);
                     }
@@ -858,12 +863,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               backgroundColor: Colors.orange));
       }
 
+      if (!_sessionFichas.contains(sequenceNumber)) {
+        _sessionFichas.add(sequenceNumber);
+      }
+
       setState(() {
         _generatedQrCodeData = sequenceNumber;
         _sequenceCount++; // Increment for next client
         _fichasHojeCount++; // Atualiza UI de Hoje
       });
       await prefs.setInt('lote_sequence_count', _sequenceCount);
+      await prefs.setStringList('lote_session_fichas', _sessionFichas);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -1002,6 +1012,33 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
+    if (_sessionFichas.isEmpty) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Nenhuma ficha registrada nesta sessão para fechar o lote.'),
+        backgroundColor: Colors.orange,
+      ));
+      return;
+    }
+
+    final syncService = Provider.of<SyncService>(context, listen: false);
+    final hasPendingFichas = syncService.pendingRequests.any((req) {
+      if (req.type == 'SYNC_CLIENTS') {
+        final seq = req.payload['sequenceNumber']?.toString();
+        return seq != null && _sessionFichas.contains(seq);
+      }
+      return false;
+    });
+
+    if (hasPendingFichas) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Existem fichas locais aguardando confirmação no servidor. Sincronize antes de finalizar o lote.'),
+        backgroundColor: Colors.orange,
+      ));
+      return;
+    }
+
     showDialog(
         context: context,
         builder: (context) {
@@ -1010,7 +1047,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
             title: const Text('Finalizar Lote/Evento',
                 style: TextStyle(color: Colors.white)),
             content: Text(
-                'Deseja realmente finalizar a produção do Evento $_currentEventName (Lote: $_currentCityLote)? O admin será notificado na tela de liberação.',
+                'Deseja realmente finalizar a produção do Evento $_currentEventName (Lote: $_currentCityLote) com ${_sessionFichas.length} ficha(s)? O admin será notificado na tela de liberação.',
                 style: const TextStyle(color: Colors.white70)),
             actionsAlignment: MainAxisAlignment.end,
             actions: [
@@ -1022,25 +1059,34 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               LedButton(
                 onPressed: () async {
                   final eventToFinish = _currentEventName!;
+                  final cityToFinish = _currentCityLote;
+                  final fichasToFinish = List<String>.from(_sessionFichas);
                   Navigator.pop(context);
 
                   try {
-                    await ApiService().createBookBatch(eventToFinish);
+                    final res = await ApiService().createBookBatch(
+                      eventToFinish,
+                      city: cityToFinish,
+                      clientIds: fichasToFinish,
+                    );
 
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.remove('lote_city');
                     await prefs.remove('lote_event_name');
                     await prefs.remove('lote_sequence_count');
+                    await prefs.remove('lote_session_fichas');
 
                     if (mounted) {
                       setState(() {
                         _currentCityLote = null;
                         _currentEventName = null;
                         _sequenceCount = 1;
+                        _sessionFichas = [];
                       });
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text(
-                              'Lote finalizado com sucesso! Admin notificado.'),
+                      final successMsg = res['message']?.toString() ?? 'Lote finalizado com sucesso! Admin notificado.';
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(successMsg),
                           backgroundColor: Colors.green));
 
                       // Automatically open config dialog for next event session
@@ -1048,6 +1094,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     }
                   } catch (e) {
                     if (mounted) {
+                      ScaffoldMessenger.of(context).clearSnackBars();
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                           content: Text('Erro ao finalizar lote: $e'),
                           backgroundColor: Colors.red));

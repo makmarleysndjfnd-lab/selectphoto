@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/telas/visao_fechamento_admin.dart';
 
@@ -62,10 +61,8 @@ void main() {
 
   group('3. Cálculo Matemático do Repasse e Posição Financeira', () {
     test('quando dinheiro em mãos > comissão devida, vendedor repassa a diferença à empresa', () {
-      final double totalVendas = 1000.0;
-      final double comissao = 150.0; // 15%
-      final double dinheiro = 600.0;
-      final double pix = 400.0;
+      const double comissao = 150.0; // 15%
+      const double dinheiro = 600.0;
 
       final double saldoDia = dinheiro - comissao;
       final String direction = dinheiro > comissao
@@ -77,10 +74,8 @@ void main() {
     });
 
     test('quando comissão devida > dinheiro em mãos, empresa paga a diferença ao vendedor', () {
-      final double totalVendas = 1000.0;
-      final double comissao = 150.0; // 15%
-      final double dinheiro = 50.0;
-      final double pix = 950.0;
+      const double comissao = 150.0; // 15%
+      const double dinheiro = 50.0;
 
       final double saldoDia = (comissao - dinheiro).abs();
       final String direction = dinheiro > comissao

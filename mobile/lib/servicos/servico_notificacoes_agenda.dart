@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -198,8 +197,9 @@ class ServicoNotificacoesAgenda {
 
     String? id;
     try {
-      if (_ianaTimeZoneProvider != null) {
-        id = await _ianaTimeZoneProvider!();
+      final provider = _ianaTimeZoneProvider;
+      if (provider != null) {
+        id = await provider();
       } else {
         id = await obterFusoIanaNativo();
       }
