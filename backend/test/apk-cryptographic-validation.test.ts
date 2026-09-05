@@ -16,7 +16,7 @@ import appRoutes, {
   createAppRouter,
 } from '../src/routes/app';
 
-describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+9)', { concurrency: 1 }, () => {
+describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+10)', { concurrency: 1 }, () => {
   const tmpDir = path.join(__dirname, `tmp_apk_test_${Date.now()}`);
   let server: http.Server;
   let baseUrl: string;
@@ -103,8 +103,8 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+9)'
     const versionRes = await makeRequest('/version');
     assert.equal(versionRes.status, 200);
     assert.deepEqual(versionRes.body, {
-      version: '1.0.8',
-      buildNumber: 9,
+      version: CURRENT_APP_VERSION,
+      buildNumber: CURRENT_BUILD_NUMBER,
       mandatory: false,
       downloadUrl: '',
       apkAvailable: false,
@@ -177,8 +177,8 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+9)'
 
     const result = await getApkValidationStatus(validPath, descriptorFor(content));
     assert.equal(result.valid, true);
-    assert.equal(result.version, '1.0.8');
-    assert.equal(result.buildNumber, 9);
+    assert.equal(result.version, CURRENT_APP_VERSION);
+    assert.equal(result.buildNumber, CURRENT_BUILD_NUMBER);
     assert.equal(result.packageName, 'com.example.mobile');
     assert.equal(result.foundSha256, sha256(content));
   });
@@ -240,8 +240,8 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+9)'
   it('10. Manifesto confiável da release possui versão, build, pacote e hash auditados', () => {
     assert.deepEqual(RELEASE_APK, {
       version: '1.0.8',
-      buildNumber: 9,
-      sha256: '5192052FEADA8C7453DD315D67D4D39742B461627800FA217829943A47564A2D',
+      buildNumber: 10,
+      sha256: '96E12020647447A6B95EAE1732DD39AC0F736C530701BC45CAFFBEAB1C44F3D1',
       packageName: 'com.example.mobile',
     });
   });

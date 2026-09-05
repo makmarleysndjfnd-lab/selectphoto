@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 
-describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas (1.0.8+9)', { concurrency: 1 }, () => {
+describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas (1.0.8+10)', { concurrency: 1 }, () => {
   const rootDir = path.resolve(__dirname, '../..');
 
   it('1. backend/package.json possui versão 1.0.8', () => {
@@ -20,7 +20,7 @@ describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas (1.0.8+9)', { c
     assert.equal(match[1], '1.0.8');
   });
 
-  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION 1.0.8 e CURRENT_BUILD_NUMBER 9', () => {
+  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION 1.0.8 e CURRENT_BUILD_NUMBER 10', () => {
     const appRoutePath = path.join(rootDir, 'backend/src/routes/app.ts');
     const content = fs.readFileSync(appRoutePath, 'utf8');
     const vMatch = content.match(/CURRENT_APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
@@ -28,19 +28,19 @@ describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas (1.0.8+9)', { c
     assert.ok(vMatch, 'CURRENT_APP_VERSION deve existir');
     assert.ok(bMatch, 'CURRENT_BUILD_NUMBER deve existir');
     assert.equal(vMatch[1], '1.0.8');
-    assert.equal(bMatch[1], '9');
+    assert.equal(bMatch[1], '10');
   });
 
-  it('4. mobile/pubspec.yaml define versão 1.0.8+9', () => {
+  it('4. mobile/pubspec.yaml define versão 1.0.8+10', () => {
     const pubspecPath = path.join(rootDir, 'mobile/pubspec.yaml');
     const content = fs.readFileSync(pubspecPath, 'utf8');
     const match = content.match(/^version:\s*([0-9.]+)\+(\d+)/m);
     assert.ok(match, 'Campo version deve existir no pubspec.yaml');
     assert.equal(match[1], '1.0.8');
-    assert.equal(match[2], '9');
+    assert.equal(match[2], '10');
   });
 
-  it('5. mobile/lib/config/app_config.dart define appVersion 1.0.8 e buildNumber 9', () => {
+  it('5. mobile/lib/config/app_config.dart define appVersion 1.0.8 e buildNumber 10', () => {
     const configPath = path.join(rootDir, 'mobile/lib/config/app_config.dart');
     const content = fs.readFileSync(configPath, 'utf8');
     const vMatch = content.match(/static const String appVersion = '([^']+)';/);
@@ -48,7 +48,7 @@ describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas (1.0.8+9)', { c
     assert.ok(vMatch, 'appVersion deve existir no AppConfig');
     assert.ok(bMatch, 'buildNumber deve existir no AppConfig');
     assert.equal(vMatch[1], '1.0.8');
-    assert.equal(bMatch[1], '9');
+    assert.equal(bMatch[1], '10');
   });
 
   it('6. TODAS as camadas (package.json, health, app.ts, pubspec, AppConfig) esto 100% alinhadas', () => {

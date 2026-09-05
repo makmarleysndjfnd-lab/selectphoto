@@ -12,7 +12,7 @@ class AppConfig {
 
   /// Versão do aplicativo compilada
   static const String appVersion = '1.0.8';
-  static const int buildNumber = 9;
+  static const int buildNumber = 10;
   static const String fullVersion = '$appVersion+$buildNumber';
 
   /// Retorna se a SERVER_URL foi definida em tempo de compilação.

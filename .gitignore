@@ -4,3 +4,4 @@ scratch/
 firebase-adminsdk.json
 backend/public/apk/
 *.apk
+*.mp4
