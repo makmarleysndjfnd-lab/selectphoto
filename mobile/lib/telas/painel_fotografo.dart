@@ -20,6 +20,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/km_request_dialog.dart';
 import '../utils/ui_helpers.dart';
+import '../utils/brazilian_phone_formatter.dart';
 import '../widgets/led_button.dart';
 
 // ── Palette for House Colors ──────────────────────────────────────────────────
@@ -37,40 +38,13 @@ const List<Color> _houseColors = [
   Colors.brown,
 ];
 
-class PhoneInputFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final digits = newValue.text.replaceAll(RegExp(r'\D'), '');
-    if (digits.isEmpty) return newValue.copyWith(text: '');
-    final buffer = StringBuffer();
-    buffer.write('(');
-    if (digits.length <= 2) {
-      buffer.write(digits);
-    } else {
-      buffer.write(digits.substring(0, 2));
-      buffer.write(') ');
-      if (digits.length <= 6) {
-        buffer.write(digits.substring(2));
-      } else if (digits.length <= 10) {
-        buffer.write(digits.substring(2, 6));
-        buffer.write('-');
-        buffer.write(digits.substring(6));
-      } else {
-        final maxDigits = digits.length > 11 ? 11 : digits.length;
-        final sub = digits.substring(0, maxDigits);
-        buffer.write(sub.substring(2, 7));
-        buffer.write('-');
-        buffer.write(sub.substring(7));
-      }
-    }
-    final text = buffer.toString();
-    return TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: text.length),
-    );
-  }
-}
+const Set<String> _validBrazilianUfs = {
+  'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA',
+  'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RJ', 'RN',
+  'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+};
+
+typedef PhoneInputFormatter = BrazilianPhoneFormatter;
 
 class PhotographerDashboard extends StatefulWidget {
   const PhotographerDashboard({super.key});
@@ -86,6 +60,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   String? _currentEventName;
   int _sequenceCount = 1;
   int _fichasHojeCount = 0;
+  int _pendingFichasCount = 0;
+  bool _isResetting = false;
   List<String> _sessionFichas = [];
 
   // Form State
@@ -172,9 +148,20 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     _loadFichasHojeCount();
     _loadUserData();
 
+    try {
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      syncService.addListener(_onSyncUpdate);
+    } catch (_) {}
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initLoteAndCheckKm();
     });
+  }
+
+  void _onSyncUpdate() {
+    if (mounted) {
+      _loadFichasHojeCount();
+    }
   }
 
   Future<void> _initLoteAndCheckKm() async {
@@ -231,17 +218,68 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
   Future<void> _loadFichasHojeCount() async {
     try {
-      final fichas = await ApiService().getClientsByPhotographer();
-      final hojeStr = DateTime.now().toIso8601String().split('T')[0];
-      int count = 0;
-      for (var f in fichas) {
-        final fDate = f['createdAt']?.toString().split('T')[0] ?? '';
-        if (fDate == hojeStr) count++;
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+
+      final Set<String> todayFichaKeys = {};
+      int pendingCount = 0;
+
+      // 1. Tentar buscar do servidor se houver conexão
+      try {
+        final serverFichas = await ApiService().getClientsByPhotographer();
+        for (final f in serverFichas) {
+          final dtStr = f['createdAt']?.toString();
+          if (dtStr != null) {
+            final parsed = DateTime.tryParse(dtStr)?.toLocal();
+            if (parsed != null &&
+                !parsed.isBefore(todayStart) &&
+                !parsed.isAfter(todayEnd)) {
+              final key = f['uuid']?.toString() ??
+                  f['id']?.toString() ??
+                  f['sequenceNumber']?.toString();
+              if (key != null && key.isNotEmpty) {
+                todayFichaKeys.add(key);
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // Offline ou erro de rede: preserva contagem local
       }
-      if (mounted) setState(() => _fichasHojeCount = count);
-    } catch (e) {
-      // Ignora erro e mantem 0
-    }
+
+      // 2. Mesclar com pendências locais do SyncService
+      if (mounted) {
+        final syncService = Provider.of<SyncService>(context, listen: false);
+        final pendingClientReqs = syncService.pendingRequests.where((r) =>
+            r.type == 'SYNC_CLIENTS' ||
+            r.type == 'REGISTER_CLIENT' ||
+            r.type == 'CREATE_CLIENT');
+
+        for (final req in pendingClientReqs) {
+          final reqDate = req.createdAt.toLocal();
+          if (!reqDate.isBefore(todayStart) && !reqDate.isAfter(todayEnd)) {
+            final payload = req.payload;
+            final key = payload['uuid']?.toString() ??
+                payload['localId']?.toString() ??
+                req.id;
+            if (key.isNotEmpty) {
+              if (!todayFichaKeys.contains(key)) {
+                todayFichaKeys.add(key);
+                pendingCount++;
+              }
+            }
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _fichasHojeCount = todayFichaKeys.length;
+          _pendingFichasCount = pendingCount;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadProfessions() async {
@@ -261,6 +299,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   }
 
   Future<void> _saveFormDraft() async {
+    if (_isResetting) return;
+    if (_generatedQrCodeData != null) return;
+    final hasAnyData = _nameController.text.trim().isNotEmpty ||
+        _phoneController.text.trim().isNotEmpty ||
+        _phone2Controller.text.trim().isNotEmpty ||
+        _streetController.text.trim().isNotEmpty;
+    if (!hasAnyData) {
+      await _clearFormDraft();
+      return;
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       _currentFichaUuid ??= SyncService.generateUuid();
@@ -371,6 +419,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
   @override
   void dispose() {
+    try {
+      final syncService = Provider.of<SyncService>(context, listen: false);
+      syncService.removeListener(_onSyncUpdate);
+    } catch (_) {}
     _animController.dispose();
     _nameController.dispose();
     _cepController.dispose();
@@ -414,7 +466,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         builder: (context) {
           return AlertDialog(
             backgroundColor: const Color(0xFF1A1A2E),
-            title: const Text('Configurar Lote e Evento',
+            title: const Text('Configurar Lote da Sessão e Evento',
                 style: TextStyle(color: Colors.white)),
             content: Form(
               key: formKey,
@@ -425,9 +477,12 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     controller: loteCtrl,
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
-                        labelText: 'Cidade / Lote (Ex: SP, CAMPINAS01)',
-                        labelStyle: TextStyle(color: Colors.white54)),
-                    validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                        labelText: 'Rótulo do Lote da Sessão (Ex: LOTE-01, BSB-MANHA)',
+                        labelStyle: TextStyle(color: Colors.white54),
+                        hintText: 'Identificador do lote de fotos deste momento',
+                        hintStyle: TextStyle(color: Colors.white24)),
+                    validator: (v) =>
+                        v == null || v.trim().isEmpty ? 'Obrigatório' : null,
                   ),
                   const SizedBox(height: 12),
                   Autocomplete<String>(
@@ -863,10 +918,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
+      _cityController.text = _sanitizeCityName(_cityController.text);
+      _stateController.text = _stateController.text.trim().toUpperCase();
+
       final payload = {
         'localId': localId,
         'uuid': fichaUuid,
         'sequenceNumber': sequenceNumber,
+        'createdAt': DateTime.now().toIso8601String(),
         'event': _currentEventName,
         'name': _nameController.text,
         'phone1': _phoneController.text,
@@ -938,6 +997,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       }
 
       if (persistedSuccessfully) {
+        await _clearFormDraft();
         if (!_sessionFichas.contains(sequenceNumber)) {
           _sessionFichas.add(sequenceNumber);
         }
@@ -945,8 +1005,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         setState(() {
           _generatedQrCodeData = fichaUuid;
           _sequenceCount++; // Increment for next client
-          _fichasHojeCount++; // Atualiza UI de Hoje
         });
+        _loadFichasHojeCount();
         await prefs.setInt(seqKey, _sequenceCount);
         await prefs.setInt('lote_sequence_count', _sequenceCount);
         await prefs.setStringList('lote_session_fichas', _sessionFichas);
@@ -956,36 +1016,55 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     }
   }
 
-  void _resetForm() {
-    _clearFormDraft();
-    _currentFichaUuid = null;
-    _confirmedVisibleCode = null;
-    _isFichaSynced = false;
-    _nameController.clear();
-    _cepController.clear();
-    _streetController.clear();
-    _numberController.clear();
-    _condoController.clear();
-    _blockController.clear();
-    _aptController.clear();
-    _neighborhoodController.clear();
-    _cityController.clear();
-    _stateController.clear();
-    _phoneController.clear();
-    _phone2Controller.clear();
-    _referenceController.clear();
-    _professionController.clear();
-    _clothesColorController.clear();
-    _gateObservationController.clear();
-    _children.clear();
-    _selectedHouseColor = null;
-    _selectedGateColor = null;
-    _visitTime = null;
-    _signatureController.clear();
+  String _sanitizeCityName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed.split(RegExp(r'\s+')).map((word) {
+      if (word.isEmpty) return '';
+      final lower = word.toLowerCase();
+      if (['de', 'da', 'do', 'das', 'dos', 'e'].contains(lower)) {
+        return lower;
+      }
+      return '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}';
+    }).join(' ');
+  }
 
-    setState(() {
-      _generatedQrCodeData = null;
-    });
+  void _resetForm() async {
+    _isResetting = true;
+    try {
+      await _clearFormDraft();
+      _currentFichaUuid = null;
+      _confirmedVisibleCode = null;
+      _isFichaSynced = false;
+      _nameController.clear();
+      _cepController.clear();
+      _streetController.clear();
+      _numberController.clear();
+      _condoController.clear();
+      _blockController.clear();
+      _aptController.clear();
+      _neighborhoodController.clear();
+      _cityController.clear();
+      _stateController.clear();
+      _phoneController.clear();
+      _phone2Controller.clear();
+      _referenceController.clear();
+      _professionController.clear();
+      _clothesColorController.clear();
+      _gateObservationController.clear();
+      _children.clear();
+      _selectedHouseColor = null;
+      _selectedGateColor = null;
+      _visitTime = null;
+      _signatureController.clear();
+
+      setState(() {
+        _generatedQrCodeData = null;
+      });
+      _loadFichasHojeCount();
+    } finally {
+      _isResetting = false;
+    }
   }
 
   void _printFicha() async {
@@ -1460,11 +1539,27 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                             decoration: BoxDecoration(
                                 color: const Color(0xFFCE93D8).withOpacity(0.2),
                                 borderRadius: BorderRadius.circular(4)),
-                            child: Text('$_fichasHojeCount Fichas Hoje',
-                                style: const TextStyle(
-                                    color: Color(0xFFCE93D8),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold)),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text('$_fichasHojeCount Fichas Hoje',
+                                    style: const TextStyle(
+                                        color: Color(0xFFCE93D8),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold)),
+                                if (_pendingFichasCount > 0)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(
+                                        '⏳ $_pendingFichasCount aguardando envio',
+                                        style: const TextStyle(
+                                            color: Colors.orangeAccent,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600)),
+                                  ),
+                              ],
+                            ),
                           ),
                         ],
                       )
@@ -1679,9 +1774,26 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                 Expanded(
                     flex: 0,
                     child: SizedBox(
-                        width: 70,
+                        width: 75,
                         child: _buildTextField(
-                            _stateController, 'UF', Icons.flag))),
+                            _stateController,
+                            'UF',
+                            Icons.flag,
+                            inputFormatters: [
+                              LengthLimitingTextInputFormatter(2),
+                              FilteringTextInputFormatter.allow(
+                                  RegExp(r'[a-zA-Z]')),
+                            ],
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Obrigatório';
+                              }
+                              final uf = v.trim().toUpperCase();
+                              if (!_validBrazilianUfs.contains(uf)) {
+                                return 'Inválida';
+                              }
+                              return null;
+                            }))),
               ],
             ),
             const SizedBox(height: 12),

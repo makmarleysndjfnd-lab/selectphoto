@@ -96,14 +96,28 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
         }
       }
 
-      // Mesclar sem duplicidade de sequenceNumber ou id
+      // Mesclar sem duplicidade priorizando chave UUID permanente
+      String getFichaKey(Map f) {
+        final u = f['uuid']?.toString();
+        if (u != null && u.isNotEmpty) return 'u:$u';
+        final id = f['id']?.toString();
+        if (id != null && id.isNotEmpty) return 'id:$id';
+        final seq = f['sequenceNumber']?.toString();
+        if (seq != null && seq.isNotEmpty) return 'seq:$seq';
+        final lid = f['localId']?.toString();
+        if (lid != null && lid.isNotEmpty) return 'lid:$lid';
+        return UniqueKey().toString();
+      }
+
       final Map<String, dynamic> mergedMap = {};
       for (final sf in serverFichas) {
-        final key = sf['id']?.toString() ?? sf['sequenceNumber']?.toString() ?? UniqueKey().toString();
-        mergedMap[key] = sf;
+        if (sf is Map) {
+          final key = getFichaKey(sf);
+          mergedMap[key] = sf;
+        }
       }
       for (final of in offlineFichas) {
-        final key = of['id']?.toString() ?? of['sequenceNumber']?.toString() ?? UniqueKey().toString();
+        final key = getFichaKey(of);
         if (!mergedMap.containsKey(key)) {
           mergedMap[key] = of;
         }
@@ -125,6 +139,73 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
         );
       }
     }
+  }
+
+  Widget _buildCodeBadge(Map<String, dynamic> ficha) {
+    final visibleCode = ficha['visibleCode']?.toString();
+    final isOffline = ficha['isOfflinePending'] == true;
+    final uuid = ficha['uuid']?.toString();
+    final seq = ficha['sequenceNumber']?.toString();
+
+    if (visibleCode != null && visibleCode.isNotEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF4FC3F7)),
+        ),
+        child: Text(
+          visibleCode,
+          style: const TextStyle(
+            color: Color(0xFF4FC3F7),
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+            fontFamily: 'monospace',
+          ),
+        ),
+      );
+    }
+
+    if (isOffline || visibleCode == null) {
+      if (uuid != null && uuid.isNotEmpty) {
+        final prov = 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.orangeAccent),
+          ),
+          child: Text(
+            prov,
+            style: const TextStyle(
+              color: Colors.orangeAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+        );
+      }
+    }
+
+    final fallbackCode = seq ?? (ficha['id'] != null ? '#${ficha['id']}' : 'S/N');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        fallbackCode,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 11,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
   }
 
   @override
@@ -171,9 +252,17 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                         ),
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(
-                          title: Text(
-                            ficha['name'] ?? ficha['mainContact'] ?? 'Sem Nome',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  ficha['name'] ?? ficha['mainContact'] ?? 'Sem Nome',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _buildCodeBadge(Map<String, dynamic>.from(ficha as Map)),
+                            ],
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,18 +277,40 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                   style: const TextStyle(color: Colors.white54, fontSize: 12),
                                 ),
                               const SizedBox(height: 4),
-                              Builder(
-                                builder: (context) {
-                                  final statusInfo = _getStatusDisplay(Map<String, dynamic>.from(ficha as Map));
-                                  return Text(
-                                    statusInfo['label'] as String,
-                                    style: TextStyle(
-                                      color: statusInfo['color'] as Color,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
+                              Row(
+                                children: [
+                                  Builder(
+                                    builder: (context) {
+                                      final statusInfo = _getStatusDisplay(Map<String, dynamic>.from(ficha as Map));
+                                      return Text(
+                                        statusInfo['label'] as String,
+                                        style: TextStyle(
+                                          color: statusInfo['color'] as Color,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  if (isOffline || ficha['visibleCode'] == null) ...[
+                                    const SizedBox(width: 8),
+                                    const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.sync_problem, size: 13, color: Colors.orangeAccent),
+                                        SizedBox(width: 3),
+                                        Text(
+                                          'Aguardando sincronização',
+                                          style: TextStyle(
+                                            color: Colors.orangeAccent,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  );
-                                },
+                                  ],
+                                ],
                               ),
                             ],
                           ),
@@ -345,13 +456,17 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     }
 
     final seq = ficha['sequenceNumber'] ?? 'S/N';
+    final visibleCode = ficha['visibleCode'] ??
+        (ficha['uuid'] != null && ficha['uuid'].toString().isNotEmpty
+            ? 'PROV-${ficha['uuid'].toString().substring(0, ficha['uuid'].toString().length >= 8 ? 8 : ficha['uuid'].toString().length).toUpperCase()}'
+            : seq);
     final city = ficha['city'] ?? 'Sem Cidade';
     final eventName = ficha['eventName'] ?? 'Evento Desconhecido';
     
     bluetooth.printNewLine();
     bluetooth.printCustom("LUMORA - FICHA UNICA", 2, 1);
     bluetooth.printNewLine();
-    bluetooth.printCustom("Ficha: $seq", 2, 1);
+    bluetooth.printCustom("Ficha: $visibleCode", 2, 1);
     bluetooth.printCustom("Evento: $eventName", 1, 1);
     bluetooth.printCustom("Cidade: $city", 1, 1);
     bluetooth.printNewLine();

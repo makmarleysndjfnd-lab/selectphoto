@@ -275,12 +275,23 @@ class _AdminDashboardState extends State<AdminDashboard>
       for (var client in clients) {
         if (reboloIds.contains(client['id'].toString())) continue;
 
+        final visibleCode = client['visibleCode']?.toString();
+        final uuid = client['uuid']?.toString();
+        final seq = (client['sequenceNumber'] ?? 'S/N').toString();
+        final displayCode = (visibleCode != null && visibleCode.isNotEmpty)
+            ? visibleCode
+            : (uuid != null && uuid.isNotEmpty
+                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                : seq);
+
         final b = {
           'id': client['id'],
-          'ficha': client['sequenceNumber'] ?? 'S/N',
-          'lote': 'N/A',
-          'qr': client['sequenceNumber'] ?? 'S/N',
-          'cliente': client['name'] ?? 'Cliente',
+          'uuid': uuid,
+          'visibleCode': visibleCode,
+          'ficha': displayCode,
+          'lote': client['batch']?['name'] ?? client['batchId'] ?? 'N/A',
+          'qr': (uuid != null && uuid.isNotEmpty) ? uuid : seq,
+          'cliente': client['name'] ?? client['clientName'] ?? 'Cliente',
           'city': client['city'],
           'photographerId': client['photographerId'],
           'rawClientData': client,
@@ -402,13 +413,24 @@ class _AdminDashboardState extends State<AdminDashboard>
             ? (nonSales.last['reason']?.toString() ?? 'Não-venda')
             : (raw['outcomeStatus']?.toString() ?? bookStatus);
 
+        final visibleCode = raw['visibleCode']?.toString();
+        final uuid = raw['uuid']?.toString();
+        final displayCode = (visibleCode != null && visibleCode.isNotEmpty)
+            ? visibleCode
+            : (uuid != null && uuid.isNotEmpty
+                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                : seq);
+
         final b = {
           'id': raw['id']?.toString() ?? '',
+          'uuid': uuid,
+          'visibleCode': visibleCode,
           'client': clientName,
           'cliente': clientName,
           'name': clientName,
           'seq': seq,
-          'ficha': seq,
+          'ficha': displayCode,
+          'qr': (uuid != null && uuid.isNotEmpty) ? uuid : seq,
           'sequenceNumber': seq,
           'lote': raw['batch']?['name'] ?? raw['batchId'] ?? 'Rebolo',
           'reason': reason,

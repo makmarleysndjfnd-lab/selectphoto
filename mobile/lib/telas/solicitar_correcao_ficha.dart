@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../servicos/servico_api.dart';
+import '../utils/brazilian_phone_formatter.dart';
 import '../widgets/led_button.dart';
 
 
@@ -159,9 +161,9 @@ class _SolicitarCorrecaoFichaState extends State<SolicitarCorrecaoFicha> {
               const SizedBox(height: 8),
               _buildTextField('Nome Principal', _nomeController, Icons.person),
               const SizedBox(height: 12),
-              _buildTextField('WhatsApp 1', _telefoneController, FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
+              _buildTextField('WhatsApp 1', _telefoneController, FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone, inputFormatters: [BrazilianPhoneFormatter()]),
               const SizedBox(height: 12),
-              _buildTextField('WhatsApp 2 (Opcional)', _telefone2Controller, FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone),
+              _buildTextField('WhatsApp 2 (Opcional)', _telefone2Controller, FontAwesomeIcons.whatsapp, keyboardType: TextInputType.phone, inputFormatters: [BrazilianPhoneFormatter()]),
               const SizedBox(height: 12),
               _buildTextField('Profissão', _professionController, Icons.work),
               const SizedBox(height: 24),
@@ -242,12 +244,13 @@ class _SolicitarCorrecaoFichaState extends State<SolicitarCorrecaoFicha> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller, IconData? icon, {int maxLines = 1, TextInputType? keyboardType, String? Function(String?)? validator}) {
+  Widget _buildTextField(String label, TextEditingController controller, IconData? icon, {int maxLines = 1, TextInputType? keyboardType, List<TextInputFormatter>? inputFormatters, String? Function(String?)? validator}) {
     return TextFormField(
       controller: controller,
       style: const TextStyle(color: Colors.white),
       maxLines: maxLines,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: Colors.white54),

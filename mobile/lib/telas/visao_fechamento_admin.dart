@@ -183,7 +183,11 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                         clients.where((c) => c['batchId'] == batchId).toList();
                     final clientCount = cityClients.length;
                     final sequenceNumbers = cityClients
-                        .map((c) => c['sequenceNumber'] ?? 'S/N')
+                        .map((c) => (c['visibleCode'] ??
+                                (c['uuid'] != null && c['uuid'].toString().isNotEmpty
+                                    ? 'PROV-${c['uuid'].toString().substring(0, c['uuid'].toString().length >= 8 ? 8 : c['uuid'].toString().length).toUpperCase()}'
+                                    : (c['sequenceNumber'] ?? 'S/N')))
+                            .toString())
                         .join(', ');
 
                     return Column(
@@ -257,12 +261,17 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   runSpacing: 12,
                   children: looseClients.map((c) {
                     final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
+                    final code = (c['visibleCode'] ??
+                            (c['uuid'] != null && c['uuid'].toString().isNotEmpty
+                                ? 'PROV-${c['uuid'].toString().substring(0, c['uuid'].toString().length >= 8 ? 8 : c['uuid'].toString().length).toUpperCase()}'
+                                : (c['sequenceNumber'] ?? '#${c['id']}')))
+                        .toString();
                     return ActionChip(
                       backgroundColor: Colors.transparent,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                           side: const BorderSide(color: Colors.redAccent)),
-                      label: Text('Resgatar: $name',
+                      label: Text('Resgatar: [$code] $name',
                           style: const TextStyle(color: Colors.redAccent)),
                       onPressed: () async {
                         final messenger = ScaffoldMessenger.of(context);
