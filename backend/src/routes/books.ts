@@ -215,29 +215,56 @@ router.put('/batch/:id/release', authMiddleware, async (req: AuthRequest, res) =
 // Receive returned book (Admin)
 router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const { sequenceNumber } = req.body;
+        const { sequenceNumber, clientId } = req.body;
         const companyId = req.user?.companyId;
 
         if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Empresa não identificada' });
         }
 
-        const client = await prisma.client.findUnique({
-            where: { sequenceNumber },
+        const client = await prisma.client.findFirst({
+            where: {
+                ...(clientId ? { id: clientId } : { sequenceNumber }),
+                ...(companyId ? { companyId } : {}),
+            },
             include: { nonSales: true }
         });
 
-        if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN')) {
+        if (!client) {
             return res.status(404).json({ error: 'Book not found' });
         }
         if (client.bookStatus !== 'AWAITING_RETURN') return res.status(400).json({ error: 'Book is not awaiting return' });
 
+        const currentCycle = client.commercialCycle || 1;
         const nonSalesCount = client.nonSales ? client.nonSales.length : 0;
-        const nextBookStatus = nonSalesCount >= 2 ? 'DISCARDED' : 'IN_STOCK_REBOLO';
+        const isSecondNonSale = currentCycle >= 2 || nonSalesCount >= 2;
+        const nextBookStatus = isSecondNonSale ? 'DISCARDED' : 'IN_STOCK_REBOLO';
+        const nextCycle = isSecondNonSale ? currentCycle : 2;
 
         const updated = await prisma.client.update({
             where: { id: client.id },
-            data: { bookStatus: nextBookStatus, assignedSellerId: null }
+            data: {
+              bookStatus: nextBookStatus,
+              assignedSellerId: null,
+              commercialCycle: nextCycle,
+            }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: currentCycle,
+            previousStatus: client.bookStatus,
+            newStatus: nextBookStatus,
+            previousSellerId: client.assignedSellerId,
+            newSellerId: null,
+            authorId: req.user?.id,
+            authorRole: req.user?.role,
+            action: 'RECEIVE_RETURN',
+            reason: isSecondNonSale
+              ? 'Devolução física da 2ª não-venda recebida pelo Admin; ficha encerrada definitivamente (descarte)'
+              : 'Devolução da 1ª não-venda recebida pelo Admin; ficha movida para estoque de rebolo',
+          },
         });
 
         res.json(updated);
@@ -379,8 +406,24 @@ router.put('/client/:id/force-release', authMiddleware, async (req: AuthRequest,
             where: { id: client.id },
             data: { 
                 bookStatus: 'IN_STOCK',
+                assignedSellerId: null,
                 batchId
             }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: client.commercialCycle || 1,
+            previousStatus: client.bookStatus,
+            newStatus: 'IN_STOCK',
+            previousSellerId: client.assignedSellerId,
+            newSellerId: null,
+            authorId: req.user?.id,
+            authorRole: req.user?.role,
+            action: 'FORCE_RELEASE_ADMIN',
+            reason: 'Ficha liberada para estoque central pelo Admin',
+          },
         });
 
         res.json({ message: 'Ficha liberada com sucesso', client: updated });
@@ -406,7 +449,22 @@ router.put('/client/:id/force-return-to-stock', authMiddleware, async (req: Auth
 
         const updated = await prisma.client.update({
             where: { id: client.id },
-            data: { bookStatus: 'IN_STOCK' }
+            data: { bookStatus: 'IN_STOCK', assignedSellerId: null }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: client.commercialCycle || 1,
+            previousStatus: client.bookStatus,
+            newStatus: 'IN_STOCK',
+            previousSellerId: client.assignedSellerId,
+            newSellerId: null,
+            authorId: req.user?.id,
+            authorRole: req.user?.role,
+            action: 'FORCE_RETURN_TO_STOCK',
+            reason: 'Admin resgatou a posse da ficha de volta para o estoque central',
+          },
         });
 
         res.json({ message: 'Ficha resgatada para estoque', client: updated });
@@ -434,6 +492,21 @@ router.put('/client/:id/force-return', authMiddleware, async (req: AuthRequest, 
         const updated = await prisma.client.update({
             where: { id: client.id },
             data: { bookStatus: 'AWAITING_RETURN' }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: client.commercialCycle || 1,
+            previousStatus: client.bookStatus,
+            newStatus: 'AWAITING_RETURN',
+            previousSellerId: client.assignedSellerId,
+            newSellerId: client.assignedSellerId,
+            authorId: sellerId,
+            authorRole: req.user?.role,
+            action: 'FORCE_RETURN_SELLER',
+            reason: 'Vendedor enviou ficha para devolução ao Admin',
+          },
         });
 
         // Notify Admins
@@ -474,7 +547,22 @@ router.put('/client/:id/force-return-rebolo-stock', authMiddleware, async (req: 
 
         const updated = await prisma.client.update({
             where: { id: client.id },
-            data: { bookStatus: 'IN_STOCK_REBOLO' }
+            data: { bookStatus: 'IN_STOCK_REBOLO', assignedSellerId: null }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: client.commercialCycle || 2,
+            previousStatus: client.bookStatus,
+            newStatus: 'IN_STOCK_REBOLO',
+            previousSellerId: client.assignedSellerId,
+            newSellerId: null,
+            authorId: req.user?.id,
+            authorRole: req.user?.role,
+            action: 'FORCE_RETURN_REBOLO_STOCK',
+            reason: 'Admin resgatou ficha de rebolo para o estoque de rebolo',
+          },
         });
 
         res.json({ message: 'Rebolo resgatado para estoque', client: updated });
@@ -502,6 +590,21 @@ router.put('/client/:id/force-return-rebolo', authMiddleware, async (req: AuthRe
         const updated = await prisma.client.update({
             where: { id: client.id },
             data: { bookStatus: 'AWAITING_RETURN' }
+        });
+
+        await prisma.clientTimeline.create({
+          data: {
+            clientId: client.id,
+            cycle: client.commercialCycle || 2,
+            previousStatus: client.bookStatus,
+            newStatus: 'AWAITING_RETURN',
+            previousSellerId: client.assignedSellerId,
+            newSellerId: client.assignedSellerId,
+            authorId: sellerId,
+            authorRole: req.user?.role,
+            action: 'FORCE_RETURN_REBOLO_SELLER',
+            reason: 'Vendedor devolveu ficha de rebolo para o Admin',
+          },
         });
 
         // Notify Admins

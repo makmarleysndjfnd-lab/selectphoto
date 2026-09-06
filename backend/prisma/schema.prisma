@@ -139,6 +139,8 @@ model Client {
   companyId       String?
   signatureUrl    String?
   assignedSellerId String?
+  localId         String?
+  commercialCycle Int           @default(1)
 
   company         Company?      @relation(fields: [companyId], references: [id])
   batch           BookBatch?    @relation(fields: [batchId], references: [id])
@@ -152,10 +154,32 @@ model Client {
   sales           Sale[]
   sellerPhotos    SellerPhoto[]
   editRequests    ClientEditRequest[]
+  timeline        ClientTimeline[]
 
   @@index([companyId, assignedSellerId, city])
   @@index([outcomeStatus])
   @@index([cityClosedAt])
+  @@index([localId])
+}
+
+model ClientTimeline {
+  id               String   @id @default(uuid())
+  clientId         String
+  cycle            Int      @default(1)
+  previousStatus   String?
+  newStatus        String
+  previousSellerId String?
+  newSellerId      String?
+  authorId         String?
+  authorRole       String?
+  action           String
+  reason           String?
+  metadata         Json?
+  timestamp        DateTime @default(now())
+
+  client           Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, timestamp])
 }
 
 model Child {
@@ -193,6 +217,9 @@ model Sale {
   status        String   @default("PRONTO")
   hasCover      Boolean  @default(true)
   receiptUrl    String?
+  sheetPhotoUrl String?
+  reportNotes   String?
+  isLegacy      Boolean  @default(false)
 
   sellerRating       Int?
   photographerRating Int?
@@ -214,6 +241,7 @@ model NonSale {
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?
+  cycle        Int      @default(1)
   supersededAt DateTime?
   supersededBySaleId String?
 

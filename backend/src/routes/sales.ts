@@ -10,7 +10,19 @@ const prisma = new PrismaClient();
 const SALE_MANAGER_ROLES = ['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'];
 
 function parseSaleInput(body: any) {
-  const { clientId, value, city, product, fichaNumber, paymentMethod } = body;
+  const {
+    clientId,
+    value,
+    city,
+    product,
+    fichaNumber,
+    paymentMethod,
+    reportNotes,
+    notes,
+    sellerRating,
+    photographerRating,
+    contactRating,
+  } = body;
   const parsedValue = Number(value);
 
   if (!clientId || value === undefined || !city) {
@@ -20,6 +32,12 @@ function parseSaleInput(body: any) {
     throw { status: 400, message: 'O valor da venda deve ser maior que zero' };
   }
 
+  const parseRating = (val: any) => {
+    if (val === undefined || val === null || val === '') return null;
+    const num = Number(val);
+    return Number.isFinite(num) ? Math.round(num) : null;
+  };
+
   return {
     clientId: String(clientId),
     value: parsedValue,
@@ -27,6 +45,10 @@ function parseSaleInput(body: any) {
     product: product ? String(product).trim() : 'Mídias fotográficas',
     fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
     paymentMethod: paymentMethod ? String(paymentMethod).trim() : 'CASH',
+    reportNotes: reportNotes ? String(reportNotes).trim() : (notes ? String(notes).trim() : null),
+    sellerRating: parseRating(sellerRating),
+    photographerRating: parseRating(photographerRating),
+    contactRating: parseRating(contactRating),
   };
 }
 
@@ -102,6 +124,7 @@ async function finalizeSaleWithReceipt(params: {
   sellerId: string;
   companyId: string;
   receiptUrl: string;
+  sheetPhotoUrl?: string | null;
   correlationId?: string;
 }): Promise<{ sale: any; created: boolean }> {
   const input = parseSaleInput(params.body);
@@ -184,6 +207,11 @@ async function finalizeSaleWithReceipt(params: {
           paymentStatus: 'PAID',
           status: 'PRONTO',
           receiptUrl: params.receiptUrl,
+          ...(params.sheetPhotoUrl ? { sheetPhotoUrl: params.sheetPhotoUrl } : {}),
+          ...(input.reportNotes ? { reportNotes: input.reportNotes } : {}),
+          ...(input.sellerRating !== null ? { sellerRating: input.sellerRating } : {}),
+          ...(input.photographerRating !== null ? { photographerRating: input.photographerRating } : {}),
+          ...(input.contactRating !== null ? { contactRating: input.contactRating } : {}),
         },
       });
 
@@ -212,6 +240,21 @@ async function finalizeSaleWithReceipt(params: {
         },
       });
 
+      await tx.clientTimeline.create({
+        data: {
+          clientId: input.clientId,
+          cycle: client.commercialCycle || 1,
+          previousStatus: client.bookStatus,
+          newStatus: nextBookStatus,
+          previousSellerId: client.assignedSellerId,
+          newSellerId: client.assignedSellerId,
+          authorId: params.sellerId,
+          authorRole: 'SELLER',
+          action: 'SALE',
+          reason: `Venda regularizada com anexos de comprovante no valor de R$ ${input.value}`,
+        },
+      });
+
       return { sale: updatedSale, created: true };
     }
 
@@ -232,6 +275,12 @@ async function finalizeSaleWithReceipt(params: {
         paymentStatus: 'PAID',
         status: 'PRONTO',
         receiptUrl: params.receiptUrl,
+        sheetPhotoUrl: params.sheetPhotoUrl || null,
+        reportNotes: input.reportNotes || null,
+        sellerRating: input.sellerRating,
+        photographerRating: input.photographerRating,
+        contactRating: input.contactRating,
+        isLegacy: !params.sheetPhotoUrl,
       },
     });
 
@@ -257,6 +306,21 @@ async function finalizeSaleWithReceipt(params: {
         outcomeStatus: 'SOLD',
         outcomeUpdatedAt: sale.date,
         bookStatus: nextBookStatus,
+      },
+    });
+
+    await tx.clientTimeline.create({
+      data: {
+        clientId: input.clientId,
+        cycle: client.commercialCycle || 1,
+        previousStatus: client.bookStatus,
+        newStatus: nextBookStatus,
+        previousSellerId: client.assignedSellerId,
+        newSellerId: client.assignedSellerId,
+        authorId: params.sellerId,
+        authorRole: 'SELLER',
+        action: 'SALE',
+        reason: `Venda concluída no valor de R$ ${input.value} (${input.paymentMethod}) com anexos completos`,
       },
     });
 
@@ -382,57 +446,84 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
   }
 });
 
-// Fluxo atômico recomendado: comprovante obrigatório e venda concluída em uma
-// única chamada lógica. Sem comprovante não existe venda finalizada.
-router.post('/with-receipt', authenticateToken, safeUpload(upload.single('receipt')), async (req: AuthRequest, res: any) => {
-  const correlationId = (req.headers['x-correlation-id'] as string) || uuidv4().substring(0, 8);
-  const companyId = req.user?.companyId;
-  const sellerId = req.user?.id;
-  try {
-    if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
-    if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
-    if (!req.file) return res.status(400).json({ error: 'O comprovante é obrigatório para concluir a venda' });
+// Fluxo atômico recomendado: comprovante obrigatório, foto da ficha e venda concluída em uma
+// única chamada lógica. Documentação completa e persistida.
+router.post(
+  '/with-receipt',
+  authenticateToken,
+  safeUpload(upload.fields([
+    { name: 'receipt', maxCount: 1 },
+    { name: 'sheetPhoto', maxCount: 1 },
+  ])),
+  async (req: AuthRequest, res: any) => {
+    const correlationId = (req.headers['x-correlation-id'] as string) || uuidv4().substring(0, 8);
+    const companyId = req.user?.companyId;
+    const sellerId = req.user?.id;
 
-    const receiptUrl = getUploadedFileUrl(req.file);
-    if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+    const receiptFile = files?.['receipt']?.[0] || (req.file as Express.Multer.File | undefined);
+    const sheetPhotoFile = files?.['sheetPhoto']?.[0];
 
-    const result = await finalizeSaleWithReceipt({
-      body: req.body,
-      sellerId,
-      companyId,
-      receiptUrl,
-      correlationId,
-    });
+    try {
+      if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+      if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
+      if (!receiptFile) {
+        return res.status(400).json({ error: 'O comprovante é obrigatório para concluir a venda' });
+      }
 
-    // Se a venda for reutilizada (repetição idêntica) ou não foi criada agora,
-    // remove o novo arquivo recém-enviado para não deixar arquivo órfão no disco/storage.
-    if (!result.created || result.sale.receiptUrl !== receiptUrl) {
-      await removeUploadedFile(req, req.file).catch(() => undefined);
-    }
+      // Verificação da foto da ficha: obrigatória para novas vendas
+      if (!sheetPhotoFile && req.headers['x-allow-legacy-sale'] !== 'true' && process.env.ALLOW_LEGACY_SALES_WITHOUT_SHEET !== 'true') {
+        return res.status(400).json({
+          error: 'A foto legível da ficha é obrigatória para concluir a venda',
+          code: 'SHEET_PHOTO_REQUIRED',
+        });
+      }
 
-    console.info('[SALES] Venda com comprovante finalizada com sucesso:', {
-      correlationId,
-      saleId: result.sale.id,
-      created: result.created,
-    });
-    return res.status(result.created ? 201 : 200).json(result.sale);
-  } catch (error: any) {
-    // Em caso de erro ou conflito, sempre remove o arquivo enviado
-    await removeUploadedFile(req, req.file).catch(() => undefined);
-    if (error?.status && error?.message) {
-      return res.status(error.status).json({
-        error: error.message,
-        ...(error.code ? { code: error.code } : {}),
+      const receiptUrl = getUploadedFileUrl(receiptFile);
+      if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
+
+      const sheetPhotoUrl = sheetPhotoFile ? getUploadedFileUrl(sheetPhotoFile) : undefined;
+
+      const result = await finalizeSaleWithReceipt({
+        body: req.body,
+        sellerId,
+        companyId,
+        receiptUrl,
+        sheetPhotoUrl,
+        correlationId,
       });
+
+      // Se a venda for reutilizada (repetição idêntica) ou não foi criada agora,
+      // remove os novos arquivos recém-enviados para não deixar objetos órfãos.
+      if (!result.created || result.sale.receiptUrl !== receiptUrl) {
+        await removeUploadedFile(req, receiptFile).catch(() => undefined);
+        if (sheetPhotoFile) await removeUploadedFile(req, sheetPhotoFile).catch(() => undefined);
+      }
+
+      console.info('[SALES] Venda com comprovante finalizada com sucesso:', {
+        correlationId,
+        saleId: result.sale.id,
+        created: result.created,
+      });
+      return res.status(result.created ? 201 : 200).json(result.sale);
+    } catch (error: any) {
+      if (receiptFile) await removeUploadedFile(req, receiptFile).catch(() => undefined);
+      if (sheetPhotoFile) await removeUploadedFile(req, sheetPhotoFile).catch(() => undefined);
+      if (error?.status && error?.message) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+      console.error('[SALES] Falha ao concluir venda com comprovante:', {
+        correlationId,
+        name: error?.name,
+        code: error?.code,
+      });
+      return res.status(500).json({ error: 'Não foi possível concluir a venda' });
     }
-    console.error('[SALES] Falha ao concluir venda com comprovante:', {
-      correlationId,
-      name: error?.name,
-      code: error?.code,
-    });
-    return res.status(500).json({ error: 'Não foi possível concluir a venda' });
   }
-});
+);
 
 // Edit a Sale
 router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
@@ -575,6 +666,16 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
       return res.status(400).json({ error: 'Client ID, Reason, and Signature are required' });
     }
 
+    // Validação estrita: rejeitar terminantemente assinaturas fictícias
+    if (
+      signatureBase64 === 'fictitious_signature' ||
+      (typeof signatureUrl === 'string' && signatureUrl.includes('fictitious_signature'))
+    ) {
+      return res.status(400).json({
+        error: 'Assinatura fictícia rejeitada. A captura da imagem real da assinatura na tela é obrigatória.',
+      });
+    }
+
     let finalSigUrl = signatureUrl;
     if (signatureBase64) {
       finalSigUrl = signatureBase64.startsWith('data:')
@@ -641,7 +742,11 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
           sellerId: sellerId as string,
           reason: String(reason).trim(),
           signatureUrl: finalSigUrl,
+          cycle: client.commercialCycle || 1,
           companyId,
+          sellerRating: req.body.sellerRating !== undefined ? Number(req.body.sellerRating) : null,
+          photographerRating: req.body.photographerRating !== undefined ? Number(req.body.photographerRating) : null,
+          contactRating: req.body.contactRating !== undefined ? Number(req.body.contactRating) : null,
         },
       });
 
@@ -652,6 +757,22 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
           outcomeStatus: 'NON_SALE',
           outcomeUpdatedAt: nonSale.date,
           bookStatus: 'AWAITING_RETURN',
+        },
+      });
+
+      // 8. Gravar histórico auditável na linha do tempo
+      await tx.clientTimeline.create({
+        data: {
+          clientId,
+          cycle: client.commercialCycle || 1,
+          previousStatus: client.bookStatus,
+          newStatus: 'AWAITING_RETURN',
+          previousSellerId: client.assignedSellerId,
+          newSellerId: client.assignedSellerId,
+          authorId: sellerId,
+          authorRole: req.user?.role,
+          action: 'NON_SALE',
+          reason: String(reason).trim(),
         },
       });
 

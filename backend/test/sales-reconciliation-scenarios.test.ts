@@ -98,6 +98,7 @@ describe('CENÁRIOS DE VENDA, COMPROVANTE E RECONCILIAÇÃO (HOTFIX 1.0.8)', { c
     fd.set('city', 'Londrina');
     fd.set('product', 'Book Completo');
     fd.set('receipt', new Blob([Buffer.from('fake-receipt-content')], { type: 'image/jpeg' }), 'comprovante.jpg');
+    fd.set('sheetPhoto', new Blob([Buffer.from('fake-sheet-content')], { type: 'image/jpeg' }), 'folha.jpg');
     return fd;
   }
 

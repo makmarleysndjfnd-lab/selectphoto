@@ -240,6 +240,7 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
     form.set('city', 'Londrina');
     form.set('product', 'Book completo');
     form.set('receipt', new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }), 'receipt.jpg');
+    form.set('sheetPhoto', new Blob([Buffer.from('fake-sheet')], { type: 'image/jpeg' }), 'sheet.jpg');
     const res = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: {
@@ -405,7 +406,24 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
     assert.equal(preview.totalSalesValue, 1250.0);
     assert.equal(preview.isAlreadyClosed, false);
 
-    // 2. Executar Fechamento Real
+    // 2. Tentar fechar com pendência deve ser bloqueado com 409
+    const closeBlockedRes = await fetch(`${baseUrl}/api/closing/city`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenSellerA}`,
+      },
+      body: JSON.stringify({ city, event: 'Evento Principal' }),
+    });
+    assert.equal(closeBlockedRes.status, 409);
+
+    // 3. Resolver a pendência para permitir fechamento
+    await prisma.client.update({
+      where: { id: c1.id },
+      data: { outcomeStatus: 'NON_SALE', bookStatus: 'AWAITING_RETURN' },
+    });
+
+    // 4. Executar Fechamento Real
     const closeRes = await fetch(`${baseUrl}/api/closing/city`, {
       method: 'POST',
       headers: {
@@ -418,8 +436,8 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
     assert.equal(closeRes.status, 201);
     const closeData = await closeRes.json();
     assert.ok(closeData.success);
-    assert.equal(closeData.closing.pendingCount, 1);
-    assert.equal(closeData.closing.nonSaleCount, 1);
+    assert.equal(closeData.closing.pendingCount, 0);
+    assert.equal(closeData.closing.nonSaleCount, 2);
     assert.equal(closeData.closing.soldCount, 2);
     assert.equal(closeData.closing.totalSalesValue, 1250.0);
 
@@ -558,6 +576,7 @@ describe('ESCOPO 5 & 6 — Ciclo de Vida das Fichas, Fechamento de Cidade e Jane
     form.set('value', '1500');
     form.set('city', city);
     form.set('receipt', new Blob([Buffer.from('fake-jpeg')], { type: 'image/jpeg' }), 'receipt.jpg');
+    form.set('sheetPhoto', new Blob([Buffer.from('fake-sheet')], { type: 'image/jpeg' }), 'sheet.jpg');
     const saleRes = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: {

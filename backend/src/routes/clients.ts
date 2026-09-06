@@ -30,8 +30,9 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
 
   const results = {
     success: 0,
+    synced: 0,
     failed: 0,
-    details: [] as Array<{ sequenceNumber: string; success: boolean; error?: string; id?: string }>
+    details: [] as Array<{ sequenceNumber: string; success: boolean; error?: string; reason?: string; id?: string }>
   };
 
   for (const clientData of clients) {
@@ -41,12 +42,14 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         results.details.push({
           sequenceNumber: '',
           success: false,
-          error: 'Ficha sem sequenceNumber'
+          error: 'Ficha sem sequenceNumber',
+          reason: 'Ficha sem sequenceNumber'
         });
         continue;
       }
 
       const seqNum = String(clientData.sequenceNumber).trim();
+      const clientLocalId = clientData.localId ? String(clientData.localId).trim() : null;
 
       // Sanitizar dados aceitos
       const sanitizedData: Record<string, any> = {};
@@ -92,33 +95,63 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       });
 
       if (existingGlobal) {
-        if (existingGlobal.companyId === companyId) {
-          // Pertence à mesma empresa: atualiza os dados da ficha
-          const updated = await prisma.client.update({
-            where: { id: existingGlobal.id },
-            data: {
-              ...sanitizedData,
-              ...(finalSignatureUrl ? { signatureUrl: finalSignatureUrl } : {}),
-              status: 'SYNCED',
-              ...(photographerId ? { photographerId } : {}),
-              ...(assignedSellerId ? { assignedSellerId } : {}),
-            },
-          });
-          results.success++;
-          results.details.push({
-            sequenceNumber: seqNum,
-            success: true,
-            id: updated.id
-          });
-        } else {
+        if (existingGlobal.companyId !== companyId) {
           // Pertence a OUTRA empresa: NUNCA sobrescrever ou alterar cliente de outra empresa
           results.failed++;
           results.details.push({
             sequenceNumber: seqNum,
             success: false,
             error: 'Número de ficha já cadastrado em outra empresa',
+            reason: 'Número de ficha já cadastrado em outra empresa',
           });
+          continue;
         }
+
+        // Pertence à mesma empresa: verificar colisão vs repetição do mesmo cadastro
+        const isSameLocalId = Boolean(clientLocalId && existingGlobal.localId && existingGlobal.localId === clientLocalId);
+
+        // Se a ficha já avançou no ciclo e não é o mesmo localId da retentativa, rejeitar como colisão
+        if (existingGlobal.bookStatus !== 'CREATED' && !isSameLocalId) {
+          results.failed++;
+          results.details.push({
+            sequenceNumber: seqNum,
+            success: false,
+            error: 'Colisão de número de ficha: esta numeração já foi utilizada em outro atendimento ou ciclo.',
+            reason: 'Colisão de número de ficha: esta numeração já foi utilizada em outro atendimento ou ciclo.',
+          });
+          continue;
+        }
+
+        if (clientLocalId && existingGlobal.localId && existingGlobal.localId !== clientLocalId) {
+          results.failed++;
+          results.details.push({
+            sequenceNumber: seqNum,
+            success: false,
+            error: 'Colisão de número de ficha: identificador local divergente para o mesmo número.',
+            reason: 'Colisão de número de ficha: identificador local divergente para o mesmo número.',
+          });
+          continue;
+        }
+
+        // É uma retentativa legítima ou edição permitida da mesma ficha em CREATED:
+        const updated = await prisma.client.update({
+          where: { id: existingGlobal.id },
+          data: {
+            ...sanitizedData,
+            ...(clientLocalId && !existingGlobal.localId ? { localId: clientLocalId } : {}),
+            ...(finalSignatureUrl ? { signatureUrl: finalSignatureUrl } : {}),
+            status: 'SYNCED',
+            ...(photographerId ? { photographerId } : {}),
+            ...(assignedSellerId ? { assignedSellerId } : {}),
+          },
+        });
+        results.success++;
+        results.synced++;
+        results.details.push({
+          sequenceNumber: seqNum,
+          success: true,
+          id: updated.id
+        });
         continue;
       }
 
@@ -127,8 +160,11 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
           ...sanitizedData,
           name: sanitizedData.name || 'Cliente sem nome',
           sequenceNumber: seqNum,
+          localId: clientLocalId,
           signatureUrl: finalSignatureUrl,
           status: 'SYNCED',
+          bookStatus: 'CREATED',
+          commercialCycle: 1,
           companyId,
           photographerId,
           assignedSellerId,
@@ -143,7 +179,26 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         },
       });
 
+      await prisma.clientTimeline.create({
+        data: {
+          clientId: created.id,
+          cycle: 1,
+          action: 'CREATED',
+          newStatus: 'CREATED',
+          authorId: req.user?.id || photographerId || null,
+          authorRole: req.user?.role || null,
+          metadata: {
+            source: 'sync',
+            sequenceNumber: seqNum,
+            localId: clientLocalId,
+            event: sanitizedData.event || null,
+            city: sanitizedData.city || null,
+          },
+        },
+      }).catch((err) => console.error('Error creating client timeline for CREATED:', err));
+
       results.success++;
+      results.synced++;
       results.details.push({
         sequenceNumber: seqNum,
         success: true,
@@ -155,7 +210,8 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       results.details.push({
         sequenceNumber: String(clientData?.sequenceNumber || ''),
         success: false,
-        error: error.message
+        error: error.message,
+        reason: error.message
       });
     }
   }
@@ -337,12 +393,12 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
 // Assign seller to a client/book
 router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
-    const { sequenceNumber, sellerId } = req.body;
+    const { sequenceNumber, clientId, sellerId } = req.body;
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
-    if (!sequenceNumber || !sellerId) {
-      res.status(400).json({ error: 'Faltam sequenceNumber ou sellerId' });
+    if ((!sequenceNumber && !clientId) || !sellerId) {
+      res.status(400).json({ error: 'Faltam sequenceNumber/clientId ou sellerId' });
       return;
     }
 
@@ -360,11 +416,15 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
     }
 
     // Find client in same company
+    const whereClient: any = { companyId: userCompanyId };
+    if (clientId) {
+      whereClient.id = clientId;
+    } else {
+      whereClient.sequenceNumber = sequenceNumber;
+    }
+
     const existingClient = await prisma.client.findFirst({
-      where: {
-        sequenceNumber,
-        companyId: userCompanyId,
-      },
+      where: whereClient,
     });
 
     if (!existingClient) {
@@ -372,19 +432,48 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
       return;
     }
 
+    const closedStatuses = ['SOLD', 'REBOLO_SOLD', 'DISCARDED'];
+    if (closedStatuses.includes(existingClient.bookStatus)) {
+      return res.status(409).json({
+        error: `Não é permitido atribuir vendedor para ficha com status finalizado (${existingClient.bookStatus}).`,
+      });
+    }
+
     let updateData: any = { assignedSellerId: sellerId };
+    let newBookStatus = existingClient.bookStatus;
     if (existingClient.bookStatus === 'IN_STOCK_REBOLO') {
       updateData.bookStatus = 'DISTRIBUTED_REBOLO';
       updateData.outcomeStatus = 'PENDING';
       updateData.cityClosedAt = null;
-    } else if (existingClient.bookStatus === 'IN_STOCK') {
+      newBookStatus = 'DISTRIBUTED_REBOLO';
+    } else if (existingClient.bookStatus === 'IN_STOCK' || existingClient.bookStatus === 'DISTRIBUTED') {
       updateData.bookStatus = 'DISTRIBUTED';
+      newBookStatus = 'DISTRIBUTED';
     }
 
     const client = await prisma.client.update({
       where: { id: existingClient.id },
       data: updateData,
     });
+
+    await prisma.clientTimeline.create({
+      data: {
+        clientId: client.id,
+        cycle: client.commercialCycle || 1,
+        action: 'ASSIGNED_SELLER',
+        previousStatus: existingClient.bookStatus,
+        newStatus: newBookStatus,
+        previousSellerId: existingClient.assignedSellerId,
+        newSellerId: sellerId,
+        authorId: req.user?.id || null,
+        authorRole: req.user?.role || null,
+        metadata: {
+          previousSellerId: existingClient.assignedSellerId,
+          newSellerId: sellerId,
+        },
+      },
+    }).catch((err) => console.error('Error creating timeline for ASSIGNED_SELLER:', err));
+
     res.json({ success: true, client });
   } catch (error) {
     res.status(500).json({ error: 'Erro ao atribuir vendedor' });
@@ -444,7 +533,7 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
 });
 
 // Batch assign seller to multiple clients
-router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+const batchAssignHandler = async (req: AuthRequest, res: Response) => {
   try {
     const { clientIds, assignedSellerId } = req.body;
     const userCompanyId = req.user?.companyId;
@@ -493,6 +582,24 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
 
     // Transactional validation and atomic update
     const updatedCount = await prisma.$transaction(async (tx) => {
+      // 1. Rejeitar imediatamente se qualquer ficha já estiver encerrada (SOLD, REBOLO_SOLD, DISCARDED)
+      const closedStatuses = ['SOLD', 'REBOLO_SOLD', 'DISCARDED'];
+      const finalizedClients = await tx.client.findMany({
+        where: {
+          id: { in: uniqueClientIds },
+          companyId: userCompanyId,
+          bookStatus: { in: closedStatuses }
+        },
+        select: { id: true, bookStatus: true }
+      });
+
+      if (finalizedClients.length > 0) {
+        throw {
+          status: 409,
+          error: `Não é permitido atribuir vendedor para fichas com status finalizado (${finalizedClients.map(c => c.bookStatus).join(', ')}).`
+        };
+      }
+
       // Fetch all requested clients for the company that are in stock
       const clientsInStock = await tx.client.findMany({
         where: {
@@ -500,7 +607,7 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
           companyId: userCompanyId,
           bookStatus: { in: ['IN_STOCK', 'IN_STOCK_REBOLO'] }
         },
-        select: { id: true, bookStatus: true }
+        select: { id: true, bookStatus: true, commercialCycle: true, assignedSellerId: true }
       });
 
       if (clientsInStock.length !== uniqueClientIds.length) {
@@ -555,6 +662,21 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
         };
       }
 
+      // Gravar auditoria na timeline para cada ficha distribuída
+      const timelineEntries = clientsInStock.map((c) => ({
+        clientId: c.id,
+        cycle: c.commercialCycle || 1,
+        action: 'ASSIGNED_SELLER',
+        previousStatus: c.bookStatus,
+        newStatus: c.bookStatus === 'IN_STOCK_REBOLO' ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED',
+        previousSellerId: c.assignedSellerId,
+        newSellerId: assignedSellerId,
+        authorId: req.user?.id || null,
+        authorRole: req.user?.role || null,
+      }));
+
+      await tx.clientTimeline.createMany({ data: timelineEntries });
+
       return totalUpdated;
     });
 
@@ -565,6 +687,42 @@ router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, async
     }
     console.error("Erro ao atribuir lote de fichas:", error);
     res.status(500).json({ error: 'Erro ao atribuir lote de fichas' });
+  }
+};
+
+router.patch('/batch-assign', authenticateToken, requireAdminOrSupervisor, batchAssignHandler);
+router.post('/batch-assign', authenticateToken, requireAdminOrSupervisor, batchAssignHandler);
+router.post('/batch/assign-seller', authenticateToken, requireAdminOrSupervisor, batchAssignHandler);
+
+// Get client timeline audit
+router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const client = await prisma.client.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    const timeline = await prisma.clientTimeline.findMany({
+      where: { clientId: id },
+      orderBy: { timestamp: 'asc' },
+    });
+
+    res.json(timeline);
+  } catch (error) {
+    console.error('Error fetching client timeline:', error);
+    res.status(500).json({ error: 'Falha ao buscar linha do tempo da ficha' });
   }
 });
 

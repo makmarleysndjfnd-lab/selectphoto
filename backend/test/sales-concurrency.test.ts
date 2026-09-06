@@ -88,6 +88,11 @@ describe('CONCORRÊNCIA REAL E IDEMPOTÊNCIA ESTRITA EM VENDAS (HOTFIX 1.0.8)', 
       new Blob([Buffer.from(`fake-receipt-${uuidv4()}`)], { type: 'image/jpeg' }),
       'comprovante_conc.jpg'
     );
+    fd.set(
+      'sheetPhoto',
+      new Blob([Buffer.from(`fake-sheet-${uuidv4()}`)], { type: 'image/jpeg' }),
+      'folha_conc.jpg'
+    );
     return fd;
   }
 
@@ -146,13 +151,13 @@ describe('CONCORRÊNCIA REAL E IDEMPOTÊNCIA ESTRITA EM VENDAS (HOTFIX 1.0.8)', 
     const updatedClient = await prisma.client.findUnique({ where: { id: client.id } });
     assert.equal(updatedClient?.outcomeStatus, 'SOLD');
 
-    // Verificação de arquivos no disco: apenas 1 novo arquivo deve ter permanecido no diretório uploads da empresa
+    // Verificação de arquivos no disco: apenas 2 novos arquivos (comprovante + foto da ficha) devem ter permanecido no diretório uploads da empresa
     const filesAfter = fs.existsSync(companyUploadsDir) ? fs.readdirSync(companyUploadsDir) : [];
     const newFiles = filesAfter.filter((f) => !filesBefore.has(f));
     assert.equal(
       newFiles.length,
-      1,
-      `Apenas 1 arquivo de comprovante deve permanecer; arquivos órfãos encontrados: ${newFiles.length}`
+      2,
+      `Apenas 2 arquivos (comprovante + foto da ficha) devem permanecer; arquivos órfãos encontrados: ${newFiles.length}`
     );
   });
 
@@ -196,10 +201,10 @@ describe('CONCORRÊNCIA REAL E IDEMPOTÊNCIA ESTRITA EM VENDAS (HOTFIX 1.0.8)', 
     const totalSales = await prisma.sale.count({ where: { clientId: client.id } });
     assert.equal(totalSales, 1);
 
-    // O upload da 2ª chamada deve ter sido removido (apenas 1 novo arquivo gerado pela 1ª chamada)
+    // O upload da 2ª chamada deve ter sido removido (apenas os 2 arquivos gerados pela 1ª chamada)
     const filesAfter = fs.existsSync(companyUploadsDir) ? fs.readdirSync(companyUploadsDir) : [];
     const newFiles = filesAfter.filter((f) => !filesBefore.has(f));
-    assert.equal(newFiles.length, 1, 'Arquivo órfão da chamada repetida deve ser excluído');
+    assert.equal(newFiles.length, 2, 'Arquivos órfãos da chamada repetida devem ser excluídos');
   });
 
   it('3. Divergência de dados comerciais rejeita com 409 SALE_ALREADY_EXISTS e remove upload', async () => {

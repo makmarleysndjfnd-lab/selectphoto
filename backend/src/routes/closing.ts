@@ -78,6 +78,13 @@ function calculateCityClosingStats(
     if (isOpen) {
       if (c.outcomeStatus === 'PENDING') {
         pendingCount++;
+        pendingClients.push({
+          id: c.id,
+          sequenceNumber: c.sequenceNumber,
+          name: c.name,
+          city: c.city,
+          neighborhood: c.neighborhood,
+        });
       } else if (c.outcomeStatus === 'NON_SALE') {
         nonSaleCount++;
       } else if (c.outcomeStatus === 'SOLD' || validFinishedSale) {
@@ -97,13 +104,15 @@ function calculateCityClosingStats(
       const incompleteSales = sellerSales.filter((s: any) => !s.receiptUrl);
       if (incompleteSales.length > 0 && c.outcomeStatus !== 'NON_SALE' && isOpen) {
         pendingReceiptsCount += incompleteSales.length;
-        pendingClients.push({
-          id: c.id,
-          sequenceNumber: c.sequenceNumber,
-          name: c.name,
-          city: c.city,
-          neighborhood: c.neighborhood,
-        });
+        if (!pendingClients.some((p) => p.id === c.id)) {
+          pendingClients.push({
+            id: c.id,
+            sequenceNumber: c.sequenceNumber,
+            name: c.name,
+            city: c.city,
+            neighborhood: c.neighborhood,
+          });
+        }
       }
     }
   }
@@ -119,6 +128,9 @@ function calculateCityClosingStats(
   } else if (openClients.length === 0) {
     status = 409;
     blockReason = 'Esta cidade já foi encerrada anteriormente.';
+  } else if (pendingCount > 0) {
+    status = 409;
+    blockReason = `Existem ${pendingCount} ficha(s) sem desfecho (pendentes). Conclua todas as vendas ou não-vendas antes de fechar a cidade.`;
   } else if (pendingReceiptsCount > 0) {
     status = 409;
     blockReason = `Existem ${pendingReceiptsCount} venda(s) aguardando comprovante. Conclua os envios antes de fechar.`;
@@ -275,17 +287,37 @@ router.post('/cities', authenticateToken, async (req: AuthRequest, res: any) => 
           };
         }
 
-        const openClients = clients.filter((c) => c.cityClosedAt === null);
+        const openClients = clients.filter((c: any) => c.cityClosedAt === null);
+        const closableClients = openClients.filter((c: any) => c.outcomeStatus === 'SOLD' || c.outcomeStatus === 'NON_SALE');
 
-        // 1. Marcar cityClosedAt nas fichas abertas da cidade
-        await tx.client.updateMany({
-          where: {
-            id: { in: openClients.map((c) => c.id) },
-          },
-          data: {
-            cityClosedAt: now,
-          },
-        });
+        // 1. Marcar cityClosedAt APENAS nas fichas com desfecho (nunca em pendentes)
+        if (closableClients.length > 0) {
+          await tx.client.updateMany({
+            where: {
+              id: { in: closableClients.map((c) => c.id) },
+            },
+            data: {
+              cityClosedAt: now,
+            },
+          });
+
+          for (const client of closableClients) {
+            await tx.clientTimeline.create({
+              data: {
+                clientId: client.id,
+                cycle: client.commercialCycle || 1,
+                previousStatus: client.bookStatus,
+                newStatus: client.bookStatus,
+                previousSellerId: sellerId,
+                newSellerId: sellerId,
+                authorId: sellerId,
+                authorRole: 'SELLER',
+                action: 'CITY_CLOSED',
+                reason: `Cidade ${cityName} fechada pelo vendedor`,
+              },
+            });
+          }
+        }
 
         // 2. Criar registro auditável SellerCityClosing
         const closing = await tx.sellerCityClosing.create({
@@ -365,17 +397,37 @@ router.post('/city', authenticateToken, async (req: AuthRequest, res: any) => {
         };
       }
 
-      const openClients = clients.filter((c) => c.cityClosedAt === null);
+      const openClients = clients.filter((c: any) => c.cityClosedAt === null);
+      const closableClients = openClients.filter((c: any) => c.outcomeStatus === 'SOLD' || c.outcomeStatus === 'NON_SALE');
       const now = new Date();
 
-      await tx.client.updateMany({
-        where: {
-          id: { in: openClients.map((c) => c.id) },
-        },
-        data: {
-          cityClosedAt: now,
-        },
-      });
+      if (closableClients.length > 0) {
+        await tx.client.updateMany({
+          where: {
+            id: { in: closableClients.map((c) => c.id) },
+          },
+          data: {
+            cityClosedAt: now,
+          },
+        });
+
+        for (const client of closableClients) {
+          await tx.clientTimeline.create({
+            data: {
+              clientId: client.id,
+              cycle: client.commercialCycle || 1,
+              previousStatus: client.bookStatus,
+              newStatus: client.bookStatus,
+              previousSellerId: sellerId,
+              newSellerId: sellerId,
+              authorId: sellerId,
+              authorRole: 'SELLER',
+              action: 'CITY_CLOSED',
+              reason: `Cidade ${trimmedCity} fechada pelo vendedor`,
+            },
+          });
+        }
+      }
 
       const closing = await tx.sellerCityClosing.create({
         data: {
