@@ -7,8 +7,6 @@ import 'package:signature/signature.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 
 import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
@@ -604,69 +602,6 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
             ],
           );
         });
-  }
-
-  // ── GPS Reverse Geocoding ──────────────────────────────────────────────────
-  Future<void> _fetchGpsAddress() async {
-    try {
-      // Request permission
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (mounted)
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Permissão de localização negada.'),
-                backgroundColor: Colors.red));
-          return;
-        }
-      }
-      if (permission == LocationPermission.deniedForever) {
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text(
-                  'Localização bloqueada. Habilite nas configurações do celular.'),
-              backgroundColor: Colors.red));
-        return;
-      }
-
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('📍 Obtendo localização GPS...'),
-            duration: Duration(seconds: 2)));
-
-      final position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              timeLimit: Duration(seconds: 10)));
-      final placemarks =
-          await placemarkFromCoordinates(position.latitude, position.longitude);
-
-      if (placemarks.isNotEmpty) {
-        final p = placemarks.first;
-        setState(() {
-          if ((p.street ?? '').isNotEmpty) _streetController.text = p.street!;
-          if ((p.subLocality ?? '').isNotEmpty)
-            _neighborhoodController.text = p.subLocality!;
-          if ((p.locality ?? '').isNotEmpty) _cityController.text = p.locality!;
-          if ((p.administrativeArea ?? '').isNotEmpty)
-            _stateController.text = p.administrativeArea!;
-          if ((p.postalCode ?? '').isNotEmpty)
-            _cepController.text = p.postalCode!;
-        });
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:
-                Text('📍 Endereço GPS: ${p.street ?? ''}, ${p.locality ?? ''}'),
-            backgroundColor: Colors.green,
-          ));
-      }
-    } catch (e) {
-      if (mounted)
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Erro ao obter GPS: $e'),
-            backgroundColor: Colors.red));
-    }
   }
 
   // ── CEP Lookup ───────────────────────────────────────────────────────────────
@@ -1719,31 +1654,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
             const SizedBox(height: 24),
 
             // ── Endereço
-            _buildSectionTitle('Endereço & Localização'),
-            // GPS Button
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: _fetchGpsAddress,
-                icon: const Icon(Icons.my_location,
-                    color: Color(0xFF80DEEA), size: 18),
-                label: const Text('📍 Usar minha localização GPS',
-                    style: TextStyle(
-                        color: Color(0xFF80DEEA), fontWeight: FontWeight.bold)),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xFF80DEEA), width: 1.2),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(top: 4, left: 4, bottom: 8),
-              child: Text(
-                  'Toque para preencher endereço automaticamente pelo GPS do celular.',
-                  style: TextStyle(color: Colors.white38, fontSize: 11)),
-            ),
+            _buildSectionTitle('Endereço do cliente'),
             _buildTextField(_cepController, 'CEP', Icons.map,
                 keyboardType: TextInputType.number, onChanged: _onCepChanged),
             const SizedBox(height: 12),
