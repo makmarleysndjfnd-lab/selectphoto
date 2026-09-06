@@ -4,7 +4,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 
 export const CURRENT_APP_VERSION = '1.0.8';
-export const CURRENT_BUILD_NUMBER = 10;
+export const CURRENT_BUILD_NUMBER = 11;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -21,8 +21,8 @@ export interface ApkReleaseDescriptor {
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
   version: '1.0.8',
-  buildNumber: 10,
-  sha256: '96E12020647447A6B95EAE1732DD39AC0F736C530701BC45CAFFBEAB1C44F3D1',
+  buildNumber: 11,
+  sha256: '333B51C275B06112E60539B147C108EDA08333F9C3C81A30CEECE36A668F96DE',
   packageName: 'com.example.mobile',
 });
 
