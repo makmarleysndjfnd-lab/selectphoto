@@ -98,7 +98,9 @@ model User {
 
 model Client {
   id              String        @id @default(uuid())
-  sequenceNumber  String        @unique
+  uuid            String        @unique @default(uuid())
+  visibleCode     String?       @unique
+  sequenceNumber  String
   createdAt       DateTime      @default(now())
   name            String
   cep             String?
@@ -160,6 +162,13 @@ model Client {
   @@index([outcomeStatus])
   @@index([cityClosedAt])
   @@index([localId])
+  @@index([sequenceNumber])
+}
+
+model FichaCodeSequence {
+  id        Int      @id @default(1)
+  nextValue BigInt   @default(0)
+  updatedAt DateTime @updatedAt
 }
 
 model ClientTimeline {

@@ -134,9 +134,9 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                           fontWeight: FontWeight.bold),
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (client['sequenceNumber'] != null)
+                    if (client['visibleCode'] != null || client['sequenceNumber'] != null)
                       Text(
-                        client['sequenceNumber'].toString(),
+                        (client['visibleCode'] ?? client['sequenceNumber']).toString(),
                         style: const TextStyle(
                             color: Color(0xFF4FC3F7),
                             fontSize: 11,
@@ -184,7 +184,7 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                           fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      client['sequenceNumber'] ?? '',
+                      (client['visibleCode'] ?? client['sequenceNumber'] ?? '').toString(),
                       style: const TextStyle(
                           color: Color(0xFF4FC3F7),
                           fontSize: 12,
@@ -1776,7 +1776,7 @@ class _ScheduleTabState extends State<_ScheduleTab> {
             Expanded(
               child: isSelected
                   ? Text(
-                      '${widget.client['name']} (Ficha: ${widget.client['sequenceNumber']})',
+                      '${widget.client['name']} (Ficha: ${widget.client['visibleCode'] ?? widget.client['sequenceNumber']})',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14,

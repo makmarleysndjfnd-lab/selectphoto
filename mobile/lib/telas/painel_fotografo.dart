@@ -123,6 +123,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
   bool _isLoading = false;
   String? _generatedQrCodeData;
+  String? _currentFichaUuid;
+  String? _confirmedVisibleCode;
+  bool _isFichaSynced = false;
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -260,7 +263,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   Future<void> _saveFormDraft() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      _currentFichaUuid ??= SyncService.generateUuid();
       final draft = {
+        'currentFichaUuid': _currentFichaUuid,
+        'confirmedVisibleCode': _confirmedVisibleCode,
+        'isFichaSynced': _isFichaSynced,
         'name': _nameController.text,
         'phone': _phoneController.text,
         'phone2': _phone2Controller.text,
@@ -294,6 +301,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       if (draftStr != null && draftStr.isNotEmpty) {
         final draft = jsonDecode(draftStr) as Map<String, dynamic>;
         setState(() {
+          _currentFichaUuid = draft['currentFichaUuid']?.toString() ?? SyncService.generateUuid();
+          _confirmedVisibleCode = draft['confirmedVisibleCode']?.toString();
+          _isFichaSynced = draft['isFichaSynced'] == true;
           _nameController.text = draft['name'] ?? '';
           _phoneController.text = draft['phone'] ?? '';
           _phone2Controller.text = draft['phone2'] ?? '';
@@ -846,6 +856,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       final sequenceNumber =
           '$photographerCode-$eventAbbrev-$_currentCityLote-$seqString';
 
+      _currentFichaUuid ??= SyncService.generateUuid();
+      final fichaUuid = _currentFichaUuid!;
       final localId = SyncService.generateUuid();
 
       final apiService = Provider.of<ApiService>(context, listen: false);
@@ -853,6 +865,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
       final payload = {
         'localId': localId,
+        'uuid': fichaUuid,
         'sequenceNumber': sequenceNumber,
         'event': _currentEventName,
         'name': _nameController.text,
@@ -888,12 +901,21 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
           throw Exception('Rejeitado pelo servidor');
         }
         persistedSuccessfully = true;
+        final details = syncResult['details'];
+        String? confirmedCode;
+        if (details is List && details.isNotEmpty && details[0] is Map) {
+          confirmedCode = details[0]['visibleCode']?.toString();
+        }
+        _confirmedVisibleCode = confirmedCode;
+        _isFichaSynced = true;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('Ficha salva e sincronizada com o servidor!'),
               backgroundColor: Colors.green));
         }
       } catch (e) {
+        _confirmedVisibleCode = null;
+        _isFichaSynced = false;
         final enqueued =
             await syncService.addPendingRequest('SYNC_CLIENTS', payload);
         if (enqueued) {
@@ -921,7 +943,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         }
 
         setState(() {
-          _generatedQrCodeData = sequenceNumber;
+          _generatedQrCodeData = fichaUuid;
           _sequenceCount++; // Increment for next client
           _fichasHojeCount++; // Atualiza UI de Hoje
         });
@@ -936,6 +958,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
   void _resetForm() {
     _clearFormDraft();
+    _currentFichaUuid = null;
+    _confirmedVisibleCode = null;
+    _isFichaSynced = false;
     _nameController.clear();
     _cepController.clear();
     _streetController.clear();
@@ -975,12 +1000,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
+    final displayCode = (_isFichaSynced && _confirmedVisibleCode != null)
+        ? _confirmedVisibleCode!
+        : 'PROV-${(_currentFichaUuid ?? _generatedQrCodeData ?? "").substring(0, (_currentFichaUuid ?? _generatedQrCodeData ?? "").length >= 8 ? 8 : (_currentFichaUuid ?? _generatedQrCodeData ?? "").length).toUpperCase()} (Aguardando sincronização)';
+
     bluetooth.printNewLine();
     bluetooth.printCustom("LUMORA - FICHA COMPLETA", 2, 1);
     bluetooth.printNewLine();
     bluetooth.printCustom("Evento: $_currentEventName", 1, 0);
     bluetooth.printCustom("Lote/Cidade: $_currentCityLote", 1, 0);
-    bluetooth.printCustom("Ficha: $_generatedQrCodeData", 1, 0);
+    bluetooth.printCustom("Ficha: $displayCode", 1, 0);
     bluetooth.printNewLine();
     bluetooth.printCustom("Nome: ${_nameController.text}", 0, 0);
     bluetooth.printCustom("Telefone: ${_phoneController.text}", 0, 0);
@@ -2022,19 +2051,83 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                         size: 220.0),
                   ),
                   const SizedBox(height: 24),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                        color: Colors.black26,
-                        borderRadius: BorderRadius.circular(8)),
-                    child: Text('Ficha: $_generatedQrCodeData',
-                        style: const TextStyle(
-                            color: Color(0xFF4FC3F7),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                            fontFamily: 'monospace')),
-                  ),
+                  if (_isFichaSynced && _confirmedVisibleCode != null) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFF1E293B),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: const Color(0xFF4FC3F7).withOpacity(0.5))),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Ficha: $_confirmedVisibleCode',
+                            style: const TextStyle(
+                                color: Color(0xFF4FC3F7),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20,
+                                fontFamily: 'monospace'),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.check_circle,
+                                  color: Colors.greenAccent, size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                'Sincronizada com o servidor',
+                                style: TextStyle(
+                                    color: Colors.greenAccent,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: Colors.orangeAccent.withOpacity(0.7))),
+                      child: Column(
+                        children: [
+                          Text(
+                            'Provisório: PROV-${(_currentFichaUuid ?? _generatedQrCodeData ?? "").substring(0, (_currentFichaUuid ?? _generatedQrCodeData ?? "").length >= 8 ? 8 : (_currentFichaUuid ?? _generatedQrCodeData ?? "").length).toUpperCase()}',
+                            style: const TextStyle(
+                                color: Colors.orangeAccent,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                                fontFamily: 'monospace'),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.sync_problem,
+                                  color: Colors.orangeAccent, size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                'Aguardando sincronização',
+                                style: TextStyle(
+                                    color: Colors.orangeAccent,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

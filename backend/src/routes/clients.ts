@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import { getNextVisibleCode } from '../utils/visibleCode';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -32,23 +34,33 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
     success: 0,
     synced: 0,
     failed: 0,
-    details: [] as Array<{ sequenceNumber: string; success: boolean; error?: string; reason?: string; id?: string }>
+    details: [] as Array<{
+      sequenceNumber: string;
+      uuid?: string;
+      visibleCode?: string | null;
+      success: boolean;
+      error?: string;
+      reason?: string;
+      id?: string;
+    }>
   };
 
   for (const clientData of clients) {
     try {
-      if (!clientData || !clientData.sequenceNumber) {
+      if (!clientData || (!clientData.sequenceNumber && !clientData.uuid && !clientData.localId)) {
         results.failed++;
         results.details.push({
           sequenceNumber: '',
           success: false,
-          error: 'Ficha sem sequenceNumber',
-          reason: 'Ficha sem sequenceNumber'
+          error: 'Ficha sem identificador permanente ou sequenceNumber',
+          reason: 'Ficha sem identificador permanente ou sequenceNumber'
         });
         continue;
       }
 
-      const seqNum = String(clientData.sequenceNumber).trim();
+      const seqNum = String(clientData.sequenceNumber || '').trim();
+      const rawUuid = clientData.uuid || clientData.localId;
+      const clientUuid = rawUuid ? String(rawUuid).trim() : randomUUID();
       const clientLocalId = clientData.localId ? String(clientData.localId).trim() : null;
 
       // Sanitizar dados aceitos
@@ -89,56 +101,53 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         finalSignatureUrl = `data:image/png;base64,${clientData.signatureBase64}`;
       }
 
-      // Localizar se já existe ficha com esse sequenceNumber (mesma empresa ou outra empresa)
-      const existingGlobal = await prisma.client.findUnique({
-        where: { sequenceNumber: seqNum },
+      // 1. Localizar se já existe ficha com esse UUID permanente
+      let existing = await prisma.client.findUnique({
+        where: { uuid: clientUuid },
       });
 
-      if (existingGlobal) {
-        if (existingGlobal.companyId !== companyId) {
+      // Fallback para fichas legadas que vieram apenas com sequenceNumber
+      if (!existing && seqNum) {
+        existing = await prisma.client.findFirst({
+          where: { sequenceNumber: seqNum, companyId },
+        });
+      }
+
+      if (existing) {
+        if (existing.companyId !== companyId) {
           // Pertence a OUTRA empresa: NUNCA sobrescrever ou alterar cliente de outra empresa
           results.failed++;
           results.details.push({
-            sequenceNumber: seqNum,
+            sequenceNumber: seqNum || existing.sequenceNumber,
+            uuid: clientUuid,
             success: false,
-            error: 'Número de ficha já cadastrado em outra empresa',
-            reason: 'Número de ficha já cadastrado em outra empresa',
+            error: 'Ficha já cadastrada em outra empresa',
+            reason: 'Ficha já cadastrada em outra empresa',
           });
           continue;
         }
 
-        // Pertence à mesma empresa: verificar colisão vs repetição do mesmo cadastro
-        const isSameLocalId = Boolean(clientLocalId && existingGlobal.localId && existingGlobal.localId === clientLocalId);
-
-        // Se a ficha já avançou no ciclo e não é o mesmo localId da retentativa, rejeitar como colisão
-        if (existingGlobal.bookStatus !== 'CREATED' && !isSameLocalId) {
-          results.failed++;
+        // Pertence à mesma empresa: retentativa idempotente legítima
+        // Se a ficha já avançou além de CREATED, mantemos o estado e retornamos sucesso idempotente
+        if (existing.bookStatus !== 'CREATED') {
+          results.success++;
+          results.synced++;
           results.details.push({
-            sequenceNumber: seqNum,
-            success: false,
-            error: 'Colisão de número de ficha: esta numeração já foi utilizada em outro atendimento ou ciclo.',
-            reason: 'Colisão de número de ficha: esta numeração já foi utilizada em outro atendimento ou ciclo.',
+            sequenceNumber: existing.sequenceNumber,
+            uuid: existing.uuid,
+            visibleCode: existing.visibleCode,
+            success: true,
+            id: existing.id
           });
           continue;
         }
 
-        if (clientLocalId && existingGlobal.localId && existingGlobal.localId !== clientLocalId) {
-          results.failed++;
-          results.details.push({
-            sequenceNumber: seqNum,
-            success: false,
-            error: 'Colisão de número de ficha: identificador local divergente para o mesmo número.',
-            reason: 'Colisão de número de ficha: identificador local divergente para o mesmo número.',
-          });
-          continue;
-        }
-
-        // É uma retentativa legítima ou edição permitida da mesma ficha em CREATED:
+        // Se ainda está em CREATED, atualiza com os dados mais recentes do formulário
         const updated = await prisma.client.update({
-          where: { id: existingGlobal.id },
+          where: { id: existing.id },
           data: {
             ...sanitizedData,
-            ...(clientLocalId && !existingGlobal.localId ? { localId: clientLocalId } : {}),
+            ...(clientLocalId && !existing.localId ? { localId: clientLocalId } : {}),
             ...(finalSignatureUrl ? { signatureUrl: finalSignatureUrl } : {}),
             status: 'SYNCED',
             ...(photographerId ? { photographerId } : {}),
@@ -148,59 +157,73 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         results.success++;
         results.synced++;
         results.details.push({
-          sequenceNumber: seqNum,
+          sequenceNumber: updated.sequenceNumber,
+          uuid: updated.uuid,
+          visibleCode: updated.visibleCode,
           success: true,
           id: updated.id
         });
         continue;
       }
 
-      const created = await prisma.client.create({
-        data: {
-          ...sanitizedData,
-          name: sanitizedData.name || 'Cliente sem nome',
-          sequenceNumber: seqNum,
-          localId: clientLocalId,
-          signatureUrl: finalSignatureUrl,
-          status: 'SYNCED',
-          bookStatus: 'CREATED',
-          commercialCycle: 1,
-          companyId,
-          photographerId,
-          assignedSellerId,
-          children: Array.isArray(clientData.children)
-            ? {
-                create: clientData.children.map((c: any) => ({
-                  name: String(c.name || '').trim(),
-                  age: typeof c.age === 'string' ? parseInt(c.age, 10) : (c.age || 0),
-                })),
-              }
-            : undefined,
-        },
-      });
-
-      await prisma.clientTimeline.create({
-        data: {
-          clientId: created.id,
-          cycle: 1,
-          action: 'CREATED',
-          newStatus: 'CREATED',
-          authorId: req.user?.id || photographerId || null,
-          authorRole: req.user?.role || null,
-          metadata: {
-            source: 'sync',
-            sequenceNumber: seqNum,
+      // 2. Ficha nova: criação atômica com geração de visibleCode
+      const { created } = await prisma.$transaction(async (tx) => {
+        const visibleCode = await getNextVisibleCode(tx);
+        const newClient = await tx.client.create({
+          data: {
+            ...sanitizedData,
+            name: sanitizedData.name || 'Cliente sem nome',
+            uuid: clientUuid,
+            visibleCode,
+            sequenceNumber: seqNum || visibleCode,
             localId: clientLocalId,
-            event: sanitizedData.event || null,
-            city: sanitizedData.city || null,
+            signatureUrl: finalSignatureUrl,
+            status: 'SYNCED',
+            bookStatus: 'CREATED',
+            commercialCycle: 1,
+            companyId,
+            photographerId,
+            assignedSellerId,
+            children: Array.isArray(clientData.children)
+              ? {
+                  create: clientData.children.map((c: any) => ({
+                    name: String(c.name || '').trim(),
+                    age: typeof c.age === 'string' ? parseInt(c.age, 10) : (c.age || 0),
+                  })),
+                }
+              : undefined,
           },
-        },
-      }).catch((err) => console.error('Error creating client timeline for CREATED:', err));
+        });
+
+        await tx.clientTimeline.create({
+          data: {
+            clientId: newClient.id,
+            cycle: 1,
+            action: 'CREATED',
+            newStatus: 'CREATED',
+            authorId: req.user?.id || photographerId || null,
+            authorRole: req.user?.role || null,
+            metadata: {
+              source: 'sync',
+              uuid: clientUuid,
+              visibleCode,
+              sequenceNumber: seqNum || visibleCode,
+              localId: clientLocalId,
+              event: sanitizedData.event || null,
+              city: sanitizedData.city || null,
+            },
+          },
+        });
+
+        return { created: newClient };
+      });
 
       results.success++;
       results.synced++;
       results.details.push({
-        sequenceNumber: seqNum,
+        sequenceNumber: created.sequenceNumber,
+        uuid: created.uuid,
+        visibleCode: created.visibleCode,
         success: true,
         id: created.id
       });
@@ -209,6 +232,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       results.failed++;
       results.details.push({
         sequenceNumber: String(clientData?.sequenceNumber || ''),
+        uuid: clientData?.uuid ? String(clientData.uuid) : undefined,
         success: false,
         error: error.message,
         reason: error.message
@@ -393,11 +417,14 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
 // Assign seller to a client/book
 router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
-    const { sequenceNumber, clientId, sellerId } = req.body;
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
-    if ((!sequenceNumber && !clientId) || !sellerId) {
+    const { sequenceNumber, clientId, sellerId, identifier: bodyIdentifier, uuid: bodyUuid } = req.body;
+    const rawIdentifier = clientId || sequenceNumber || bodyIdentifier || bodyUuid || '';
+    const identifier = String(rawIdentifier).trim();
+
+    if (!identifier || !sellerId) {
       res.status(400).json({ error: 'Faltam sequenceNumber/clientId ou sellerId' });
       return;
     }
@@ -415,16 +442,17 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
       return;
     }
 
-    // Find client in same company
-    const whereClient: any = { companyId: userCompanyId };
-    if (clientId) {
-      whereClient.id = clientId;
-    } else {
-      whereClient.sequenceNumber = sequenceNumber;
-    }
-
+    // Find client in same company by any valid identifier
     const existingClient = await prisma.client.findFirst({
-      where: whereClient,
+      where: {
+        companyId: userCompanyId,
+        OR: [
+          { id: identifier },
+          { uuid: identifier },
+          { visibleCode: identifier },
+          { sequenceNumber: identifier },
+        ]
+      },
     });
 
     if (!existingClient) {
@@ -475,8 +503,9 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
     }).catch((err) => console.error('Error creating timeline for ASSIGNED_SELLER:', err));
 
     res.json({ success: true, client });
-  } catch (error) {
-    res.status(500).json({ error: 'Erro ao atribuir vendedor' });
+  } catch (error: any) {
+    console.error('Error in assign-seller:', error);
+    res.status(500).json({ error: 'Erro ao atribuir vendedor', message: error?.message });
   }
 });
 

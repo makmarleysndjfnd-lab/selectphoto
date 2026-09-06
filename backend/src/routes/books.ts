@@ -216,6 +216,8 @@ router.put('/batch/:id/release', authMiddleware, async (req: AuthRequest, res) =
 router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const { sequenceNumber, clientId } = req.body;
+        const rawIdentifier = clientId || sequenceNumber || req.body.identifier || req.body.uuid || '';
+        const identifier = String(rawIdentifier).trim();
         const companyId = req.user?.companyId;
 
         if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
@@ -224,8 +226,13 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
 
         const client = await prisma.client.findFirst({
             where: {
-                ...(clientId ? { id: clientId } : { sequenceNumber }),
                 ...(companyId ? { companyId } : {}),
+                OR: [
+                    { id: identifier },
+                    { uuid: identifier },
+                    { visibleCode: identifier },
+                    { sequenceNumber: identifier },
+                ]
             },
             include: { nonSales: true }
         });
@@ -644,12 +651,16 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
             where: {
                 companyId,
                 OR: [
+                    { uuid: { contains: q as string, mode: 'insensitive' } },
+                    { visibleCode: { contains: q as string, mode: 'insensitive' } },
                     { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
                     { name: { contains: q as string, mode: 'insensitive' } }
                 ]
             },
             select: {
                 id: true,
+                uuid: true,
+                visibleCode: true,
                 sequenceNumber: true,
                 name: true,
                 bookStatus: true,

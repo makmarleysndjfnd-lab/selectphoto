@@ -179,7 +179,13 @@ class _SellerDashboardState extends State<SellerDashboard>
     if (code.isEmpty) return;
 
     final found = _sellerClients.firstWhere(
-      (c) => (c['sequenceNumber'] as String).toUpperCase() == code,
+      (c) {
+        final seq = (c['sequenceNumber'] ?? '').toString().trim().toUpperCase();
+        final vis = (c['visibleCode'] ?? '').toString().trim().toUpperCase();
+        final uid = (c['uuid'] ?? '').toString().trim().toUpperCase();
+        final cid = (c['id'] ?? '').toString().trim().toUpperCase();
+        return seq == code || vis == code || uid == code || cid == code;
+      },
       orElse: () => {},
     );
 
@@ -255,9 +261,16 @@ class _SellerDashboardState extends State<SellerDashboard>
     if (_searchQuery.isEmpty) return activeClients;
     final q = _searchQuery.toLowerCase();
     return activeClients.where((c) {
-      return (c['name'] as String).toLowerCase().contains(q) ||
-          (c['sequenceNumber'] as String).toLowerCase().contains(q) ||
-          ((c['city'] as String?) ?? '').toLowerCase().contains(q);
+      final name = ((c['name'] as String?) ?? '').toLowerCase();
+      final seq = ((c['sequenceNumber'] as String?) ?? '').toLowerCase();
+      final vis = ((c['visibleCode'] as String?) ?? '').toLowerCase();
+      final uid = ((c['uuid'] as String?) ?? '').toLowerCase();
+      final city = ((c['city'] as String?) ?? '').toLowerCase();
+      return name.contains(q) ||
+          seq.contains(q) ||
+          vis.contains(q) ||
+          uid.contains(q) ||
+          city.contains(q);
     }).toList();
   }
 
@@ -1883,7 +1896,7 @@ class _SellerDashboardState extends State<SellerDashboard>
               style: const TextStyle(color: Colors.white)),
         ),
         title: Text(client['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        subtitle: Text('Ficha ${client['sequenceNumber']} - ${client['visitTime'] ?? 'Sem horário'}', 
+        subtitle: Text('Ficha ${client['visibleCode'] ?? client['sequenceNumber'] ?? ''} - ${client['visitTime'] ?? 'Sem horário'}', 
           style: TextStyle(color: Colors.white.withOpacity(0.7))),
         trailing: const Icon(Icons.chevron_right, color: Colors.white54),
       ),
@@ -2069,7 +2082,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                     runSpacing: 4,
                     children: [
                       Text(
-                        'Ficha ${client['sequenceNumber'] ?? ''} · ${client['city'] ?? ''}',
+                        'Ficha ${client['visibleCode'] ?? client['sequenceNumber'] ?? ''} · ${client['city'] ?? ''}',
                         style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
                       ),
                       badgeWidget,
