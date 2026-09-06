@@ -178,7 +178,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     final prefs = await SharedPreferences.getInstance();
     final city = prefs.getString('lote_city');
     final event = prefs.getString('lote_event_name');
-    final seq = prefs.getInt('lote_sequence_count') ?? 1;
+    final photographerCode = prefs.getString('photographer_code') ?? '0000';
+    int seq = 1;
+    if (city != null && event != null) {
+      final eventAbbrev = _abbreviateEvent(event);
+      final seqKey = _getSequenceKey(photographerCode, eventAbbrev, city);
+      seq = prefs.getInt(seqKey) ?? prefs.getInt('lote_sequence_count') ?? 1;
+    } else {
+      seq = prefs.getInt('lote_sequence_count') ?? 1;
+    }
     final fichas = prefs.getStringList('lote_session_fichas') ?? <String>[];
 
     if (mounted) {
@@ -498,14 +506,25 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     final event = eventCtrl.text;
 
                     final prefs = await SharedPreferences.getInstance();
+                    final photographerCode =
+                        prefs.getString('photographer_code') ?? '0000';
+                    final eventAbbrev = _abbreviateEvent(event);
+                    final seqKey =
+                        _getSequenceKey(photographerCode, eventAbbrev, city);
+                    final seq = prefs.getInt(seqKey) ??
+                        prefs.getInt('lote_sequence_count') ??
+                        1;
+
                     await prefs.setString('lote_city', city);
                     await prefs.setString('lote_event_name', event);
                     await prefs.setStringList('lote_session_fichas', []);
+                    await prefs.setInt('lote_sequence_count', seq);
 
                     if (mounted) {
                       setState(() {
                         _currentCityLote = city;
                         _currentEventName = event;
+                        _sequenceCount = seq;
                         _sessionFichas = [];
                       });
                       Navigator.pop(context);
@@ -806,21 +825,34 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
     try {
       final signatureBytes = await _signatureController.toPngBytes();
-      final base64Signature = base64Encode(signatureBytes!);
+      if (signatureBytes == null || signatureBytes.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('A assinatura é obrigatória.'),
+              backgroundColor: Colors.red));
+        }
+        return;
+      }
+      final base64Signature = base64Encode(signatureBytes);
 
       final seqString = _sequenceCount.toString().padLeft(4, '0');
 
       final prefs = await SharedPreferences.getInstance();
       final photographerCode = prefs.getString('photographer_code') ?? '0000';
       final eventAbbrev = _abbreviateEvent(_currentEventName!);
+      final seqKey =
+          _getSequenceKey(photographerCode, eventAbbrev, _currentCityLote!);
 
       final sequenceNumber =
           '$photographerCode-$eventAbbrev-$_currentCityLote-$seqString';
+
+      final localId = SyncService.generateUuid();
 
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
       final payload = {
+        'localId': localId,
         'sequenceNumber': sequenceNumber,
         'event': _currentEventName,
         'name': _nameController.text,
@@ -848,32 +880,55 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         'signatureBase64': base64Signature,
       };
 
+      bool persistedSuccessfully = false;
       try {
-        await apiService.syncClients([payload]);
-        if (mounted)
+        final syncResult = await apiService.syncClients([payload]);
+        final failed = syncResult['failed'];
+        if (failed is int && failed > 0) {
+          throw Exception('Rejeitado pelo servidor');
+        }
+        persistedSuccessfully = true;
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Sincronizado com o servidor!'),
+              content: Text('Ficha salva e sincronizada com o servidor!'),
               backgroundColor: Colors.green));
+        }
       } catch (e) {
-        await syncService.addPendingRequest('SYNC_CLIENTS', payload);
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text(
-                  'Cadastro salvo no aparelho e aguardando sincronização.'),
-              backgroundColor: Colors.orange));
+        final enqueued =
+            await syncService.addPendingRequest('SYNC_CLIENTS', payload);
+        if (enqueued) {
+          persistedSuccessfully = true;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text(
+                    'Cadastro salvo no aparelho e aguardando sincronização.'),
+                backgroundColor: Colors.orange));
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text(
+                    'Erro: falha ao salvar ficha no aparelho. Tente novamente.'),
+                backgroundColor: Colors.red));
+          }
+          return;
+        }
       }
 
-      if (!_sessionFichas.contains(sequenceNumber)) {
-        _sessionFichas.add(sequenceNumber);
-      }
+      if (persistedSuccessfully) {
+        if (!_sessionFichas.contains(sequenceNumber)) {
+          _sessionFichas.add(sequenceNumber);
+        }
 
-      setState(() {
-        _generatedQrCodeData = sequenceNumber;
-        _sequenceCount++; // Increment for next client
-        _fichasHojeCount++; // Atualiza UI de Hoje
-      });
-      await prefs.setInt('lote_sequence_count', _sequenceCount);
-      await prefs.setStringList('lote_session_fichas', _sessionFichas);
+        setState(() {
+          _generatedQrCodeData = sequenceNumber;
+          _sequenceCount++; // Increment for next client
+          _fichasHojeCount++; // Atualiza UI de Hoje
+        });
+        await prefs.setInt(seqKey, _sequenceCount);
+        await prefs.setInt('lote_sequence_count', _sequenceCount);
+        await prefs.setStringList('lote_session_fichas', _sessionFichas);
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -969,6 +1024,14 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     return single.length > 5
         ? single.substring(0, 5).toUpperCase()
         : single.toUpperCase();
+  }
+
+  String _getSequenceKey(
+      String photographerCode, String eventAbbrev, String city) {
+    final cleanCity =
+        city.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
+    final cleanEvent = eventAbbrev.trim().toLowerCase();
+    return 'lote_seq_${photographerCode}_${cleanEvent}_${cleanCity}';
   }
 
   void _printLote() async {

@@ -15,7 +15,8 @@ class MockApiService extends Fake implements ApiService {
 
   @override
   Future<String> registerSaleWithReceipt(
-      Map<String, dynamic> saleData, String receiptFilePath) async {
+      Map<String, dynamic> saleData, String receiptFilePath,
+      {String? sheetPhotoPath}) async {
     if (shouldHangSales && hangCompleter != null) {
       await hangCompleter!.future;
     }

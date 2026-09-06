@@ -356,11 +356,20 @@ class ApiService {
   }
 
   // Sync Offline Clients
-  Future<void> syncClients(List<Map<String, dynamic>> clientsData) async {
+  Future<Map<String, dynamic>> syncClients(
+      List<Map<String, dynamic>> clientsData) async {
     try {
-      await _dio.post('/clients/sync', data: {'clients': clientsData});
+      final response =
+          await _dio.post('/clients/sync', data: {'clients': clientsData});
+      if (response.data is Map<String, dynamic>) {
+        return response.data as Map<String, dynamic>;
+      }
+      return {'success': true, 'raw': response.data};
     } on DioException catch (e) {
-      throw Exception(_extractError(e));
+      throw ApiRequestException(
+        _extractError(e),
+        retryable: _isRetryable(e),
+      );
     }
   }
 
@@ -434,14 +443,20 @@ class ApiService {
   }
 
   Future<String> registerSaleWithReceipt(
-      Map<String, dynamic> saleData, String filePath) async {
+      Map<String, dynamic> saleData, String filePath,
+      {String? sheetPhotoPath}) async {
     try {
       final fields = <String, dynamic>{};
       for (final entry in saleData.entries) {
-        if (entry.key == 'pendingReceiptPath' || entry.value == null) continue;
+        if (entry.key == 'pendingReceiptPath' ||
+            entry.key == 'pendingSheetPhotoPath' ||
+            entry.value == null) continue;
         fields[entry.key] = entry.value.toString();
       }
       fields['receipt'] = await MultipartFile.fromFile(filePath);
+      if (sheetPhotoPath != null && sheetPhotoPath.trim().isNotEmpty) {
+        fields['sheetPhoto'] = await MultipartFile.fromFile(sheetPhotoPath);
+      }
       final response = await _dio.post('/sales/with-receipt',
           data: FormData.fromMap(fields));
       return response.data['id'].toString();

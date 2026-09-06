@@ -650,7 +650,8 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: ListTile(
                   title: Text(c['name']?.toString() ?? 'Cliente',
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                  subtitle: Text('Ficha ${c['sequenceNumber'] ?? ''} • ${c['neighborhood'] ?? ''}',
+                  subtitle: Text(
+                      'Ficha ${c['sequenceNumber'] ?? ''} • ${c['reason'] ?? c['neighborhood'] ?? ''}',
                       style: const TextStyle(color: Colors.white70, fontSize: 12)),
                   trailing: ElevatedButton(
                     style: ElevatedButton.styleFrom(
@@ -667,7 +668,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                       );
                       _openClientDetail(fullClient);
                     },
-                    child: const Text('Anexar', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    child: const Text('Resolver', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   ),
                 ),
               );

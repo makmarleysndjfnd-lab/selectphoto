@@ -769,19 +769,18 @@ class _SaleTab extends StatefulWidget {
 class _SaleTabState extends State<_SaleTab> {
   final _valorVendaController = TextEditingController();
   final _numeroFichaController = TextEditingController();
+  final _reportNotesController = TextEditingController();
   bool _isLoading = false;
 
   String _product = 'Book completo capa +Book+mídias';
   String _paymentMethod = 'CASH';
   bool _hasCover = true;
-  // ignore: unused_field
   double _sellerRating = 0;
-  // ignore: unused_field
   double _photoRating = 0;
-  // ignore: unused_field
   double _contactRating = 0;
 
   File? _receiptPhoto;
+  File? _sheetPhoto;
 
   void _submit() async {
     if (_isLoading) return;
@@ -793,6 +792,13 @@ class _SaleTabState extends State<_SaleTab> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Informe um valor de venda válido.'),
           backgroundColor: Colors.red));
+      return;
+    }
+    if (_sheetPhoto == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('Tire a foto da folha da ficha antes de confirmar a venda.'),
+          backgroundColor: Colors.orange));
       return;
     }
     if (_receiptPhoto == null) {
@@ -817,10 +823,15 @@ class _SaleTabState extends State<_SaleTab> {
         'paymentStatus': 'PAID',
         'fichaNumber': _numeroFichaController.text,
         'paymentMethod': _paymentMethod,
+        'reportNotes': _reportNotesController.text,
+        'sellerRating': _sellerRating,
+        'photoRating': _photoRating,
+        'contactRating': _contactRating,
       };
 
       try {
-        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path);
+        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path,
+            sheetPhotoPath: _sheetPhoto!.path);
       } on ApiRequestException catch (e) {
         if (!e.retryable) rethrow;
         final storageDir = await getApplicationSupportDirectory();
@@ -828,18 +839,26 @@ class _SaleTabState extends State<_SaleTab> {
             '${storageDir.path}${Platform.pathSeparator}pending_receipts');
         await pendingDir.create(recursive: true);
         final persistedReceipt = await _receiptPhoto!.copy(
-          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_${SyncService.generateUuid()}.jpg',
+          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_receipt_${SyncService.generateUuid()}.jpg',
+        );
+        final persistedSheet = await _sheetPhoto!.copy(
+          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_sheet_${SyncService.generateUuid()}.jpg',
         );
         final queued = await syncService.addPendingRequest('REGISTER_SALE', {
           ...payload,
           'pendingReceiptPath': persistedReceipt.path,
+          'pendingSheetPhotoPath': persistedSheet.path,
         });
         if (queued) {
           if (mounted) {
-            setState(() => _isLoading = false);
+            setState(() {
+              _isLoading = false;
+              _receiptPhoto = null;
+              _sheetPhoto = null;
+            });
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
-                  'Sem confirmação do servidor. Venda e comprovante ficaram aguardando sincronização.'),
+                  'Sem confirmação do servidor. Venda, comprovante e ficha ficaram aguardando sincronização.'),
               backgroundColor: Colors.orange,
             ));
           }
@@ -847,6 +866,9 @@ class _SaleTabState extends State<_SaleTab> {
           try {
             if (await persistedReceipt.exists()) {
               await persistedReceipt.delete();
+            }
+            if (await persistedSheet.exists()) {
+              await persistedSheet.delete();
             }
           } catch (_) {}
           if (mounted) {
@@ -865,10 +887,12 @@ class _SaleTabState extends State<_SaleTab> {
       setState(() {
         _isLoading = false;
         _receiptPhoto = null;
+        _sheetPhoto = null;
       });
       _valorVendaController.clear();
       _numeroFichaController.clear();
-      widget.onSuccess('Venda e comprovante registrados com sucesso!');
+      _reportNotesController.clear();
+      widget.onSuccess('Venda, ficha e comprovante registrados com sucesso!');
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -878,6 +902,13 @@ class _SaleTabState extends State<_SaleTab> {
               backgroundColor: Colors.red),
         );
       }
+    }
+  }
+
+  void _takeSheetPhoto() async {
+    final result = await MediaPickerService().pickSaleEvidencePhoto(context);
+    if (result != null) {
+      setState(() => _sheetPhoto = result.file);
     }
   }
 
@@ -985,6 +1016,30 @@ class _SaleTabState extends State<_SaleTab> {
               const SizedBox(height: 16),
               const Divider(color: Colors.white12),
               const SizedBox(height: 12),
+              if (activeSale['sheetPhotoUrl'] != null &&
+                  activeSale['sheetPhotoUrl'].toString().trim().isNotEmpty) ...[
+                const Text('Foto da Folha / Ficha:',
+                    style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Container(
+                  height: 180,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AuthenticatedImage(
+                        url: activeSale['sheetPhotoUrl'].toString(),
+                        fit: BoxFit.cover),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               const Text('Comprovante de Pagamento:',
                   style: TextStyle(
                       color: Colors.white70,
@@ -1186,11 +1241,56 @@ class _SaleTabState extends State<_SaleTab> {
                   fontWeight: FontWeight.bold,
                   fontSize: 14)),
           const SizedBox(height: 12),
-          _buildRatingField('Vendedor', (r) => _sellerRating = r),
+          _buildRatingField(
+              'Vendedor', (r) => setState(() => _sellerRating = r)),
           const SizedBox(height: 12),
-          _buildRatingField('Fotógrafo', (r) => _photoRating = r),
+          _buildRatingField(
+              'Fotógrafo', (r) => setState(() => _photoRating = r)),
           const SizedBox(height: 12),
-          _buildRatingField('O Contato', (r) => _contactRating = r),
+          _buildRatingField(
+              'O Contato', (r) => setState(() => _contactRating = r)),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _reportNotesController,
+            maxLines: 2,
+            style: const TextStyle(color: Colors.white),
+            decoration: _fieldDecoration('Anotações do Relatório de Vendas',
+                Icons.rate_review_outlined),
+          ),
+          const SizedBox(height: 24),
+          const Text('Foto da Folha da Ficha (obrigatório)',
+              style: TextStyle(
+                  color: Color(0xFF90CAF9),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14)),
+          const SizedBox(height: 12),
+          if (_sheetPhoto != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(_sheetPhoto!,
+                  height: 140, width: double.infinity, fit: BoxFit.cover),
+            ),
+            TextButton.icon(
+              onPressed: _takeSheetPhoto,
+              icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+              label: const Text('Tirar outra foto da folha',
+                  style: TextStyle(color: Color(0xFF4FC3F7))),
+            ),
+          ] else ...[
+            OutlinedButton.icon(
+              onPressed: _takeSheetPhoto,
+              icon: const Icon(Icons.document_scanner_rounded,
+                  color: Color(0xFF4FC3F7)),
+              label: const Text('Tirar foto da folha da ficha',
+                  style: TextStyle(color: Color(0xFF4FC3F7))),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 56),
+                side: const BorderSide(color: Color(0xFF4FC3F7)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           const Text('Comprovante de pagamento (obrigatório)',
               style: TextStyle(
@@ -1333,10 +1433,22 @@ class _NonSaleTabState extends State<_NonSaleTab> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
+      final signatureBytes = await _sigController.toPngBytes();
+      if (signatureBytes == null || signatureBytes.isEmpty) {
+        setState(() => _isLoading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('A assinatura é obrigatória.'),
+              behavior: SnackBarBehavior.floating));
+        }
+        return;
+      }
+      final base64Signature = base64Encode(signatureBytes);
+
       final payload = {
         'clientId': widget.client['id'],
         'reason': reasonToSubmit,
-        'signatureBase64': 'fictitious_signature',
+        'signatureBase64': base64Signature,
         'sellerRating': _sellerRating,
         'photoRating': _photoRating,
         'contactRating': _contactRating,

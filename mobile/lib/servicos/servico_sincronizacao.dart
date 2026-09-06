@@ -384,6 +384,19 @@ class SyncService extends ChangeNotifier {
           return false;
         }
 
+        final pendingSheetPhotoPath =
+            payload['pendingSheetPhotoPath'] as String?;
+        if (pendingSheetPhotoPath != null &&
+            pendingSheetPhotoPath.trim().isNotEmpty &&
+            (!_checkFileExists(pendingSheetPhotoPath) ||
+                !isPathInsideControlledDirectory(pendingSheetPhotoPath))) {
+          if (kDebugMode) {
+            print(
+                '[SyncService] Venda com foto da folha/ficha inválida na pasta controlada não pode ser enfileirada offline.');
+          }
+          return false;
+        }
+
         // Se já existia pendência deste cliente, coleta o caminho antigo para remoção posterior à persistência
         if (payload['clientId'] != null) {
           final existingSales = _pendingRequests
@@ -397,6 +410,11 @@ class SyncService extends ChangeNotifier {
             final oldPath = oldSale.payload['pendingReceiptPath'] as String?;
             if (oldPath != null && oldPath != pendingReceiptPath) {
               oldReceiptsToDelete.add(oldPath);
+            }
+            final oldSheet =
+                oldSale.payload['pendingSheetPhotoPath'] as String?;
+            if (oldSheet != null && oldSheet != pendingSheetPhotoPath) {
+              oldReceiptsToDelete.add(oldSheet);
             }
           }
         }
@@ -481,6 +499,10 @@ class SyncService extends ChangeNotifier {
         if (req.type == 'REGISTER_SALE') {
           final path = req.payload['pendingReceiptPath'] as String?;
           await _safeDeleteControlledReceipt(path);
+          final sheetPath = req.payload['pendingSheetPhotoPath'] as String?;
+          if (sheetPath != null && sheetPath.isNotEmpty) {
+            await _safeDeleteControlledReceipt(sheetPath);
+          }
         }
       }
 
@@ -539,16 +561,40 @@ class SyncService extends ChangeNotifier {
 
           try {
             if (req.type == 'SYNC_CLIENTS') {
-              await apiService.syncClients([req.payload]);
+              final result = await apiService.syncClients([req.payload]);
+              final failed = result['failed'];
+              if (failed is int && failed > 0) {
+                final details = result['details'] as List<dynamic>?;
+                final errReason = (details != null && details.isNotEmpty)
+                    ? details
+                        .map((d) => d['reason'] ?? d['status'])
+                        .join(', ')
+                    : 'Falha ao sincronizar ficha';
+                throw StateError(
+                    'Sincronização rejeitada pelo servidor: $errReason');
+              }
+              final synced = result['synced'] ?? result['success'];
+              if (synced != null && (synced is int && synced == 0)) {
+                throw StateError('Nenhuma ficha foi aceita pelo servidor.');
+              }
               success = true;
             } else if (req.type == 'REGISTER_SALE') {
               final pendingReceiptPath =
                   req.payload['pendingReceiptPath'] as String?;
+              final pendingSheetPhotoPath =
+                  req.payload['pendingSheetPhotoPath'] as String?;
               if (pendingReceiptPath != null &&
                   pendingReceiptPath.isNotEmpty &&
                   _checkFileExists(pendingReceiptPath)) {
+                if (pendingSheetPhotoPath != null &&
+                    pendingSheetPhotoPath.isNotEmpty &&
+                    !_checkFileExists(pendingSheetPhotoPath)) {
+                  throw StateError(
+                      'Foto da ficha local ausente ou inacessível.');
+                }
                 await apiService.registerSaleWithReceipt(
-                    req.payload, pendingReceiptPath);
+                    req.payload, pendingReceiptPath,
+                    sheetPhotoPath: pendingSheetPhotoPath);
 
                 // Persistência transacional da remoção do item antes de apagar a foto
                 final candidate =
@@ -558,6 +604,10 @@ class SyncService extends ChangeNotifier {
                   _pendingRequests = candidate;
                   _safeNotifyListeners();
                   await _safeDeleteControlledReceipt(pendingReceiptPath);
+                  if (pendingSheetPhotoPath != null &&
+                      pendingSheetPhotoPath.isNotEmpty) {
+                    await _safeDeleteControlledReceipt(pendingSheetPhotoPath);
+                  }
                   success = true;
                 } else {
                   throw StateError(
