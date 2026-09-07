@@ -3,10 +3,10 @@ import 'package:mobile/config/app_config.dart';
 
 void main() {
   group('0. Verificação da Versão Efetivamente Compilada no AppConfig', () {
-    test('AppConfig reflete fielmente a release 1.0.8+14', () {
+    test('AppConfig reflete fielmente a release 1.0.8+15', () {
       expect(AppConfig.appVersion, equals('1.0.8'));
-      expect(AppConfig.buildNumber, equals(14));
-      expect(AppConfig.fullVersion, equals('1.0.8+14'));
+      expect(AppConfig.buildNumber, equals(15));
+      expect(AppConfig.fullVersion, equals('1.0.8+15'));
     });
   });
 
@@ -49,26 +49,26 @@ void main() {
   group('2. Comparação de Build Number e Resposta Real do Backend (AppConfig.shouldPromptUpdate)', () {
     const validUrl = 'https://selectphoto-k1ac.onrender.com/apk/app-release.apk';
 
-    // Testes usando a versão instalada padrão (1.0.8+14)
-    test('instalada padrão (1.0.8+14) / remota version "1.0.8" e buildNumber 15: atualizar', () {
+    // Testes usando a versão instalada padrão (1.0.8+15)
+    test('instalada padrão (1.0.8+15) / remota version "1.0.8" e buildNumber 16: atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
         remoteVersion: '1.0.8',
-        remoteBuildNumber: 15,
+        remoteBuildNumber: 16,
         downloadUrl: validUrl,
       );
       expect(shouldUpdate, isTrue);
     });
 
-    test('instalada padrão (1.0.8+14) / remota version "1.0.8" e buildNumber 14: não atualizar', () {
+    test('instalada padrão (1.0.8+15) / remota version "1.0.8" e buildNumber 15: não atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
         remoteVersion: '1.0.8',
-        remoteBuildNumber: 14,
+        remoteBuildNumber: 15,
         downloadUrl: validUrl,
       );
       expect(shouldUpdate, isFalse);
     });
 
-    test('instalada padrão (1.0.8+14) / remota version "1.0.9" e buildNumber 1: atualizar', () {
+    test('instalada padrão (1.0.8+15) / remota version "1.0.9" e buildNumber 1: atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
         remoteVersion: '1.0.9',
         remoteBuildNumber: 1,

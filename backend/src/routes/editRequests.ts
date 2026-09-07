@@ -2,6 +2,7 @@ import express, { Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
 
 dotenv.config();
 
@@ -71,6 +72,17 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     if (!client) {
       res.status(404).json({ error: 'Cliente não encontrado ou não pertence à sua empresa' });
       return;
+    }
+
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      if (client.photographerId !== userId) {
+        res.status(403).json({ error: 'Acesso não autorizado a esta ficha' });
+        return;
+      }
+      if (isClientClosedForPhotographer(client)) {
+        res.status(403).json({ error: 'Ficha não disponível para edição: cidade já encerrada' });
+        return;
+      }
     }
 
     const sanitizedData = sanitizeProposedData(proposedData);

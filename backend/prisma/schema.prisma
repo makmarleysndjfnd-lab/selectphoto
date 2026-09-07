@@ -134,6 +134,7 @@ model Client {
   outcomeStatus   String        @default("PENDING") // PENDING, NON_SALE, SOLD
   outcomeUpdatedAt DateTime?
   cityClosedAt    DateTime?
+  photographerClosedAt DateTime?
   batchId         String?
   releasedForRouting Boolean    @default(false)
   photographerId  String?
@@ -161,6 +162,7 @@ model Client {
   @@index([companyId, assignedSellerId, city])
   @@index([outcomeStatus])
   @@index([cityClosedAt])
+  @@index([photographerClosedAt])
   @@index([localId])
   @@index([sequenceNumber])
 }

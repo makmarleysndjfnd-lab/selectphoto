@@ -90,7 +90,13 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
             _buildCompactHeader(client)
           else
             _buildHeader(client),
-          if (!isKeyboardOpen) _buildClientInfo(client),
+          if (!isKeyboardOpen && !widget.isFotografo) _buildClientInfo(client),
+          if (!isKeyboardOpen && widget.isFotografo)
+            Expanded(
+              child: SingleChildScrollView(
+                child: _buildClientInfo(client),
+              ),
+            ),
           if (!widget.isFotografo) _buildTabBar(),
           if (!widget.isFotografo) Expanded(child: _buildTabView(client)),
         ],
@@ -537,7 +543,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                             ),
                           ),
                         ],
-                        if (client['nonSales'] != null &&
+                        if (!widget.isFotografo &&
+                            client['nonSales'] != null &&
                             client['nonSales'] is List &&
                             (client['nonSales'] as List).isNotEmpty) ...[
                           const SizedBox(height: 8),

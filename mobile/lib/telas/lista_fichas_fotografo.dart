@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'package:intl/intl.dart';
@@ -32,23 +34,8 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
       case 'AWAITING_RELEASE':
         return {'label': '⏳ Aguardando liberação (Admin)', 'color': const Color(0xFF64B5F6)};
       case 'IN_STOCK':
-        return {'label': '📦 Em Estoque', 'color': const Color(0xFF81C784)};
-      case 'DISTRIBUTED':
-        return {'label': '🚗 Distribuída (Vendedor)', 'color': const Color(0xFF4DB6AC)};
-      case 'SOLD':
-        return {'label': '✅ Vendida', 'color': Colors.greenAccent};
-      case 'AWAITING_RETURN':
-        return {'label': '↩️ Aguardando devolução', 'color': const Color(0xFFBA68C8)};
-      case 'IN_STOCK_REBOLO':
-        return {'label': '🔄 Rebolo (Disponível)', 'color': const Color(0xFFFF8A65)};
-      case 'DISTRIBUTED_REBOLO':
-        return {'label': '🔄 Rebolo (Com vendedor)', 'color': const Color(0xFFFFB74D)};
-      case 'REBOLO_SOLD':
-        return {'label': '💰 Rebolo (Vendido)', 'color': Colors.greenAccent};
-      case 'DISCARDED':
-        return {'label': '🗑️ Descarte defeituoso', 'color': Colors.redAccent};
       default:
-        return {'label': status, 'color': Colors.white70};
+        return {'label': '📦 Recebida / Em estoque', 'color': const Color(0xFF81C784)};
     }
   }
 
@@ -62,12 +49,23 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
     setState(() => _isLoading = true);
     try {
       final syncService = Provider.of<SyncService>(context, listen: false);
+      final prefs = await SharedPreferences.getInstance();
       List<dynamic> serverFichas = [];
+
       try {
         final fichas = await ApiService().getClientsByPhotographer();
         serverFichas = (fichas as List).toList();
+        // Atualiza a cópia local de consulta, expurgando automaticamente qualquer registro desautorizado
+        await prefs.setString('cached_photographer_fichas', jsonEncode(serverFichas));
       } catch (e) {
         debugPrint('Erro ao buscar fichas online do fotógrafo: $e');
+        // Se falhou por rede/offline, utiliza a cópia local autorizada salva anteriormente
+        final cachedStr = prefs.getString('cached_photographer_fichas');
+        if (cachedStr != null && cachedStr.isNotEmpty) {
+          try {
+            serverFichas = jsonDecode(cachedStr) as List<dynamic>;
+          } catch (_) {}
+        }
       }
 
       // Buscar fichas offline pendentes na fila do SyncService
@@ -167,7 +165,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
       );
     }
 
-    if (isOffline || visibleCode == null) {
+    if (isOffline) {
       if (uuid != null && uuid.isNotEmpty) {
         final prov = 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}';
         return Container(
@@ -190,7 +188,9 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
       }
     }
 
-    final fallbackCode = seq ?? (ficha['id'] != null ? '#${ficha['id']}' : 'S/N');
+    final fallbackCode = (seq != null && seq.isNotEmpty)
+        ? seq
+        : (ficha['id'] != null ? '#${ficha['id']}' : 'S/N');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -292,7 +292,7 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
                                       );
                                     },
                                   ),
-                                  if (isOffline || ficha['visibleCode'] == null) ...[
+                                  if (isOffline) ...[
                                     const SizedBox(width: 8),
                                     const Row(
                                       mainAxisSize: MainAxisSize.min,

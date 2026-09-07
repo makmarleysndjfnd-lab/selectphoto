@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { getNextVisibleCode } from '../utils/visibleCode';
+import { isClientClosedForPhotographer, sanitizeClientForPhotographer } from '../utils/photographerIsolation';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -509,7 +510,7 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
   }
 });
 
-// Get clients by photographer
+// Get clients by photographer (Restrito à produção, sem dados comerciais e sem fichas fechadas)
 router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
@@ -518,12 +519,24 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
     const clients = await prisma.client.findMany({
       where: { 
         companyId: userCompanyId,
-        photographerId: req.user?.id
+        photographerId: req.user?.id,
+        photographerClosedAt: null,
+        cityClosedAt: null,
+        bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD'] },
+        commercialCycle: { lte: 1 },
       },
-      include: { children: true, appointments: true },
+      include: {
+        children: true,
+        timeline: { where: { action: 'CITY_CLOSED' } },
+      },
       orderBy: { createdAt: 'desc' }
     });
-    res.json(clients);
+
+    const accessibleClients = clients
+      .filter((c) => !isClientClosedForPhotographer(c))
+      .map(sanitizeClientForPhotographer);
+
+    res.json(accessibleClients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch photographer clients' });
   }
@@ -741,6 +754,12 @@ router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Res
 
     if (!client) {
       return res.status(404).json({ error: 'Cliente não encontrado' });
+    }
+
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      if (client.photographerId !== req.user.id || isClientClosedForPhotographer(client)) {
+        return res.status(403).json({ error: 'Acesso negado à linha do tempo da ficha' });
+      }
     }
 
     const timeline = await prisma.clientTimeline.findMany({

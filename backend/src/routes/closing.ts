@@ -298,6 +298,7 @@ router.post('/cities', authenticateToken, async (req: AuthRequest, res: any) => 
             },
             data: {
               cityClosedAt: now,
+              photographerClosedAt: now,
             },
           });
 
@@ -408,6 +409,7 @@ router.post('/city', authenticateToken, async (req: AuthRequest, res: any) => {
           },
           data: {
             cityClosedAt: now,
+            photographerClosedAt: now,
           },
         });
 

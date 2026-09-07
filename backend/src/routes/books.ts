@@ -1,6 +1,7 @@
 import express from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
+import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -306,6 +307,10 @@ router.put('/client/:id/force-send', authMiddleware, async (req: AuthRequest, re
             const client = await tx.client.findUnique({ where: { id: id as string } });
             if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.photographerId !== photographerId) {
                 return { status: 404, data: { error: 'Client not found or unauthorized' } };
+            }
+
+            if (isClientClosedForPhotographer(client)) {
+                return { status: 403, data: { error: 'Ficha indisponível para envio: cidade já encerrada' } };
             }
 
             // Se já estiver em AWAITING_RELEASE (enviada anteriormente ou pela requisição concorrente vencedora)
@@ -647,9 +652,19 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
 
         if (!q) return res.json([]);
 
+        const isPhotographer = req.user?.role === 'PHOTOGRAPHER';
+        const photographerWhere = isPhotographer && req.user?.id ? {
+            photographerId: req.user.id,
+            photographerClosedAt: null,
+            cityClosedAt: null,
+            bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD'] },
+            commercialCycle: { lte: 1 },
+        } : {};
+
         const clients = await prisma.client.findMany({
             where: {
                 companyId,
+                ...photographerWhere,
                 OR: [
                     { uuid: { contains: q as string, mode: 'insensitive' } },
                     { visibleCode: { contains: q as string, mode: 'insensitive' } },
@@ -664,14 +679,22 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                 sequenceNumber: true,
                 name: true,
                 bookStatus: true,
-                assignedSeller: {
-                    select: { name: true }
-                }
+                ...(!isPhotographer ? {
+                    assignedSeller: {
+                        select: { name: true }
+                    }
+                } : {})
             },
             take: 10
         });
 
-        res.json(clients);
+        const formattedClients = isPhotographer ? clients.map((c) => ({
+            ...c,
+            bookStatus: c.bookStatus === 'CREATED' || c.bookStatus === 'AWAITING_RELEASE' ? c.bookStatus : 'IN_STOCK',
+            assignedSeller: undefined,
+        })) : clients;
+
+        res.json(formattedClients);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
