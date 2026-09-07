@@ -252,6 +252,10 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Empresa não identificada' });
     }
 
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      return res.status(403).json({ error: 'Acesso restrito. Fotógrafos devem utilizar a rota de produção /clients/photographer.' });
+    }
+
     const clients = await prisma.client.findMany({
       where: { companyId },
       include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
@@ -367,6 +371,10 @@ router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
 
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      return res.status(403).json({ error: 'Acesso não autorizado para fotógrafo' });
+    }
+
     const { city, bookStatus } = req.query as { city?: string; bookStatus?: string };
 
     const clients = await prisma.client.findMany({
@@ -389,6 +397,10 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
   try {
     const userCompanyId = req.user?.companyId;
     if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      return res.status(403).json({ error: 'Acesso não autorizado para fotógrafo' });
+    }
 
     const reboloStatuses = [
       'AWAITING_RETURN',
@@ -474,6 +486,9 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
       updateData.bookStatus = 'DISTRIBUTED_REBOLO';
       updateData.outcomeStatus = 'PENDING';
       updateData.cityClosedAt = null;
+      if (!existingClient.photographerClosedAt) {
+        updateData.photographerClosedAt = existingClient.cityClosedAt || new Date();
+      }
       newBookStatus = 'DISTRIBUTED_REBOLO';
     } else if (existingClient.bookStatus === 'IN_STOCK' || existingClient.bookStatus === 'DISTRIBUTED') {
       updateData.bookStatus = 'DISTRIBUTED';
@@ -522,8 +537,9 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
         photographerId: req.user?.id,
         photographerClosedAt: null,
         cityClosedAt: null,
-        bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD'] },
+        bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD', 'AWAITING_RETURN', 'DISCARDED'] },
         commercialCycle: { lte: 1 },
+        timeline: { none: { action: 'CITY_CLOSED' } },
       },
       include: {
         children: true,
@@ -539,6 +555,59 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
     res.json(accessibleClients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch photographer clients' });
+  }
+});
+
+// Get client by ficha identifier (sequenceNumber, uuid, visibleCode, id)
+router.get('/ficha/:identifier', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const rawIdentifier = req.params.identifier;
+    const identifier = String(rawIdentifier || '').trim();
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identificador não fornecido' });
+    }
+
+    const client = await prisma.client.findFirst({
+      where: {
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        OR: [
+          { id: identifier },
+          { uuid: identifier },
+          { visibleCode: identifier },
+          { sequenceNumber: identifier },
+        ],
+      },
+      include: {
+        children: true,
+        timeline: { where: { action: 'CITY_CLOSED' } },
+        appointments: true,
+        assignedSeller: true,
+        photographer: true,
+        sales: { orderBy: { date: 'desc' } },
+        nonSales: { where: { supersededAt: null }, orderBy: { date: 'desc' } },
+      },
+    });
+
+    if (!client) {
+      return res.status(404).json({ error: 'Ficha não encontrada na sua empresa' });
+    }
+
+    if (req.user?.role === 'PHOTOGRAPHER') {
+      if (client.photographerId !== req.user.id || isClientClosedForPhotographer(client)) {
+        return res.status(403).json({ error: 'Acesso não autorizado a esta ficha' });
+      }
+      return res.json(sanitizeClientForPhotographer(client));
+    }
+
+    res.json(client);
+  } catch (error: any) {
+    console.error('Error in /clients/ficha/:identifier:', error);
+    res.status(500).json({ error: 'Falha ao buscar ficha' });
   }
 });
 
@@ -666,6 +735,18 @@ const batchAssignHandler = async (req: AuthRequest, res: Response) => {
 
       let totalUpdated = 0;
       if (reboloIds.length > 0) {
+        // Assegurar que photographerClosedAt permaneça preenchido em qualquer ficha de rebolo
+        await tx.client.updateMany({
+          where: {
+            id: { in: reboloIds },
+            companyId: userCompanyId,
+            photographerClosedAt: null,
+          },
+          data: {
+            photographerClosedAt: new Date(),
+          },
+        });
+
         const reboloUpdate = await tx.client.updateMany({
           where: {
             id: { in: reboloIds },
@@ -749,6 +830,9 @@ router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Res
       where: {
         id,
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+      include: {
+        timeline: { where: { action: 'CITY_CLOSED' } },
       },
     });
 

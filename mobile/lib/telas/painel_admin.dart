@@ -278,11 +278,14 @@ class _AdminDashboardState extends State<AdminDashboard>
         final visibleCode = client['visibleCode']?.toString();
         final uuid = client['uuid']?.toString();
         final seq = (client['sequenceNumber'] ?? 'S/N').toString();
+        final isOffline = client['isOfflinePending'] == true;
         final displayCode = (visibleCode != null && visibleCode.isNotEmpty)
             ? visibleCode
-            : (uuid != null && uuid.isNotEmpty
-                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
-                : seq);
+            : ((seq != 'S/N' && seq.isNotEmpty)
+                ? seq
+                : (isOffline && uuid != null && uuid.isNotEmpty
+                    ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                    : seq));
 
         final b = {
           'id': client['id'],
@@ -415,11 +418,14 @@ class _AdminDashboardState extends State<AdminDashboard>
 
         final visibleCode = raw['visibleCode']?.toString();
         final uuid = raw['uuid']?.toString();
+        final isOffline = raw['isOfflinePending'] == true;
         final displayCode = (visibleCode != null && visibleCode.isNotEmpty)
             ? visibleCode
-            : (uuid != null && uuid.isNotEmpty
-                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
-                : seq);
+            : ((seq != 'S/N' && seq.isNotEmpty)
+                ? seq
+                : (isOffline && uuid != null && uuid.isNotEmpty
+                    ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                    : seq));
 
         final b = {
           'id': raw['id']?.toString() ?? '',

@@ -259,5 +259,52 @@ describe('ISOLAMENTO DE ACESSO DO FOTÓGRAFO E FECHAMENTO DE CIDADE', { concurre
     });
     assert.equal(resTimeline.status, 403, 'Timeline de ficha fechada deve retornar 403 para o fotógrafo');
   });
+
+  it('7. Fotógrafo não tem acesso a rotas gerais/comerciais (GET /clients, /by-city, /rebolos)', async () => {
+    const resClients = await fetch(`${baseUrl}/api/clients`, {
+      headers: { Authorization: `Bearer ${tokenPhotog}` },
+    });
+    assert.equal(resClients.status, 403, 'GET /api/clients deve retornar 403 para fotógrafo');
+
+    const resCity = await fetch(`${baseUrl}/api/clients/by-city?city=${cityName}`, {
+      headers: { Authorization: `Bearer ${tokenPhotog}` },
+    });
+    assert.equal(resCity.status, 403, 'GET /api/clients/by-city deve retornar 403 para fotógrafo');
+
+    const resRebolo = await fetch(`${baseUrl}/api/clients/rebolos`, {
+      headers: { Authorization: `Bearer ${tokenPhotog}` },
+    });
+    assert.equal(resRebolo.status, 403, 'GET /api/clients/rebolos deve retornar 403 para fotógrafo');
+  });
+
+  it('8. GET /api/clients/ficha/:identifier valida isolamento, sanitização e fechamento', async () => {
+    // Ficha aberta própria do fotógrafo: 200, sanitizada sem dados comerciais
+    const resOpen = await fetch(`${baseUrl}/api/clients/ficha/${clientOpenId}`, {
+      headers: { Authorization: `Bearer ${tokenPhotog}` },
+    });
+    assert.equal(resOpen.status, 200);
+    const openClient = await resOpen.json() as any;
+    assert.equal(openClient.id, clientOpenId);
+    assert.equal(openClient.sales, undefined);
+    assert.equal(openClient.nonSales, undefined);
+    assert.equal(openClient.assignedSeller, undefined);
+    assert.equal(openClient.assignedSellerId, undefined);
+    assert.equal(openClient.outcomeStatus, undefined);
+
+    // Ficha fechada do fotógrafo: 403
+    const resClosed = await fetch(`${baseUrl}/api/clients/ficha/${clientClosedId}`, {
+      headers: { Authorization: `Bearer ${tokenPhotog}` },
+    });
+    assert.equal(resClosed.status, 403, 'Ficha fechada deve retornar 403 para fotógrafo');
+
+    // Admin consultando ficha fechada: 200, acesso total e histórico preservado
+    const resAdmin = await fetch(`${baseUrl}/api/clients/ficha/${clientClosedId}`, {
+      headers: { Authorization: `Bearer ${tokenAdmin}` },
+    });
+    assert.equal(resAdmin.status, 200);
+    const adminFicha = await resAdmin.json() as any;
+    assert.equal(adminFicha.id, clientClosedId);
+    assert.ok(adminFicha.sales && adminFicha.sales.length > 0, 'Admin deve ver histórico comercial completo');
+  });
 });
 

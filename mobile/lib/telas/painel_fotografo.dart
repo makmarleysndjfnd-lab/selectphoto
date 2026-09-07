@@ -898,9 +898,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         final details = syncResult['details'];
         String? confirmedCode;
         if (details is List && details.isNotEmpty && details[0] is Map) {
-          confirmedCode = details[0]['visibleCode']?.toString();
+          confirmedCode = details[0]['visibleCode']?.toString() ?? details[0]['sequenceNumber']?.toString();
         }
-        _confirmedVisibleCode = confirmedCode;
+        _confirmedVisibleCode = (confirmedCode != null && confirmedCode.isNotEmpty) ? confirmedCode : sequenceNumber;
         _isFichaSynced = true;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1014,8 +1014,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
-    final displayCode = (_isFichaSynced && _confirmedVisibleCode != null)
-        ? _confirmedVisibleCode!
+    final displayCode = _isFichaSynced
+        ? ((_confirmedVisibleCode != null && _confirmedVisibleCode!.isNotEmpty)
+            ? _confirmedVisibleCode!
+            : (_currentFichaUuid ?? 'CONFIRMADA'))
         : 'PROV-${(_currentFichaUuid ?? _generatedQrCodeData ?? "").substring(0, (_currentFichaUuid ?? _generatedQrCodeData ?? "").length >= 8 ? 8 : (_currentFichaUuid ?? _generatedQrCodeData ?? "").length).toUpperCase()} (Aguardando sincronização)';
 
     bluetooth.printNewLine();
@@ -2074,7 +2076,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                         size: 220.0),
                   ),
                   const SizedBox(height: 24),
-                  if (_isFichaSynced && _confirmedVisibleCode != null) ...[
+                  if (_isFichaSynced) ...[
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 10),
@@ -2086,7 +2088,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                       child: Column(
                         children: [
                           Text(
-                            'Ficha: $_confirmedVisibleCode',
+                            'Ficha: ${_confirmedVisibleCode ?? _currentFichaUuid ?? 'CONFIRMADA'}',
                             style: const TextStyle(
                                 color: Color(0xFF4FC3F7),
                                 fontWeight: FontWeight.bold,

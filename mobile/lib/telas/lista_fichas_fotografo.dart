@@ -455,9 +455,11 @@ class _ListaFichasFotografoState extends State<ListaFichasFotografo> {
       return;
     }
 
-    final seq = ficha['sequenceNumber'] ?? 'S/N';
-    final visibleCode = ficha['visibleCode'] ??
-        (ficha['uuid'] != null && ficha['uuid'].toString().isNotEmpty
+    final seq = (ficha['sequenceNumber'] ?? 'S/N').toString();
+    final isOffline = ficha['isOfflinePending'] == true;
+    final visibleCode = (ficha['visibleCode'] != null && ficha['visibleCode'].toString().isNotEmpty)
+        ? ficha['visibleCode'].toString()
+        : (isOffline && ficha['uuid'] != null && ficha['uuid'].toString().isNotEmpty
             ? 'PROV-${ficha['uuid'].toString().substring(0, ficha['uuid'].toString().length >= 8 ? 8 : ficha['uuid'].toString().length).toUpperCase()}'
             : seq);
     final city = ficha['city'] ?? 'Sem Cidade';

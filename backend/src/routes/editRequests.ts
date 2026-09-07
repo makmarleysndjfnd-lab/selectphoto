@@ -67,6 +67,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         id: clientId,
         companyId: userCompanyId,
       },
+      include: {
+        timeline: { where: { action: 'CITY_CLOSED' } },
+      },
     });
 
     if (!client) {

@@ -183,11 +183,18 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                         clients.where((c) => c['batchId'] == batchId).toList();
                     final clientCount = cityClients.length;
                     final sequenceNumbers = cityClients
-                        .map((c) => (c['visibleCode'] ??
-                                (c['uuid'] != null && c['uuid'].toString().isNotEmpty
-                                    ? 'PROV-${c['uuid'].toString().substring(0, c['uuid'].toString().length >= 8 ? 8 : c['uuid'].toString().length).toUpperCase()}'
-                                    : (c['sequenceNumber'] ?? 'S/N')))
-                            .toString())
+                        .map((c) {
+                          final vCode = c['visibleCode']?.toString();
+                          final seq = (c['sequenceNumber'] ?? 'S/N').toString();
+                          final isOffline = c['isOfflinePending'] == true;
+                          final uuid = c['uuid']?.toString();
+                          if (vCode != null && vCode.isNotEmpty) return vCode;
+                          if (seq != 'S/N' && seq.isNotEmpty) return seq;
+                          if (isOffline && uuid != null && uuid.isNotEmpty) {
+                            return 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}';
+                          }
+                          return seq;
+                        })
                         .join(', ');
 
                     return Column(
@@ -261,11 +268,17 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   runSpacing: 12,
                   children: looseClients.map((c) {
                     final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
-                    final code = (c['visibleCode'] ??
-                            (c['uuid'] != null && c['uuid'].toString().isNotEmpty
-                                ? 'PROV-${c['uuid'].toString().substring(0, c['uuid'].toString().length >= 8 ? 8 : c['uuid'].toString().length).toUpperCase()}'
-                                : (c['sequenceNumber'] ?? '#${c['id']}')))
-                        .toString();
+                    final vCode = c['visibleCode']?.toString();
+                    final seq = (c['sequenceNumber'] ?? '#${c['id']}').toString();
+                    final isOffline = c['isOfflinePending'] == true;
+                    final uuid = c['uuid']?.toString();
+                    final code = (vCode != null && vCode.isNotEmpty)
+                        ? vCode
+                        : ((c['sequenceNumber'] != null && c['sequenceNumber'].toString().isNotEmpty && c['sequenceNumber'] != 'S/N')
+                            ? seq
+                            : (isOffline && uuid != null && uuid.isNotEmpty
+                                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                                : seq));
                     return ActionChip(
                       backgroundColor: Colors.transparent,
                       shape: RoundedRectangleBorder(

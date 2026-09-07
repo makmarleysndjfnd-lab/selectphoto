@@ -21,7 +21,7 @@ export function isClientClosedForPhotographer(client: {
   if (client.photographerClosedAt != null) return true;
   if (client.cityClosedAt != null) return true;
   if ((client.commercialCycle || 1) > 1) return true;
-  if (['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD'].includes(client.bookStatus || '')) {
+  if (['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD', 'AWAITING_RETURN', 'DISCARDED'].includes(client.bookStatus || '')) {
     return true;
   }
   if (client.timeline && client.timeline.some(t => t.action === 'CITY_CLOSED')) {

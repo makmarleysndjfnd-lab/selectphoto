@@ -304,7 +304,10 @@ router.put('/client/:id/force-send', authMiddleware, async (req: AuthRequest, re
                 FOR UPDATE
             `;
 
-            const client = await tx.client.findUnique({ where: { id: id as string } });
+            const client = await tx.client.findUnique({
+                where: { id: id as string },
+                include: { timeline: { where: { action: 'CITY_CLOSED' } } },
+            });
             if (!client || (client.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') || client.photographerId !== photographerId) {
                 return { status: 404, data: { error: 'Client not found or unauthorized' } };
             }
@@ -657,42 +660,65 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
             photographerId: req.user.id,
             photographerClosedAt: null,
             cityClosedAt: null,
-            bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD'] },
+            bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD', 'AWAITING_RETURN', 'DISCARDED'] },
             commercialCycle: { lte: 1 },
+            timeline: { none: { action: 'CITY_CLOSED' } },
         } : {};
 
-        const clients = await prisma.client.findMany({
-            where: {
-                companyId,
-                ...photographerWhere,
-                OR: [
-                    { uuid: { contains: q as string, mode: 'insensitive' } },
-                    { visibleCode: { contains: q as string, mode: 'insensitive' } },
-                    { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
-                    { name: { contains: q as string, mode: 'insensitive' } }
-                ]
-            },
-            select: {
-                id: true,
-                uuid: true,
-                visibleCode: true,
-                sequenceNumber: true,
-                name: true,
-                bookStatus: true,
-                ...(!isPhotographer ? {
+        let clients: any[];
+        if (isPhotographer) {
+            clients = await prisma.client.findMany({
+                where: {
+                    companyId,
+                    ...photographerWhere,
+                    OR: [
+                        { uuid: { contains: q as string, mode: 'insensitive' } },
+                        { visibleCode: { contains: q as string, mode: 'insensitive' } },
+                        { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
+                        { name: { contains: q as string, mode: 'insensitive' } }
+                    ]
+                },
+                include: { timeline: { where: { action: 'CITY_CLOSED' } } },
+                take: 10
+            });
+        } else {
+            clients = await prisma.client.findMany({
+                where: {
+                    companyId,
+                    OR: [
+                        { uuid: { contains: q as string, mode: 'insensitive' } },
+                        { visibleCode: { contains: q as string, mode: 'insensitive' } },
+                        { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
+                        { name: { contains: q as string, mode: 'insensitive' } }
+                    ]
+                },
+                select: {
+                    id: true,
+                    uuid: true,
+                    visibleCode: true,
+                    sequenceNumber: true,
+                    name: true,
+                    bookStatus: true,
                     assignedSeller: {
                         select: { name: true }
                     }
-                } : {})
-            },
-            take: 10
-        });
+                },
+                take: 10
+            });
+        }
 
-        const formattedClients = isPhotographer ? clients.map((c) => ({
-            ...c,
-            bookStatus: c.bookStatus === 'CREATED' || c.bookStatus === 'AWAITING_RELEASE' ? c.bookStatus : 'IN_STOCK',
-            assignedSeller: undefined,
-        })) : clients;
+        const formattedClients = isPhotographer
+            ? clients
+                .filter((c) => !isClientClosedForPhotographer(c))
+                .map((c) => ({
+                    id: c.id,
+                    uuid: c.uuid,
+                    visibleCode: c.visibleCode,
+                    sequenceNumber: c.sequenceNumber,
+                    name: c.name,
+                    bookStatus: c.bookStatus === 'CREATED' || c.bookStatus === 'AWAITING_RELEASE' ? c.bookStatus : 'IN_STOCK',
+                }))
+            : clients;
 
         res.json(formattedClients);
     } catch (error: any) {
