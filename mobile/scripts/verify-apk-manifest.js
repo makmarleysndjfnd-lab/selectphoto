@@ -66,8 +66,20 @@ function verifyApk() {
   console.log(`🏷️  Package: ${packageName}`);
   console.log(`🏷️  Version: ${versionName} (code ${versionCode})`);
 
-  if (versionName !== '1.0.8' || versionCode !== '9') {
-    console.error(`❌ Versão incorreta! Esperado: versionName='1.0.8', versionCode='9'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
+  const pubspecPath = path.resolve(__dirname, '../pubspec.yaml');
+  let expectedVersionName = '1.0.9';
+  let expectedVersionCode = '17';
+  if (fs.existsSync(pubspecPath)) {
+    const pubspecContent = fs.readFileSync(pubspecPath, 'utf8');
+    const versionMatch = pubspecContent.match(/^version:\s*([^\s+]+)\+(\d+)/m);
+    if (versionMatch) {
+      expectedVersionName = versionMatch[1];
+      expectedVersionCode = versionMatch[2];
+    }
+  }
+
+  if (versionName !== expectedVersionName || versionCode !== expectedVersionCode) {
+    console.error(`❌ Versão incorreta! Esperado: versionName='${expectedVersionName}', versionCode='${expectedVersionCode}'. Encontrado: versionName='${versionName}', versionCode='${versionCode}'`);
     process.exit(1);
   }
 
