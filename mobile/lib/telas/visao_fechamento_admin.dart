@@ -115,6 +115,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
       future: Future.wait([
         ApiService().getBookBatches(),
         ApiService().getAllClients(),
+        ApiService().getProductionSummary(),
       ]),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -127,17 +128,15 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   style: const TextStyle(color: Colors.redAccent)));
         }
 
-        final results = snapshot.data ?? [[], []];
+        final results = snapshot.data ?? [[], [], []];
         final batches = results[0] as List<dynamic>;
         final clients = results[1] as List<dynamic>;
+        final productionSummary = results.length > 2 ? (results[2] as List<dynamic>) : [];
 
         final createdBatches =
             batches.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
-        final looseClients = clients
-            .where((c) => c['bookStatus'] == 'CREATED' && c['batchId'] == null)
-            .toList();
 
-        if (createdBatches.isEmpty && looseClients.isEmpty) {
+        if (createdBatches.isEmpty && productionSummary.isEmpty) {
           return Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -147,7 +146,7 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             ),
             child: const Center(
                 child: Text(
-                    'Nenhuma cidade/lote ou ficha aguardando liberação.',
+                    'Nenhum lote aguardando liberação ou fichas em produção no momento.',
                     style: TextStyle(color: Colors.white54))),
           );
         }
@@ -250,62 +249,124 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                     );
                   }).toList(),
                 ),
-                const SizedBox(height: 32),
+                if (productionSummary.isNotEmpty) const SizedBox(height: 32),
               ],
-              if (looseClients.isNotEmpty) ...[
-                const Text('⚠️ Fichas Órfãs / Avulsas',
-                    style: TextStyle(
-                        color: Colors.redAccent,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold)),
+              if (productionSummary.isNotEmpty) ...[
+                const Row(
+                  children: [
+                    Icon(Icons.camera_alt, color: Colors.cyanAccent, size: 20),
+                    SizedBox(width: 8),
+                    Text('Fichas em Produção (Em Campo)',
+                        style: TextStyle(
+                            color: Colors.cyanAccent,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 const Text(
-                    'Fichas criadas mas não agrupadas em lote. Resgate para o estoque:',
+                    'Resumo das fichas atualmente em confecção pelos fotógrafos em campo. O acesso individual é liberado após a finalização do lote pelo fotógrafo.',
                     style: TextStyle(color: Colors.white70, fontSize: 14)),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: looseClients.map((c) {
-                    final name = c['name'] ?? c['mainContact'] ?? 'Sem Nome';
-                    final vCode = c['visibleCode']?.toString();
-                    final seq = (c['sequenceNumber'] ?? '#${c['id']}').toString();
-                    final isOffline = c['isOfflinePending'] == true;
-                    final uuid = c['uuid']?.toString();
-                    final code = (vCode != null && vCode.isNotEmpty)
-                        ? vCode
-                        : ((c['sequenceNumber'] != null && c['sequenceNumber'].toString().isNotEmpty && c['sequenceNumber'] != 'S/N')
-                            ? seq
-                            : (isOffline && uuid != null && uuid.isNotEmpty
-                                ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
-                                : seq));
-                    return ActionChip(
-                      backgroundColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                          side: const BorderSide(color: Colors.redAccent)),
-                      label: Text('Resgatar: [$code] $name',
-                          style: const TextStyle(color: Colors.redAccent)),
-                      onPressed: () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        try {
-                          messenger.showSnackBar(const SnackBar(
-                              content: Text('Resgatando ficha...')));
-                          await ApiService().forceReleaseClient(c['id']);
-                          if (mounted) {
-                            messenger.showSnackBar(const SnackBar(
-                                content:
-                                    Text('Ficha resgatada para o estoque!'),
-                                backgroundColor: Colors.green));
-                            setState(() {});
-                          }
-                        } catch (e) {
-                          if (mounted)
-                            messenger.showSnackBar(SnackBar(
-                                content: Text('Erro ao resgatar: $e'),
-                                backgroundColor: Colors.red));
-                        }
-                      },
+                Column(
+                  children: productionSummary.map((item) {
+                    final fotografo = item['photographerName'] ?? 'Fotógrafo não identificado';
+                    final local = [
+                      if (item['city'] != null && item['city'].toString().trim().isNotEmpty) item['city'].toString().trim(),
+                      if (item['event'] != null && item['event'].toString().trim().isNotEmpty) item['event'].toString().trim(),
+                    ].join(' • ');
+                    final lote = item['batchName'] != null && item['batchName'].toString().trim().isNotEmpty
+                        ? 'Lote: ${item['batchName']}'
+                        : null;
+                    final count = item['count'] ?? 0;
+                    final status = item['status'] ?? 'Em produção';
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF101026),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.cyanAccent.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.cyanAccent.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.person_pin, color: Colors.cyanAccent, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  fotografo,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                if (local.isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    local,
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                                if (lote != null) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    lote,
+                                    style: TextStyle(
+                                      color: Colors.cyanAccent.shade100,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.cyanAccent.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.cyanAccent),
+                                ),
+                                child: Text(
+                                  '$count ficha${count == 1 ? '' : 's'}',
+                                  style: const TextStyle(
+                                    color: Colors.cyanAccent,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                status,
+                                style: const TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 11,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     );
                   }).toList(),
                 ),

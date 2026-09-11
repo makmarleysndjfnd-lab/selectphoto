@@ -31,11 +31,9 @@ export function isClientClosedForPhotographer(client: {
 }
 
 export function sanitizeClientForPhotographer(c: any) {
-  // Mapeia bookStatus para etapas estritamente de produção
-  // O fotógrafo enxerga apenas se a ficha está sendo produzida, aguardando liberação ou se foi recebida no estoque.
-  // Etapas comerciais (DISTRIBUTED, SOLD, NON_SALE, REBOLO, etc.) nunca são expostas.
-  let productionBookStatus = 'IN_STOCK';
-  if (c.bookStatus === 'CREATED' || c.bookStatus === 'AWAITING_RELEASE') {
+  // Mapeia bookStatus para etapas estritamente de produção do fotógrafo
+  let productionBookStatus = 'CREATED';
+  if (c.bookStatus) {
     productionBookStatus = c.bookStatus;
   }
 

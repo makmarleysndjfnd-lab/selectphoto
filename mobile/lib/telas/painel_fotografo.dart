@@ -1131,9 +1131,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
     final syncService = Provider.of<SyncService>(context, listen: false);
     final hasPendingFichas = syncService.pendingRequests.any((req) {
-      if (req.type == 'SYNC_CLIENTS') {
-        final seq = req.payload['sequenceNumber']?.toString();
-        return seq != null && _sessionFichas.contains(seq);
+      if (req.type == 'SYNC_CLIENTS' || req.type == 'REGISTER_CLIENT' || req.type == 'CREATE_CLIENT') {
+        final seq = req.payload['sequenceNumber']?.toString() ?? req.payload['id']?.toString() ?? req.payload['code']?.toString();
+        if (seq != null && _sessionFichas.contains(seq)) return true;
+        if (req.payload['clients'] is List) {
+          final list = req.payload['clients'] as List;
+          return list.any((c) {
+            final cSeq = c['sequenceNumber']?.toString() ?? c['id']?.toString() ?? c['code']?.toString();
+            return cSeq != null && _sessionFichas.contains(cSeq);
+          });
+        }
+        return true;
       }
       return false;
     });
@@ -1183,6 +1191,22 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     await prefs.remove('lote_event_name');
                     await prefs.remove('lote_sequence_count');
                     await prefs.remove('lote_session_fichas');
+
+                    final cachedStr = prefs.getString('cached_photographer_fichas');
+                    if (cachedStr != null) {
+                      try {
+                        final list = jsonDecode(cachedStr) as List;
+                        final updated = list.where((f) {
+                          final id = f['id']?.toString();
+                          final seq = f['sequenceNumber']?.toString();
+                          final code = f['code']?.toString();
+                          return !fichasToFinish.contains(id) &&
+                                 !fichasToFinish.contains(seq) &&
+                                 !fichasToFinish.contains(code);
+                        }).toList();
+                        await prefs.setString('cached_photographer_fichas', jsonEncode(updated));
+                      } catch (_) {}
+                    }
 
                     if (mounted) {
                       setState(() {

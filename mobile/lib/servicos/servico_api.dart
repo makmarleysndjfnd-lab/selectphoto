@@ -1353,6 +1353,17 @@ class ApiService {
     }
   }
 
+  Future<List<dynamic>> getProductionSummary() async {
+    try {
+      final response = await _dio.get('/clients/production-summary');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao buscar resumo de produção');
+    }
+  }
+
   Future<List<dynamic>> getClientsByPhotographer() async {
     try {
       final response = await _dio.get('/clients/photographer');

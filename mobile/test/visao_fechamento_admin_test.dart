@@ -33,6 +33,21 @@ class MockFechamentoApiService extends ApiService {
     return [];
   }
 
+  @override
+  Future<List<dynamic>> getProductionSummary() async {
+    return [
+      {
+        'photographerId': 'photo-1',
+        'photographerName': 'Carlos Fotógrafo',
+        'city': 'Curitiba',
+        'event': 'Formatura 2026',
+        'batchName': 'Lote 01',
+        'count': 15,
+        'status': 'Em produção',
+      }
+    ];
+  }
+
 
 
   @override
@@ -170,6 +185,23 @@ void main() {
       expect(mockApi.getCustomMetricsCalls, 2);
       expect(mockApi.lastCity, 'Londrina');
       expect(find.text('Métricas de Vendas x Não Vendas'), findsOneWidget);
+    });
+
+    testWidgets('5. Exibe resumo de fichas em produção sem listar fichas individuais',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(buildTestableScreen());
+      await tester.pumpAndSettle();
+
+      expect(find.text('Fichas em Produção (Em Campo)'), findsOneWidget);
+      expect(find.text('Carlos Fotógrafo'), findsOneWidget);
+      expect(find.text('Curitiba • Formatura 2026'), findsOneWidget);
+      expect(find.text('Lote: Lote 01'), findsOneWidget);
+      expect(find.text('15 fichas'), findsOneWidget);
+      expect(find.text('Em produção'), findsOneWidget);
+
+      // Não deve exibir chips de resgate individual nem "Fichas Órfãs / Avulsas"
+      expect(find.text('⚠️ Fichas Órfãs / Avulsas'), findsNothing);
+      expect(find.textContaining('Resgatar:'), findsNothing);
     });
   });
 }

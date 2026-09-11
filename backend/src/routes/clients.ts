@@ -130,7 +130,20 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
 
         // Pertence à mesma empresa: retentativa idempotente legítima
         // Se a ficha já avançou além de CREATED, mantemos o estado e retornamos sucesso idempotente
+        // a menos que seja um localId diferente (colisão de sequenceNumber entre dois clientes locais)
         if (existing.bookStatus !== 'CREATED') {
+          if (clientLocalId && existing.localId && clientLocalId !== existing.localId) {
+            results.failed++;
+            results.details.push({
+              sequenceNumber: existing.sequenceNumber,
+              uuid: clientUuid,
+              success: false,
+              error: 'Colisão de sequência com ficha existente',
+              reason: 'Colisão de sequência com ficha existente',
+            });
+            continue;
+          }
+
           results.success++;
           results.synced++;
           results.details.push({
@@ -244,7 +257,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
   res.json(results);
 });
 
-// Get all clients (Admin, Supervisor or User in company)
+// Get all clients (Admin, Supervisor or User in company - exclui fichas em produção do fotógrafo)
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
@@ -257,12 +270,78 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     }
 
     const clients = await prisma.client.findMany({
-      where: { companyId },
+      where: { 
+        companyId,
+        bookStatus: { not: 'CREATED' }
+      },
       include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
     });
     res.json(clients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch clients' });
+  }
+});
+
+// Resumo gerencial de fichas em produção (Admin visualiza resumo por fotógrafo, local e lote, sem acesso às fichas individuais)
+router.get('/production-summary', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const createdClients = await prisma.client.findMany({
+      where: {
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        bookStatus: 'CREATED',
+      },
+      select: {
+        id: true,
+        photographerId: true,
+        photographer: { select: { id: true, name: true } },
+        city: true,
+        event: true,
+        batchId: true,
+        batch: { select: { id: true, name: true } },
+      },
+    });
+
+    const groups: Record<string, {
+      photographerId: string | null;
+      photographerName: string;
+      city: string;
+      event: string;
+      batchName: string;
+      count: number;
+      status: string;
+    }> = {};
+
+    for (const c of createdClients) {
+      const pId = c.photographerId || 'sem_fotografo';
+      const pName = c.photographer?.name || (c.photographerId ? `Fotógrafo #${c.photographerId.slice(0, 8)}` : 'Sem fotógrafo');
+      const city = (c.city || 'Sem cidade').trim();
+      const event = (c.event || 'Evento sem nome').trim();
+      const batchName = c.batch?.name || 'Em produção na câmera';
+      const key = `${pId}|${city}|${event}|${batchName}`;
+
+      if (!groups[key]) {
+        groups[key] = {
+          photographerId: c.photographerId,
+          photographerName: pName,
+          city,
+          event,
+          batchName,
+          count: 0,
+          status: 'Em produção',
+        };
+      }
+      groups[key].count++;
+    }
+
+    res.json(Object.values(groups));
+  } catch (error: any) {
+    console.error('Error fetching production summary:', error);
+    res.status(500).json({ error: 'Falha ao buscar resumo de produção' });
   }
 });
 
@@ -525,7 +604,7 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
   }
 });
 
-// Get clients by photographer (Restrito à produção, sem dados comerciais e sem fichas fechadas)
+// Get clients by photographer (Restrito à produção - somente fichas em produção CREATED)
 router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userCompanyId = req.user?.companyId;
@@ -535,9 +614,9 @@ router.get('/photographer', authenticateToken, async (req: AuthRequest, res: Res
       where: { 
         companyId: userCompanyId,
         photographerId: req.user?.id,
+        bookStatus: 'CREATED',
         photographerClosedAt: null,
         cityClosedAt: null,
-        bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD', 'AWAITING_RETURN', 'DISCARDED'] },
         commercialCycle: { lte: 1 },
         timeline: { none: { action: 'CITY_CLOSED' } },
       },
@@ -598,7 +677,7 @@ router.get('/ficha/:identifier', authenticateToken, async (req: AuthRequest, res
     }
 
     if (req.user?.role === 'PHOTOGRAPHER') {
-      if (client.photographerId !== req.user.id || isClientClosedForPhotographer(client)) {
+      if (client.photographerId !== req.user.id || client.bookStatus !== 'CREATED' || isClientClosedForPhotographer(client)) {
         return res.status(403).json({ error: 'Acesso não autorizado a esta ficha' });
       }
       return res.json(sanitizeClientForPhotographer(client));

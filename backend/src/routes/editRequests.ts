@@ -82,8 +82,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         res.status(403).json({ error: 'Acesso não autorizado a esta ficha' });
         return;
       }
-      if (isClientClosedForPhotographer(client)) {
-        res.status(403).json({ error: 'Ficha não disponível para edição: cidade já encerrada' });
+      if (client.bookStatus !== 'CREATED' || isClientClosedForPhotographer(client)) {
+        res.status(403).json({ error: 'Ficha não disponível para edição: já entregue ou encerrada' });
         return;
       }
     }

@@ -660,7 +660,7 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
             photographerId: req.user.id,
             photographerClosedAt: null,
             cityClosedAt: null,
-            bookStatus: { notIn: ['IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO', 'REBOLO_SOLD', 'AWAITING_RETURN', 'DISCARDED'] },
+            bookStatus: 'CREATED',
             commercialCycle: { lte: 1 },
             timeline: { none: { action: 'CITY_CLOSED' } },
         } : {};
@@ -716,7 +716,7 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     visibleCode: c.visibleCode,
                     sequenceNumber: c.sequenceNumber,
                     name: c.name,
-                    bookStatus: c.bookStatus === 'CREATED' || c.bookStatus === 'AWAITING_RELEASE' ? c.bookStatus : 'IN_STOCK',
+                    bookStatus: c.bookStatus || 'CREATED',
                 }))
             : clients;
 

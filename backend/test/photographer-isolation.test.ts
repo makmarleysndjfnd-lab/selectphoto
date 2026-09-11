@@ -138,9 +138,9 @@ describe('ISOLAMENTO DE ACESSO DO FOTÓGRAFO E FECHAMENTO DE CIDADE', { concurre
     assert.equal(res.status, 200);
     const clients = await res.json() as any[];
 
-    // Deve conter ambas inicialmente
-    assert.ok(clients.some(c => c.id === clientOpenId));
-    assert.ok(clients.some(c => c.id === clientClosedId));
+    // Deve conter apenas a ficha em produção (CREATED)
+    assert.ok(clients.some(c => c.id === clientOpenId), 'Ficha em produção deve estar presente');
+    assert.ok(!clients.some(c => c.id === clientClosedId), 'Ficha vendida/entregue NÃO deve estar presente para o fotógrafo');
 
     for (const c of clients) {
       // Regra estrita: Nenhum dado comercial transmitido ao fotógrafo
@@ -149,7 +149,7 @@ describe('ISOLAMENTO DE ACESSO DO FOTÓGRAFO E FECHAMENTO DE CIDADE', { concurre
       assert.equal(c.outcomeStatus, undefined, 'outcomeStatus não deve ser transmitido');
       assert.equal(c.assignedSellerId, undefined, 'assignedSellerId não deve ser transmitido');
       assert.equal(c.assignedSeller, undefined, 'assignedSeller não deve ser transmitido');
-      assert.ok(['CREATED', 'AWAITING_RELEASE', 'IN_STOCK'].includes(c.bookStatus), 'bookStatus deve ser restrito à produção');
+      assert.equal(c.bookStatus, 'CREATED', 'Fotógrafo enxerga estritamente fichas em produção CREATED');
     }
   });
 
