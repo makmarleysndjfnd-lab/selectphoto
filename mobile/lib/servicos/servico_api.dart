@@ -740,6 +740,19 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> updateBatchBaseCity(String batchId, String baseCity) async {
+    try {
+      final response = await _dio.patch('/books/batch/$batchId/base-city', data: {
+        'baseCity': baseCity,
+      });
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao atualizar localidade-base do lote');
+    }
+  }
+
   // ── Gestão de Frota (Fleet) ───────────────────────────────────────────
 
   Future<void> createCar(FormData data) async {

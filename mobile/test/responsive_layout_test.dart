@@ -143,6 +143,13 @@ void main() {
           tester.view.devicePixelRatio = 1.0;
           addTearDown(tester.view.resetPhysicalSize);
 
+          FlutterErrorDetails? caughtDetails;
+          final originalOnError = FlutterError.onError;
+          FlutterError.onError = (details) {
+            caughtDetails = details;
+            originalOnError?.call(details);
+          };
+
           await tester.pumpWidget(
             buildTestApp(
               size: size,
@@ -152,7 +159,13 @@ void main() {
           );
 
           await tester.pumpAndSettle(const Duration(milliseconds: 50));
-          expect(tester.takeException(), isNull);
+          FlutterError.onError = originalOnError;
+
+          if (caughtDetails != null) {
+            debugPrint('CAUGHT INFO: ${caughtDetails?.informationCollector?.call().map((d) => d.toString()).join("\n")}');
+          }
+          final err = tester.takeException();
+          expect(err, isNull);
         });
 
         testWidgets('2. EmployeeManagementScreen renderiza sem overflow em ${size.width.toInt()}x${size.height.toInt()} scale $scale', (tester) async {

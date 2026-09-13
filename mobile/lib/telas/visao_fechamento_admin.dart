@@ -256,11 +256,13 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   children: [
                     Icon(Icons.camera_alt, color: Colors.cyanAccent, size: 20),
                     SizedBox(width: 8),
-                    Text('Fichas em Produção (Em Campo)',
-                        style: TextStyle(
-                            color: Colors.cyanAccent,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)),
+                    Expanded(
+                      child: Text('Fichas em Produção (Em Campo)',
+                          style: TextStyle(
+                              color: Colors.cyanAccent,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold)),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),

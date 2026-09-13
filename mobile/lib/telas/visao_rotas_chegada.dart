@@ -12,19 +12,62 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
   final ApiService _api = ApiService();
   bool _isLoading = true;
 
-  // "eventName|city" -> { 'eventName': String, 'city': String, 'awaiting': [...], 'inStock': [...] }
-  Map<String, Map<String, dynamic>> _dadosPorEvento = {};
+  // Key: batchId (or 'orphan_${client.id}')
+  // Value: Map containing batch details and its clients list
+  Map<String, Map<String, dynamic>> _dadosPorLote = {};
   List<dynamic> _sellers = [];
 
-  // Track which cities are being confirmed (loading spinner per city)
+  // Track which batches are confirming arrival from gráfica
   final Set<String> _confirmando = {};
-  // Track cities already confirmed (now in_stock) to show distribute button
-  final Set<String> _confirmadas = {};
+  // Track which batches are currently distributing
+  final Set<String> _distribuindo = {};
+
+  // Selected client IDs per batch: batchId -> Set<clientId>
+  final Map<String, Set<String>> _selectedByBatch = {};
+
+  // Track expanded cards for batches with > 10 fichas
+  final Set<String> _expandedBatches = {};
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  static String? _parseBaseCity(String name) {
+    final match = RegExp(r'\(([^)]+)\)$').firstMatch(name.trim());
+    if (match != null) {
+      final city = match.group(1)?.trim() ?? '';
+      final upper = city.toUpperCase();
+      // Não deduzir de rótulos genéricos livres como "MUNDO", "GERAL", "TODOS", "PADRÃO"
+      if (upper != 'MUNDO' &&
+          upper != 'GERAL' &&
+          upper != 'TODOS' &&
+          upper != 'PADRAO' &&
+          upper != 'PADRÃO' &&
+          upper != 'SEM CIDADE' &&
+          city.isNotEmpty) {
+        return city;
+      }
+    }
+    return null;
+  }
+
+  static String _cleanBatchName(String name) {
+    final match = RegExp(r'\(([^)]+)\)$').firstMatch(name.trim());
+    if (match != null) {
+      final city = match.group(1)?.trim() ?? '';
+      final upper = city.toUpperCase();
+      if (upper != 'MUNDO' &&
+          upper != 'GERAL' &&
+          upper != 'TODOS' &&
+          upper != 'PADRAO' &&
+          upper != 'PADRÃO') {
+        final cleaned = name.replaceFirst(RegExp(r'\s*\([^)]*\)\s*$'), '').trim();
+        if (cleaned.isNotEmpty) return cleaned;
+      }
+    }
+    return name.trim();
   }
 
   Future<void> _loadData() async {
@@ -35,59 +78,71 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         _api.getCompanyUsers(),
       ]);
 
-      final clients = results[0];
-      final users = results[1];
+      final clients = List<dynamic>.from(results[0]);
+      final users = List<dynamic>.from(results[1]);
 
       final sellers = users.where((u) {
         final role = (u['role'] ?? '').toString().toUpperCase();
-        // Backend usa 'VENDEDOR' (PT) e também 'SELLER' / 'SELLER_MANAGER' (EN)
         return role == 'SELLER' || role == 'SELLER_MANAGER' || role == 'VENDEDOR';
       }).toList();
 
-      // Key: "eventName|city" -> { 'eventName': String, 'city': String, 'awaiting': [...], 'inStock': [...] }
       final Map<String, Map<String, dynamic>> agrupado = {};
 
-      for (var c in clients) {
+      for (var rawClient in clients) {
+        final c = Map<String, dynamic>.from(rawClient as Map);
         final status = (c['bookStatus'] ?? '').toString();
-        if (status != 'AWAITING_RELEASE' && status != 'IN_STOCK') continue;
 
-        final city = (c['city'] ?? 'Sem Cidade').toString().trim().toUpperCase();
-        final eventName = (c['eventName'] ?? c['event'] ?? c['notes'] ?? 'Produção de Fichas').toString().trim();
-        final groupKey = '$eventName|$city';
+        // Ignora status de produção pré-campo do fotógrafo
+        if (status == 'CREATED') continue;
 
-        agrupado.putIfAbsent(groupKey, () => {
-          'eventName': eventName,
-          'city': city,
-          'awaiting': <dynamic>[],
-          'inStock': <dynamic>[],
+        final rawBatchId = c['batchId']?.toString() ?? c['batch']?['id']?.toString();
+        final rawBatchName = (c['batch']?['name'] ??
+                c['batchName'] ??
+                c['eventName'] ??
+                c['event'] ??
+                'Lote Avulso')
+            .toString()
+            .trim();
+
+        final groupKey = (rawBatchId != null && rawBatchId.isNotEmpty)
+            ? rawBatchId
+            : 'orphan_${c['id']}';
+
+        agrupado.putIfAbsent(groupKey, () {
+          final parsedCity = _parseBaseCity(rawBatchName);
+          final cleanName = _cleanBatchName(rawBatchName);
+
+          return {
+            'batchId': rawBatchId,
+            'batchName': cleanName,
+            'fullName': rawBatchName,
+            'baseCity': parsedCity,
+            'clients': <Map<String, dynamic>>[],
+          };
         });
 
-        if (status == 'AWAITING_RELEASE') {
-          (agrupado[groupKey]!['awaiting'] as List).add(c);
-        } else {
-          (agrupado[groupKey]!['inStock'] as List).add(c);
-        }
+        (agrupado[groupKey]!['clients'] as List<Map<String, dynamic>>).add(c);
       }
 
-      agrupado.removeWhere((key, data) =>
-          (data['awaiting'] as List).isEmpty && (data['inStock'] as List).isEmpty);
-
-      for (final key in agrupado.keys) {
-        if ((agrupado[key]!['awaiting'] as List).isEmpty &&
-            (agrupado[key]!['inStock'] as List).isNotEmpty) {
-          _confirmadas.add(key);
-        }
-      }
+      // Exibe apenas lotes que possuem pelo menos 1 ficha ativa em gráfica ou estoque
+      agrupado.removeWhere((key, data) {
+        final cl = data['clients'] as List<Map<String, dynamic>>;
+        final hasActive = cl.any((c) {
+          final s = (c['bookStatus'] ?? '').toString();
+          return s == 'AWAITING_RELEASE' || s == 'IN_STOCK';
+        });
+        return !hasActive;
+      });
 
       if (mounted) {
         setState(() {
-          _dadosPorEvento = agrupado;
+          _dadosPorLote = agrupado;
           _sellers = sellers;
           _isLoading = false;
         });
       }
     } catch (e) {
-      debugPrint('Erro ao carregar rotas de chegada: $e');
+      debugPrint('Erro ao carregar rotas da gráfica: $e');
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -97,22 +152,21 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
-  final Set<String> _distribuindo = {};
-
+  // ── CONFIRMAR CHEGADA DA GRÁFICA ──────────────────────────────────────────
   Future<void> _confirmarChegadaGrafica(
     String groupKey,
-    String city,
-    String eventName,
-    List<dynamic> awaitingClients,
+    String batchName,
+    List<Map<String, dynamic>> awaitingClients,
   ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E35),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Confirmar Chegada', style: TextStyle(color: Colors.white)),
+        title: const Text('Confirmar Chegada da Gráfica',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: Text(
-          'Confirmar que as fichas de "$eventName" ($city) chegaram da gráfica?\n\nElas serão movidas para o ESTOQUE.',
+          'Confirmar que as ${awaitingClients.length} fichas do lote "$batchName" chegaram da gráfica?\n\nElas serão movidas para o ESTOQUE.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -140,26 +194,26 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     try {
       final clientIds = awaitingClients.map((c) => c['id'].toString()).toList();
       final result = await _api.confirmGrafica(
-        city: city,
-        eventName: eventName,
         clientIds: clientIds,
       );
       final count = result['count'] ?? awaitingClients.length;
 
       if (mounted) {
-        final awaiting = List<dynamic>.from(_dadosPorEvento[groupKey]?['awaiting'] ?? []);
         setState(() {
-          if (_dadosPorEvento.containsKey(groupKey)) {
-            _dadosPorEvento[groupKey]!['inStock']!.addAll(awaiting);
-            _dadosPorEvento[groupKey]!['awaiting']!.clear();
+          if (_dadosPorLote.containsKey(groupKey)) {
+            final clients = _dadosPorLote[groupKey]!['clients'] as List<Map<String, dynamic>>;
+            for (var c in clients) {
+              if (clientIds.contains(c['id'].toString())) {
+                c['bookStatus'] = 'IN_STOCK';
+              }
+            }
           }
-          _confirmadas.add(groupKey);
           _confirmando.remove(groupKey);
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF00C853),
-            content: Text('✅ $count fichas de "$eventName" ($city) movidas para o Estoque!'),
+            content: Text('✅ $count fichas do lote "$batchName" movidas para o Estoque!'),
           ),
         );
       }
@@ -176,13 +230,101 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
-  Future<void> _distribuirParaVendedor(String groupKey, String city) async {
-    final inStockClients = List<dynamic>.from(_dadosPorEvento[groupKey]?['inStock'] ?? []);
-    if (inStockClients.isEmpty) {
+  // ── SELEÇÃO POR CIDADE ────────────────────────────────────────────────────
+  void _dialogSelecionarPorCidade(
+      String groupKey, List<Map<String, dynamic>> inStockClients) {
+    final Map<String, List<Map<String, dynamic>>> byCity = {};
+    for (var c in inStockClients) {
+      final city = (c['city'] ?? 'Sem Cidade').toString().trim();
+      byCity.putIfAbsent(city, () => []).add(c);
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E35),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Selecionar Fichas por Cidade',
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: byCity.entries.map((entry) {
+              final city = entry.key;
+              final count = entry.value.length;
+              final ids = entry.value.map((c) => c['id'].toString()).toSet();
+              final currentSelected = _selectedByBatch[groupKey] ?? {};
+              final allCitySelected = ids.every((id) => currentSelected.contains(id));
+
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                leading: Icon(
+                  allCitySelected ? Icons.check_box : Icons.check_box_outline_blank,
+                  color: const Color(0xFFCE93D8),
+                ),
+                title: Text(city,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text('$count ${count == 1 ? 'ficha' : 'fichas'}',
+                      style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 12)),
+                ),
+                onTap: () {
+                  setState(() {
+                    _selectedByBatch.putIfAbsent(groupKey, () => {});
+                    if (allCitySelected) {
+                      _selectedByBatch[groupKey]!.removeAll(ids);
+                    } else {
+                      _selectedByBatch[groupKey]!.addAll(ids);
+                    }
+                  });
+                  Navigator.pop(ctx);
+                },
+              );
+            }).toList(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── SELECIONAR TODAS EM ESTOQUE ──────────────────────────────────────────
+  void _toggleSelectAllInStock(
+      String groupKey, List<Map<String, dynamic>> inStockClients) {
+    setState(() {
+      _selectedByBatch.putIfAbsent(groupKey, () => {});
+      final current = _selectedByBatch[groupKey]!;
+      final inStockIds = inStockClients.map((c) => c['id'].toString()).toSet();
+      final allSelected = inStockIds.isNotEmpty && inStockIds.every((id) => current.contains(id));
+
+      if (allSelected) {
+        current.removeAll(inStockIds);
+      } else {
+        current.addAll(inStockIds);
+      }
+    });
+  }
+
+  // ── DISTRIBUIÇÃO PARCIAL / TOTAL ─────────────────────────────────────────
+  Future<void> _distribuirSelecionadas(
+      String groupKey, List<Map<String, dynamic>> allClients) async {
+    final selectedIds = (_selectedByBatch[groupKey] ?? {}).toList();
+    if (selectedIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.orange,
-          content: Text('Nenhuma ficha disponível no estoque para distribuição.'),
+          content: Text('Selecione ao menos uma ficha em estoque para distribuir.'),
         ),
       );
       return;
@@ -224,9 +366,9 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  Text(
-                    '📦 Distribuir Fichas — $city',
-                    style: const TextStyle(
+                  const Text(
+                    '📦 Distribuir Fichas Selecionadas',
+                    style: TextStyle(
                       color: Colors.white,
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -234,7 +376,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${inStockClients.length} fichas disponíveis no estoque',
+                    '${selectedIds.length} ${selectedIds.length == 1 ? 'ficha selecionada' : 'fichas selecionadas'} para entrega',
                     style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 14),
                   ),
                   const SizedBox(height: 20),
@@ -290,7 +432,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Atribuir ${inStockClients.length} fichas de $city ao vendedor $selectedSellerName. Confirmar?',
+                              'Atribuir ${selectedIds.length} fichas ao vendedor $selectedSellerName. Confirmar?',
                               style: const TextStyle(color: Colors.white70, fontSize: 13),
                             ),
                           ),
@@ -313,7 +455,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                       icon: const Icon(Icons.send),
                       label: Text(
                         selectedSellerId != null
-                            ? 'Distribuir ${inStockClients.length} Fichas →'
+                            ? 'Distribuir ${selectedIds.length} Fichas →'
                             : 'Selecione um Vendedor',
                       ),
                       onPressed: selectedSellerId == null
@@ -322,8 +464,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                               Navigator.pop(ctx2);
                               await _executarDistribuicao(
                                 groupKey,
-                                city,
-                                inStockClients,
+                                selectedIds,
                                 selectedSellerId!,
                                 selectedSellerName ?? 'Vendedor',
                               );
@@ -341,28 +482,36 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
 
   Future<void> _executarDistribuicao(
     String groupKey,
-    String city,
-    List<dynamic> clients,
+    List<String> clientIds,
     String sellerId,
     String sellerName,
   ) async {
     setState(() => _distribuindo.add(groupKey));
     try {
-      final ids = clients.map((c) => c['id'].toString()).toList();
-      final res = await _api.batchAssignSeller(ids, sellerId);
-      final count = (res['count'] != null) ? res['count'] : clients.length;
+      final res = await _api.batchAssignSeller(clientIds, sellerId);
+      final count = (res['count'] != null) ? res['count'] : clientIds.length;
 
       if (mounted) {
         setState(() {
           _distribuindo.remove(groupKey);
-          _dadosPorEvento.remove(groupKey);
-          _confirmadas.remove(groupKey);
+          if (_dadosPorLote.containsKey(groupKey)) {
+            final clients = _dadosPorLote[groupKey]!['clients'] as List<Map<String, dynamic>>;
+            for (var c in clients) {
+              if (clientIds.contains(c['id'].toString())) {
+                c['bookStatus'] = 'DISTRIBUTED';
+                c['assignedSeller'] = {'id': sellerId, 'name': sellerName};
+                c['assignedSellerId'] = sellerId;
+              }
+            }
+          }
+          _selectedByBatch[groupKey]?.clear();
         });
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFFCE93D8),
             content: Text(
-              '🚀 $count fichas de $city distribuídas para $sellerName!',
+              '🚀 $count fichas distribuídas para $sellerName com sucesso!',
             ),
           ),
         );
@@ -381,6 +530,90 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
+  // ── DEFINIR OU ATUALIZAR LOCALIDADE-BASE ──────────────────────────────────
+  Future<void> _dialogEditarCidadeBase(String? batchId, String currentBaseCity) async {
+    if (batchId == null || batchId.startsWith('orphan_')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Lote avulso não possui identificador estável para fixar base.')),
+      );
+      return;
+    }
+
+    final controller = TextEditingController(text: currentBaseCity);
+    final newCity = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E35),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Definir Localidade-Base do Lote',
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Fichas de clientes com cidade diferente da localidade-base serão destacadas com o indicador "Fora da Base".',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Cidade Base',
+                labelStyle: const TextStyle(color: Color(0xFFCE93D8)),
+                hintText: 'Ex: Brasília',
+                hintStyle: const TextStyle(color: Colors.white30),
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFCE93D8),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+
+    if (newCity != null) {
+      try {
+        await _api.updateBatchBaseCity(batchId, newCity);
+        _loadData();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF00C853),
+              content: Text(newCity.isEmpty
+                  ? 'Localidade-base removida.'
+                  : 'Localidade-base definida: $newCity'),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(backgroundColor: Colors.red, content: Text('Erro ao atualizar: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  // ── BUILD PRINCIPAL ───────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -402,7 +635,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         backgroundColor: const Color(0xFF1A1A2E),
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
-            : _dadosPorEvento.isEmpty
+            : _dadosPorLote.isEmpty
                 ? ListView(
                     children: const [
                       SizedBox(height: 80),
@@ -424,109 +657,207 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _dadosPorEvento.length,
+                    itemCount: _dadosPorLote.length,
                     itemBuilder: (context, index) {
-                      final groupKey = _dadosPorEvento.keys.elementAt(index);
-                      final data = _dadosPorEvento[groupKey]!;
-                      return _buildEventCard(
-                        groupKey,
-                        data['eventName'] ?? 'Evento Comercial',
-                        data['city'] ?? 'Sem Cidade',
-                        (data['awaiting'] as List).cast<dynamic>(),
-                        (data['inStock'] as List).cast<dynamic>(),
-                      );
+                      final groupKey = _dadosPorLote.keys.elementAt(index);
+                      final data = _dadosPorLote[groupKey]!;
+                      return _buildBatchCard(groupKey, data);
                     },
                   ),
       ),
     );
   }
 
-  Widget _buildEventCard(
-    String groupKey,
-    String eventName,
-    String city,
-    List<dynamic> awaiting,
-    List<dynamic> inStock,
-  ) {
+  // ── CARD ÚNICO POR BATCH ID ───────────────────────────────────────────────
+  Widget _buildBatchCard(String groupKey, Map<String, dynamic> data) {
+    final batchId = data['batchId'] as String?;
+    final batchName = data['batchName'] as String? ?? 'Lote';
+    final baseCity = data['baseCity'] as String?;
+    final clients = List<Map<String, dynamic>>.from(data['clients'] ?? []);
+
+    final awaiting = clients.where((c) => c['bookStatus'] == 'AWAITING_RELEASE').toList();
+    final inStock = clients.where((c) => c['bookStatus'] == 'IN_STOCK').toList();
+    final distributed = clients.where((c) => c['bookStatus'] == 'DISTRIBUTED').toList();
+
+    final cities = clients
+        .map((c) => (c['city'] ?? 'Sem Cidade').toString().trim())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    final hasOutsideFichas = baseCity != null &&
+        baseCity.isNotEmpty &&
+        clients.any((c) {
+          final cCity = (c['city'] ?? '').toString().trim().toLowerCase();
+          return cCity.isNotEmpty && cCity != baseCity.toLowerCase();
+        });
+
+    final showMultiCityIndicator = cities.length > 1 || hasOutsideFichas;
+
     final isConfirmando = _confirmando.contains(groupKey);
-    final isConfirmada = _confirmadas.contains(groupKey);
-    final totalFichas = awaiting.length + inStock.length;
+    final isDistribuindo = _distribuindo.contains(groupKey);
+
+    final selectedIds = _selectedByBatch[groupKey] ?? {};
+    final isExpanded = _expandedBatches.contains(groupKey);
+
+    // Limit display to first 10 unless expanded
+    final displayedClients = (isExpanded || clients.length <= 10)
+        ? clients
+        : clients.sublist(0, 10);
+
+    final allInStockSelected = inStock.isNotEmpty &&
+        inStock.every((c) => selectedIds.contains(c['id'].toString()));
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(
+          color: showMultiCityIndicator
+              ? const Color(0xFFFF9800).withOpacity(0.4)
+              : Colors.white12,
+          width: showMultiCityIndicator ? 1.5 : 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── Header (Nome do Evento em Destaque, Cidade abaixo)
+          // ── CABEÇALHO DO LOTE (Nome, Total Fichas, Quantidade de Cidades)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: const BoxDecoration(
               color: Color(0xFF1E1040),
               borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(16),
-                topRight: Radius.circular(16),
+                topLeft: Radius.circular(15),
+                topRight: Radius.circular(15),
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.event, color: Color(0xFFCE93D8), size: 24),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        eventName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.layers_rounded, color: Color(0xFFCE93D8), size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 13),
-                          const SizedBox(width: 2),
-                          Expanded(
-                            child: Text(
-                              city,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 12, fontWeight: FontWeight.w600),
+                          Text(
+                            batchName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$batchName · ${clients.length} ${clients.length == 1 ? 'ficha' : 'fichas'} · ${cities.length} ${cities.length == 1 ? 'cidade' : 'cidades'}',
+                            style: const TextStyle(
+                              color: Color(0xFF80DEEA),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                    // Localidade Base Config
+                    InkWell(
+                      onTap: () => _dialogEditarCidadeBase(batchId, baseCity ?? ''),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: baseCity != null ? Colors.white12 : Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white24,
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.location_city_rounded,
+                              size: 13,
+                              color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white60,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              baseCity ?? '+ Base',
+                              style: TextStyle(
+                                color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white70,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white10,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '$totalFichas fichas',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+                // Resumo de Cidades
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 13),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        cities.isEmpty ? 'Sem cidade definida' : cities.join(', '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFFFB74D),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                // ⚠️ Indicador: Contém fichas de outras localidades
+                if (showMultiCityIndicator)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE65100).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFFF9800), width: 0.9),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.share_location_rounded, color: Color(0xFFFFB74D), size: 15),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Contém fichas de outras localidades',
+                            style: TextStyle(
+                              color: Color(0xFFFFB74D),
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
 
-          // ── Status badges
+          // ── BADGES DE ESTADO OPERACIONAL DO LOTE
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -543,125 +874,397 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                     label: '${inStock.length} em Estoque',
                     color: const Color(0xFF00C853),
                   ),
+                if (distributed.isNotEmpty)
+                  _statusBadge(
+                    icon: Icons.check_circle_outline,
+                    label: '${distributed.length} Distribuídas',
+                    color: const Color(0xFFCE93D8),
+                  ),
               ],
             ),
           ),
 
-          const SizedBox(height: 16),
-
-          // ── Pipeline visual
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                _flowStep(
-                  icon: Icons.camera_alt,
-                  label: 'Fotógrafo',
-                  done: true,
-                  color: const Color(0xFF00C853),
-                ),
-                _flowArrow(),
-                _flowStep(
-                  icon: Icons.local_print_shop,
-                  label: 'Gráfica',
-                  done: isConfirmada || awaiting.isEmpty,
-                  color: Colors.orange,
-                ),
-                _flowArrow(),
-                _flowStep(
-                  icon: Icons.inventory_2,
-                  label: 'Estoque',
-                  done: inStock.isNotEmpty,
-                  color: const Color(0xFF00C853),
-                ),
-                _flowArrow(),
-                _flowStep(
-                  icon: Icons.person,
-                  label: 'Vendedor',
-                  done: false,
-                  color: const Color(0xFFCE93D8),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-          const Divider(color: Colors.white12, height: 1),
           const SizedBox(height: 12),
 
-          // ── Action buttons
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (awaiting.isNotEmpty)
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange.shade700,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+          // ── BOTÃO DE CONFIRMAR CHEGADA DA GRÁFICA (SE HOUVER PENDÊNCIAS)
+          if (awaiting.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange.shade800,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: isConfirmando
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check_circle_outline),
+                label: Text(
+                  isConfirmando
+                      ? 'Confirmando Chegada...'
+                      : '✅ Confirmar Chegada da Gráfica (${awaiting.length} fichas)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onPressed: isConfirmando
+                    ? null
+                    : () => _confirmarChegadaGrafica(groupKey, batchName, awaiting),
+              ),
+            ),
+
+          // ── BARRA DE SELEÇÃO E DISTRIBUIÇÃO (PARA FICHAS EM ESTOQUE)
+          if (inStock.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFCE93D8),
+                      side: const BorderSide(color: Color(0xFFCE93D8)),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    icon: isConfirmando
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Icon(Icons.check_circle_outline),
+                    icon: Icon(
+                      allInStockSelected ? Icons.deselect : Icons.select_all,
+                      size: 16,
+                    ),
                     label: Text(
-                      isConfirmando
-                          ? 'Confirmando...'
-                          : '✅ Confirmar Chegada da Gráfica (${awaiting.length} fichas)',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      allInStockSelected ? 'Desmarcar todas' : 'Selecionar todas (${inStock.length})',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
-                    onPressed:
-                        isConfirmando ? null : () => _confirmarChegadaGrafica(groupKey, city, eventName, awaiting),
+                    onPressed: () => _toggleSelectAllInStock(groupKey, inStock),
                   ),
-                if (awaiting.isNotEmpty && inStock.isNotEmpty)
-                  const SizedBox(height: 8),
-                if (inStock.isNotEmpty)
+                  if (cities.length > 1)
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF80DEEA),
+                        side: const BorderSide(color: Color(0xFF80DEEA)),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.location_city, size: 16),
+                      label: const Text(
+                        'Selecionar por cidade',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () => _dialogSelecionarPorCidade(groupKey, inStock),
+                    ),
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFCE93D8),
+                      backgroundColor: selectedIds.isNotEmpty
+                          ? const Color(0xFFCE93D8)
+                          : Colors.white24,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    icon: _distribuindo.contains(groupKey)
+                    icon: isDistribuindo
                         ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                           )
-                        : const Icon(Icons.send),
+                        : const Icon(Icons.send, size: 16),
                     label: Text(
-                      _distribuindo.contains(groupKey)
+                      isDistribuindo
                           ? 'Distribuindo...'
-                          : '🚀 Distribuir ${inStock.length} Fichas para Vendedor',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                          : 'Distribuir selecionadas (${selectedIds.length})',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
-                    onPressed: _distribuindo.contains(groupKey)
+                    onPressed: (selectedIds.isEmpty || isDistribuindo)
                         ? null
-                        : () => _distribuirParaVendedor(groupKey, city),
+                        : () => _distribuirSelecionadas(groupKey, clients),
                   ),
+                ],
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 8),
+          const Divider(color: Colors.white12, height: 1),
+
+          // ── LISTA DE FICHAS NO PRÓPRIO CARD
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.format_list_bulleted, color: Colors.white60, size: 16),
+                const SizedBox(width: 6),
+                Text(
+                  'Fichas do Lote (${clients.length})',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
           ),
+
+          ...displayedClients.map((client) {
+            final cId = client['id'].toString();
+            final isSelected = selectedIds.contains(cId);
+            return _buildFichaRow(groupKey, client, isSelected, baseCity);
+          }),
+
+          // Botão Expansor "Ver todas / Recolher" para lotes com mais de 10 fichas
+          if (clients.length > 10)
+            InkWell(
+              onTap: () {
+                setState(() {
+                  if (isExpanded) {
+                    _expandedBatches.remove(groupKey);
+                  } else {
+                    _expandedBatches.add(groupKey);
+                  }
+                });
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(15),
+                    bottomRight: Radius.circular(15),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                      color: const Color(0xFFCE93D8),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isExpanded
+                          ? 'Recolher lista de fichas'
+                          : 'Ver todas as fichas (${clients.length} total)',
+                      style: const TextStyle(
+                        color: Color(0xFFCE93D8),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  // ── LINHA INDIVIDUAL DA FICHA ─────────────────────────────────────────────
+  Widget _buildFichaRow(
+    String groupKey,
+    Map<String, dynamic> client,
+    bool isSelected,
+    String? baseCity,
+  ) {
+    final status = (client['bookStatus'] ?? '').toString();
+    final isInStock = status == 'IN_STOCK';
+    final isAwaiting = status == 'AWAITING_RELEASE';
+
+    final visibleCode = client['visibleCode']?.toString();
+    final seq = client['sequenceNumber']?.toString();
+    final uuid = client['uuid']?.toString();
+    final isOffline = client['isOfflinePending'] == true;
+    final displayCode = (visibleCode != null && visibleCode.isNotEmpty)
+        ? visibleCode
+        : ((seq != null && seq.isNotEmpty && seq != 'S/N')
+            ? seq
+            : (uuid != null && uuid.isNotEmpty
+                ? (isOffline
+                    ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
+                    : uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase())
+                : 'S/N'));
+
+    final clientName =
+        (client['name'] ?? client['clientName'] ?? 'Cliente').toString();
+    final city = (client['city'] ?? 'Sem Cidade').toString().trim();
+    final state = client['state']?.toString().trim();
+    final locationStr = (state != null && state.isNotEmpty) ? '$city - $state' : city;
+
+    final isOutside = baseCity != null &&
+        baseCity.isNotEmpty &&
+        city.toLowerCase() != baseCity.toLowerCase();
+
+    final sellerName = client['assignedSeller']?['name']?.toString() ??
+        client['assignedSellerName']?.toString() ??
+        'Vendedor';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isSelected
+            ? const Color(0xFFCE93D8).withOpacity(0.08)
+            : Colors.transparent,
+        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.05))),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Caixa de seleção ou ícone indicador
+          if (isInStock)
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: Checkbox(
+                value: isSelected,
+                activeColor: const Color(0xFFCE93D8),
+                onChanged: (val) {
+                  setState(() {
+                    _selectedByBatch.putIfAbsent(groupKey, () => {});
+                    if (val == true) {
+                      _selectedByBatch[groupKey]!.add(client['id'].toString());
+                    } else {
+                      _selectedByBatch[groupKey]!.remove(client['id'].toString());
+                    }
+                  });
+                },
+              ),
+            )
+          else
+            SizedBox(
+              width: 32,
+              height: 32,
+              child: Center(
+                child: Icon(
+                  isAwaiting ? Icons.local_print_shop_outlined : Icons.check_circle_outline,
+                  size: 18,
+                  color: isAwaiting ? Colors.orange : const Color(0xFFCE93D8),
+                ),
+              ),
+            ),
+          const SizedBox(width: 8),
+
+          // Código da Ficha em fonte monoespaçada
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: Text(
+              displayCode,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+                color: Color(0xFF80DEEA),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // Nome do Cliente e Cidade/UF (Sem quebra letra por letra)
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  clientName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      size: 11,
+                      color: isOutside ? const Color(0xFFFFB74D) : Colors.white60,
+                    ),
+                    const SizedBox(width: 2),
+                    Flexible(
+                      child: Text(
+                        locationStr,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isOutside ? const Color(0xFFFFB74D) : Colors.white60,
+                          fontWeight: isOutside ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                    if (isOutside) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFF9800).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: const Color(0xFFFF9800), width: 0.8),
+                        ),
+                        child: const Text(
+                          'Fora da Base',
+                          style: TextStyle(
+                            color: Color(0xFFFFB74D),
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // Badge de Estado Atual
+          _buildItemStatusBadge(status, sellerName),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemStatusBadge(String status, String sellerName) {
+    if (status == 'AWAITING_RELEASE') {
+      return _statusBadge(
+        icon: Icons.local_print_shop,
+        label: 'Na Gráfica',
+        color: Colors.orange,
+      );
+    } else if (status == 'IN_STOCK') {
+      return _statusBadge(
+        icon: Icons.inventory_2,
+        label: 'Em Estoque',
+        color: const Color(0xFF00C853),
+      );
+    } else if (status == 'DISTRIBUTED') {
+      return _statusBadge(
+        icon: Icons.person_pin_circle_outlined,
+        label: 'Distribuída ($sellerName)',
+        color: const Color(0xFFCE93D8),
+      );
+    } else {
+      return _statusBadge(
+        icon: Icons.info_outline,
+        label: status,
+        color: Colors.white70,
+      );
+    }
   }
 
   Widget _statusBadge({
@@ -670,7 +1273,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: color.withOpacity(0.15),
         borderRadius: BorderRadius.circular(20),
@@ -679,62 +1282,21 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 14),
-          const SizedBox(width: 5),
+          Icon(icon, color: color, size: 12),
+          const SizedBox(width: 4),
           Flexible(
             child: Text(
               label,
               style: TextStyle(
-                  color: color, fontSize: 12, fontWeight: FontWeight.bold),
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _flowStep({
-    required IconData icon,
-    required String label,
-    required bool done,
-    required Color color,
-  }) {
-    return Expanded(
-      child: Column(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: done ? color.withOpacity(0.2) : Colors.white10,
-              border:
-                  Border.all(color: done ? color : Colors.white24, width: 1.5),
-            ),
-            child: Icon(icon, size: 18, color: done ? color : Colors.white38),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 10,
-              color: done ? color : Colors.white38,
-              fontWeight: done ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _flowArrow() {
-    return const Padding(
-      padding: EdgeInsets.only(bottom: 18),
-      child: Icon(Icons.arrow_forward_ios, size: 12, color: Colors.white24),
     );
   }
 }

@@ -16,7 +16,6 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../widgets/led_menu_item.dart';
 import 'visao_rotas_chegada.dart';
-import 'visao_roteiro_inteligente.dart';
 import '../widgets/led_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
@@ -287,12 +286,16 @@ class _AdminDashboardState extends State<AdminDashboard>
                     ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
                     : seq));
 
+        final batchId = client['batchId'] ?? client['batch']?['id'];
+        final batchName = client['batch']?['name'] ?? client['batchName'] ?? client['batchId'] ?? 'N/A';
+
         final b = {
           'id': client['id'],
           'uuid': uuid,
           'visibleCode': visibleCode,
           'ficha': displayCode,
-          'lote': client['batch']?['name'] ?? client['batchId'] ?? 'N/A',
+          'lote': batchName,
+          'batchId': batchId,
           'qr': (uuid != null && uuid.isNotEmpty) ? uuid : seq,
           'cliente': client['name'] ?? client['clientName'] ?? 'Cliente',
           'city': client['city'],
@@ -361,23 +364,37 @@ class _AdminDashboardState extends State<AdminDashboard>
       for (var entry in photographerBooks.entries) {
         final teamColor = colors[colorIndex % colors.length];
 
-        // Group books by event/city for this photographer
-        final Map<String, List<Map<String, dynamic>>> eventBooks = {};
+        // Group books by batchId for this photographer
+        final Map<String, List<Map<String, dynamic>>> batchBooks = {};
         for (var b in entry.value) {
-          final city = b['city'] ?? 'Sem Cidade';
-          if (!eventBooks.containsKey(city)) {
-            eventBooks[city] = [];
+          final bId = (b['batchId'] != null && b['batchId'].toString().isNotEmpty)
+              ? b['batchId'].toString()
+              : (b['city'] ?? 'Sem Lote').toString();
+          if (!batchBooks.containsKey(bId)) {
+            batchBooks[bId] = [];
           }
-          eventBooks[city]!.add(b);
+          batchBooks[bId]!.add(b);
         }
 
         final List<Map<String, dynamic>> events = [];
-        for (var ev in eventBooks.entries) {
+        for (var ev in batchBooks.entries) {
+          final bList = ev.value;
+          final firstBook = bList.first;
+          final batchName = (firstBook['lote'] ?? 'Lote').toString();
+          final cities = bList
+              .map((x) => (x['city'] ?? 'Sem Cidade').toString().trim())
+              .where((s) => s.isNotEmpty)
+              .toSet();
+          final cityText = cities.length <= 1
+              ? (cities.isEmpty ? 'Sem Cidade' : cities.first)
+              : '${cities.first} (+${cities.length - 1} ${cities.length - 1 == 1 ? 'cidade' : 'cidades'})';
+
           events.add({
-            'event': 'Produção em ${ev.key}',
-            'city': ev.key,
-            'photos': ev.value.length,
-            'books': ev.value,
+            'event': 'Lote $batchName',
+            'city': '$cityText · ${cities.length} ${cities.length == 1 ? 'cidade' : 'cidades'}',
+            'photos': bList.length,
+            'books': bList,
+            'batchId': ev.key,
           });
         }
 
@@ -2512,53 +2529,6 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             );
           }),
-          const SizedBox(height: 24),
-          // 🗺️ Card Mapeamento de Rotas no final da Aba Books
-          LedCard(
-            color: const Color(0xFF1A1A2E),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.route_rounded,
-                          color: Color(0xFF80DEEA), size: 22),
-                      SizedBox(width: 8),
-                      Text('Mapeamento de Rotas & Transbordo',
-                          style: TextStyle(
-                              color: Color(0xFF80DEEA),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                      'Visualiza itinerários de 300 km para retransportar fichas perdidas entre rotas de vendedores no mesmo trajeto.',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: LedButton.icon(
-                      onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const VisaoRoteiroInteligente())),
-                      icon: const Icon(Icons.alt_route_rounded,
-                          color: Colors.black),
-                      label: const Text('Abrir Mapeamento de Rotas',
-                          style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold)),
-                      style: LedButton.styleFrom(
-                          backgroundColor: const Color(0xFF80DEEA)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           const SizedBox(height: 20),
         ],
       ),

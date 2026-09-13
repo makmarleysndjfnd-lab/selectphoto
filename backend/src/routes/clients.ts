@@ -274,7 +274,13 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         companyId,
         bookStatus: { not: 'CREATED' }
       },
-      include: { children: true, appointments: true, assignedSeller: true, photographer: { select: { id: true, name: true } } }
+      include: { 
+        children: true, 
+        appointments: true, 
+        assignedSeller: true, 
+        photographer: { select: { id: true, name: true } },
+        batch: { select: { id: true, name: true, status: true } }
+      }
     });
     res.json(clients);
   } catch (error) {

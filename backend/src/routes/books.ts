@@ -736,11 +736,67 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
 
         const batches = await prisma.bookBatch.findMany({
             where: { companyId },
-            include: { photographer: true },
+            include: { 
+                photographer: { select: { id: true, name: true } },
+                clients: {
+                    select: {
+                        id: true,
+                        uuid: true,
+                        visibleCode: true,
+                        sequenceNumber: true,
+                        name: true,
+                        city: true,
+                        state: true,
+                        bookStatus: true,
+                        outcomeStatus: true,
+                        assignedSellerId: true,
+                        assignedSeller: { select: { id: true, name: true } }
+                    }
+                }
+            },
             orderBy: { date: 'desc' }
         });
 
         res.json(batches);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update batch base city (Admin)
+router.patch('/batch/:id/base-city', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const { id } = req.params;
+        const { baseCity } = req.body;
+        const companyId = req.user?.companyId;
+
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const batch = await prisma.bookBatch.findFirst({
+            where: { id: id as string, ...(companyId ? { companyId } : {}) }
+        });
+
+        if (!batch) {
+            return res.status(404).json({ error: 'Lote não encontrado' });
+        }
+
+        const cleanBaseCity = typeof baseCity === 'string' ? baseCity.trim() : '';
+        let newName = batch.name;
+        if (cleanBaseCity.length > 0) {
+            const baseName = batch.name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+            newName = `${baseName} (${cleanBaseCity})`;
+        } else {
+            newName = batch.name.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        }
+
+        const updated = await prisma.bookBatch.update({
+            where: { id: id as string },
+            data: { name: newName }
+        });
+
+        res.json({ success: true, batch: updated });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
