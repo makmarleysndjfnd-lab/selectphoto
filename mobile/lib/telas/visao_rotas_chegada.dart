@@ -34,41 +34,6 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     _loadData();
   }
 
-  static String? _parseBaseCity(String name) {
-    final match = RegExp(r'\(([^)]+)\)$').firstMatch(name.trim());
-    if (match != null) {
-      final city = match.group(1)?.trim() ?? '';
-      final upper = city.toUpperCase();
-      // Não deduzir de rótulos genéricos livres como "MUNDO", "GERAL", "TODOS", "PADRÃO"
-      if (upper != 'MUNDO' &&
-          upper != 'GERAL' &&
-          upper != 'TODOS' &&
-          upper != 'PADRAO' &&
-          upper != 'PADRÃO' &&
-          upper != 'SEM CIDADE' &&
-          city.isNotEmpty) {
-        return city;
-      }
-    }
-    return null;
-  }
-
-  static String _cleanBatchName(String name) {
-    final match = RegExp(r'\(([^)]+)\)$').firstMatch(name.trim());
-    if (match != null) {
-      final city = match.group(1)?.trim() ?? '';
-      final upper = city.toUpperCase();
-      if (upper != 'MUNDO' &&
-          upper != 'GERAL' &&
-          upper != 'TODOS' &&
-          upper != 'PADRAO' &&
-          upper != 'PADRÃO') {
-        final cleaned = name.replaceFirst(RegExp(r'\s*\([^)]*\)\s*$'), '').trim();
-        if (cleaned.isNotEmpty) return cleaned;
-      }
-    }
-    return name.trim();
-  }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
@@ -92,8 +57,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         final c = Map<String, dynamic>.from(rawClient as Map);
         final status = (c['bookStatus'] ?? '').toString();
 
-        // Ignora status de produção pré-campo do fotógrafo
-        if (status == 'CREATED') continue;
+        // Ignora status de produção pré-campo do fotógrafo e fichas já vendidas
+        if (status == 'CREATED' || status == 'SOLD' || status == 'REBOLO_SOLD') continue;
 
         final rawBatchId = c['batchId']?.toString() ?? c['batch']?['id']?.toString();
         final rawBatchName = (c['batch']?['name'] ??
@@ -109,14 +74,10 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
             : 'orphan_${c['id']}';
 
         agrupado.putIfAbsent(groupKey, () {
-          final parsedCity = _parseBaseCity(rawBatchName);
-          final cleanName = _cleanBatchName(rawBatchName);
-
           return {
             'batchId': rawBatchId,
-            'batchName': cleanName,
+            'batchName': rawBatchName,
             'fullName': rawBatchName,
-            'baseCity': parsedCity,
             'clients': <Map<String, dynamic>>[],
           };
         });
@@ -530,88 +491,6 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     }
   }
 
-  // ── DEFINIR OU ATUALIZAR LOCALIDADE-BASE ──────────────────────────────────
-  Future<void> _dialogEditarCidadeBase(String? batchId, String currentBaseCity) async {
-    if (batchId == null || batchId.startsWith('orphan_')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lote avulso não possui identificador estável para fixar base.')),
-      );
-      return;
-    }
-
-    final controller = TextEditingController(text: currentBaseCity);
-    final newCity = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E35),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Definir Localidade-Base do Lote',
-            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Fichas de clientes com cidade diferente da localidade-base serão destacadas com o indicador "Fora da Base".',
-              style: TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Cidade Base',
-                labelStyle: const TextStyle(color: Color(0xFFCE93D8)),
-                hintText: 'Ex: Brasília',
-                hintStyle: const TextStyle(color: Colors.white30),
-                filled: true,
-                fillColor: Colors.white10,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFCE93D8),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Salvar'),
-          ),
-        ],
-      ),
-    );
-
-    if (newCity != null) {
-      try {
-        await _api.updateBatchBaseCity(batchId, newCity);
-        _loadData();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: const Color(0xFF00C853),
-              content: Text(newCity.isEmpty
-                  ? 'Localidade-base removida.'
-                  : 'Localidade-base definida: $newCity'),
-            ),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(backgroundColor: Colors.red, content: Text('Erro ao atualizar: $e')),
-          );
-        }
-      }
-    }
-  }
 
   // ── BUILD PRINCIPAL ───────────────────────────────────────────────────────
   @override
@@ -682,16 +561,11 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     final cities = clients
         .map((c) => (c['city'] ?? 'Sem Cidade').toString().trim())
         .where((s) => s.isNotEmpty)
-        .toSet();
+        .toSet()
+        .toList();
 
-    final hasOutsideFichas = baseCity != null &&
-        baseCity.isNotEmpty &&
-        clients.any((c) {
-          final cCity = (c['city'] ?? '').toString().trim().toLowerCase();
-          return cCity.isNotEmpty && cCity != baseCity.toLowerCase();
-        });
-
-    final showMultiCityIndicator = cities.length > 1 || hasOutsideFichas;
+    // Ordenar alfabeticamente para exibição consistente
+    cities.sort((a, b) => a.compareTo(b));
 
     final isConfirmando = _confirmando.contains(groupKey);
     final isDistribuindo = _distribuindo.contains(groupKey);
@@ -713,10 +587,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         color: const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: showMultiCityIndicator
-              ? const Color(0xFFFF9800).withOpacity(0.4)
-              : Colors.white12,
-          width: showMultiCityIndicator ? 1.5 : 1,
+          color: Colors.white12,
+          width: 1,
         ),
       ),
       child: Column(
@@ -766,53 +638,22 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                         ],
                       ),
                     ),
-                    // Localidade Base Config
-                    InkWell(
-                      onTap: () => _dialogEditarCidadeBase(batchId, baseCity ?? ''),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: baseCity != null ? Colors.white12 : Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white24,
-                            width: 0.8,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.location_city_rounded,
-                              size: 13,
-                              color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white60,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              baseCity ?? '+ Base',
-                              style: TextStyle(
-                                color: baseCity != null ? const Color(0xFF80DEEA) : Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
                   ],
                 ),
                 // Resumo de Cidades
                 const SizedBox(height: 6),
                 Row(
                   children: [
-                    const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 13),
+                    const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 14),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        cities.isEmpty ? 'Sem cidade definida' : cities.join(', '),
-                        maxLines: 1,
+                        cities.isEmpty
+                            ? 'Sem cidade definida'
+                            : (cities.length > 1
+                                ? 'Múltiplas cidades (${cities.length}): ${cities.join(', ')}'
+                                : cities.first),
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Color(0xFFFFB74D),
@@ -823,34 +664,6 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                     ),
                   ],
                 ),
-                // ⚠️ Indicador: Contém fichas de outras localidades
-                if (showMultiCityIndicator)
-                  Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE65100).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFFF9800), width: 0.9),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.share_location_rounded, color: Color(0xFFFFB74D), size: 15),
-                        SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            'Contém fichas de outras localidades',
-                            style: TextStyle(
-                              color: Color(0xFFFFB74D),
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ),
@@ -999,12 +812,16 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
               children: [
                 const Icon(Icons.format_list_bulleted, color: Colors.white60, size: 16),
                 const SizedBox(width: 6),
-                Text(
-                  'Fichas do Lote (${clients.length})',
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Text(
+                    'Fichas do Lote (${clients.length})',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -1014,7 +831,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
           ...displayedClients.map((client) {
             final cId = client['id'].toString();
             final isSelected = selectedIds.contains(cId);
-            return _buildFichaRow(groupKey, client, isSelected, baseCity);
+            return _buildFichaRow(groupKey, client, isSelected);
           }),
 
           // Botão Expansor "Ver todas / Recolher" para lotes com mais de 10 fichas
@@ -1072,7 +889,6 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     String groupKey,
     Map<String, dynamic> client,
     bool isSelected,
-    String? baseCity,
   ) {
     final status = (client['bookStatus'] ?? '').toString();
     final isInStock = status == 'IN_STOCK';
@@ -1098,16 +914,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     final state = client['state']?.toString().trim();
     final locationStr = (state != null && state.isNotEmpty) ? '$city - $state' : city;
 
-    final isOutside = baseCity != null &&
-        baseCity.isNotEmpty &&
-        city.toLowerCase() != baseCity.toLowerCase();
-
     final sellerName = client['assignedSeller']?['name']?.toString() ??
         client['assignedSellerName']?.toString() ??
         'Vendedor';
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: isSelected
             ? const Color(0xFFCE93D8).withOpacity(0.08)
@@ -1120,8 +932,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
           // Caixa de seleção ou ícone indicador
           if (isInStock)
             SizedBox(
-              width: 32,
-              height: 32,
+              width: 28,
+              height: 28,
               child: Checkbox(
                 value: isSelected,
                 activeColor: const Color(0xFFCE93D8),
@@ -1139,8 +951,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
             )
           else
             SizedBox(
-              width: 32,
-              height: 32,
+              width: 28,
+              height: 28,
               child: Center(
                 child: Icon(
                   isAwaiting ? Icons.local_print_shop_outlined : Icons.check_circle_outline,
@@ -1149,14 +961,14 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                 ),
               ),
             ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
 
           // Código da Ficha em fonte monoespaçada
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
               color: Colors.white10,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(5),
               border: Border.all(color: Colors.white24),
             ),
             child: Text(
@@ -1169,71 +981,59 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
 
-          // Nome do Cliente e Cidade/UF (Sem quebra letra por letra)
+          // Nome do Cliente e Cidade/UF real
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   clientName,
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w600,
-                    fontSize: 13,
+                    fontSize: 12,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Row(
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.location_on_outlined,
                       size: 11,
-                      color: isOutside ? const Color(0xFFFFB74D) : Colors.white60,
+                      color: Colors.white60,
                     ),
                     const SizedBox(width: 2),
-                    Flexible(
+                    Expanded(
                       child: Text(
                         locationStr,
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 11,
-                          color: isOutside ? const Color(0xFFFFB74D) : Colors.white60,
-                          fontWeight: isOutside ? FontWeight.bold : FontWeight.normal,
+                          color: Colors.white60,
+                          fontWeight: FontWeight.normal,
                         ),
                       ),
                     ),
-                    if (isOutside) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFF9800).withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: const Color(0xFFFF9800), width: 0.8),
-                        ),
-                        child: const Text(
-                          'Fora da Base',
-                          style: TextStyle(
-                            color: Color(0xFFFFB74D),
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
 
-          // Badge de Estado Atual
-          _buildItemStatusBadge(status, sellerName),
+          // Badge de Estado Atual com largura flexível para evitar overflow em telas estreitas
+          Flexible(
+            flex: 0,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 130),
+              child: _buildItemStatusBadge(status, sellerName),
+            ),
+          ),
         ],
       ),
     );
@@ -1273,7 +1073,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
       decoration: BoxDecoration(
         color: color.withOpacity(0.15),
         borderRadius: BorderRadius.circular(20),
@@ -1282,14 +1082,14 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 12),
-          const SizedBox(width: 4),
+          Icon(icon, color: color, size: 11),
+          const SizedBox(width: 3),
           Flexible(
             child: Text(
               label,
               style: TextStyle(
                 color: color,
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.bold,
               ),
               overflow: TextOverflow.ellipsis,

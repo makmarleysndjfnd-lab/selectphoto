@@ -16,6 +16,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../widgets/led_menu_item.dart';
 import 'visao_rotas_chegada.dart';
+import 'visao_historico_vendas_admin.dart';
 import '../widgets/led_button.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
@@ -767,6 +768,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded,
                           'Fechamentos'),
+                      _sideMenuItem(10, Icons.point_of_sale_rounded,
+                          'Histórico de Vendas'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
@@ -1275,6 +1278,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         break;
       case 9:
         tabWidget = const VisaoEstatisticasAdmin();
+        break;
+      case 10:
+        tabWidget = const VisaoHistoricoVendasAdmin();
         break;
       default:
         tabWidget = const VisaoFechamentoAdmin();
@@ -2310,6 +2316,53 @@ class _AdminDashboardState extends State<AdminDashboard>
                               fontWeight: FontWeight.bold)),
                       style: LedButton.styleFrom(
                           backgroundColor: const Color(0xFFFFB74D)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Card de Acesso ao Histórico de Vendas
+          LedCard(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.point_of_sale_rounded,
+                          color: Color(0xFF00C853), size: 24),
+                      SizedBox(width: 10),
+                      Text('Histórico de Vendas',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                      'Consulte todas as fichas vendidas, comprovantes de pagamento, fotos e relatórios da equipe.',
+                      style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: LedButton.icon(
+                      onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const VisaoHistoricoVendasAdmin())),
+                      icon: const Icon(Icons.receipt_long_rounded,
+                          color: Colors.black),
+                      label: const Text('Abrir Histórico de Vendas',
+                          style: TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold)),
+                      style: LedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00C853)),
                     ),
                   ),
                 ],

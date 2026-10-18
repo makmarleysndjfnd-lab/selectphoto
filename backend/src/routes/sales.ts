@@ -843,6 +843,47 @@ router.get('/metrics', authenticateToken, async (req: AuthRequest, res: any) => 
   }
 });
 
+// Admin Sales History: List sold fichas with client, batch, seller, attachments, ratings
+router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => {
+  try {
+    if (!SALE_MANAGER_ROLES.includes(req.user?.role || '')) {
+      return res.status(403).json({ error: 'Acesso restrito a administradores e supervisores' });
+    }
+
+    const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const sales = await prisma.sale.findMany({
+      where: {
+        ...(companyId ? { companyId } : {}),
+      },
+      include: {
+        client: {
+          include: {
+            batch: { select: { id: true, name: true } },
+            photographer: { select: { id: true, name: true } },
+            assignedSeller: { select: { id: true, name: true } },
+            timeline: { orderBy: { timestamp: 'asc' } },
+            appointments: true,
+            children: true,
+          },
+        },
+        seller: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { date: 'desc' },
+    });
+
+    res.json(sales);
+  } catch (error) {
+    console.error('Get sales history error:', error);
+    res.status(500).json({ error: 'Erro ao carregar histórico de vendas' });
+  }
+});
+
 // Register an Appointment
 router.post('/appointments', authenticateToken, async (req: AuthRequest, res: any) => {
   try {

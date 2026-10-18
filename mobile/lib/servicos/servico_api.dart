@@ -431,6 +431,15 @@ class ApiService {
   }
 
   // Sales
+  Future<List<dynamic>> getSalesHistory() async {
+    try {
+      final response = await _dio.get('/sales/history');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<String> registerSale(Map<String, dynamic> saleData) async {
     try {
       final response = await _dio.post('/sales', data: saleData);
