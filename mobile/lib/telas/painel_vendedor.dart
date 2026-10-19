@@ -175,67 +175,194 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   void _searchClient() async {
-    final code = _codeController.text.trim().toUpperCase();
-    if (code.isEmpty) return;
+    final query = _codeController.text.trim();
+    if (query.isEmpty) return;
+    final upperQuery = query.toUpperCase();
 
-    final found = _sellerClients.firstWhere(
+    // 1. Tenta correspondência exata na lista do próprio vendedor
+    final localMatch = _sellerClients.firstWhere(
       (c) {
         final seq = (c['sequenceNumber'] ?? '').toString().trim().toUpperCase();
         final vis = (c['visibleCode'] ?? '').toString().trim().toUpperCase();
         final uid = (c['uuid'] ?? '').toString().trim().toUpperCase();
         final cid = (c['id'] ?? '').toString().trim().toUpperCase();
-        return seq == code || vis == code || uid == code || cid == code;
+        return seq == upperQuery || vis == upperQuery || uid == upperQuery || cid == upperQuery;
       },
       orElse: () => {},
     );
 
-    if (found.isNotEmpty) {
+    if (localMatch.isNotEmpty) {
       setState(() {
         _searched = true;
-        _foundClient = found;
+        _foundClient = localMatch;
       });
-      _openClientDetail(found);
+      _openClientDetail(localMatch);
       return;
     }
 
-    // Busca global (Estoque/Outros Vendedores)
+    // 2. Consulta ao backend para busca por código, criança ou responsável
     try {
-      final results = await ApiService().searchBooks(code);
+      final results = await ApiService().searchBooks(query);
+      if (!mounted) return;
+
       if (results.isNotEmpty) {
-        final book = results.first;
-        String locationStr = '';
-        if (book['bookStatus'] == 'IN_STOCK' || book['bookStatus'] == 'IN_STOCK_REBOLO') {
-          locationStr = 'Disponível no Estoque';
-        } else if (book['assignedSeller'] != null) {
-          locationStr = 'Com vendedor(a): ${book['assignedSeller']['name']}';
-        } else {
-          locationStr = 'Status: ${book['bookStatus']}';
-        }
-        
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1A2535),
-              title: const Text('Localização do Book', style: TextStyle(color: Colors.white)),
-              content: Text('Ficha: ${book['sequenceNumber']}\nNome: ${book['name']}\n\n$locationStr', style: const TextStyle(color: Colors.white70)),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Fechar', style: TextStyle(color: Color(0xFF4FC3F7))))
-              ],
-            )
-          );
-        }
+        _showSearchResultsDialog(results, query);
       } else {
         setState(() {
           _searched = true;
           _foundClient = null;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Nenhuma ficha encontrada para "$query".'),
+            backgroundColor: Colors.orange,
+          ),
+        );
       }
-    } catch(e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro na busca: $e')));
+    } catch (e) {
+      // 3. Fallback para cache local offline se a rede falhar
+      final offlineMatches = _sellerClients.where((c) {
+        final name = (c['name'] ?? '').toString().toLowerCase();
+        final contact = (c['mainContact'] ?? '').toString().toLowerCase();
+        final seq = (c['sequenceNumber'] ?? '').toString().toLowerCase();
+        final vis = (c['visibleCode'] ?? '').toString().toLowerCase();
+        final q = query.toLowerCase();
+        return name.contains(q) || contact.contains(q) || seq.contains(q) || vis.contains(q);
+      }).toList();
+
+      if (offlineMatches.isNotEmpty && mounted) {
+        _showSearchResultsDialog(offlineMatches, query, isOffline: true);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro na busca: $e')),
+        );
       }
     }
+  }
+
+  void _showSearchResultsDialog(List<dynamic> results, String query, {bool isOffline = false}) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2535),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.search, color: Color(0xFF4FC3F7)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Resultados para "$query"',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isOffline)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.orange, size: 16),
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Informação salva localmente (offline), possivelmente desatualizada.',
+                          style: TextStyle(color: Colors.orange, fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: results.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                  itemBuilder: (ctx, i) {
+                    final item = results[i];
+                    final code = item['visibleCode'] ?? item['sequenceNumber'] ?? 'S/N';
+                    final clientName = item['name'] ?? 'Cliente não informado';
+                    final childrenStr = item['childrenNames']?.toString().isNotEmpty == true
+                        ? item['childrenNames']
+                        : ((item['children'] as List?)?.map((c) => c['name']).join(', ') ?? 'Não cadastrada');
+                    final contact = item['mainContact'] ?? 'Não informado';
+                    final city = item['city'] ?? 'Sem cidade';
+                    final batch = item['batchName'] ?? 'Sem lote';
+                    final custodian = item['currentCustodian'] ?? (item['assignedSeller'] != null ? 'Com vendedor: ${item['assignedSeller']['name']}' : 'No Estoque');
+
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      title: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF4FC3F7).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.5)),
+                            ),
+                            child: Text(
+                              code.toString(),
+                              style: const TextStyle(
+                                color: Color(0xFF4FC3F7),
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              clientName.toString(),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Criança: $childrenStr · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                            const SizedBox(height: 2),
+                            Text('Cidade: $city · Lote: $batch', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                            const SizedBox(height: 2),
+                            Text('Situação: $custodian', style: const TextStyle(color: Color(0xFF81C784), fontWeight: FontWeight.w600, fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Fechar', style: TextStyle(color: Color(0xFF4FC3F7))),
+          ),
+        ],
+      ),
+    );
   }
 
   void _openClientDetail(Map<String, dynamic> client) {
@@ -1209,7 +1336,7 @@ class _SellerDashboardState extends State<SellerDashboard>
             ],
           ),
           const SizedBox(height: 4),
-          const Text('Ex: CF-EQP1-0001',
+          const Text('Busque por código permanente, nome da criança ou responsável',
               style:
                   TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           const SizedBox(height: 14),
@@ -1219,14 +1346,13 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: TextField(
                   controller: _codeController,
                   style: const TextStyle(
-                      color: Colors.white, fontFamily: 'monospace'),
-                  textCapitalization: TextCapitalization.characters,
+                      color: Colors.white),
+                  textCapitalization: TextCapitalization.words,
                   onSubmitted: (_) => _searchClient(),
                   decoration: InputDecoration(
-                    hintText: 'CF-EQP1-0001',
+                    hintText: 'Código, Criança ou Responsável...',
                     hintStyle: TextStyle(
-                        color: Colors.white.withOpacity(0.3),
-                        fontFamily: 'monospace'),
+                        color: Colors.white.withOpacity(0.3)),
                     prefixIcon: const Icon(Icons.tag_rounded,
                         color: Color(0xFF4FC3F7), size: 18),
                     enabledBorder: OutlineInputBorder(

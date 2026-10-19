@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -460,7 +461,11 @@ class ApiService {
         if (entry.key == 'pendingReceiptPath' ||
             entry.key == 'pendingSheetPhotoPath' ||
             entry.value == null) continue;
-        fields[entry.key] = entry.value.toString();
+        if (entry.value is List || entry.value is Map) {
+          fields[entry.key] = jsonEncode(entry.value);
+        } else {
+          fields[entry.key] = entry.value.toString();
+        }
       }
       fields['receipt'] = await MultipartFile.fromFile(filePath);
       if (sheetPhotoPath != null && sheetPhotoPath.trim().isNotEmpty) {

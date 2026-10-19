@@ -239,6 +239,20 @@ model Sale {
   client        Client   @relation(fields: [clientId], references: [id])
   seller        User     @relation(fields: [sellerId], references: [id])
   supersededNonSales NonSale[] @relation("SupersededNonSales")
+  payments      SalePayment[]
+}
+
+model SalePayment {
+  id         String   @id @default(uuid())
+  saleId     String
+  method     String   // CASH, PIX, CREDIT, DEBIT
+  amount     Float
+  receiptUrl String?
+  createdAt  DateTime @default(now())
+
+  sale       Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
 }
 
 model NonSale {

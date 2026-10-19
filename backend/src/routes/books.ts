@@ -666,30 +666,40 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
         } : {};
 
         let clients: any[];
+        const queryString = (q as string).trim();
+
         if (isPhotographer) {
             clients = await prisma.client.findMany({
                 where: {
                     companyId,
                     ...photographerWhere,
                     OR: [
-                        { uuid: { contains: q as string, mode: 'insensitive' } },
-                        { visibleCode: { contains: q as string, mode: 'insensitive' } },
-                        { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
-                        { name: { contains: q as string, mode: 'insensitive' } }
+                        { uuid: { contains: queryString, mode: 'insensitive' } },
+                        { visibleCode: { contains: queryString, mode: 'insensitive' } },
+                        { sequenceNumber: { contains: queryString, mode: 'insensitive' } },
+                        { name: { contains: queryString, mode: 'insensitive' } },
+                        { mainContact: { contains: queryString, mode: 'insensitive' } },
+                        { children: { some: { name: { contains: queryString, mode: 'insensitive' } } } }
                     ]
                 },
-                include: { timeline: { where: { action: 'CITY_CLOSED' } } },
-                take: 10
+                include: {
+                    timeline: { where: { action: 'CITY_CLOSED' } },
+                    children: { select: { id: true, name: true, age: true } },
+                    batch: { select: { id: true, name: true } },
+                },
+                take: 20
             });
         } else {
             clients = await prisma.client.findMany({
                 where: {
                     companyId,
                     OR: [
-                        { uuid: { contains: q as string, mode: 'insensitive' } },
-                        { visibleCode: { contains: q as string, mode: 'insensitive' } },
-                        { sequenceNumber: { contains: q as string, mode: 'insensitive' } },
-                        { name: { contains: q as string, mode: 'insensitive' } }
+                        { uuid: { contains: queryString, mode: 'insensitive' } },
+                        { visibleCode: { contains: queryString, mode: 'insensitive' } },
+                        { sequenceNumber: { contains: queryString, mode: 'insensitive' } },
+                        { name: { contains: queryString, mode: 'insensitive' } },
+                        { mainContact: { contains: queryString, mode: 'insensitive' } },
+                        { children: { some: { name: { contains: queryString, mode: 'insensitive' } } } }
                     ]
                 },
                 select: {
@@ -698,12 +708,26 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     visibleCode: true,
                     sequenceNumber: true,
                     name: true,
+                    mainContact: true,
+                    city: true,
+                    state: true,
                     bookStatus: true,
+                    outcomeStatus: true,
+                    batchId: true,
+                    batch: {
+                        select: { id: true, name: true }
+                    },
+                    children: {
+                        select: { id: true, name: true, age: true }
+                    },
+                    photographer: {
+                        select: { id: true, name: true }
+                    },
                     assignedSeller: {
-                        select: { name: true }
+                        select: { id: true, name: true }
                     }
                 },
-                take: 10
+                take: 20
             });
         }
 
@@ -716,9 +740,51 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     visibleCode: c.visibleCode,
                     sequenceNumber: c.sequenceNumber,
                     name: c.name,
+                    mainContact: c.mainContact,
+                    city: c.city,
+                    state: c.state,
+                    batchName: c.batch?.name || 'Sem Lote',
+                    childrenNames: (c.children || []).map((ch: any) => ch.name).join(', '),
+                    currentCustodian: 'Fotógrafo (' + (c.photographer?.name || 'Você') + ')',
                     bookStatus: c.bookStatus || 'CREATED',
                 }))
-            : clients;
+            : clients.map((c) => {
+                let currentCustodian = 'Estoque / Central';
+                const status = (c.bookStatus || '').toUpperCase();
+
+                if (status === 'CREATED' || status === 'AWAITING_RELEASE') {
+                    currentCustodian = c.photographer?.name ? `Fotógrafo (${c.photographer.name})` : 'Em produção fotográfica';
+                } else if (status === 'IN_STOCK' || status === 'IN_STOCK_REBOLO') {
+                    currentCustodian = 'Estoque / Central';
+                } else if (status === 'DISTRIBUTED' || status === 'DISTRIBUTED_REBOLO') {
+                    currentCustodian = c.assignedSeller?.name ? `Com vendedor (${c.assignedSeller.name})` : 'Com vendedor';
+                } else if (status === 'AWAITING_RETURN') {
+                    currentCustodian = c.assignedSeller?.name
+                        ? `Aguardando devolução do vendedor (${c.assignedSeller.name}) para o Estoque`
+                        : 'Aguardando devolução para o Estoque';
+                } else if (status === 'SOLD' || status === 'REBOLO_SOLD') {
+                    currentCustodian = c.assignedSeller?.name ? `Vendida (${c.assignedSeller.name})` : 'Vendida';
+                }
+
+                return {
+                    id: c.id,
+                    uuid: c.uuid,
+                    visibleCode: c.visibleCode,
+                    sequenceNumber: c.sequenceNumber,
+                    name: c.name,
+                    mainContact: c.mainContact,
+                    city: c.city,
+                    state: c.state,
+                    batchId: c.batchId,
+                    batchName: c.batch?.name || 'Sem Lote',
+                    childrenNames: (c.children || []).map((ch: any) => ch.name).join(', '),
+                    children: c.children,
+                    bookStatus: c.bookStatus,
+                    outcomeStatus: c.outcomeStatus,
+                    currentCustodian,
+                    assignedSeller: c.assignedSeller,
+                };
+            });
 
         res.json(formattedClients);
     } catch (error: any) {

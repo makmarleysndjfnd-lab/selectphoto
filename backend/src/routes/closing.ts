@@ -504,7 +504,8 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 }
             },
             include: {
-                client: true
+                client: true,
+                payments: true,
             }
         });
 
@@ -544,12 +545,23 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
 
         sales.forEach(sale => {
             totalSalesValue += sale.value;
-            const pm = (sale.paymentMethod || '').toUpperCase();
-            if (pm === 'CASH' || pm === 'DINHEIRO') cashValue += sale.value;
-            else if (pm === 'PIX') pixValue += sale.value;
-            else if (pm === 'DEBIT' || pm === 'DEBITO') debitValue += sale.value;
-            else if (pm === 'CREDIT' || pm === 'CREDITO') creditValue += sale.value;
-            else pixValue += sale.value; // fallback
+            if (sale.payments && sale.payments.length > 0) {
+                for (const p of sale.payments) {
+                    const m = (p.method || '').toUpperCase();
+                    if (m === 'CASH' || m === 'DINHEIRO') cashValue += p.amount;
+                    else if (m === 'PIX') pixValue += p.amount;
+                    else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitValue += p.amount;
+                    else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditValue += p.amount;
+                    else pixValue += p.amount;
+                }
+            } else {
+                const pm = (sale.paymentMethod || '').toUpperCase();
+                if (pm === 'CASH' || pm === 'DINHEIRO') cashValue += sale.value;
+                else if (pm === 'PIX') pixValue += sale.value;
+                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitValue += sale.value;
+                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditValue += sale.value;
+                else pixValue += sale.value; // fallback
+            }
         });
 
         const totalFichas = sales.length + nonSales.length;
@@ -673,6 +685,9 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
                 companyId: userCompanyId,
                 receiptUrl: { not: null },
                 date: { gte: startDate, lte: endDate }
+            },
+            include: {
+                payments: true,
             }
         });
 
@@ -684,12 +699,23 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
 
         sales.forEach(s => {
             totalSalesVal += s.value;
-            const pm = (s.paymentMethod || '').toUpperCase();
-            if (pm === 'CASH' || pm === 'DINHEIRO') cashVal += s.value;
-            else if (pm === 'PIX') pixVal += s.value;
-            else if (pm === 'DEBIT' || pm === 'DEBITO') debitVal += s.value;
-            else if (pm === 'CREDIT' || pm === 'CREDITO') creditVal += s.value;
-            else pixVal += s.value;
+            if (s.payments && s.payments.length > 0) {
+                for (const p of s.payments) {
+                    const m = (p.method || '').toUpperCase();
+                    if (m === 'CASH' || m === 'DINHEIRO') cashVal += p.amount;
+                    else if (m === 'PIX') pixVal += p.amount;
+                    else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitVal += p.amount;
+                    else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditVal += p.amount;
+                    else pixVal += p.amount;
+                }
+            } else {
+                const pm = (s.paymentMethod || '').toUpperCase();
+                if (pm === 'CASH' || pm === 'DINHEIRO') cashVal += s.value;
+                else if (pm === 'PIX') pixVal += s.value;
+                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitVal += s.value;
+                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditVal += s.value;
+                else pixVal += s.value;
+            }
         });
 
         const seller = await prisma.user.findUnique({ where: { id: sellerId } });

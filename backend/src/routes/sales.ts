@@ -17,6 +17,7 @@ function parseSaleInput(body: any) {
     product,
     fichaNumber,
     paymentMethod,
+    payments,
     reportNotes,
     notes,
     sellerRating,
@@ -32,6 +33,73 @@ function parseSaleInput(body: any) {
     throw { status: 400, message: 'O valor da venda deve ser maior que zero' };
   }
 
+  // Tratamento monetário seguro em centavos
+  const totalCents = Math.round(parsedValue * 100);
+
+  let parsedPayments: Array<{ method: string; amount: number; receiptUrl?: string | null }> = [];
+  let rawPayments = payments;
+  if (typeof rawPayments === 'string') {
+    try {
+      rawPayments = JSON.parse(rawPayments);
+    } catch (_) {
+      rawPayments = null;
+    }
+  }
+
+  if (Array.isArray(rawPayments) && rawPayments.length > 0) {
+    let sumCents = 0;
+    const allowedMethods = ['CASH', 'DINHEIRO', 'PIX', 'CREDIT', 'CREDITO', 'CREDIT_CARD', 'DEBIT', 'DEBITO', 'DEBIT_CARD'];
+
+    for (const p of rawPayments) {
+      const pAmount = Number(p.amount ?? p.value);
+      if (!Number.isFinite(pAmount) || pAmount <= 0) {
+        throw { status: 400, message: 'Cada forma de pagamento selecionada deve ter um valor maior que zero' };
+      }
+      const rawMethod = String(p.method || p.paymentMethod || '').trim().toUpperCase();
+      let normalizedMethod = 'CASH';
+      if (rawMethod === 'PIX') normalizedMethod = 'PIX';
+      else if (rawMethod === 'DEBIT' || rawMethod === 'DEBITO' || rawMethod === 'DEBIT_CARD') normalizedMethod = 'DEBIT';
+      else if (rawMethod === 'CREDIT' || rawMethod === 'CREDITO' || rawMethod === 'CREDIT_CARD') normalizedMethod = 'CREDIT';
+      else if (rawMethod === 'CASH' || rawMethod === 'DINHEIRO') normalizedMethod = 'CASH';
+      else {
+        throw { status: 400, message: `Forma de pagamento inválida: ${rawMethod}` };
+      }
+
+      const pCents = Math.round(pAmount * 100);
+      sumCents += pCents;
+
+      parsedPayments.push({
+        method: normalizedMethod,
+        amount: Number((pCents / 100).toFixed(2)),
+        receiptUrl: p.receiptUrl ? String(p.receiptUrl).trim() : null,
+      });
+    }
+
+    if (sumCents !== totalCents) {
+      const diff = Number(((sumCents - totalCents) / 100).toFixed(2));
+      throw {
+        status: 400,
+        message: `A soma das formas de pagamento (R$ ${(sumCents / 100).toFixed(2)}) deve corresponder exatamente ao valor da venda (R$ ${parsedValue.toFixed(2)}). Diferença: R$ ${diff.toFixed(2)}`,
+      };
+    }
+  } else {
+    // Venda tradicional com 1 único método
+    const singleMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : 'CASH';
+    let normalized = 'CASH';
+    if (singleMethod === 'PIX') normalized = 'PIX';
+    else if (singleMethod.includes('DEBIT')) normalized = 'DEBIT';
+    else if (singleMethod.includes('CREDIT')) normalized = 'CREDIT';
+    else normalized = 'CASH';
+
+    parsedPayments.push({
+      method: normalized,
+      amount: parsedValue,
+      receiptUrl: null,
+    });
+  }
+
+  const effectivePaymentMethod = parsedPayments.length > 1 ? 'SPLIT' : parsedPayments[0].method;
+
   const parseRating = (val: any) => {
     if (val === undefined || val === null || val === '') return null;
     const num = Number(val);
@@ -44,7 +112,8 @@ function parseSaleInput(body: any) {
     city: String(city).trim(),
     product: product ? String(product).trim() : 'Mídias fotográficas',
     fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
-    paymentMethod: paymentMethod ? String(paymentMethod).trim() : 'CASH',
+    paymentMethod: effectivePaymentMethod,
+    payments: parsedPayments,
     reportNotes: reportNotes ? String(reportNotes).trim() : (notes ? String(notes).trim() : null),
     sellerRating: parseRating(sellerRating),
     photographerRating: parseRating(photographerRating),
@@ -267,22 +336,34 @@ async function finalizeSaleWithReceipt(params: {
       };
     }
 
-    const sale = await tx.sale.create({
-      data: {
-        ...input,
-        sellerId: params.sellerId,
-        companyId: params.companyId,
-        paymentStatus: 'PAID',
-        status: 'PRONTO',
-        receiptUrl: params.receiptUrl,
-        sheetPhotoUrl: params.sheetPhotoUrl || null,
-        reportNotes: input.reportNotes || null,
-        sellerRating: input.sellerRating,
-        photographerRating: input.photographerRating,
-        contactRating: input.contactRating,
-        isLegacy: !params.sheetPhotoUrl,
-      },
-    });
+      const { payments: paymentsList, ...saleData } = input;
+      const sale = await tx.sale.create({
+        data: {
+          ...saleData,
+          sellerId: params.sellerId,
+          companyId: params.companyId,
+          paymentStatus: 'PAID',
+          status: 'PRONTO',
+          receiptUrl: params.receiptUrl,
+          sheetPhotoUrl: params.sheetPhotoUrl || null,
+          reportNotes: input.reportNotes || null,
+          sellerRating: input.sellerRating,
+          photographerRating: input.photographerRating,
+          contactRating: input.contactRating,
+          isLegacy: !params.sheetPhotoUrl,
+        },
+      });
+
+      if (paymentsList && paymentsList.length > 0) {
+        await tx.salePayment.createMany({
+          data: paymentsList.map((p) => ({
+            saleId: sale.id,
+            method: p.method,
+            amount: p.amount,
+            receiptUrl: p.receiptUrl || params.receiptUrl,
+          })),
+        });
+      }
 
     if (client.outcomeStatus === 'NON_SALE') {
       await tx.nonSale.updateMany({
@@ -411,15 +492,27 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       }
 
       // 4. Criar a venda pendente de comprovante
+      const { payments: postPayments, ...postSaleData } = input;
       const sale = await tx.sale.create({
         data: {
-          ...input,
+          ...postSaleData,
           sellerId,
           status: 'PENDING_RECEIPT',
           paymentStatus: 'PENDING_RECEIPT',
           companyId,
         },
       });
+
+      if (postPayments && postPayments.length > 0) {
+        await tx.salePayment.createMany({
+          data: postPayments.map((p) => ({
+            saleId: sale.id,
+            method: p.method,
+            amount: p.amount,
+            receiptUrl: null,
+          })),
+        });
+      }
 
       return { sale, created: true };
     });
@@ -873,6 +966,7 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
         seller: {
           select: { id: true, name: true },
         },
+        payments: true,
       },
       orderBy: { date: 'desc' },
     });

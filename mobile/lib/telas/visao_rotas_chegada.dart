@@ -57,8 +57,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         final c = Map<String, dynamic>.from(rawClient as Map);
         final status = (c['bookStatus'] ?? '').toString();
 
-        // Ignora status de produção pré-campo do fotógrafo e fichas já vendidas
-        if (status == 'CREATED' || status == 'SOLD' || status == 'REBOLO_SOLD') continue;
+        // Ignora apenas status de produção pré-campo do fotógrafo. Fichas vendidas são incluídas para constar no histórico do lote.
+        if (status == 'CREATED') continue;
 
         final rawBatchId = c['batchId']?.toString() ?? c['batch']?['id']?.toString();
         final rawBatchName = (c['batch']?['name'] ??
@@ -555,8 +555,10 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     final clients = List<Map<String, dynamic>>.from(data['clients'] ?? []);
 
     final awaiting = clients.where((c) => c['bookStatus'] == 'AWAITING_RELEASE').toList();
-    final inStock = clients.where((c) => c['bookStatus'] == 'IN_STOCK').toList();
-    final distributed = clients.where((c) => c['bookStatus'] == 'DISTRIBUTED').toList();
+    final inStock = clients.where((c) => c['bookStatus'] == 'IN_STOCK' || c['bookStatus'] == 'IN_STOCK_REBOLO').toList();
+    final distributed = clients.where((c) => c['bookStatus'] == 'DISTRIBUTED' || c['bookStatus'] == 'DISTRIBUTED_REBOLO').toList();
+    final sold = clients.where((c) => c['bookStatus'] == 'SOLD' || c['bookStatus'] == 'REBOLO_SOLD').toList();
+    final awaitingReturn = clients.where((c) => c['bookStatus'] == 'AWAITING_RETURN').toList();
 
     final cities = clients
         .map((c) => (c['city'] ?? 'Sem Cidade').toString().trim())
@@ -668,9 +670,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
             ),
           ),
 
-          // ── BADGES DE ESTADO OPERACIONAL DO LOTE
+          // ── RASTREIO VISUAL DAS ETAPAS DO LOTE (fotografo → Gráfica → Estoque → Com vendedor)
+          _buildBatchStepper(awaiting, inStock, distributed, sold, clients),
+
+          // ── BADGES DE ESTADO OPERACIONAL DO LOTE (DISTRIBUIÇÃO PARCIAL)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -689,9 +694,21 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
                   ),
                 if (distributed.isNotEmpty)
                   _statusBadge(
-                    icon: Icons.check_circle_outline,
-                    label: '${distributed.length} Distribuídas',
+                    icon: Icons.person_pin_circle_outlined,
+                    label: '${distributed.length} com Vendedor',
                     color: const Color(0xFFCE93D8),
+                  ),
+                if (awaitingReturn.isNotEmpty)
+                  _statusBadge(
+                    icon: Icons.assignment_return_outlined,
+                    label: '${awaitingReturn.length} Aguard. Devolução',
+                    color: Colors.amber,
+                  ),
+                if (sold.isNotEmpty)
+                  _statusBadge(
+                    icon: Icons.verified_outlined,
+                    label: '${sold.length} Vendida${sold.length > 1 ? 's' : ''}',
+                    color: const Color(0xFF80DEEA),
                   ),
               ],
             ),
@@ -1039,6 +1056,158 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
     );
   }
 
+  // ── STEPPER VISUAL: Fotógrafo → Gráfica → Estoque → Com vendedor ─────────
+  Widget _buildBatchStepper(
+    List<Map<String, dynamic>> awaiting,
+    List<Map<String, dynamic>> inStock,
+    List<Map<String, dynamic>> distributed,
+    List<Map<String, dynamic>> sold,
+    List<Map<String, dynamic>> allClients,
+  ) {
+    // Determinação dos estados das etapas baseadas nos dados reais do backend:
+    // Etapa 1: Fotógrafo (concluído se o lote existe e saiu da fase inicial de produção do fotógrafo)
+    const bool step1Done = true;
+
+    // Etapa 2: Gráfica (concluído se nenhuma ficha aguarda a gráfica e já entraram em estoque/vendedor)
+    final bool step2Done = awaiting.isEmpty && (inStock.isNotEmpty || distributed.isNotEmpty || sold.isNotEmpty);
+    final bool step2Active = awaiting.isNotEmpty;
+
+    // Etapa 3: Estoque (concluído se todas já saíram do estoque para vendedor/venda; ativo se há fichas em estoque)
+    final bool step3Active = inStock.isNotEmpty;
+    final bool step3Done = step2Done && inStock.isEmpty && (distributed.isNotEmpty || sold.isNotEmpty);
+
+    // Etapa 4: Com vendedor (ativo se há fichas distribuídas aos vendedores ou vendidas)
+    final bool step4Active = distributed.isNotEmpty;
+    final bool step4Done = (distributed.isNotEmpty || sold.isNotEmpty) && awaiting.isEmpty && inStock.isEmpty;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: _buildStepNode(
+              icon: Icons.camera_alt_outlined,
+              label: 'Fotógrafo',
+              isCompleted: step1Done,
+              isActive: false,
+            ),
+          ),
+          _buildStepConnector(step1Done),
+          Expanded(
+            flex: 2,
+            child: _buildStepNode(
+              icon: Icons.local_print_shop_outlined,
+              label: 'Gráfica',
+              isCompleted: step2Done,
+              isActive: step2Active,
+            ),
+          ),
+          _buildStepConnector(step2Done),
+          Expanded(
+            flex: 2,
+            child: _buildStepNode(
+              icon: Icons.inventory_2_outlined,
+              label: 'Estoque',
+              isCompleted: step3Done,
+              isActive: step3Active,
+            ),
+          ),
+          _buildStepConnector(step3Done),
+          Expanded(
+            flex: 2,
+            child: _buildStepNode(
+              icon: Icons.person_pin_circle_outlined,
+              label: 'Vendedor',
+              isCompleted: step4Done,
+              isActive: step4Active,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepConnector(bool isActive) {
+    return Expanded(
+      child: Container(
+        height: 2,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        color: isActive ? const Color(0xFF00C853) : Colors.white24,
+      ),
+    );
+  }
+
+  Widget _buildStepNode({
+    required IconData icon,
+    required String label,
+    required bool isCompleted,
+    required bool isActive,
+  }) {
+    Color circleColor;
+    Color iconColor;
+    Color textColor;
+
+    if (isCompleted) {
+      circleColor = const Color(0xFF00C853);
+      iconColor = Colors.white;
+      textColor = const Color(0xFF00C853);
+    } else if (isActive) {
+      circleColor = const Color(0xFFCE93D8);
+      iconColor = Colors.black;
+      textColor = const Color(0xFFCE93D8);
+    } else {
+      circleColor = Colors.white12;
+      iconColor = Colors.white38;
+      textColor = Colors.white38;
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: circleColor,
+            shape: BoxShape.circle,
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFFCE93D8).withOpacity(0.4),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    )
+                  ]
+                : null,
+          ),
+          child: Icon(
+            isCompleted ? Icons.check : icon,
+            size: 16,
+            color: iconColor,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: textColor,
+            fontSize: 10,
+            fontWeight: (isActive || isCompleted) ? FontWeight.bold : FontWeight.normal,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+
   Widget _buildItemStatusBadge(String status, String sellerName) {
     if (status == 'AWAITING_RELEASE') {
       return _statusBadge(
@@ -1046,17 +1215,29 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada> {
         label: 'Na Gráfica',
         color: Colors.orange,
       );
-    } else if (status == 'IN_STOCK') {
+    } else if (status == 'IN_STOCK' || status == 'IN_STOCK_REBOLO') {
       return _statusBadge(
         icon: Icons.inventory_2,
         label: 'Em Estoque',
         color: const Color(0xFF00C853),
       );
-    } else if (status == 'DISTRIBUTED') {
+    } else if (status == 'DISTRIBUTED' || status == 'DISTRIBUTED_REBOLO') {
       return _statusBadge(
         icon: Icons.person_pin_circle_outlined,
-        label: 'Distribuída ($sellerName)',
+        label: 'Com vendedor ($sellerName)',
         color: const Color(0xFFCE93D8),
+      );
+    } else if (status == 'SOLD' || status == 'REBOLO_SOLD') {
+      return _statusBadge(
+        icon: Icons.verified_outlined,
+        label: 'Vendida',
+        color: const Color(0xFF80DEEA),
+      );
+    } else if (status == 'AWAITING_RETURN') {
+      return _statusBadge(
+        icon: Icons.assignment_return_outlined,
+        label: 'Aguard. Devolução',
+        color: Colors.amber,
       );
     } else {
       return _statusBadge(

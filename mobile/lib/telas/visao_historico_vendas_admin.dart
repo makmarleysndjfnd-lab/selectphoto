@@ -601,6 +601,31 @@ class _ModalDetalhesVenda extends StatelessWidget {
                           const SizedBox(height: 10),
                           _infoRow(Icons.monetization_on_outlined, 'Valor Total', formattedValue, valueColor: const Color(0xFF00C853)),
                           _infoRow(Icons.payment_outlined, 'Forma de Pagamento', paymentMethod),
+                          if (sale['payments'] != null && (sale['payments'] as List).isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 28, bottom: 6),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: (sale['payments'] as List).map<Widget>((p) {
+                                  final m = (p['method'] ?? '').toString();
+                                  String label = m;
+                                  if (m == 'CASH') label = 'Dinheiro';
+                                  else if (m == 'PIX') label = 'Pix';
+                                  else if (m == 'CREDIT') label = 'Cartão de Crédito';
+                                  else if (m == 'DEBIT') label = 'Cartão de Débito';
+                                  final amt = double.tryParse(p['amount']?.toString() ?? '0') ?? 0.0;
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 2),
+                                    child: Text(
+                                      '• $label: ${currencyFormat.format(amt)}',
+                                      style: const TextStyle(color: Color(0xFF80DEEA), fontSize: 12),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ],
                           _infoRow(Icons.person_outline, 'Vendedor Responsável', sellerName),
                           _infoRow(Icons.location_on_outlined, 'Localidade', locationStr),
                           _infoRow(Icons.calendar_today_outlined, 'Data da Confirmação', formattedDate),

@@ -779,8 +779,21 @@ class _SaleTabState extends State<_SaleTab> {
   final _reportNotesController = TextEditingController();
   bool _isLoading = false;
 
+  // Formas de pagamento divididas (Dinheiro, Pix, Cartão Crédito, Cartão Débito)
+  final Map<String, bool> _selectedPaymentMethods = {
+    'CASH': true,
+    'PIX': false,
+    'CREDIT': false,
+    'DEBIT': false,
+  };
+  final Map<String, TextEditingController> _paymentAmountControllers = {
+    'CASH': TextEditingController(),
+    'PIX': TextEditingController(),
+    'CREDIT': TextEditingController(),
+    'DEBIT': TextEditingController(),
+  };
+
   String _product = 'Book completo capa +Book+mídias';
-  String _paymentMethod = 'CASH';
   bool _hasCover = true;
   double _sellerRating = 0;
   double _photoRating = 0;
@@ -789,18 +802,71 @@ class _SaleTabState extends State<_SaleTab> {
   File? _receiptPhoto;
   File? _sheetPhoto;
 
+  @override
+  void dispose() {
+    _valorVendaController.dispose();
+    _numeroFichaController.dispose();
+    _reportNotesController.dispose();
+    for (final ctrl in _paymentAmountControllers.values) {
+      ctrl.dispose();
+    }
+    super.dispose();
+  }
+
+  double _parseMonetary(String text) {
+    final clean = text.replaceAll(RegExp(r'[^0-9,]'), '').replaceAll(',', '.');
+    return double.tryParse(clean) ?? 0.0;
+  }
+
   void _submit() async {
     if (_isLoading) return;
-    final cleanAmount = _valorVendaController.text
-        .replaceAll(RegExp(r'[^0-9,]'), '')
-        .replaceAll(',', '.');
-    final double valor = double.tryParse(cleanAmount) ?? 0.0;
+    final double valor = _parseMonetary(_valorVendaController.text);
     if (_valorVendaController.text.isEmpty || valor <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Informe um valor de venda válido.'),
           backgroundColor: Colors.red));
       return;
     }
+
+    final totalCents = (valor * 100).round();
+    final List<Map<String, dynamic>> paymentsList = [];
+    int sumCents = 0;
+
+    for (final entry in _selectedPaymentMethods.entries) {
+      if (entry.value) {
+        final ctrl = _paymentAmountControllers[entry.key]!;
+        final val = _parseMonetary(ctrl.text);
+        if (val <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Informe um valor maior que zero para a forma selecionada (${_getMethodLabel(entry.key)}).'),
+              backgroundColor: Colors.red));
+          return;
+        }
+        final pCents = (val * 100).round();
+        sumCents += pCents;
+        paymentsList.add({
+          'method': entry.key,
+          'amount': (pCents / 100.0),
+        });
+      }
+    }
+
+    if (paymentsList.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Selecione pelo menos uma forma de pagamento.'),
+          backgroundColor: Colors.red));
+      return;
+    }
+
+    if (sumCents != totalCents) {
+      final diff = ((sumCents - totalCents) / 100.0);
+      final diffStr = diff > 0 ? 'excede em R\$ ${diff.toStringAsFixed(2)}' : 'falta R\$ ${(-diff).toStringAsFixed(2)}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('A soma das parcelas (R\$ ${(sumCents / 100.0).toStringAsFixed(2)}) não bate com a venda (R\$ ${valor.toStringAsFixed(2)}). Valor $diffStr.'),
+          backgroundColor: Colors.red));
+      return;
+    }
+
     if (_sheetPhoto == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content:
@@ -829,7 +895,8 @@ class _SaleTabState extends State<_SaleTab> {
         'status': 'PRONTO',
         'paymentStatus': 'PAID',
         'fichaNumber': _numeroFichaController.text,
-        'paymentMethod': _paymentMethod,
+        'paymentMethod': paymentsList.length > 1 ? 'SPLIT' : paymentsList.first['method'],
+        'payments': paymentsList,
         'reportNotes': _reportNotesController.text,
         'sellerRating': _sellerRating,
         'photoRating': _photoRating,
@@ -1236,11 +1303,7 @@ class _SaleTabState extends State<_SaleTab> {
             ),
             const SizedBox(height: 16),
           ],
-          _buildDropdown(
-              'Método de Pagamento',
-              _paymentMethod,
-              ['CASH', 'PIX', 'DEBIT', 'CREDIT'],
-              (v) => setState(() => _paymentMethod = v!)),
+          _buildSplitPaymentSection(),
           const SizedBox(height: 24),
           const Text('Avaliação do Atendimento',
               style: TextStyle(
@@ -1361,8 +1424,254 @@ class _SaleTabState extends State<_SaleTab> {
     );
   }
 
-  Widget _buildDropdown(String label, String value, List<String> items,
-      void Function(String?) onChanged) {
+  String _getMethodLabel(String key) {
+    switch (key) {
+      case 'CASH':
+        return 'Dinheiro';
+      case 'PIX':
+        return 'Pix';
+      case 'CREDIT':
+        return 'Cartão de Crédito';
+      case 'DEBIT':
+        return 'Cartão de Débito';
+      default:
+        return key;
+    }
+  }
+
+  IconData _getMethodIcon(String key) {
+    switch (key) {
+      case 'CASH':
+        return Icons.attach_money;
+      case 'PIX':
+        return Icons.qr_code_scanner;
+      case 'CREDIT':
+        return Icons.credit_card;
+      case 'DEBIT':
+        return Icons.credit_score;
+      default:
+        return Icons.payment;
+    }
+  }
+
+  Widget _buildSplitPaymentSection() {
+    final double valorVenda = _parseMonetary(_valorVendaController.text);
+    final totalCents = (valorVenda * 100).round();
+
+    int sumCents = 0;
+    for (final entry in _selectedPaymentMethods.entries) {
+      if (entry.value) {
+        final ctrl = _paymentAmountControllers[entry.key]!;
+        final val = _parseMonetary(ctrl.text);
+        sumCents += (val * 100).round();
+      }
+    }
+
+    final double somaInformada = sumCents / 100.0;
+    final int diffCents = sumCents - totalCents;
+    final double diffValor = (diffCents.abs()) / 100.0;
+    final bool isExact = totalCents > 0 && diffCents == 0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isExact
+              ? const Color(0xFF00E676).withOpacity(0.5)
+              : (totalCents > 0 && diffCents != 0 ? Colors.orange.withOpacity(0.5) : Colors.white12),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  'Formas de Pagamento',
+                  style: TextStyle(
+                    color: Color(0xFF90CAF9),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (totalCents > 0)
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isExact
+                          ? const Color(0xFF00E676).withOpacity(0.15)
+                          : Colors.orange.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isExact ? const Color(0xFF00E676) : Colors.orange,
+                      ),
+                    ),
+                    child: Text(
+                      isExact
+                          ? '✓ Soma exata'
+                          : (diffCents > 0
+                              ? 'Excede R\$ ${diffValor.toStringAsFixed(2)}'
+                              : 'Falta R\$ ${diffValor.toStringAsFixed(2)}'),
+                      style: TextStyle(
+                        color: isExact ? const Color(0xFF00E676) : Colors.orange,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Selecione uma ou mais formas (ex: Dinheiro + Pix ou Cartão):',
+            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          ..._selectedPaymentMethods.keys.map((methodKey) {
+            final isSelected = _selectedPaymentMethods[methodKey] ?? false;
+            final label = _getMethodLabel(methodKey);
+            final icon = _getMethodIcon(methodKey);
+            final controller = _paymentAmountControllers[methodKey]!;
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.white.withOpacity(0.06) : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isSelected ? const Color(0xFF4FC3F7).withOpacity(0.4) : Colors.white10,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: isSelected,
+                        activeColor: const Color(0xFF4FC3F7),
+                        checkColor: Colors.black,
+                        onChanged: (val) {
+                          setState(() {
+                            final checked = val ?? false;
+                            _selectedPaymentMethods[methodKey] = checked;
+                            if (checked && controller.text.trim().isEmpty) {
+                              // Se apenas esta estiver marcada ou se faltar valor, preenche o restante
+                              if (diffCents < 0) {
+                                controller.text = (diffCents.abs() / 100.0).toStringAsFixed(2);
+                              } else if (valorVenda > 0 && somaInformada == 0) {
+                                controller.text = valorVenda.toStringAsFixed(2);
+                              }
+                            }
+                          });
+                        },
+                      ),
+                      Icon(icon, color: isSelected ? const Color(0xFF4FC3F7) : Colors.white54, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.white70,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isSelected) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(40, 0, 10, 8),
+                      child: TextField(
+                        controller: controller,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'Valor pago em $label',
+                          labelStyle: const TextStyle(color: Color(0xFF90CAF9), fontSize: 12),
+                          prefixText: 'R\$ ',
+                          prefixStyle: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }),
+          const Divider(color: Colors.white12, height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  'Total Informado:',
+                  style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 13),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'R\$ ${somaInformada.toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: isExact ? const Color(0xFF00E676) : Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  'Valor da Venda:',
+                  style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 13),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'R\$ ${valorVenda.toStringAsFixed(2)}',
+                style: const TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDropdown(
+    String label,
+    String value,
+    List<String> items,
+    ValueChanged<String?> onChanged,
+  ) {
     return DropdownButtonFormField<String>(
       isExpanded: true,
       value: value,

@@ -1067,6 +1067,187 @@ class _AdminDashboardState extends State<AdminDashboard>
             ));
   }
 
+  void _showSearchFichasDialog() {
+    final searchCtrl = TextEditingController();
+    bool isSearching = false;
+    List<dynamic> searchResults = [];
+    String? searchError;
+    bool searched = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.search, color: Color(0xFFCE93D8)),
+              SizedBox(width: 8),
+              Text('Buscar Ficha', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: searchCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    hintText: 'Código, nome da criança ou responsável...',
+                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                    prefixIcon: const Icon(Icons.search, color: Color(0xFFCE93D8), size: 20),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.arrow_forward, color: Color(0xFFCE93D8)),
+                      onPressed: () async {
+                        final query = searchCtrl.text.trim();
+                        if (query.isEmpty) return;
+                        setDialogState(() {
+                          isSearching = true;
+                          searchError = null;
+                          searched = true;
+                        });
+                        try {
+                          final res = await ApiService().searchBooks(query);
+                          setDialogState(() {
+                            searchResults = res;
+                            isSearching = false;
+                          });
+                        } catch (e) {
+                          setDialogState(() {
+                            searchError = e.toString();
+                            isSearching = false;
+                          });
+                        }
+                      },
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Colors.white24),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFCE93D8)),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.05),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
+                  onSubmitted: (query) async {
+                    if (query.trim().isEmpty) return;
+                    setDialogState(() {
+                      isSearching = true;
+                      searchError = null;
+                      searched = true;
+                    });
+                    try {
+                      final res = await ApiService().searchBooks(query.trim());
+                      setDialogState(() {
+                        searchResults = res;
+                        isSearching = false;
+                      });
+                    } catch (e) {
+                      setDialogState(() {
+                        searchError = e.toString();
+                        isSearching = false;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                if (isSearching)
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: CircularProgressIndicator(color: Color(0xFFCE93D8)),
+                  )
+                else if (searchError != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text('Erro: $searchError', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                  )
+                else if (searched && searchResults.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('Nenhuma ficha encontrada.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                  )
+                else if (searchResults.isNotEmpty)
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: searchResults.length,
+                      separatorBuilder: (_, __) => const Divider(color: Colors.white12, height: 1),
+                      itemBuilder: (_, i) {
+                        final item = searchResults[i];
+                        final code = item['visibleCode'] ?? item['sequenceNumber'] ?? 'S/N';
+                        final clientName = item['name'] ?? 'Cliente';
+                        final childrenStr = item['childrenNames']?.toString().isNotEmpty == true
+                            ? item['childrenNames']
+                            : ((item['children'] as List?)?.map((c) => c['name']).join(', ') ?? 'Não cadastrada');
+                        final contact = item['mainContact'] ?? 'Não informado';
+                        final city = item['city'] ?? 'Sem cidade';
+                        final batch = item['batchName'] ?? 'Sem lote';
+                        final custodian = item['currentCustodian'] ?? (item['assignedSeller'] != null ? 'Com vendedor: ${item['assignedSeller']['name']}' : 'No Estoque');
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                          title: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFCE93D8).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: const Color(0xFFCE93D8).withOpacity(0.5)),
+                                ),
+                                child: Text(
+                                  code.toString(),
+                                  style: const TextStyle(color: Color(0xFFCE93D8), fontWeight: FontWeight.bold, fontFamily: 'monospace', fontSize: 11),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  clientName.toString(),
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Criança: $childrenStr · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                const SizedBox(height: 2),
+                                Text('Cidade: $city · Lote: $batch', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                const SizedBox(height: 2),
+                                Text('Situação: $custodian', style: const TextStyle(color: Color(0xFF81C784), fontWeight: FontWeight.w600, fontSize: 11)),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Fechar', style: TextStyle(color: Colors.white70)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _sideMenuItem(int index, IconData icon, String label) {
     final selected = _navIndex == index;
     return LedMenuItem(
@@ -1207,7 +1388,16 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       IconButton(
                         constraints:
-                            const BoxConstraints(minWidth: 48, minHeight: 44),
+                            const BoxConstraints(minWidth: 48, minHeight: 40),
+                        padding: EdgeInsets.zero,
+                        onPressed: _showSearchFichasDialog,
+                        icon: const Icon(Icons.search,
+                            color: Color(0xFFCE93D8), size: 22),
+                        tooltip: 'Buscar Ficha (Criança/Responsável/Código)',
+                      ),
+                      IconButton(
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 40),
                         padding: EdgeInsets.zero,
                         onPressed: () {
                           _showNotificacoesDialog();
@@ -1224,10 +1414,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 color: Colors.white70, size: 22),
                         tooltip: 'Notificações',
                       ),
-                      const SizedBox(height: 2),
                       IconButton(
                         constraints:
-                            const BoxConstraints(minWidth: 48, minHeight: 44),
+                            const BoxConstraints(minWidth: 48, minHeight: 40),
                         padding: EdgeInsets.zero,
                         onPressed: () {
                           Navigator.of(context).push(MaterialPageRoute(
