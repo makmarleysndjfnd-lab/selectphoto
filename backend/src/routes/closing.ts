@@ -22,6 +22,49 @@ async function canAccessSellerClosing(user: any, sellerId: string): Promise<bool
     return false;
 }
 
+function parseDateRange(dateStr?: string): { startDate: Date; endDate: Date } {
+    let startDate = new Date();
+    let endDate = new Date();
+
+    if (dateStr) {
+        const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) {
+            const year = parseInt(m[1], 10);
+            const month = parseInt(m[2], 10) - 1;
+            const day = parseInt(m[3], 10);
+            startDate = new Date(year, month, day, 0, 0, 0, 0);
+            endDate = new Date(year, month, day, 23, 59, 59, 999);
+            return { startDate, endDate };
+        }
+        startDate = new Date(dateStr);
+        endDate = new Date(dateStr);
+    }
+
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+    return { startDate, endDate };
+}
+
+function parseExplicitDate(dateStr: string, isEnd: boolean): Date {
+    const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+        const year = parseInt(m[1], 10);
+        const month = parseInt(m[2], 10) - 1;
+        const day = parseInt(m[3], 10);
+        return isEnd
+            ? new Date(year, month, day, 23, 59, 59, 999)
+            : new Date(year, month, day, 0, 0, 0, 0);
+    }
+    const d = new Date(dateStr);
+    if (isEnd) {
+        d.setHours(23, 59, 59, 999);
+    } else {
+        d.setHours(0, 0, 0, 0);
+    }
+    return d;
+}
+
+
 // --------------------------------------------------------------------------
 // ESCOPO 5: FECHAMENTO REAL DE CIDADE DO VENDEDOR (SellerCityClosing)
 // --------------------------------------------------------------------------
@@ -481,16 +524,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             return;
         }
 
-        let startDate = new Date();
-        let endDate = new Date();
-        
-        if (dateParam) {
-            startDate = new Date(dateParam);
-            endDate = new Date(dateParam);
-        }
-
-        startDate.setHours(0, 0, 0, 0);
-        endDate.setHours(23, 59, 59, 999);
+        const { startDate, endDate } = parseDateRange(dateParam);
 
         // Fetch sales for this day
         const sales = await prisma.sale.findMany({
@@ -669,14 +703,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
             return;
         }
 
-        let startDate = new Date();
-        let endDate = new Date();
-        if (date) {
-            startDate = new Date(date);
-            endDate = new Date(date);
-        }
-        startDate.setHours(0, 0, 0, 0);
-        endDate.setHours(23, 59, 59, 999);
+        const { startDate, endDate } = parseDateRange(date);
 
         // Recalcular no servidor
         const sales = await prisma.sale.findMany({
@@ -827,16 +854,7 @@ router.get('/photographer/:photographerId', authenticateToken, async (req: AuthR
             return;
         }
 
-        let startDate = new Date();
-        let endDate = new Date();
-        
-        if (dateParam) {
-            startDate = new Date(dateParam);
-            endDate = new Date(dateParam);
-        }
-
-        startDate.setHours(0, 0, 0, 0);
-        endDate.setHours(23, 59, 59, 999);
+        const { startDate, endDate } = parseDateRange(dateParam);
 
         const books = await prisma.bookBatch.findMany({
             where: {
@@ -892,22 +910,8 @@ router.get('/custom', authenticateToken, async (req: AuthRequest, res: Response)
         }
 
         if (startDateParam && endDateParam) {
-            let startDate: Date;
-            let endDate: Date;
-
-            if (startDateParam.includes('T') || startDateParam.length > 10) {
-                startDate = new Date(startDateParam);
-            } else {
-                startDate = new Date(startDateParam);
-                startDate.setHours(0, 0, 0, 0);
-            }
-
-            if (endDateParam.includes('T') || endDateParam.length > 10) {
-                endDate = new Date(endDateParam);
-            } else {
-                endDate = new Date(endDateParam);
-                endDate.setHours(23, 59, 59, 999);
-            }
+            const startDate = parseExplicitDate(startDateParam, false);
+            const endDate = parseExplicitDate(endDateParam, true);
 
             whereSale.date = { gte: startDate, lte: endDate };
             whereNonSale.date = { gte: startDate, lte: endDate };

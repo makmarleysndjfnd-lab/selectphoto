@@ -350,7 +350,7 @@ async function finalizeSaleWithReceipt(params: {
           sellerRating: input.sellerRating,
           photographerRating: input.photographerRating,
           contactRating: input.contactRating,
-          isLegacy: !params.sheetPhotoUrl,
+          isLegacy: false,
         },
       });
 
@@ -564,14 +564,6 @@ router.post(
         return res.status(400).json({ error: 'O comprovante é obrigatório para concluir a venda' });
       }
 
-      // Verificação da foto da ficha: obrigatória para novas vendas
-      if (!sheetPhotoFile && req.headers['x-allow-legacy-sale'] !== 'true' && process.env.ALLOW_LEGACY_SALES_WITHOUT_SHEET !== 'true') {
-        return res.status(400).json({
-          error: 'A foto legível da ficha é obrigatória para concluir a venda',
-          code: 'SHEET_PHOTO_REQUIRED',
-        });
-      }
-
       const receiptUrl = getUploadedFileUrl(receiptFile);
       if (!receiptUrl) throw { status: 503, message: 'Não foi possível confirmar o armazenamento do comprovante' };
 
@@ -612,6 +604,8 @@ router.post(
         correlationId,
         name: error?.name,
         code: error?.code,
+        message: error?.message,
+        meta: error?.meta,
       });
       return res.status(500).json({ error: 'Não foi possível concluir a venda' });
     }
@@ -948,9 +942,39 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
       return res.status(403).json({ error: 'Empresa não identificada' });
     }
 
+    const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+    const dateFilter: { gte?: Date; lte?: Date } = {};
+    if (startDate) {
+      const match = String(startDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, y, m, d] = match.map(Number);
+        dateFilter.gte = new Date(y, m - 1, d, 0, 0, 0, 0);
+      } else {
+        const dStart = new Date(startDate);
+        if (!isNaN(dStart.getTime())) {
+          dStart.setHours(0, 0, 0, 0);
+          dateFilter.gte = dStart;
+        }
+      }
+    }
+    if (endDate) {
+      const match = String(endDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, y, m, d] = match.map(Number);
+        dateFilter.lte = new Date(y, m - 1, d, 23, 59, 59, 999);
+      } else {
+        const dEnd = new Date(endDate);
+        if (!isNaN(dEnd.getTime())) {
+          dEnd.setHours(23, 59, 59, 999);
+          dateFilter.lte = dEnd;
+        }
+      }
+    }
+
     const sales = await prisma.sale.findMany({
       where: {
         ...(companyId ? { companyId } : {}),
+        ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
       },
       include: {
         client: {

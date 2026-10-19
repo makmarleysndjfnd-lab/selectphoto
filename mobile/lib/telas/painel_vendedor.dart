@@ -298,7 +298,10 @@ class _SellerDashboardState extends State<SellerDashboard>
                     final clientName = item['name'] ?? 'Cliente não informado';
                     final childrenStr = item['childrenNames']?.toString().isNotEmpty == true
                         ? item['childrenNames']
-                        : ((item['children'] as List?)?.map((c) => c['name']).join(', ') ?? 'Não cadastrada');
+                        : UIHelpers.formatChildren(item['children'] as List?);
+                    final childrenLabel = (item['children'] is List && (item['children'] as List).length > 1)
+                        ? 'Crianças'
+                        : 'Criança';
                     final contact = item['mainContact'] ?? 'Não informado';
                     final city = item['city'] ?? 'Sem cidade';
                     final batch = item['batchName'] ?? 'Sem lote';
@@ -340,7 +343,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Criança: $childrenStr · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                            Text('$childrenLabel: ${childrenStr.isEmpty ? "Não cadastrada" : childrenStr} · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                             const SizedBox(height: 2),
                             Text('Cidade: $city · Lote: $batch', style: const TextStyle(color: Colors.white54, fontSize: 11)),
                             const SizedBox(height: 2),
@@ -365,8 +368,8 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  void _openClientDetail(Map<String, dynamic> client) {
-    Navigator.push(
+  void _openClientDetail(Map<String, dynamic> client) async {
+    final result = await Navigator.push(
       context,
       PageRouteBuilder(
         pageBuilder: (_, __, ___) =>
@@ -381,6 +384,32 @@ class _SellerDashboardState extends State<SellerDashboard>
         transitionDuration: const Duration(milliseconds: 350),
       ),
     );
+
+    if (result != null && result is Map && result['saleSuccess'] == true) {
+      await _fetchClients();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    result['message']?.toString() ?? 'Venda registrada com sucesso',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF2E7D32),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
   }
 
   List<Map<String, dynamic>> get _filteredClients {

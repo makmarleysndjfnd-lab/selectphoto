@@ -68,4 +68,37 @@ class UIHelpers {
       ],
     );
   }
+
+  static String formatChild(dynamic child) {
+    if (child == null) return '';
+    if (child is! Map) {
+      return child.toString().trim();
+    }
+    final name = (child['name'] ?? '').toString().trim();
+    final ageRaw = child['age'];
+    if (ageRaw != null) {
+      final ageStr = ageRaw.toString().trim();
+      if (ageStr.isNotEmpty) {
+        final ageNum = int.tryParse(ageStr);
+        if (ageNum != null) {
+          final unit = ageNum == 1 ? 'ano' : 'anos';
+          return name.isNotEmpty ? '$name — $ageNum $unit' : '$ageNum $unit';
+        }
+      }
+    }
+    return name;
+  }
+
+  static String formatChildren(dynamic children) {
+    if (children == null) return '';
+    if (children is String) return children;
+    if (children is List) {
+      final formatted = children
+          .map(formatChild)
+          .where((s) => s.isNotEmpty)
+          .toList();
+      return formatted.join(', ');
+    }
+    return '';
+  }
 }

@@ -306,23 +306,22 @@ describe('CICLO DE VIDA DA FICHA, REBOLO E TIMELINE (LIFECYCLE V2)', { concurren
       },
     });
 
-    // 1. Tenta enviar sem sheetPhoto
-    const formMissingSheet = new FormData();
-    formMissingSheet.set('clientId', client.id);
-    formMissingSheet.set('value', '850');
-    formMissingSheet.set('city', 'Apucarana');
-    formMissingSheet.set('receipt', new Blob([Buffer.from('fake-receipt')], { type: 'image/jpeg' }), 'rec.jpg');
+    // 1. Tenta enviar sem comprovante (receipt é obrigatório)
+    const formMissingReceipt = new FormData();
+    formMissingReceipt.set('clientId', client.id);
+    formMissingReceipt.set('value', '850');
+    formMissingReceipt.set('city', 'Apucarana');
 
-    const resMissing = await fetch(`${baseUrl}/api/sales/with-receipt`, {
+    const resMissingReceipt = await fetch(`${baseUrl}/api/sales/with-receipt`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${tokenSeller1}` },
-      body: formMissingSheet,
+      body: formMissingReceipt,
     });
-    assert.equal(resMissing.status, 400);
-    const missingJson = await resMissing.json();
-    assert.ok(missingJson.error.includes('ficha') || missingJson.code === 'SHEET_PHOTO_REQUIRED');
+    assert.equal(resMissingReceipt.status, 400);
+    const missingJson = await resMissingReceipt.json();
+    assert.ok(missingJson.error.includes('comprovante'));
 
-    // 2. Envia com receipt + sheetPhoto + ratings + reportNotes
+    // 2. Envia com receipt sem sheetPhoto (permitido) e com ratings + reportNotes
     const formComplete = new FormData();
     formComplete.set('clientId', client.id);
     formComplete.set('value', '850');

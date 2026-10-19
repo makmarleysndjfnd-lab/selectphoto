@@ -432,9 +432,19 @@ class ApiService {
   }
 
   // Sales
-  Future<List<dynamic>> getSalesHistory() async {
+  Future<List<dynamic>> getSalesHistory({DateTime? startDate, DateTime? endDate}) async {
     try {
-      final response = await _dio.get('/sales/history');
+      final queryParams = <String, dynamic>{};
+      if (startDate != null) {
+        queryParams['startDate'] = startDate.toIso8601String().split('T')[0];
+      }
+      if (endDate != null) {
+        queryParams['endDate'] = endDate.toIso8601String().split('T')[0];
+      }
+      final response = await _dio.get(
+        '/sales/history',
+        queryParameters: queryParams.isNotEmpty ? queryParams : null,
+      );
       return response.data as List<dynamic>;
     } on DioException catch (e) {
       throw Exception(_extractError(e));

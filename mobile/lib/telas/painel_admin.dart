@@ -768,8 +768,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded,
                           'Fechamentos'),
-                      _sideMenuItem(10, Icons.point_of_sale_rounded,
-                          'Histórico de Vendas'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
@@ -795,6 +793,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(
                           4, Icons.attach_money_rounded, 'Financeiro e Saúde'),
+                      _sideMenuItem(10, Icons.point_of_sale_rounded,
+                          'Histórico de Vendas'),
                       ListTile(
                         leading: const Icon(Icons.money_off,
                             color: Color(0xFFE57373)),
@@ -1185,7 +1185,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                         final clientName = item['name'] ?? 'Cliente';
                         final childrenStr = item['childrenNames']?.toString().isNotEmpty == true
                             ? item['childrenNames']
-                            : ((item['children'] as List?)?.map((c) => c['name']).join(', ') ?? 'Não cadastrada');
+                            : UIHelpers.formatChildren(item['children'] as List?);
+                        final childrenLabel = (item['children'] is List && (item['children'] as List).length > 1)
+                            ? 'Crianças'
+                            : 'Criança';
                         final contact = item['mainContact'] ?? 'Não informado';
                         final city = item['city'] ?? 'Sem cidade';
                         final batch = item['batchName'] ?? 'Sem lote';
@@ -1222,7 +1225,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Criança: $childrenStr · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                Text('$childrenLabel: ${childrenStr.isEmpty ? "Não cadastrada" : childrenStr} · Resp: $contact', style: const TextStyle(color: Colors.white70, fontSize: 11)),
                                 const SizedBox(height: 2),
                                 Text('Cidade: $city · Lote: $batch', style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                 const SizedBox(height: 2),
@@ -2511,53 +2514,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             ),
           ),
-          const SizedBox(height: 12),
 
-          // Card de Acesso ao Histórico de Vendas
-          LedCard(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.point_of_sale_rounded,
-                          color: Color(0xFF00C853), size: 24),
-                      SizedBox(width: 10),
-                      Text('Histórico de Vendas',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                      'Consulte todas as fichas vendidas, comprovantes de pagamento, fotos e relatórios da equipe.',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: LedButton.icon(
-                      onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const VisaoHistoricoVendasAdmin())),
-                      icon: const Icon(Icons.receipt_long_rounded,
-                          color: Colors.black),
-                      label: const Text('Abrir Histórico de Vendas',
-                          style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold)),
-                      style: LedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00C853)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           const SizedBox(height: 20),
 
           // Resumo geral

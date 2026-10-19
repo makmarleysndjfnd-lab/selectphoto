@@ -513,8 +513,12 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                               client['children'] is List &&
                               (client['children'] as List).isNotEmpty) ...[
                             const SizedBox(height: 6),
-                            _infoRow(Icons.child_care,
-                                "Crianças: ${(client['children'] as List).map((c) => c is Map ? "${c['name']} (${c['age']})" : c.toString()).join(', ')}"),
+                            _infoRow(
+                              Icons.child_care,
+                              (client['children'] as List).length == 1
+                                  ? "Criança: ${UIHelpers.formatChildren(client['children'])}"
+                                  : "Crianças: ${UIHelpers.formatChildren(client['children'])}",
+                            ),
                           ],
                         ],
                         if (client['signatureUrl'] != null &&
@@ -800,7 +804,6 @@ class _SaleTabState extends State<_SaleTab> {
   double _contactRating = 0;
 
   File? _receiptPhoto;
-  File? _sheetPhoto;
 
   @override
   void dispose() {
@@ -867,13 +870,6 @@ class _SaleTabState extends State<_SaleTab> {
       return;
     }
 
-    if (_sheetPhoto == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content:
-              Text('Tire a foto da folha da ficha antes de confirmar a venda.'),
-          backgroundColor: Colors.orange));
-      return;
-    }
     if (_receiptPhoto == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content:
@@ -904,8 +900,7 @@ class _SaleTabState extends State<_SaleTab> {
       };
 
       try {
-        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path,
-            sheetPhotoPath: _sheetPhoto!.path);
+        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path);
       } on ApiRequestException catch (e) {
         if (!e.retryable) rethrow;
         final storageDir = await getApplicationSupportDirectory();
@@ -915,34 +910,28 @@ class _SaleTabState extends State<_SaleTab> {
         final persistedReceipt = await _receiptPhoto!.copy(
           '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_receipt_${SyncService.generateUuid()}.jpg',
         );
-        final persistedSheet = await _sheetPhoto!.copy(
-          '${pendingDir.path}${Platform.pathSeparator}${widget.client['id']}_sheet_${SyncService.generateUuid()}.jpg',
-        );
         final queued = await syncService.addPendingRequest('REGISTER_SALE', {
           ...payload,
           'pendingReceiptPath': persistedReceipt.path,
-          'pendingSheetPhotoPath': persistedSheet.path,
         });
         if (queued) {
           if (mounted) {
             setState(() {
               _isLoading = false;
               _receiptPhoto = null;
-              _sheetPhoto = null;
             });
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text(
-                  'Sem confirmação do servidor. Venda, comprovante e ficha ficaram aguardando sincronização.'),
-              backgroundColor: Colors.orange,
-            ));
+            _valorVendaController.clear();
+            _numeroFichaController.clear();
+            _reportNotesController.clear();
+            Navigator.of(context).pop({
+              'saleSuccess': true,
+              'message': 'Sem confirmação do servidor. Venda salva offline aguardando sincronização.',
+            });
           }
         } else {
           try {
             if (await persistedReceipt.exists()) {
               await persistedReceipt.delete();
-            }
-            if (await persistedSheet.exists()) {
-              await persistedSheet.delete();
             }
           } catch (_) {}
           if (mounted) {
@@ -961,12 +950,14 @@ class _SaleTabState extends State<_SaleTab> {
       setState(() {
         _isLoading = false;
         _receiptPhoto = null;
-        _sheetPhoto = null;
       });
       _valorVendaController.clear();
       _numeroFichaController.clear();
       _reportNotesController.clear();
-      widget.onSuccess('Venda, ficha e comprovante registrados com sucesso!');
+      Navigator.of(context).pop({
+        'saleSuccess': true,
+        'message': 'Venda registrada com sucesso',
+      });
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -976,13 +967,6 @@ class _SaleTabState extends State<_SaleTab> {
               backgroundColor: Colors.red),
         );
       }
-    }
-  }
-
-  void _takeSheetPhoto() async {
-    final result = await MediaPickerService().pickSaleEvidencePhoto(context);
-    if (result != null) {
-      setState(() => _sheetPhoto = result.file);
     }
   }
 
@@ -1327,40 +1311,7 @@ class _SaleTabState extends State<_SaleTab> {
             decoration: _fieldDecoration('Anotações do Relatório de Vendas',
                 Icons.rate_review_outlined),
           ),
-          const SizedBox(height: 24),
-          const Text('Foto da Folha da Ficha (obrigatório)',
-              style: TextStyle(
-                  color: Color(0xFF90CAF9),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14)),
-          const SizedBox(height: 12),
-          if (_sheetPhoto != null) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(_sheetPhoto!,
-                  height: 140, width: double.infinity, fit: BoxFit.cover),
-            ),
-            TextButton.icon(
-              onPressed: _takeSheetPhoto,
-              icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
-              label: const Text('Tirar outra foto da folha',
-                  style: TextStyle(color: Color(0xFF4FC3F7))),
-            ),
-          ] else ...[
-            OutlinedButton.icon(
-              onPressed: _takeSheetPhoto,
-              icon: const Icon(Icons.document_scanner_rounded,
-                  color: Color(0xFF4FC3F7)),
-              label: const Text('Tirar foto da folha da ficha',
-                  style: TextStyle(color: Color(0xFF4FC3F7))),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 56),
-                side: const BorderSide(color: Color(0xFF4FC3F7)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ],
+
           const SizedBox(height: 24),
           const Text('Comprovante de pagamento (obrigatório)',
               style: TextStyle(

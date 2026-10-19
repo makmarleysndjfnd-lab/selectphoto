@@ -731,6 +731,19 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
             });
         }
 
+        const formatChild = (ch: any) => {
+            const name = ch?.name ? String(ch.name).trim() : '';
+            const ageRaw = ch?.age;
+            if (ageRaw !== undefined && ageRaw !== null && String(ageRaw).trim() !== '') {
+                const ageNum = parseInt(String(ageRaw).trim(), 10);
+                if (!isNaN(ageNum)) {
+                    const unit = ageNum === 1 ? 'ano' : 'anos';
+                    return name ? `${name} — ${ageNum} ${unit}` : `${ageNum} ${unit}`;
+                }
+            }
+            return name;
+        };
+
         const formattedClients = isPhotographer
             ? clients
                 .filter((c) => !isClientClosedForPhotographer(c))
@@ -744,7 +757,7 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     city: c.city,
                     state: c.state,
                     batchName: c.batch?.name || 'Sem Lote',
-                    childrenNames: (c.children || []).map((ch: any) => ch.name).join(', '),
+                    childrenNames: (c.children || []).map(formatChild).filter(Boolean).join(', '),
                     currentCustodian: 'Fotógrafo (' + (c.photographer?.name || 'Você') + ')',
                     bookStatus: c.bookStatus || 'CREATED',
                 }))
@@ -777,7 +790,7 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     state: c.state,
                     batchId: c.batchId,
                     batchName: c.batch?.name || 'Sem Lote',
-                    childrenNames: (c.children || []).map((ch: any) => ch.name).join(', '),
+                    childrenNames: (c.children || []).map(formatChild).filter(Boolean).join(', '),
                     children: c.children,
                     bookStatus: c.bookStatus,
                     outcomeStatus: c.outcomeStatus,

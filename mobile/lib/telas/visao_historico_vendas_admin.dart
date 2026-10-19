@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
+import '../utils/ui_helpers.dart';
 import '../widgets/authenticated_image.dart';
 
 class VisaoHistoricoVendasAdmin extends StatefulWidget {
@@ -15,10 +16,13 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   bool _isLoading = true;
   List<dynamic> _sales = [];
   String _filtroTexto = '';
+  DateTime? _startDate;
+  DateTime? _endDate;
   final TextEditingController _searchController = TextEditingController();
 
   final NumberFormat _currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy HH:mm');
+  final DateFormat _dateOnlyFormat = DateFormat('dd/MM/yyyy');
 
   @override
   void initState() {
@@ -35,7 +39,10 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   Future<void> _carregarHistorico() async {
     setState(() => _isLoading = true);
     try {
-      final data = await _api.getSalesHistory();
+      final data = await _api.getSalesHistory(
+        startDate: _startDate,
+        endDate: _endDate,
+      );
       if (mounted) {
         setState(() {
           _sales = data;
@@ -55,11 +62,67 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     }
   }
 
-  List<dynamic> get _salesFiltradas {
-    if (_filtroTexto.trim().isEmpty) return _sales;
-    final query = _filtroTexto.trim().toLowerCase();
+  Future<void> _pickStartDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _startDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+      locale: const Locale('pt', 'BR'),
+    );
+    if (picked != null) {
+      setState(() => _startDate = picked);
+      _carregarHistorico();
+    }
+  }
 
+  Future<void> _pickEndDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _endDate ?? _startDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+      locale: const Locale('pt', 'BR'),
+    );
+    if (picked != null) {
+      setState(() => _endDate = picked);
+      _carregarHistorico();
+    }
+  }
+
+  void _limparFiltroDatas() {
+    setState(() {
+      _startDate = null;
+      _endDate = null;
+    });
+    _carregarHistorico();
+  }
+
+  bool _matchesDate(dynamic sale) {
+    if (_startDate == null && _endDate == null) return true;
+    final rawDate = sale['date'];
+    if (rawDate == null) return false;
+    final d = DateTime.tryParse(rawDate.toString())?.toLocal();
+    if (d == null) return false;
+
+    if (_startDate != null) {
+      final start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day, 0, 0, 0, 0);
+      if (d.isBefore(start)) return false;
+    }
+    if (_endDate != null) {
+      final end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day, 23, 59, 59, 999);
+      if (d.isAfter(end)) return false;
+    }
+    return true;
+  }
+
+  List<dynamic> get _salesFiltradas {
     return _sales.where((sale) {
+      if (!_matchesDate(sale)) return false;
+
+      if (_filtroTexto.trim().isEmpty) return true;
+      final query = _filtroTexto.trim().toLowerCase();
+
       final client = sale['client'] as Map<String, dynamic>? ?? {};
       final clientName = (client['name'] ?? client['clientName'] ?? '').toString().toLowerCase();
       final code = (client['visibleCode'] ?? client['sequenceNumber'] ?? sale['fichaNumber'] ?? '').toString().toLowerCase();
@@ -75,6 +138,29 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     }).toList();
   }
 
+  Map<String, List<Map<String, dynamic>>> get _salesGroupedBySeller {
+    final map = <String, List<Map<String, dynamic>>>{};
+    for (final item in _salesFiltradas) {
+      final sale = item as Map<String, dynamic>;
+      final rawSeller = sale['seller']?['name']?.toString().trim();
+      final sellerKey = (rawSeller != null && rawSeller.isNotEmpty)
+          ? rawSeller
+          : 'Vendedor não identificado';
+      map.putIfAbsent(sellerKey, () => []).add(sale);
+    }
+    return map;
+  }
+
+  List<String> get _sortedSellers {
+    final keys = _salesGroupedBySeller.keys.toList();
+    keys.sort((a, b) {
+      if (a == 'Vendedor não identificado') return 1;
+      if (b == 'Vendedor não identificado') return -1;
+      return a.toLowerCase().compareTo(b.toLowerCase());
+    });
+    return keys;
+  }
+
   void _abrirDetalhesVenda(Map<String, dynamic> sale) {
     showModalBottomSheet(
       context: context,
@@ -88,9 +174,88 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     );
   }
 
+  Widget _buildSellerGroup(String sellerName, List<Map<String, dynamic>> sales) {
+    final subtotal = sales.fold<double>(
+      0.0,
+      (acc, s) => acc + (double.tryParse(s['value']?.toString() ?? '0') ?? 0.0),
+    );
+    final isUnidentified = sellerName == 'Vendedor não identificado';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161628),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isUnidentified ? Colors.orange.withOpacity(0.35) : Colors.white.withOpacity(0.08),
+        ),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: true,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          leading: CircleAvatar(
+            radius: 18,
+            backgroundColor: isUnidentified
+                ? Colors.orange.withOpacity(0.2)
+                : const Color(0xFFCE93D8).withOpacity(0.2),
+            child: Icon(
+              isUnidentified ? Icons.help_outline_rounded : Icons.person_rounded,
+              color: isUnidentified ? Colors.orange : const Color(0xFFCE93D8),
+              size: 20,
+            ),
+          ),
+          title: Text(
+            sellerName,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
+          subtitle: Text(
+            '${sales.length} ${sales.length == 1 ? 'venda realizada' : 'vendas realizadas'}',
+            style: const TextStyle(color: Colors.white60, fontSize: 11),
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _currencyFormat.format(subtotal),
+                style: const TextStyle(
+                  color: Color(0xFF00C853),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 2),
+              const Icon(Icons.expand_more_rounded, color: Colors.white54, size: 18),
+            ],
+          ),
+          children: [
+            const Divider(color: Colors.white10, height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Column(
+                children: sales.map((sale) => _buildSaleCard(sale)).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final filtered = _salesFiltradas;
+    final sortedSellers = _sortedSellers;
+    final grandTotal = filtered.fold<double>(
+      0.0,
+      (acc, item) => acc + (double.tryParse(item['value']?.toString() ?? '0') ?? 0.0),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F1A),
@@ -105,7 +270,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
               style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
             ),
             Text(
-              'Consultas de fichas vendidas e comprovantes',
+              'Consultas organizadas por vendedor e período',
               style: TextStyle(color: Colors.white60, fontSize: 11),
             ),
           ],
@@ -119,9 +284,9 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
       ),
       body: Column(
         children: [
-          // Barra de busca
+          // Barra de busca por texto
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
             color: const Color(0xFF151528),
             child: TextField(
               controller: _searchController,
@@ -151,7 +316,96 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
             ),
           ),
 
-          // Totalizador de vendas
+          // Barra de filtro por período (Data Inicial e Data Final)
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            color: const Color(0xFF151528),
+            child: Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickStartDate,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22223A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white12,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.calendar_today_rounded,
+                              size: 14,
+                              color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white54),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _startDate != null ? 'De: ${_dateOnlyFormat.format(_startDate!)}' : 'Data inicial',
+                              style: TextStyle(
+                                color: _startDate != null ? Colors.white : Colors.white54,
+                                fontSize: 11,
+                                fontWeight: _startDate != null ? FontWeight.bold : FontWeight.normal,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickEndDate,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22223A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white12,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.event_available_rounded,
+                              size: 14,
+                              color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white54),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _endDate != null ? 'Até: ${_dateOnlyFormat.format(_endDate!)}' : 'Data final',
+                              style: TextStyle(
+                                color: _endDate != null ? Colors.white : Colors.white54,
+                                fontSize: 11,
+                                fontWeight: _endDate != null ? FontWeight.bold : FontWeight.normal,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (_startDate != null || _endDate != null) ...[
+                  const SizedBox(width: 6),
+                  IconButton(
+                    icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
+                    tooltip: 'Limpar período',
+                    onPressed: _limparFiltroDatas,
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Totalizador geral de vendas e contadores
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             color: const Color(0xFF1A1A2E),
@@ -159,23 +413,23 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '${filtered.length} ${filtered.length == 1 ? 'venda registrada' : 'vendas registradas'}',
+                  '${filtered.length} ${filtered.length == 1 ? 'venda' : 'vendas'} · ${sortedSellers.length} ${sortedSellers.length == 1 ? 'vendedor' : 'vendedores'}',
                   style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
                 ),
                 if (filtered.isNotEmpty)
                   Text(
-                    'Total: ${_currencyFormat.format(filtered.fold<double>(0.0, (acc, item) => acc + (double.tryParse(item['value']?.toString() ?? '0') ?? 0.0)))}',
-                    style: const TextStyle(color: Color(0xFF00C853), fontSize: 12, fontWeight: FontWeight.bold),
+                    'Total Geral: ${_currencyFormat.format(grandTotal)}',
+                    style: const TextStyle(color: Color(0xFF00C853), fontSize: 13, fontWeight: FontWeight.bold),
                   ),
               ],
             ),
           ),
 
-          // Lista de vendas
+          // Lista de vendas agrupadas por vendedor
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
-                : filtered.isEmpty
+                : sortedSellers.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -183,9 +437,9 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                             const Icon(Icons.point_of_sale_rounded, color: Colors.white24, size: 56),
                             const SizedBox(height: 12),
                             Text(
-                              _filtroTexto.isEmpty
+                              _filtroTexto.isEmpty && _startDate == null && _endDate == null
                                   ? 'Nenhuma venda registrada até o momento.'
-                                  : 'Nenhuma venda encontrada para "$_filtroTexto".',
+                                  : 'Nenhuma venda encontrada para os filtros selecionados.',
                               style: const TextStyle(color: Colors.white54, fontSize: 14),
                               textAlign: TextAlign.center,
                             ),
@@ -194,10 +448,11 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                       )
                     : ListView.builder(
                         padding: const EdgeInsets.all(12),
-                        itemCount: filtered.length,
+                        itemCount: sortedSellers.length,
                         itemBuilder: (context, index) {
-                          final sale = filtered[index] as Map<String, dynamic>;
-                          return _buildSaleCard(sale);
+                          final sellerKey = sortedSellers[index];
+                          final sellerSales = _salesGroupedBySeller[sellerKey]!;
+                          return _buildSellerGroup(sellerKey, sellerSales);
                         },
                       ),
           ),
@@ -308,6 +563,25 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                   fontSize: 14,
                 ),
               ),
+              if (UIHelpers.formatChildren(client['children']).isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    const Icon(Icons.child_care, size: 12, color: Color(0xFFCE93D8)),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        (client['children'] is List && (client['children'] as List).length > 1)
+                            ? 'Crianças: ${UIHelpers.formatChildren(client['children'])}'
+                            : 'Criança: ${UIHelpers.formatChildren(client['children'])}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 4),
 
               // Cidade/UF e Vendedor
@@ -629,6 +903,12 @@ class _ModalDetalhesVenda extends StatelessWidget {
                           _infoRow(Icons.person_outline, 'Vendedor Responsável', sellerName),
                           _infoRow(Icons.location_on_outlined, 'Localidade', locationStr),
                           _infoRow(Icons.calendar_today_outlined, 'Data da Confirmação', formattedDate),
+                          if (client['children'] != null && (client['children'] as List).isNotEmpty)
+                            _infoRow(
+                              Icons.child_care,
+                              (client['children'] as List).length == 1 ? 'Criança' : 'Crianças',
+                              UIHelpers.formatChildren(client['children']),
+                            ),
                         ],
                       ),
                     ),
