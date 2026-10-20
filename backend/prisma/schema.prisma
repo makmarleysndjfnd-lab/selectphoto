@@ -32,6 +32,9 @@ model Company {
   clientEditRequests   ClientEditRequest[]
   tripSettings         TripSettings?
   sellerCityClosings   SellerCityClosing[]
+  creditAgreements     CreditAgreement[]
+  creditPayments       CreditPayment[]
+  creditCommissions    CreditCommission[]
 }
 
 model Team {
@@ -50,114 +53,120 @@ model Team {
 }
 
 model User {
-  id                      String                @id @default(uuid())
+  id                      String                         @id @default(uuid())
   name                    String
-  email                   String?               @unique
+  email                   String?                        @unique
   password                String
-  role                    String                @default("OPERATOR")
-  active                  Boolean               @default(true)
+  role                    String                         @default("OPERATOR")
+  active                  Boolean                        @default(true)
   teamId                  String?
   companyId               String?
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
   address                 String?
-  cpf                     String?               @unique
+  cpf                     String?                        @unique
   criminalRecordUrl       String?
   emergencyPhone          String?
-  isTeamLeader            Boolean               @default(false)
+  isTeamLeader            Boolean                        @default(false)
   phone                   String?
   profilePhotoUrl         String?
   rg                      String?
-  usesOwnCar              Boolean               @default(false)
+  usesOwnCar              Boolean                        @default(false)
   photographerCode        String?
   personalAppointments    PersonalAppointment[]
   salesType               String?
-  company                 Company?              @relation(fields: [companyId], references: [id])
+  company                 Company?                       @relation(fields: [companyId], references: [id])
   appointments            Appointment[]
-  currentCars             Car[]                 @relation("CarCurrentUser")
+  currentCars             Car[]                          @relation("CarCurrentUser")
   carChecklists           CarChecklist[]
   clients                 Client[]
-  assignedClients         Client[]              @relation("AssignedSeller")
+  assignedClients         Client[]                       @relation("AssignedSeller")
   costs                   Cost[]
   nonSales                NonSale[]
   sales                   Sale[]
   sellerPhotos            SellerPhoto[]
-  team                    Team?                 @relation(fields: [teamId], references: [id])
-  photographerBookBatches BookBatch[]           @relation("PhotographerBookBatches")
-  coverTransfersSent      SellerCoverTransfer[] @relation("CoverTransfersSent")
-  coverTransfersReceived  SellerCoverTransfer[] @relation("CoverTransfersReceived")
+  team                    Team?                          @relation(fields: [teamId], references: [id])
+  photographerBookBatches BookBatch[]                    @relation("PhotographerBookBatches")
+  coverTransfersSent      SellerCoverTransfer[]          @relation("CoverTransfersSent")
+  coverTransfersReceived  SellerCoverTransfer[]          @relation("CoverTransfersReceived")
   coverBalance            SellerCoverBalance?
   dailyClosings           DailyClosing[]
   fcmToken                String?
   pixKey                  String?
-  notificationsSent       Notification[]        @relation("NotificationsSent")
-  notificationsReceived   Notification[]        @relation("NotificationsReceived")
+  notificationsSent       Notification[]                 @relation("NotificationsSent")
+  notificationsReceived   Notification[]                 @relation("NotificationsReceived")
   clientEditRequests      ClientEditRequest[]
   sellerCityClosings      SellerCityClosing[]
+  creditAgreementsSeller  CreditAgreement[]              @relation("CreditAgreementSeller")
+  creditPaymentsReceived  CreditPayment[]                @relation("CreditPaymentReceiver")
+  creditPaymentsReversed  CreditPayment[]                @relation("CreditPaymentReverser")
+  creditCommissions       CreditCommission[]             @relation("CreditCommissionSeller")
+  creditRenegotiations    CreditAgreementRenegotiation[] @relation("CreditRenegotiationAuthor")
 }
 
 model Client {
-  id              String        @id @default(uuid())
-  uuid            String        @unique @default(uuid())
-  visibleCode     String?       @unique
-  sequenceNumber  String
-  createdAt       DateTime      @default(now())
-  name            String
-  cep             String?
-  street          String?
-  number          String?
-  complement      String?
-  block           String?
-  apartment       String?
-  neighborhood    String?
-  city            String?
-  state           String?
-  phone1          String?
-  phone2          String?
-  mainContact     String?
-  event           String?
-  eventDate       DateTime?
-  eventTime       String?
-  visitDate       DateTime?
-  visitTime       String?
-  condo           String?
-  houseColor      String?
-  gateColor       String?
-  gateObservation String?
-  referencePoint  String?
-  profession      String?
-  clothesColor    String?
-  latitude        Float?
-  longitude       Float?
-  status          String        @default("PENDING")
-  bookStatus      String        @default("CREATED") // CREATED, AWAITING_RELEASE, IN_STOCK, DISTRIBUTED, SOLD, AWAITING_RETURN, IN_STOCK_REBOLO, DISTRIBUTED_REBOLO, REBOLO_SOLD, DISCARDED
-  outcomeStatus   String        @default("PENDING") // PENDING, NON_SALE, SOLD
-  outcomeUpdatedAt DateTime?
-  cityClosedAt    DateTime?
+  id                   String    @id @default(uuid())
+  uuid                 String    @unique @default(uuid())
+  visibleCode          String?   @unique
+  sequenceNumber       String
+  createdAt            DateTime  @default(now())
+  name                 String
+  cep                  String?
+  street               String?
+  number               String?
+  complement           String?
+  block                String?
+  apartment            String?
+  neighborhood         String?
+  city                 String?
+  state                String?
+  phone1               String?
+  phone2               String?
+  mainContact          String?
+  event                String?
+  eventDate            DateTime?
+  eventTime            String?
+  visitDate            DateTime?
+  visitTime            String?
+  condo                String?
+  houseColor           String?
+  gateColor            String?
+  gateObservation      String?
+  referencePoint       String?
+  profession           String?
+  clothesColor         String?
+  latitude             Float?
+  longitude            Float?
+  status               String    @default("PENDING")
+  bookStatus           String    @default("CREATED") // CREATED, AWAITING_RELEASE, IN_STOCK, DISTRIBUTED, SOLD, AWAITING_RETURN, IN_STOCK_REBOLO, DISTRIBUTED_REBOLO, REBOLO_SOLD, DISCARDED
+  outcomeStatus        String    @default("PENDING") // PENDING, NON_SALE, SOLD
+  outcomeUpdatedAt     DateTime?
+  cityClosedAt         DateTime?
   photographerClosedAt DateTime?
-  batchId         String?
-  releasedForRouting Boolean    @default(false)
-  photographerId  String?
-  teamId          String?
-  companyId       String?
-  signatureUrl    String?
-  assignedSellerId String?
-  localId         String?
-  commercialCycle Int           @default(1)
+  batchId              String?
+  releasedForRouting   Boolean   @default(false)
+  photographerId       String?
+  teamId               String?
+  companyId            String?
+  signatureUrl         String?
+  assignedSellerId     String?
+  localId              String?
+  commercialCycle      Int       @default(1)
 
-  company         Company?      @relation(fields: [companyId], references: [id])
-  batch           BookBatch?    @relation(fields: [batchId], references: [id])
-  appointments    Appointment[]
-  children        Child[]
-  photographer    User?         @relation(fields: [photographerId], references: [id])
-  assignedSeller  User?         @relation("AssignedSeller", fields: [assignedSellerId], references: [id])
-  team            Team?         @relation(fields: [teamId], references: [id])
-  evaluation      Evaluation?
-  nonSales        NonSale[]
-  sales           Sale[]
-  sellerPhotos    SellerPhoto[]
-  editRequests    ClientEditRequest[]
-  timeline        ClientTimeline[]
+  company          Company?            @relation(fields: [companyId], references: [id])
+  batch            BookBatch?          @relation(fields: [batchId], references: [id])
+  appointments     Appointment[]
+  children         Child[]
+  photographer     User?               @relation(fields: [photographerId], references: [id])
+  assignedSeller   User?               @relation("AssignedSeller", fields: [assignedSellerId], references: [id])
+  team             Team?               @relation(fields: [teamId], references: [id])
+  evaluation       Evaluation?
+  nonSales         NonSale[]
+  sales            Sale[]
+  sellerPhotos     SellerPhoto[]
+  editRequests     ClientEditRequest[]
+  timeline         ClientTimeline[]
+  creditAgreements CreditAgreement[]
 
   @@index([companyId, assignedSellerId, city])
   @@index([outcomeStatus])
@@ -188,7 +197,7 @@ model ClientTimeline {
   metadata         Json?
   timestamp        DateTime @default(now())
 
-  client           Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId, timestamp])
 }
@@ -235,45 +244,46 @@ model Sale {
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?
-  company       Company? @relation(fields: [companyId], references: [id])
-  client        Client   @relation(fields: [clientId], references: [id])
-  seller        User     @relation(fields: [sellerId], references: [id])
-  supersededNonSales NonSale[] @relation("SupersededNonSales")
-  payments      SalePayment[]
+  company            Company?         @relation(fields: [companyId], references: [id])
+  client             Client           @relation(fields: [clientId], references: [id])
+  seller             User             @relation(fields: [sellerId], references: [id])
+  supersededNonSales NonSale[]        @relation("SupersededNonSales")
+  payments           SalePayment[]
+  creditAgreement    CreditAgreement?
 }
 
 model SalePayment {
   id         String   @id @default(uuid())
   saleId     String
-  method     String   // CASH, PIX, CREDIT, DEBIT
+  method     String // CASH, PIX, CREDIT, DEBIT
   amount     Float
   receiptUrl String?
   createdAt  DateTime @default(now())
 
-  sale       Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
   @@index([saleId])
 }
 
 model NonSale {
-  id           String   @id @default(uuid())
-  reason       String
-  date         DateTime @default(now())
-  sellerId     String
-  clientId     String
-  companyId    String?
-  signatureUrl String?
+  id                 String    @id @default(uuid())
+  reason             String
+  date               DateTime  @default(now())
+  sellerId           String
+  clientId           String
+  companyId          String?
+  signatureUrl       String?
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?
-  cycle        Int      @default(1)
-  supersededAt DateTime?
+  cycle              Int       @default(1)
+  supersededAt       DateTime?
   supersededBySaleId String?
 
-  company      Company? @relation(fields: [companyId], references: [id])
-  client       Client   @relation(fields: [clientId], references: [id])
-  seller       User     @relation(fields: [sellerId], references: [id])
-  supersededBySale Sale? @relation("SupersededNonSales", fields: [supersededBySaleId], references: [id])
+  company          Company? @relation(fields: [companyId], references: [id])
+  client           Client   @relation(fields: [clientId], references: [id])
+  seller           User     @relation(fields: [sellerId], references: [id])
+  supersededBySale Sale?    @relation("SupersededNonSales", fields: [supersededBySaleId], references: [id])
 }
 
 model SellerPhoto {
@@ -370,51 +380,51 @@ model Cost {
 }
 
 model CommercialEvent {
-  id                     String    @id @default(uuid())
-  name                   String
-  city                   String
-  category               String
-  score                  String
-  audience               String?
-  organizerContact       String?
-  socialMedia            String?
-  notes                  String?
-  isFavorite             Boolean   @default(false)
-  isProspect             Boolean   @default(true)
-  createdAt              DateTime  @default(now())
-  startDate              DateTime?
-  endDate                DateTime?
-  durationDays           Int?
-  isItinerant            Boolean   @default(false)
-  venueType              String?
-  ticketPrice            String?
-  observations           String?
-  expectedRevenue        Float?    @default(0)
-  estimatedFichasPerDay  Int?
-  estimatedTicketValue   Float?
-  estimatedSpaceCost     Float?
-  estimatedTeamSize      Int?      @default(2)
-  distanceFromBaseKm     Float?
-  roiApproved            Boolean   @default(false)
-  roiApprovedAt          DateTime?
-  cityAge                String?
-  cityIncome             String?
-  cityPerCapita          String?
-  cityEconomy            String?
-  companyId              String?
-  company                Company?  @relation(fields: [companyId], references: [id])
-  costs                  Cost[]
+  id                    String    @id @default(uuid())
+  name                  String
+  city                  String
+  category              String
+  score                 String
+  audience              String?
+  organizerContact      String?
+  socialMedia           String?
+  notes                 String?
+  isFavorite            Boolean   @default(false)
+  isProspect            Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  startDate             DateTime?
+  endDate               DateTime?
+  durationDays          Int?
+  isItinerant           Boolean   @default(false)
+  venueType             String?
+  ticketPrice           String?
+  observations          String?
+  expectedRevenue       Float?    @default(0)
+  estimatedFichasPerDay Int?
+  estimatedTicketValue  Float?
+  estimatedSpaceCost    Float?
+  estimatedTeamSize     Int?      @default(2)
+  distanceFromBaseKm    Float?
+  roiApproved           Boolean   @default(false)
+  roiApprovedAt         DateTime?
+  cityAge               String?
+  cityIncome            String?
+  cityPerCapita         String?
+  cityEconomy           String?
+  companyId             String?
+  company               Company?  @relation(fields: [companyId], references: [id])
+  costs                 Cost[]
 }
 
 model TripSettings {
-  id               String   @id @default(uuid())
-  companyId        String   @unique
-  costPerKm        Float    @default(0.60)
-  hotelCostPerDay  Float    @default(70.0)
-  foodCostPerDay   Float    @default(50.0)
-  productCostUnit  Float    @default(21.0)
-  baseCityName     String   @default("Goiânia")
-  company          Company  @relation(fields: [companyId], references: [id])
+  id              String  @id @default(uuid())
+  companyId       String  @unique
+  costPerKm       Float   @default(0.60)
+  hotelCostPerDay Float   @default(70.0)
+  foodCostPerDay  Float   @default(50.0)
+  productCostUnit Float   @default(21.0)
+  baseCityName    String  @default("Goiânia")
+  company         Company @relation(fields: [companyId], references: [id])
 }
 
 model CoverStockBatch {
@@ -478,21 +488,21 @@ model StateRadarCache {
 }
 
 model Notification {
-  id          String   @id @default(uuid())
-  title       String
-  message     String
-  type        String   // STOCK_TRANSFER_COVER, STOCK_TRANSFER_BOOK, COST_APPROVAL, CLOSING_APPROVAL, FLEET_URGENT, SYSTEM
-  status      String   @default("UNREAD") // UNREAD, READ, RESOLVED
-  actionData  Json?    
-  createdAt   DateTime @default(now())
-  
-  senderId    String?  
-  recipientId String   
+  id         String   @id @default(uuid())
+  title      String
+  message    String
+  type       String // STOCK_TRANSFER_COVER, STOCK_TRANSFER_BOOK, COST_APPROVAL, CLOSING_APPROVAL, FLEET_URGENT, SYSTEM
+  status     String   @default("UNREAD") // UNREAD, READ, RESOLVED
+  actionData Json?
+  createdAt  DateTime @default(now())
+
+  senderId    String?
+  recipientId String
   companyId   String?
 
-  sender      User?    @relation("NotificationsSent", fields: [senderId], references: [id])
-  recipient   User     @relation("NotificationsReceived", fields: [recipientId], references: [id])
-  company     Company? @relation(fields: [companyId], references: [id])
+  sender    User?    @relation("NotificationsSent", fields: [senderId], references: [id])
+  recipient User     @relation("NotificationsReceived", fields: [recipientId], references: [id])
+  company   Company? @relation(fields: [companyId], references: [id])
 }
 
 model ClientEditRequest {
@@ -506,9 +516,9 @@ model ClientEditRequest {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  photographer   User?    @relation(fields: [photographerId], references: [id])
-  company        Company? @relation(fields: [companyId], references: [id])
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  photographer User?    @relation(fields: [photographerId], references: [id])
+  company      Company? @relation(fields: [companyId], references: [id])
 }
 
 model PersonalAppointment {
@@ -520,7 +530,7 @@ model PersonalAppointment {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  seller      User     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  seller User @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
   @@index([sellerId, dateTime])
 }
@@ -537,9 +547,162 @@ model SellerCityClosing {
   soldCount       Int
   totalSalesValue Float
 
-  company         Company  @relation(fields: [companyId], references: [id])
-  seller          User     @relation(fields: [sellerId], references: [id])
+  company Company @relation(fields: [companyId], references: [id])
+  seller  User    @relation(fields: [sellerId], references: [id])
 
   @@index([companyId, sellerId, city])
   @@index([closedAt])
+}
+
+model CreditAgreement {
+  id                        String   @id @default(uuid())
+  saleId                    String   @unique
+  clientId                  String
+  sellerId                  String
+  companyId                 String
+  buyerName                 String
+  buyerCpf                  String
+  buyerRg                   String?
+  street                    String
+  number                    String
+  neighborhood              String
+  city                      String
+  state                     String
+  cep                       String?
+  referencePoint            String?
+  product                   String   @default("Books")
+  totalSaleCents            Int
+  downPaymentCents          Int
+  financedPrincipalCents    Int
+  remainingPrincipalCents   Int
+  paidPrincipalCents        Int      @default(0)
+  installmentsCount         Int
+  periodicity               String   @default("MONTHLY")
+  firstDueDate              DateTime
+  status                    String   @default("ACTIVE")
+  initialCommissionRate     Float    @default(0.25)
+  installmentCommissionRate Float    @default(0.10)
+  signedAgreementUrl        String?
+  notes                     String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  sale           Sale                           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  client         Client                         @relation(fields: [clientId], references: [id])
+  seller         User                           @relation("CreditAgreementSeller", fields: [sellerId], references: [id])
+  company        Company                        @relation(fields: [companyId], references: [id])
+  installments   CreditInstallment[]
+  payments       CreditPayment[]
+  commissions    CreditCommission[]
+  renegotiations CreditAgreementRenegotiation[]
+
+  @@index([companyId, sellerId])
+  @@index([companyId, status])
+  @@index([clientId])
+}
+
+model CreditInstallment {
+  id                String    @id @default(uuid())
+  agreementId       String
+  installmentNumber Int
+  dueDate           DateTime
+  amountCents       Int
+  paidCents         Int       @default(0)
+  status            String    @default("PENDING")
+  paidAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  agreement   CreditAgreement           @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  allocations CreditPaymentAllocation[]
+
+  @@index([agreementId, dueDate])
+  @@index([status])
+}
+
+model CreditPayment {
+  id               String    @id @default(uuid())
+  agreementId      String
+  companyId        String
+  amountCents      Int
+  paymentMethod    String
+  receivedByRole   String    @default("SELLER")
+  receiverUserId   String
+  destination      String    @default("SELLER_HANDS")
+  paidAt           DateTime  @default(now())
+  receiptUrl       String?
+  notes            String?
+  isReversed       Boolean   @default(false)
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
+  createdAt        DateTime  @default(now())
+
+  agreement   CreditAgreement           @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  company     Company                   @relation(fields: [companyId], references: [id])
+  receiver    User                      @relation("CreditPaymentReceiver", fields: [receiverUserId], references: [id])
+  reversedBy  User?                     @relation("CreditPaymentReverser", fields: [reversedByUserId], references: [id])
+  allocations CreditPaymentAllocation[]
+  commissions CreditCommission[]
+
+  @@index([agreementId])
+  @@index([companyId, paidAt])
+  @@index([receiverUserId, paidAt])
+}
+
+model CreditPaymentAllocation {
+  id             String @id @default(uuid())
+  paymentId      String
+  installmentId  String
+  allocatedCents Int
+
+  payment     CreditPayment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  installment CreditInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([installmentId])
+}
+
+model CreditCommission {
+  id             String    @id @default(uuid())
+  agreementId    String
+  paymentId      String?
+  sellerId       String
+  companyId      String
+  amountCents    Int
+  status         String    @default("RELEASED")
+  type           String    @default("INSTALLMENT")
+  paidAt         DateTime?
+  paidByUserId   String?
+  costId         String?
+  isReversed     Boolean   @default(false)
+  reversedAt     DateTime?
+  reversalReason String?
+  createdAt      DateTime  @default(now())
+
+  agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  payment   CreditPayment?  @relation(fields: [paymentId], references: [id])
+  seller    User            @relation("CreditCommissionSeller", fields: [sellerId], references: [id])
+  company   Company         @relation(fields: [companyId], references: [id])
+
+  @@index([sellerId, status])
+  @@index([companyId, status])
+  @@index([agreementId])
+}
+
+model CreditAgreementRenegotiation {
+  id                     String   @id @default(uuid())
+  agreementId            String
+  authorId               String
+  previousRemainingCents Int
+  newRemainingCents      Int
+  reason                 String
+  previousSchedule       Json
+  newSchedule            Json
+  createdAt              DateTime @default(now())
+
+  agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  author    User            @relation("CreditRenegotiationAuthor", fields: [authorId], references: [id])
+
+  @@index([agreementId])
 }

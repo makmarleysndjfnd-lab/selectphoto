@@ -24,6 +24,7 @@ import 'package:path_provider/path_provider.dart';
 import '../widgets/led_card.dart';
 import '../utils/ui_helpers.dart';
 import 'visao_estatisticas_admin.dart';
+import 'visao_crediario_admin.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _accentPurple = Color(0xFF9C27B0);
@@ -795,6 +796,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                           4, Icons.attach_money_rounded, 'Financeiro e Saúde'),
                       _sideMenuItem(10, Icons.point_of_sale_rounded,
                           'Histórico de Vendas'),
+                      _sideMenuItem(12, Icons.credit_score_rounded,
+                          'Crediário e Cobranças'),
                       ListTile(
                         leading: const Icon(Icons.money_off,
                             color: Color(0xFFE57373)),
@@ -1473,6 +1476,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         break;
       case 10:
         tabWidget = const VisaoHistoricoVendasAdmin();
+        break;
+      case 12:
+        tabWidget = const VisaoCrediarioAdmin();
         break;
       default:
         tabWidget = const VisaoFechamentoAdmin();

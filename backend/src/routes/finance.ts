@@ -171,8 +171,21 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
     const sales = await prisma.sale.findMany({
       where: { companyId: userCompanyId, receiptUrl: { not: null } },
       include: {
-        seller: { select: { name: true } }
+        seller: { select: { name: true } },
+        creditAgreement: true,
       }
+    });
+
+    const creditPayments = await prisma.creditPayment.findMany({
+      where: { ...(userCompanyId ? { companyId: userCompanyId } : {}), isReversed: false },
+    });
+
+    const now = new Date();
+    const openInstallments = await prisma.creditInstallment.findMany({
+      where: {
+        status: { in: ['PENDING', 'PARTIALLY_PAID'] },
+        agreement: { ...(userCompanyId ? { companyId: userCompanyId } : {}), status: { not: 'CANCELLED' } },
+      },
     });
 
     const costs = await prisma.cost.findMany({
@@ -184,16 +197,33 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
     });
 
     // KPI Calculations
-    const receita = sales.filter(s => s.paymentStatus === 'PAID').reduce((acc, s) => acc + s.value, 0);
+    const creditPaymentsSum = creditPayments.reduce((acc, cp) => acc + (cp.amountCents / 100), 0);
+    const receita = sales.reduce((acc, s) => {
+      if (s.creditAgreement) {
+        return acc + (s.creditAgreement.downPaymentCents / 100);
+      }
+      return s.paymentStatus === 'PAID' ? acc + s.value : acc;
+    }, 0) + creditPaymentsSum;
+
+    const crediarioVencido = openInstallments
+      .filter(i => new Date(i.dueDate) < now)
+      .reduce((acc, i) => acc + ((i.amountCents - i.paidCents) / 100), 0);
+
+    const crediarioAReceber = openInstallments
+      .filter(i => new Date(i.dueDate) >= now)
+      .reduce((acc, i) => acc + ((i.amountCents - i.paidCents) / 100), 0);
+
     const custosTotais = costs.reduce((acc, c) => acc + c.amount, 0);
     const lucro = receita - custosTotais;
-    const inadimplencia = sales.filter(s => s.paymentStatus !== 'PAID').reduce((acc, s) => acc + s.value, 0);
+    const legacyUnpaidSales = sales.filter(s => !s.creditAgreement && s.paymentStatus !== 'PAID').reduce((acc, s) => acc + s.value, 0);
+    const inadimplencia = Number((legacyUnpaidSales + crediarioVencido).toFixed(2));
     const frota = costs.filter(c => c.category === 'FLEET').reduce((acc, c) => acc + c.amount, 0);
 
     // Cash (Caixa)
     const salesCash = sales.filter(s => s.paymentMethod === 'CASH' && s.paymentStatus === 'PAID').reduce((acc, s) => acc + s.value, 0);
+    const creditPaymentsCash = creditPayments.filter(cp => cp.paymentMethod === 'CASH' && cp.destination === 'COMPANY_BANK').reduce((acc, cp) => acc + (cp.amountCents / 100), 0);
     const costsCash = costs.filter(c => c.paymentMethod === 'CASH' && c.status === 'APPROVED').reduce((acc, c) => acc + c.amount, 0);
-    const caixa = salesCash - costsCash;
+    const caixa = salesCash + creditPaymentsCash - costsCash;
 
     // Charts Data
     const costsByCategory = costs.reduce((acc: any, c) => {
@@ -220,6 +250,8 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
         custos: custosTotais,
         lucro,
         inadimplencia,
+        crediarioAReceber,
+        crediarioVencido,
         frota
       },
       charts: {

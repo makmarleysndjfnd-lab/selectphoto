@@ -3,6 +3,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
+import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -23,6 +24,8 @@ function parseSaleInput(body: any) {
     sellerRating,
     photographerRating,
     contactRating,
+    credit,
+    creditAgreement,
   } = body;
   const parsedValue = Number(value);
 
@@ -46,10 +49,8 @@ function parseSaleInput(body: any) {
     }
   }
 
+  let sumCents = 0;
   if (Array.isArray(rawPayments) && rawPayments.length > 0) {
-    let sumCents = 0;
-    const allowedMethods = ['CASH', 'DINHEIRO', 'PIX', 'CREDIT', 'CREDITO', 'CREDIT_CARD', 'DEBIT', 'DEBITO', 'DEBIT_CARD'];
-
     for (const p of rawPayments) {
       const pAmount = Number(p.amount ?? p.value);
       if (!Number.isFinite(pAmount) || pAmount <= 0) {
@@ -74,6 +75,113 @@ function parseSaleInput(body: any) {
         receiptUrl: p.receiptUrl ? String(p.receiptUrl).trim() : null,
       });
     }
+  }
+
+  let rawCredit = credit || creditAgreement;
+  if (typeof rawCredit === 'string') {
+    try {
+      rawCredit = JSON.parse(rawCredit);
+    } catch (_) {
+      rawCredit = null;
+    }
+  }
+
+  let parsedCredit: any = null;
+  if (rawCredit && typeof rawCredit === 'object') {
+    const rawCpf = String(rawCredit.buyerCpf || '').replace(/\D/g, '');
+    if (!validateCpf(rawCpf)) {
+      throw { status: 400, message: 'CPF do comprador inválido ou com dígitos verificadores incorretos' };
+    }
+
+    const installmentsCount = Math.round(Number(rawCredit.installmentsCount || rawCredit.installments || 1));
+    if (installmentsCount < 1 || installmentsCount > 48) {
+      throw { status: 400, message: 'Número de parcelas deve ser entre 1 e 48' };
+    }
+
+    let downPaymentCents = sumCents;
+    if (parsedPayments.length === 0 || downPaymentCents === 0) {
+      const dpNum = Number(rawCredit.downPayment || body.downPayment);
+      if (Number.isFinite(dpNum) && dpNum > 0) {
+        downPaymentCents = Math.round(dpNum * 100);
+        const singleMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : 'CASH';
+        let normalized = 'CASH';
+        if (singleMethod === 'PIX') normalized = 'PIX';
+        else if (singleMethod.includes('DEBIT')) normalized = 'DEBIT';
+        else if (singleMethod.includes('CREDIT')) normalized = 'CREDIT';
+        parsedPayments.push({
+          method: normalized,
+          amount: Number((downPaymentCents / 100).toFixed(2)),
+          receiptUrl: null,
+        });
+      }
+    }
+
+    if (downPaymentCents < 15000) {
+      throw {
+        status: 400,
+        message: 'Toda nova venda com crediário exige entrada efetivamente paga de pelo menos R$ 150,00',
+      };
+    }
+
+    if (downPaymentCents >= totalCents) {
+      throw {
+        status: 400,
+        message: 'A entrada não pode ser igual ou superior ao valor total na venda a crediário. Se o pagamento for total, desative o parcelamento.',
+      };
+    }
+
+    const financedPrincipalCents = totalCents - downPaymentCents;
+    const rawPeriodicity = String(rawCredit.periodicity || 'MONTHLY').trim().toUpperCase();
+    const periodicity = (rawPeriodicity === 'BIWEEKLY' || rawPeriodicity === 'QUINZENAL') ? 'BIWEEKLY' : 'MONTHLY';
+
+    let firstDueDate: Date | undefined;
+    if (rawCredit.firstDueDate) {
+      const parsedD = new Date(rawCredit.firstDueDate);
+      if (!isNaN(parsedD.getTime())) {
+        firstDueDate = parsedD;
+      }
+    }
+    if (!firstDueDate) {
+      firstDueDate = new Date();
+      firstDueDate.setUTCDate(firstDueDate.getUTCDate() + (periodicity === 'BIWEEKLY' ? 15 : 30));
+    }
+
+    parsedCredit = {
+      buyerName: rawCredit.buyerName ? String(rawCredit.buyerName).trim() : null,
+      buyerCpf: rawCpf,
+      buyerRg: rawCredit.buyerRg ? String(rawCredit.buyerRg).trim() : null,
+      installmentsCount,
+      periodicity,
+      firstDueDate,
+      signedAgreementUrl: rawCredit.signedAgreementUrl ? String(rawCredit.signedAgreementUrl).trim() : null,
+      notes: rawCredit.notes ? String(rawCredit.notes).trim() : null,
+      street: rawCredit.street ? String(rawCredit.street).trim() : null,
+      number: rawCredit.number ? String(rawCredit.number).trim() : null,
+      neighborhood: rawCredit.neighborhood ? String(rawCredit.neighborhood).trim() : null,
+      city: rawCredit.city ? String(rawCredit.city).trim() : null,
+      state: rawCredit.state ? String(rawCredit.state).trim() : null,
+      cep: rawCredit.cep ? String(rawCredit.cep).trim() : null,
+      referencePoint: rawCredit.referencePoint ? String(rawCredit.referencePoint).trim() : null,
+      downPaymentCents,
+      financedPrincipalCents,
+    };
+  } else {
+    // Venda tradicional à vista ou cartão sem crediário interno
+    if (parsedPayments.length === 0) {
+      const singleMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : 'CASH';
+      let normalized = 'CASH';
+      if (singleMethod === 'PIX') normalized = 'PIX';
+      else if (singleMethod.includes('DEBIT')) normalized = 'DEBIT';
+      else if (singleMethod.includes('CREDIT')) normalized = 'CREDIT';
+      else normalized = 'CASH';
+
+      parsedPayments.push({
+        method: normalized,
+        amount: parsedValue,
+        receiptUrl: null,
+      });
+      sumCents = totalCents;
+    }
 
     if (sumCents !== totalCents) {
       const diff = Number(((sumCents - totalCents) / 100).toFixed(2));
@@ -82,23 +190,9 @@ function parseSaleInput(body: any) {
         message: `A soma das formas de pagamento (R$ ${(sumCents / 100).toFixed(2)}) deve corresponder exatamente ao valor da venda (R$ ${parsedValue.toFixed(2)}). Diferença: R$ ${diff.toFixed(2)}`,
       };
     }
-  } else {
-    // Venda tradicional com 1 único método
-    const singleMethod = paymentMethod ? String(paymentMethod).trim().toUpperCase() : 'CASH';
-    let normalized = 'CASH';
-    if (singleMethod === 'PIX') normalized = 'PIX';
-    else if (singleMethod.includes('DEBIT')) normalized = 'DEBIT';
-    else if (singleMethod.includes('CREDIT')) normalized = 'CREDIT';
-    else normalized = 'CASH';
-
-    parsedPayments.push({
-      method: normalized,
-      amount: parsedValue,
-      receiptUrl: null,
-    });
   }
 
-  const effectivePaymentMethod = parsedPayments.length > 1 ? 'SPLIT' : parsedPayments[0].method;
+  const effectivePaymentMethod = parsedPayments.length > 1 ? 'SPLIT' : (parsedPayments[0]?.method || 'CASH');
 
   const parseRating = (val: any) => {
     if (val === undefined || val === null || val === '') return null;
@@ -118,6 +212,7 @@ function parseSaleInput(body: any) {
     sellerRating: parseRating(sellerRating),
     photographerRating: parseRating(photographerRating),
     contactRating: parseRating(contactRating),
+    credit: parsedCredit,
   };
 }
 
@@ -336,13 +431,13 @@ async function finalizeSaleWithReceipt(params: {
       };
     }
 
-      const { payments: paymentsList, ...saleData } = input;
+      const { payments: paymentsList, credit: creditInput, ...saleData } = input;
       const sale = await tx.sale.create({
         data: {
           ...saleData,
           sellerId: params.sellerId,
           companyId: params.companyId,
-          paymentStatus: 'PAID',
+          paymentStatus: creditInput ? 'PARTIALLY_PAID' : 'PAID',
           status: 'PRONTO',
           receiptUrl: params.receiptUrl,
           sheetPhotoUrl: params.sheetPhotoUrl || null,
@@ -362,6 +457,95 @@ async function finalizeSaleWithReceipt(params: {
             amount: p.amount,
             receiptUrl: p.receiptUrl || params.receiptUrl,
           })),
+        });
+      }
+
+      if (creditInput) {
+        const street = creditInput.street || client.street;
+        const number = creditInput.number || client.number;
+        const neighborhood = creditInput.neighborhood || client.neighborhood;
+        const city = creditInput.city || client.city;
+        const state = creditInput.state || (client as any).state || (client as any).uf || 'SP';
+        const cep = creditInput.cep || client.cep;
+        const referencePoint = creditInput.referencePoint || client.referencePoint;
+        const buyerName = creditInput.buyerName || client.name;
+
+        const validation = validateCreditSaleRequirements({
+          totalSaleCents: Math.round(input.value * 100),
+          downPaymentCents: creditInput.downPaymentCents,
+          buyerCpf: creditInput.buyerCpf,
+          street,
+          number,
+          neighborhood,
+          city,
+        });
+        if (!validation.valid) {
+          throw { status: 400, message: validation.error };
+        }
+
+        const schedule = calculateCreditSchedule({
+          totalSaleCents: Math.round(input.value * 100),
+          downPaymentCents: creditInput.downPaymentCents,
+          installmentsCount: creditInput.installmentsCount,
+          periodicity: creditInput.periodicity,
+          firstDueDate: creditInput.firstDueDate,
+        });
+
+        const agreement = await tx.creditAgreement.create({
+          data: {
+            saleId: sale.id,
+            clientId: input.clientId,
+            sellerId: params.sellerId,
+            companyId: params.companyId,
+            buyerName,
+            buyerCpf: creditInput.buyerCpf,
+            buyerRg: creditInput.buyerRg || null,
+            street,
+            number,
+            neighborhood,
+            city,
+            state,
+            cep: cep || null,
+            referencePoint: referencePoint || null,
+            product: input.product,
+            totalSaleCents: Math.round(input.value * 100),
+            downPaymentCents: creditInput.downPaymentCents,
+            financedPrincipalCents: creditInput.financedPrincipalCents,
+            remainingPrincipalCents: creditInput.financedPrincipalCents,
+            paidPrincipalCents: 0,
+            installmentsCount: creditInput.installmentsCount,
+            periodicity: creditInput.periodicity,
+            firstDueDate: schedule[0].dueDate,
+            status: 'ACTIVE',
+            initialCommissionRate: 0.25,
+            installmentCommissionRate: 0.10,
+            signedAgreementUrl: creditInput.signedAgreementUrl || null,
+            notes: creditInput.notes || null,
+          },
+        });
+
+        await tx.creditInstallment.createMany({
+          data: schedule.map((inst) => ({
+            agreementId: agreement.id,
+            installmentNumber: inst.installmentNumber,
+            dueDate: inst.dueDate,
+            amountCents: inst.amountCents,
+            paidCents: 0,
+            status: 'PENDING',
+          })),
+        });
+
+        const downPaymentCommissionCents = Math.round(creditInput.downPaymentCents * 0.25);
+        await tx.creditCommission.create({
+          data: {
+            agreementId: agreement.id,
+            paymentId: null,
+            sellerId: params.sellerId,
+            companyId: params.companyId,
+            amountCents: downPaymentCommissionCents,
+            status: 'RELEASED',
+            type: 'DOWN_PAYMENT',
+          },
         });
       }
 
@@ -390,6 +574,10 @@ async function finalizeSaleWithReceipt(params: {
       },
     });
 
+    const timelineReason = creditInput
+      ? `Venda a prazo concluída no valor de R$ ${input.value} com entrada de R$ ${(creditInput.downPaymentCents / 100).toFixed(2)} e saldo de R$ ${(creditInput.financedPrincipalCents / 100).toFixed(2)} financiado em ${creditInput.installmentsCount}x no Crediário / Parcelado`
+      : `Venda concluída no valor de R$ ${input.value} (${input.paymentMethod}) com anexos completos`;
+
     await tx.clientTimeline.create({
       data: {
         clientId: input.clientId,
@@ -401,7 +589,7 @@ async function finalizeSaleWithReceipt(params: {
         authorId: params.sellerId,
         authorRole: 'SELLER',
         action: 'SALE',
-        reason: `Venda concluída no valor de R$ ${input.value} (${input.paymentMethod}) com anexos completos`,
+        reason: timelineReason,
       },
     });
 
@@ -492,13 +680,13 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       }
 
       // 4. Criar a venda pendente de comprovante
-      const { payments: postPayments, ...postSaleData } = input;
+      const { payments: postPayments, credit: postCredit, ...postSaleData } = input;
       const sale = await tx.sale.create({
         data: {
           ...postSaleData,
           sellerId,
           status: 'PENDING_RECEIPT',
-          paymentStatus: 'PENDING_RECEIPT',
+          paymentStatus: postCredit ? 'PARTIALLY_PAID' : 'PENDING_RECEIPT',
           companyId,
         },
       });
@@ -511,6 +699,95 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             amount: p.amount,
             receiptUrl: null,
           })),
+        });
+      }
+
+      if (postCredit) {
+        const street = postCredit.street || client.street;
+        const number = postCredit.number || client.number;
+        const neighborhood = postCredit.neighborhood || client.neighborhood;
+        const city = postCredit.city || client.city;
+        const state = postCredit.state || (client as any).state || (client as any).uf || 'SP';
+        const cep = postCredit.cep || client.cep;
+        const referencePoint = postCredit.referencePoint || client.referencePoint;
+        const buyerName = postCredit.buyerName || client.name;
+
+        const validation = validateCreditSaleRequirements({
+          totalSaleCents: Math.round(input.value * 100),
+          downPaymentCents: postCredit.downPaymentCents,
+          buyerCpf: postCredit.buyerCpf,
+          street,
+          number,
+          neighborhood,
+          city,
+        });
+        if (!validation.valid) {
+          throw { status: 400, message: validation.error };
+        }
+
+        const schedule = calculateCreditSchedule({
+          totalSaleCents: Math.round(input.value * 100),
+          downPaymentCents: postCredit.downPaymentCents,
+          installmentsCount: postCredit.installmentsCount,
+          periodicity: postCredit.periodicity,
+          firstDueDate: postCredit.firstDueDate,
+        });
+
+        const agreement = await tx.creditAgreement.create({
+          data: {
+            saleId: sale.id,
+            clientId: input.clientId,
+            sellerId,
+            companyId,
+            buyerName,
+            buyerCpf: postCredit.buyerCpf,
+            buyerRg: postCredit.buyerRg || null,
+            street,
+            number,
+            neighborhood,
+            city,
+            state,
+            cep: cep || null,
+            referencePoint: referencePoint || null,
+            product: input.product,
+            totalSaleCents: Math.round(input.value * 100),
+            downPaymentCents: postCredit.downPaymentCents,
+            financedPrincipalCents: postCredit.financedPrincipalCents,
+            remainingPrincipalCents: postCredit.financedPrincipalCents,
+            paidPrincipalCents: 0,
+            installmentsCount: postCredit.installmentsCount,
+            periodicity: postCredit.periodicity,
+            firstDueDate: schedule[0].dueDate,
+            status: 'ACTIVE',
+            initialCommissionRate: 0.25,
+            installmentCommissionRate: 0.10,
+            signedAgreementUrl: postCredit.signedAgreementUrl || null,
+            notes: postCredit.notes || null,
+          },
+        });
+
+        await tx.creditInstallment.createMany({
+          data: schedule.map((inst) => ({
+            agreementId: agreement.id,
+            installmentNumber: inst.installmentNumber,
+            dueDate: inst.dueDate,
+            amountCents: inst.amountCents,
+            paidCents: 0,
+            status: 'PENDING',
+          })),
+        });
+
+        const downPaymentCommissionCents = Math.round(postCredit.downPaymentCents * 0.25);
+        await tx.creditCommission.create({
+          data: {
+            agreementId: agreement.id,
+            paymentId: null,
+            sellerId,
+            companyId,
+            amountCents: downPaymentCommissionCents,
+            status: 'RELEASED',
+            type: 'DOWN_PAYMENT',
+          },
         });
       }
 
@@ -991,6 +1268,13 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
           select: { id: true, name: true },
         },
         payments: true,
+        creditAgreement: {
+          include: {
+            installments: {
+              orderBy: { installmentNumber: 'asc' },
+            },
+          },
+        },
       },
       orderBy: { date: 'desc' },
     });

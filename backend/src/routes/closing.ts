@@ -540,6 +540,27 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             include: {
                 client: true,
                 payments: true,
+                creditAgreement: true,
+            }
+        });
+
+        // Fetch credit payments collected by this seller on this day
+        const creditPaymentsCollected = await prisma.creditPayment.findMany({
+            where: {
+                receiverUserId: sellerId as string,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                isReversed: false,
+                paidAt: {
+                    gte: startDate,
+                    lte: endDate
+                }
+            },
+            include: {
+                agreement: {
+                    include: {
+                        client: { select: { id: true, name: true, sequenceNumber: true } }
+                    }
+                }
             }
         });
 
@@ -570,15 +591,47 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             }
         });
 
-        // Calculate Totals
+        // Calculate Totals & Discriminated Crediario Metrics
         let totalSalesValue = 0;
         let cashValue = 0;
         let pixValue = 0;
         let debitValue = 0;
         let creditValue = 0;
 
+        let aVistaSalesCount = 0;
+        let aVistaSalesValue = 0;
+        let crediarioSalesCount = 0;
+        let crediarioTotalValue = 0;
+        let crediarioDownPaymentValue = 0;
+        let crediarioFinancedValue = 0;
+
+        let aVistaCommission = 0;
+        let crediarioDownPaymentCommission = 0;
+        let crediarioInstallmentsCommission = 0;
+
+        const seller = await prisma.user.findUnique({
+            where: { id: sellerId }
+        });
+        const commissionRate = resolveSellerCommissionRate(seller);
+
         sales.forEach(sale => {
             totalSalesValue += sale.value;
+
+            if (sale.creditAgreement) {
+                crediarioSalesCount += 1;
+                crediarioTotalValue += sale.value;
+                const downPaymentVal = Number((sale.creditAgreement.downPaymentCents / 100).toFixed(2));
+                const financedVal = Number((sale.creditAgreement.financedPrincipalCents / 100).toFixed(2));
+                crediarioDownPaymentValue += downPaymentVal;
+                crediarioFinancedValue += financedVal;
+                // 25% fixo sobre a entrada efetivamente recebida
+                crediarioDownPaymentCommission += Number((downPaymentVal * 0.25).toFixed(2));
+            } else {
+                aVistaSalesCount += 1;
+                aVistaSalesValue += sale.value;
+                aVistaCommission += Number((sale.value * commissionRate).toFixed(2));
+            }
+
             if (sale.payments && sale.payments.length > 0) {
                 for (const p of sale.payments) {
                     const m = (p.method || '').toUpperCase();
@@ -598,19 +651,31 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             }
         });
 
+        let crediarioPaymentsCollectedValue = 0;
+        creditPaymentsCollected.forEach(payment => {
+            const amountVal = Number((payment.amountCents / 100).toFixed(2));
+            crediarioPaymentsCollectedValue += amountVal;
+            // 10% fixo sobre principal recebido de parcelas
+            crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
+
+            // Cobrança em mãos do vendedor (aumenta o dinheiro em posse do vendedor)
+            if (payment.destination === 'SELLER_HANDS') {
+                const pm = (payment.paymentMethod || '').toUpperCase();
+                if (pm === 'CASH' || pm === 'DINHEIRO') cashValue += amountVal;
+                else if (pm === 'PIX') pixValue += amountVal;
+                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitValue += amountVal;
+                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditValue += amountVal;
+                else cashValue += amountVal;
+            }
+        });
+
         const totalFichas = sales.length + nonSales.length;
 
-        // Fetch Seller info for commission %
-        const seller = await prisma.user.findUnique({
-            where: { id: sellerId }
-        });
         const requester = req.user?.id
           ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
           : null;
 
-        const commissionRate = resolveSellerCommissionRate(seller);
-
-        const commissionAmount = Number((totalSalesValue * commissionRate).toFixed(2));
+        const commissionAmount = Number((aVistaCommission + crediarioDownPaymentCommission + crediarioInstallmentsCommission).toFixed(2));
 
         // Regra explícita de repasse:
         // Dinheiro em mãos do vendedor: cashValue
@@ -657,6 +722,20 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             creditValue,
             commissionRate,
             commissionAmount,
+            // Discriminação do Crediário
+            aVistaSalesCount,
+            aVistaSalesValue,
+            crediarioSalesCount,
+            crediarioTotalValue,
+            crediarioDownPaymentValue,
+            crediarioFinancedValue,
+            crediarioPaymentsCollectedValue,
+            creditPaymentsCollected,
+            commissionBreakdown: {
+                aVistaCommission,
+                crediarioDownPaymentCommission,
+                crediarioInstallmentsCommission,
+            },
             sellerOwesCompany,
             companyOwesSeller,
             historicalBalance,
@@ -715,6 +794,16 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
             },
             include: {
                 payments: true,
+                creditAgreement: true,
+            }
+        });
+
+        const creditPaymentsCollected = await prisma.creditPayment.findMany({
+            where: {
+                receiverUserId: sellerId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
+                isReversed: false,
+                paidAt: { gte: startDate, lte: endDate }
             }
         });
 
@@ -724,8 +813,23 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
         let debitVal = 0;
         let creditVal = 0;
 
+        let aVistaCommission = 0;
+        let crediarioDownPaymentCommission = 0;
+        let crediarioInstallmentsCommission = 0;
+
+        const seller = await prisma.user.findUnique({ where: { id: sellerId } });
+        const commRate = resolveSellerCommissionRate(seller);
+
         sales.forEach(s => {
             totalSalesVal += s.value;
+
+            if (s.creditAgreement) {
+                const downPaymentVal = Number((s.creditAgreement.downPaymentCents / 100).toFixed(2));
+                crediarioDownPaymentCommission += Number((downPaymentVal * 0.25).toFixed(2));
+            } else {
+                aVistaCommission += Number((s.value * commRate).toFixed(2));
+            }
+
             if (s.payments && s.payments.length > 0) {
                 for (const p of s.payments) {
                     const m = (p.method || '').toUpperCase();
@@ -745,9 +849,20 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
             }
         });
 
-        const seller = await prisma.user.findUnique({ where: { id: sellerId } });
-        const commRate = resolveSellerCommissionRate(seller);
-        const commAmt = Number((totalSalesVal * commRate).toFixed(2));
+        creditPaymentsCollected.forEach(payment => {
+            const amountVal = Number((payment.amountCents / 100).toFixed(2));
+            crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
+            if (payment.destination === 'SELLER_HANDS') {
+                const pm = (payment.paymentMethod || '').toUpperCase();
+                if (pm === 'CASH' || pm === 'DINHEIRO') cashVal += amountVal;
+                else if (pm === 'PIX') pixVal += amountVal;
+                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitVal += amountVal;
+                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditVal += amountVal;
+                else cashVal += amountVal;
+            }
+        });
+
+        const commAmt = Number((aVistaCommission + crediarioDownPaymentCommission + crediarioInstallmentsCommission).toFixed(2));
         const netRepasse = Number((cashVal - commAmt).toFixed(2));
 
         const closing = await prisma.dailyClosing.create({

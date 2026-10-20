@@ -110,7 +110,7 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       // Fallback para fichas legadas que vieram apenas com sequenceNumber
       if (!existing && seqNum) {
         existing = await prisma.client.findFirst({
-          where: { sequenceNumber: seqNum, companyId },
+          where: { sequenceNumber: seqNum },
         });
       }
 

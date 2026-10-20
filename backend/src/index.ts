@@ -98,12 +98,14 @@ import editRequestsRoutes from './routes/editRequests';
 import quotesRoutes from './routes/quotes';
 import appointmentsRoutes from './routes/appointments';
 import statsRoutes from './routes/stats';
+import creditRoutes from './routes/credit';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 
 // Limite JSON aumentado (50MB) especificamente para rotas que transmitem lotes de fichas / assinaturas base64
 app.use('/api/clients', express.json({ limit: '50mb' }), clientRoutes);
 app.use('/api/sales', express.json({ limit: '50mb' }), salesRoutes);
+app.use('/api/credit', express.json({ limit: '20mb' }), creditRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);

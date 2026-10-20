@@ -883,6 +883,24 @@ class _SaleTabState extends State<_SaleTab> {
   final _reportNotesController = TextEditingController();
   bool _isLoading = false;
 
+  // Crediário / Parcelado
+  bool _isCrediario = false;
+  int _installmentsCount = 4;
+  String _periodicity = 'MONTHLY';
+  DateTime _firstDueDate = DateTime.now().add(const Duration(days: 30));
+
+  late final TextEditingController _buyerNameController;
+  late final TextEditingController _buyerCpfController;
+  late final TextEditingController _cepController;
+  late final TextEditingController _streetController;
+  late final TextEditingController _numberController;
+  late final TextEditingController _neighborhoodController;
+  late final TextEditingController _cityController;
+  late final TextEditingController _stateController;
+  late final TextEditingController _complementController;
+
+  late final SignatureController _signatureController;
+
   // Formas de pagamento divididas (Dinheiro, Pix, Cartão Crédito, Cartão Débito)
   final Map<String, bool> _selectedPaymentMethods = {
     'CASH': true,
@@ -906,14 +924,98 @@ class _SaleTabState extends State<_SaleTab> {
   File? _receiptPhoto;
 
   @override
+  void initState() {
+    super.initState();
+    final client = widget.client;
+    _buyerNameController = TextEditingController(
+        text: client['name']?.toString() ?? client['mainContact']?.toString() ?? '');
+    _buyerCpfController = TextEditingController(text: client['cpf']?.toString() ?? '');
+    _cepController = TextEditingController(
+        text: client['cep']?.toString() ?? client['postalCode']?.toString() ?? '');
+    _streetController = TextEditingController(text: client['street']?.toString() ?? '');
+    _numberController = TextEditingController(text: client['number']?.toString() ?? '');
+    _neighborhoodController =
+        TextEditingController(text: client['neighborhood']?.toString() ?? '');
+    _cityController = TextEditingController(text: client['city']?.toString() ?? '');
+    _stateController = TextEditingController(text: client['state']?.toString() ?? 'PR');
+    _complementController =
+        TextEditingController(text: client['complement']?.toString() ?? '');
+
+    _signatureController = SignatureController(
+      penStrokeWidth: 3,
+      penColor: Colors.black,
+      exportBackgroundColor: Colors.white,
+    );
+  }
+
+  @override
   void dispose() {
     _valorVendaController.dispose();
     _numeroFichaController.dispose();
     _reportNotesController.dispose();
+    _buyerNameController.dispose();
+    _buyerCpfController.dispose();
+    _cepController.dispose();
+    _streetController.dispose();
+    _numberController.dispose();
+    _neighborhoodController.dispose();
+    _cityController.dispose();
+    _stateController.dispose();
+    _complementController.dispose();
+    _signatureController.dispose();
     for (final ctrl in _paymentAmountControllers.values) {
       ctrl.dispose();
     }
     super.dispose();
+  }
+
+  bool _validateCpf(String cpf) {
+    final clean = cpf.replaceAll(RegExp(r'\D'), '');
+    if (clean.length != 11) return false;
+    if (RegExp(r'^(\d)\1{10}$').hasMatch(clean)) return false;
+
+    int sum1 = 0;
+    for (int i = 0; i < 9; i++) {
+      sum1 += int.parse(clean[i]) * (10 - i);
+    }
+    int rest1 = (sum1 * 10) % 11;
+    if (rest1 == 10) rest1 = 0;
+    if (rest1 != int.parse(clean[9])) return false;
+
+    int sum2 = 0;
+    for (int i = 0; i < 10; i++) {
+      sum2 += int.parse(clean[i]) * (11 - i);
+    }
+    int rest2 = (sum2 * 10) % 11;
+    if (rest2 == 10) rest2 = 0;
+    if (rest2 != int.parse(clean[10])) return false;
+
+    return true;
+  }
+
+  List<Map<String, dynamic>> _calculateSchedule(
+      int financedCents, int count, String periodicity, DateTime firstDate) {
+    if (count <= 0 || financedCents <= 0) return [];
+    final baseAmount = financedCents ~/ count;
+    final remainder = financedCents % count;
+
+    final List<Map<String, dynamic>> schedule = [];
+    for (int i = 0; i < count; i++) {
+      DateTime due;
+      if (periodicity == 'BIWEEKLY') {
+        due = firstDate.add(Duration(days: i * 14));
+      } else {
+        due = DateTime(firstDate.year, firstDate.month + i, firstDate.day);
+      }
+      final amountCents = (i == count - 1) ? (baseAmount + remainder) : baseAmount;
+      schedule.add({
+        'number': i + 1,
+        'dueDate': due,
+        'amountCents': amountCents,
+        'amount': amountCents / 100.0,
+      });
+    }
+    return schedule;
   }
 
   double _parseMonetary(String text) {
@@ -961,13 +1063,82 @@ class _SaleTabState extends State<_SaleTab> {
       return;
     }
 
-    if (sumCents != totalCents) {
-      final diff = ((sumCents - totalCents) / 100.0);
-      final diffStr = diff > 0 ? 'excede em R\$ ${diff.toStringAsFixed(2)}' : 'falta R\$ ${(-diff).toStringAsFixed(2)}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('A soma das parcelas (R\$ ${(sumCents / 100.0).toStringAsFixed(2)}) não bate com a venda (R\$ ${valor.toStringAsFixed(2)}). Valor $diffStr.'),
-          backgroundColor: Colors.red));
-      return;
+    Map<String, dynamic>? creditPayload;
+    if (_isCrediario) {
+      if (sumCents < 15000) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Toda nova venda com crediário exige entrada de pelo menos R\$ 150,00.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+      if (sumCents >= totalCents) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('A entrada não pode ser igual ou superior ao valor total. Se o pagamento for total, desative o crediário.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+      final buyerName = _buyerNameController.text.trim();
+      if (buyerName.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Informe o nome do titular/responsável financeiro.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+      final buyerCpf = _buyerCpfController.text.trim();
+      if (!_validateCpf(buyerCpf)) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('CPF do titular financeiro inválido ou com dígitos verificadores incorretos.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+      final street = _streetController.text.trim();
+      final number = _numberController.text.trim();
+      final neighborhood = _neighborhoodController.text.trim();
+      final city = _cityController.text.trim();
+      final state = _stateController.text.trim();
+      final cep = _cepController.text.trim();
+      if (street.isEmpty || number.isEmpty || neighborhood.isEmpty || city.isEmpty || state.isEmpty || cep.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Informe o endereço completo (CEP, rua, número, bairro, cidade e UF) para o contrato.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+      if (_signatureController.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('A assinatura digital do comprador no termo de parcelamento é obrigatória.'),
+            backgroundColor: Colors.red));
+        return;
+      }
+
+      final sigBytes = await _signatureController.toPngBytes();
+      final sigBase64 = sigBytes != null ? 'data:image/png;base64,${base64Encode(sigBytes)}' : null;
+
+      creditPayload = {
+        'buyerName': buyerName,
+        'buyerCpf': buyerCpf.replaceAll(RegExp(r'\D'), ''),
+        'buyerPhone': widget.client['phone'] ?? widget.client['phone2'] ?? '',
+        'postalCode': cep,
+        'street': street,
+        'number': number,
+        'neighborhood': neighborhood,
+        'city': city,
+        'state': state,
+        'complement': _complementController.text.trim(),
+        'installmentsCount': _installmentsCount,
+        'periodicity': _periodicity,
+        'firstDueDate': _firstDueDate.toIso8601String(),
+        'signedAgreementUrl': sigBase64,
+        'notes': _reportNotesController.text.trim(),
+      };
+    } else {
+      if (sumCents != totalCents) {
+        final diff = ((sumCents - totalCents) / 100.0);
+        final diffStr = diff > 0 ? 'excede em R\$ ${diff.toStringAsFixed(2)}' : 'falta R\$ ${(-diff).toStringAsFixed(2)}';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('A soma das parcelas (R\$ ${(sumCents / 100.0).toStringAsFixed(2)}) não bate com a venda (R\$ ${valor.toStringAsFixed(2)}). Valor $diffStr.'),
+            backgroundColor: Colors.red));
+        return;
+      }
     }
 
     if (_receiptPhoto == null) {
@@ -989,7 +1160,7 @@ class _SaleTabState extends State<_SaleTab> {
         'value': valor,
         'product': _product,
         'status': 'PRONTO',
-        'paymentStatus': 'PAID',
+        'paymentStatus': _isCrediario ? 'PARTIALLY_PAID' : 'PAID',
         'fichaNumber': _numeroFichaController.text,
         'paymentMethod': paymentsList.length > 1 ? 'SPLIT' : paymentsList.first['method'],
         'payments': paymentsList,
@@ -997,6 +1168,7 @@ class _SaleTabState extends State<_SaleTab> {
         'sellerRating': _sellerRating,
         'photoRating': _photoRating,
         'contactRating': _contactRating,
+        if (creditPayload != null) 'credit': creditPayload,
       };
 
       try {
@@ -1387,7 +1559,13 @@ class _SaleTabState extends State<_SaleTab> {
             ),
             const SizedBox(height: 16),
           ],
+          _buildCrediarioToggle(),
+          const SizedBox(height: 16),
           _buildSplitPaymentSection(),
+          if (_isCrediario) ...[
+            const SizedBox(height: 16),
+            _buildCrediarioDetailsSection(),
+          ],
           const SizedBox(height: 24),
           const Text('Avaliação do Atendimento',
               style: TextStyle(
@@ -1505,6 +1683,52 @@ class _SaleTabState extends State<_SaleTab> {
     }
   }
 
+  Widget _buildCrediarioToggle() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111C2D),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _isCrediario
+              ? const Color(0xFF0EA5E9)
+              : Colors.white.withOpacity(0.1),
+        ),
+      ),
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text(
+          'Venda com Crediário / Parcelado',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+          ),
+        ),
+        subtitle: Text(
+          _isCrediario
+              ? 'Exige entrada mínima de R\$ 150,00 e termo assinado.'
+              : 'Pagamento integral à vista no momento da venda.',
+          style: TextStyle(
+            color: _isCrediario ? const Color(0xFF38BDF8) : Colors.white54,
+            fontSize: 12,
+          ),
+        ),
+        value: _isCrediario,
+        activeColor: const Color(0xFF38BDF8),
+        activeTrackColor: const Color(0xFF0EA5E9).withOpacity(0.5),
+        onChanged: (val) {
+          setState(() {
+            _isCrediario = val;
+            if (_isCrediario && _buyerNameController.text.trim().isEmpty) {
+              _buyerNameController.text = (widget.client['nome'] ?? '').toString().trim();
+            }
+          });
+        },
+      ),
+    );
+  }
+
   Widget _buildSplitPaymentSection() {
     final double valorVenda = _parseMonetary(_valorVendaController.text);
     final totalCents = (valorVenda * 100).round();
@@ -1523,15 +1747,26 @@ class _SaleTabState extends State<_SaleTab> {
     final double diffValor = (diffCents.abs()) / 100.0;
     final bool isExact = totalCents > 0 && diffCents == 0;
 
+    final bool isDownPaymentValid =
+        _isCrediario && sumCents >= 15000 && sumCents < totalCents;
+    final int remainingTo150 = 15000 - sumCents;
+
+    final bool showSuccessBorder = _isCrediario ? isDownPaymentValid : isExact;
+    final bool showAlertBorder = _isCrediario
+        ? (totalCents > 0 && !isDownPaymentValid)
+        : (totalCents > 0 && diffCents != 0);
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.04),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isExact
+          color: showSuccessBorder
               ? const Color(0xFF00E676).withOpacity(0.5)
-              : (totalCents > 0 && diffCents != 0 ? Colors.orange.withOpacity(0.5) : Colors.white12),
+              : (showAlertBorder
+                  ? Colors.orange.withOpacity(0.5)
+                  : Colors.white12),
         ),
       ),
       child: Column(
@@ -1540,10 +1775,12 @@ class _SaleTabState extends State<_SaleTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Formas de Pagamento',
-                  style: TextStyle(
+                  _isCrediario
+                      ? 'Formas de Pagamento da Entrada'
+                      : 'Formas de Pagamento',
+                  style: const TextStyle(
                     color: Color(0xFF90CAF9),
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
@@ -1554,24 +1791,35 @@ class _SaleTabState extends State<_SaleTab> {
               if (totalCents > 0)
                 Flexible(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: isExact
+                      color: showSuccessBorder
                           ? const Color(0xFF00E676).withOpacity(0.15)
                           : Colors.orange.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: isExact ? const Color(0xFF00E676) : Colors.orange,
+                        color: showSuccessBorder
+                            ? const Color(0xFF00E676)
+                            : Colors.orange,
                       ),
                     ),
                     child: Text(
-                      isExact
-                          ? '✓ Soma exata'
-                          : (diffCents > 0
-                              ? 'Excede R\$ ${diffValor.toStringAsFixed(2)}'
-                              : 'Falta R\$ ${diffValor.toStringAsFixed(2)}'),
+                      _isCrediario
+                          ? (isDownPaymentValid
+                              ? '✓ Entrada R\$ ${somaInformada.toStringAsFixed(2)}'
+                              : (sumCents < 15000
+                                  ? 'Falta R\$ ${(remainingTo150 / 100.0).toStringAsFixed(2)} (Mín. R\$ 150)'
+                                  : 'Entrada total (desative crediário)'))
+                          : (isExact
+                              ? '✓ Soma exata'
+                              : (diffCents > 0
+                                  ? 'Excede R\$ ${diffValor.toStringAsFixed(2)}'
+                                  : 'Falta R\$ ${diffValor.toStringAsFixed(2)}')),
                       style: TextStyle(
-                        color: isExact ? const Color(0xFF00E676) : Colors.orange,
+                        color: showSuccessBorder
+                            ? const Color(0xFF00E676)
+                            : Colors.orange,
                         fontWeight: FontWeight.bold,
                         fontSize: 11,
                       ),
@@ -1583,8 +1831,11 @@ class _SaleTabState extends State<_SaleTab> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Selecione uma ou mais formas (ex: Dinheiro + Pix ou Cartão):',
-            style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+            _isCrediario
+                ? 'A entrada (mínimo R\$ 150,00) pode combinar dinheiro, Pix e cartões:'
+                : 'Selecione uma ou mais formas (ex: Dinheiro + Pix ou Cartão):',
+            style: TextStyle(
+                color: Colors.white.withOpacity(0.6), fontSize: 12),
           ),
           const SizedBox(height: 12),
           ..._selectedPaymentMethods.keys.map((methodKey) {
@@ -1595,12 +1846,17 @@ class _SaleTabState extends State<_SaleTab> {
 
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: isSelected ? Colors.white.withOpacity(0.06) : Colors.transparent,
+                color: isSelected
+                    ? Colors.white.withOpacity(0.06)
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: isSelected ? const Color(0xFF4FC3F7).withOpacity(0.4) : Colors.white10,
+                  color: isSelected
+                      ? const Color(0xFF4FC3F7).withOpacity(0.4)
+                      : Colors.white10,
                 ),
               ),
               child: Column(
@@ -1616,24 +1872,37 @@ class _SaleTabState extends State<_SaleTab> {
                             final checked = val ?? false;
                             _selectedPaymentMethods[methodKey] = checked;
                             if (checked && controller.text.trim().isEmpty) {
-                              // Se apenas esta estiver marcada ou se faltar valor, preenche o restante
-                              if (diffCents < 0) {
-                                controller.text = (diffCents.abs() / 100.0).toStringAsFixed(2);
-                              } else if (valorVenda > 0 && somaInformada == 0) {
-                                controller.text = valorVenda.toStringAsFixed(2);
+                              if (_isCrediario) {
+                                if (sumCents == 0) {
+                                  controller.text = '150.00';
+                                }
+                              } else {
+                                if (diffCents < 0) {
+                                  controller.text =
+                                      (diffCents.abs() / 100.0).toStringAsFixed(2);
+                                } else if (valorVenda > 0 &&
+                                    somaInformada == 0) {
+                                  controller.text = valorVenda.toStringAsFixed(2);
+                                }
                               }
                             }
                           });
                         },
                       ),
-                      Icon(icon, color: isSelected ? const Color(0xFF4FC3F7) : Colors.white54, size: 20),
+                      Icon(icon,
+                          color: isSelected
+                              ? const Color(0xFF4FC3F7)
+                              : Colors.white54,
+                          size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           label,
                           style: TextStyle(
                             color: isSelected ? Colors.white : Colors.white70,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                             fontSize: 13,
                           ),
                         ),
@@ -1645,24 +1914,33 @@ class _SaleTabState extends State<_SaleTab> {
                       padding: const EdgeInsets.fromLTRB(40, 0, 10, 8),
                       child: TextField(
                         controller: controller,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14),
                         onChanged: (_) => setState(() {}),
                         decoration: InputDecoration(
                           labelText: 'Valor pago em $label',
-                          labelStyle: const TextStyle(color: Color(0xFF90CAF9), fontSize: 12),
+                          labelStyle: const TextStyle(
+                              color: Color(0xFF90CAF9), fontSize: 12),
                           prefixText: 'R\$ ',
-                          prefixStyle: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold),
+                          prefixStyle: const TextStyle(
+                              color: Color(0xFF00E676),
+                              fontWeight: FontWeight.bold),
                           filled: true,
                           fillColor: Colors.white.withOpacity(0.05),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                            borderSide: const BorderSide(color: Colors.white24),
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5),
+                            borderSide: const BorderSide(
+                                color: Color(0xFF4FC3F7), width: 1.5),
                           ),
                         ),
                       ),
@@ -1678,8 +1956,9 @@ class _SaleTabState extends State<_SaleTab> {
             children: [
               Expanded(
                 child: Text(
-                  'Total Informado:',
-                  style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 13),
+                  _isCrediario ? 'Entrada Informada:' : 'Total Informado:',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.7), fontSize: 13),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -1687,30 +1966,492 @@ class _SaleTabState extends State<_SaleTab> {
               Text(
                 'R\$ ${somaInformada.toStringAsFixed(2)}',
                 style: TextStyle(
-                  color: isExact ? const Color(0xFF00E676) : Colors.white,
+                  color: showSuccessBorder
+                      ? const Color(0xFF00E676)
+                      : Colors.white,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
               ),
             ],
           ),
+          if (_isCrediario) ...[
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Saldo a Financiar:',
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.7), fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'R\$ ${((totalCents > sumCents ? totalCents - sumCents : 0) / 100.0).toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: Color(0xFF38BDF8),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 4),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Text(
-                  'Valor da Venda:',
-                  style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 13),
+                  'Valor Total da Venda:',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.7), fontSize: 13),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
               Text(
                 'R\$ ${valorVenda.toStringAsFixed(2)}',
-                style: const TextStyle(color: Color(0xFF90CAF9), fontWeight: FontWeight.bold, fontSize: 14),
+                style: const TextStyle(
+                    color: Color(0xFF90CAF9),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCrediarioDetailsSection() {
+    final double valorVenda = _parseMonetary(_valorVendaController.text);
+    final totalCents = (valorVenda * 100).round();
+    int sumCents = 0;
+    for (final entry in _selectedPaymentMethods.entries) {
+      if (entry.value) {
+        final ctrl = _paymentAmountControllers[entry.key]!;
+        sumCents += (_parseMonetary(ctrl.text) * 100).round();
+      }
+    }
+    final financedCents = (totalCents > sumCents) ? (totalCents - sumCents) : 0;
+    final schedule = _calculateSchedule(
+        financedCents, _installmentsCount, _periodicity, _firstDueDate);
+    final bool isCpfValid = _validateCpf(_buyerCpfController.text);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111C2D),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF0EA5E9).withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.handshake_rounded, color: Color(0xFF38BDF8), size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Condições do Crediário & Blindagem Jurídica',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Entrada Recebida',
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    Text('R\$ ${(sumCents / 100.0).toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            color: Color(0xFF00E676),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13)),
+                  ],
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text('Saldo Financiado',
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    Text('R\$ ${(financedCents / 100.0).toStringAsFixed(2)}',
+                        style: const TextStyle(
+                            color: Color(0xFF38BDF8),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                flex: 5,
+                child: DropdownButtonFormField<int>(
+                  value: _installmentsCount,
+                  dropdownColor: const Color(0xFF111C2D),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration:
+                      _fieldDecoration('Parcelas', Icons.calendar_view_day),
+                  items: List.generate(24, (i) => i + 1)
+                      .map((n) => DropdownMenuItem(
+                          value: n, child: Text('$n parcelas')))
+                      .toList(),
+                  onChanged: (val) {
+                    if (val != null) setState(() => _installmentsCount = val);
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 5,
+                child: DropdownButtonFormField<String>(
+                  value: _periodicity,
+                  dropdownColor: const Color(0xFF111C2D),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _fieldDecoration('Periodicidade', Icons.repeat),
+                  items: const [
+                    DropdownMenuItem(value: 'MONTHLY', child: Text('Mensal')),
+                    DropdownMenuItem(
+                        value: 'BIWEEKLY', child: Text('Quinzenal')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() {
+                        _periodicity = val;
+                        _firstDueDate = DateTime.now().add(Duration(
+                            days: _periodicity == 'BIWEEKLY' ? 15 : 30));
+                      });
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          InkWell(
+            onTap: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _firstDueDate,
+                firstDate: DateTime.now(),
+                lastDate: DateTime.now().add(const Duration(days: 365)),
+              );
+              if (picked != null) {
+                setState(() => _firstDueDate = picked);
+              }
+            },
+            child: InputDecorator(
+              decoration: _fieldDecoration(
+                  'Primeiro Vencimento', Icons.calendar_today_rounded),
+              child: Text(
+                '${_firstDueDate.day.toString().padLeft(2, '0')}/${_firstDueDate.month.toString().padLeft(2, '0')}/${_firstDueDate.year}',
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Cronograma Prévio de Vencimentos:',
+            style: TextStyle(
+                color: Color(0xFF90CAF9),
+                fontWeight: FontWeight.bold,
+                fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: schedule.isEmpty
+                ? const Text(
+                    'Informe o valor da venda e a entrada para calcular as parcelas.',
+                    style: TextStyle(color: Colors.white54, fontSize: 11))
+                : Column(
+                    children: schedule.map((item) {
+                      final due = item['dueDate'] as DateTime;
+                      final dStr =
+                          '${due.day.toString().padLeft(2, '0')}/${due.month.toString().padLeft(2, '0')}/${due.year}';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                                'Parcela ${item['number']}/$_installmentsCount',
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
+                            Text('Vence em $dStr',
+                                style: TextStyle(
+                                    color: Colors.white.withOpacity(0.5),
+                                    fontSize: 11)),
+                            Text(
+                                'R\$ ${(item['amount'] as double).toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                    color: Color(0xFF38BDF8),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12)),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Dados do Comprador / Titular Financeiro:',
+            style: TextStyle(
+                color: Color(0xFF90CAF9),
+                fontWeight: FontWeight.bold,
+                fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _buyerNameController,
+            style: const TextStyle(color: Colors.white),
+            decoration: _fieldDecoration(
+                'Nome Completo do Titular *', Icons.person_rounded),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _buyerCpfController,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: Colors.white),
+            onChanged: (val) {
+              setState(() {});
+            },
+            decoration: InputDecoration(
+              labelText: 'CPF do Titular *',
+              labelStyle: const TextStyle(color: Color(0xFF90CAF9)),
+              prefixIcon: const Icon(Icons.badge_rounded,
+                  color: Color(0xFF4FC3F7), size: 18),
+              suffixIcon: _buyerCpfController.text.trim().isNotEmpty
+                  ? (isCpfValid
+                      ? const Icon(Icons.check_circle_rounded,
+                          color: Color(0xFF00E676), size: 20)
+                      : const Icon(Icons.cancel_rounded,
+                          color: Colors.redAccent, size: 20))
+                  : null,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: _buyerCpfController.text.trim().isNotEmpty
+                      ? (isCpfValid
+                          ? const Color(0xFF00E676)
+                          : Colors.redAccent)
+                      : Colors.white.withOpacity(0.15),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    const BorderSide(color: Color(0xFF4FC3F7), width: 1.5),
+              ),
+              filled: true,
+              fillColor: Colors.white.withOpacity(0.05),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: TextField(
+                  controller: _cepController,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _fieldDecoration(
+                      'CEP *', Icons.local_post_office_outlined),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 6,
+                child: TextField(
+                  controller: _streetController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration:
+                      _fieldDecoration('Rua / Logradouro *', Icons.home_rounded),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _numberController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration:
+                      _fieldDecoration('Nº *', Icons.pin_drop_outlined),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 7,
+                child: TextField(
+                  controller: _neighborhoodController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _fieldDecoration(
+                      'Bairro *', Icons.location_city_rounded),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                flex: 6,
+                child: TextField(
+                  controller: _cityController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration:
+                      _fieldDecoration('Cidade *', Icons.location_on_outlined),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 4,
+                child: TextField(
+                  controller: _stateController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _fieldDecoration('UF *', Icons.map_outlined),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _complementController,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: _fieldDecoration(
+                'Complemento (opcional)', Icons.apartment_rounded),
+          ),
+          const SizedBox(height: 20),
+          _buildConfissaoDividaCard(totalCents, sumCents, financedCents),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Assinatura Digital do Comprador *',
+                style: TextStyle(
+                    color: Color(0xFF90CAF9),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12),
+              ),
+              TextButton.icon(
+                icon: const Icon(Icons.clear_rounded,
+                    size: 14, color: Colors.orangeAccent),
+                label: const Text('Limpar',
+                    style: TextStyle(
+                        color: Colors.orangeAccent, fontSize: 12)),
+                onPressed: () => _signatureController.clear(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF38BDF8), width: 1.5),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Signature(
+                controller: _signatureController,
+                height: 130,
+                backgroundColor: Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Center(
+            child: Text(
+              'O titular deve assinar dentro do quadro branco acima para validação.',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfissaoDividaCard(
+      int totalCents, int downPaymentCents, int financedCents) {
+    final buyerName = _buyerNameController.text.trim().isEmpty
+        ? '[NOME DO TITULAR]'
+        : _buyerNameController.text.trim();
+    final buyerCpf = _buyerCpfController.text.trim().isEmpty
+        ? '[CPF]'
+        : _buyerCpfController.text.trim();
+    final street = _streetController.text.trim();
+    final number = _numberController.text.trim();
+    final city = _cityController.text.trim();
+    final address = (street.isNotEmpty && number.isNotEmpty)
+        ? '$street, $number - $city'
+        : '[ENDEREÇO COMPLETO]';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.gavel_rounded, color: Color(0xFF38BDF8), size: 16),
+              SizedBox(width: 6),
+              Text(
+                'TERMO DE PARCELAMENTO E CONFISSÃO DE DÍVIDA',
+                style: TextStyle(
+                    color: Color(0xFF38BDF8),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Pelo presente instrumento particular, o(a) DEVEDOR(A) $buyerName, portador(a) do CPF nº $buyerCpf, residente em $address, confessa e reconhece dever à CREDORA (Select Photos / Central Fotográfica) a quantia líquida e certa de R\$ ${(financedCents / 100.0).toStringAsFixed(2)}, decorrente do fornecimento de material fotográfico com valor total de R\$ ${(totalCents / 100.0).toStringAsFixed(2)}, abatida a entrada paga de R\$ ${(downPaymentCents / 100.0).toStringAsFixed(2)}.\n\nO saldo financiado será pago em $_installmentsCount parcelas com periodicidade ${_periodicity == "BIWEEKLY" ? "quinzenal" : "mensal"}, com primeiro vencimento em ${_firstDueDate.day.toString().padLeft(2, '0')}/${_firstDueDate.month.toString().padLeft(2, '0')}/${_firstDueDate.year}, assumindo o devedor integral responsabilidade pelo adimplemento pontual das obrigações.',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              height: 1.45,
+            ),
           ),
         ],
       ),
