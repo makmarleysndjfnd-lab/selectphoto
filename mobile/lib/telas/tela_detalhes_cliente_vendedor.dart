@@ -245,8 +245,14 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
   }
 
   Widget _buildClientInfo(Map<String, dynamic> client) {
-    Color? parseColor(String? colorStr) {
-      if (colorStr == null || colorStr.isEmpty) return null;
+    Color? parseColor(dynamic colorValue) {
+      if (colorValue == null) return null;
+      String colorStr = colorValue.toString().trim();
+      if (colorStr.isEmpty || colorStr == 'NO_GATE') return null;
+      if (colorStr.contains(';')) {
+        colorStr = colorStr.split(';')[0].trim();
+      }
+      if (colorStr.isEmpty) return null;
       if (colorStr.startsWith('Color(')) {
         final val = colorStr.split('(0x')[1].split(')')[0];
         return Color(int.parse(val, radix: 16));
@@ -258,6 +264,20 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
 
     Color? parsedHouseColor = parseColor(client['houseColor']);
     Color? parsedGateColor = parseColor(client['gateColor']);
+
+    String? houseFinish = client['houseFinish']?.toString();
+    if (houseFinish == null || houseFinish.isEmpty) {
+      final rawHouseColor = client['houseColor']?.toString() ?? '';
+      if (rawHouseColor.contains('NO_REBOCO')) {
+        houseFinish = 'NO_REBOCO';
+      } else if (rawHouseColor.contains('SEM_REBOCO')) {
+        houseFinish = 'SEM_REBOCO';
+      }
+    }
+
+    final bool hasNoGate = client['hasNoGate'] == true ||
+        client['hasGate'] == false ||
+        client['gateColor']?.toString() == 'NO_GATE';
 
     return Container(
       padding: EdgeInsets.symmetric(
@@ -369,8 +389,27 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                       child: Container(
                         color: Colors.transparent,
                         padding: const EdgeInsets.only(bottom: 2),
-                        child: _infoRow(Icons.location_on_rounded,
-                            "${client['street'] ?? ''}, ${client['number'] ?? ''} — ${client['city'] ?? ''}"),
+                        child: Builder(builder: (context) {
+                          final condoParts = [
+                            if (client['condo'] != null &&
+                                client['condo'].toString().isNotEmpty)
+                              client['condo'].toString(),
+                            if (client['block'] != null &&
+                                client['block'].toString().isNotEmpty)
+                              'Bl ${client['block']}',
+                            if (client['apartment'] != null &&
+                                client['apartment'].toString().isNotEmpty)
+                              'Ap ${client['apartment']}',
+                            if (client['complement'] != null &&
+                                client['complement'].toString().isNotEmpty)
+                              client['complement'].toString(),
+                          ];
+                          final condoStr = condoParts.isNotEmpty
+                              ? ' (${condoParts.join(', ')})'
+                              : '';
+                          return _infoRow(Icons.location_on_rounded,
+                              "${client['street'] ?? ''}, ${client['number'] ?? ''}$condoStr — ${client['city'] ?? ''}");
+                        }),
                       ),
                     ),
                     // Ponto de Referência (quando existir)
@@ -439,6 +478,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (parsedHouseColor != null ||
+                            houseFinish != null ||
+                            hasNoGate ||
                             parsedGateColor != null ||
                             client['visitTime'] != null ||
                             client['profession'] != null ||
@@ -448,6 +489,8 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                           const SizedBox(height: 6),
                           const Divider(color: Colors.white12),
                           if (parsedHouseColor != null ||
+                              houseFinish != null ||
+                              hasNoGate ||
                               parsedGateColor != null) ...[
                             const SizedBox(height: 6),
                             Wrap(
@@ -455,28 +498,85 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                               runSpacing: 6,
                               crossAxisAlignment: WrapCrossAlignment.start,
                               children: [
-                                if (parsedHouseColor != null)
+                                if (parsedHouseColor != null || houseFinish != null)
                                   Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
                                     children: [
-                                      const Text('Cor da Casa',
+                                      const Text('Casa',
+                                          style: TextStyle(
+                                              color: Colors.white54,
+                                              fontSize: 10)),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (parsedHouseColor != null)
+                                            Container(
+                                              width: 22,
+                                              height: 22,
+                                              margin: const EdgeInsets.only(right: 6),
+                                              decoration: BoxDecoration(
+                                                color: parsedHouseColor,
+                                                shape: BoxShape.circle,
+                                                border:
+                                                    Border.all(color: Colors.white30),
+                                              ),
+                                            ),
+                                          if (houseFinish != null)
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                  horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFFCE93D8).withOpacity(0.2),
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(
+                                                    color: const Color(0xFFCE93D8).withOpacity(0.5)),
+                                              ),
+                                              child: Text(
+                                                houseFinish == 'NO_REBOCO'
+                                                    ? 'No reboco'
+                                                    : 'Sem reboco',
+                                                style: const TextStyle(
+                                                    color: Color(0xFFCE93D8),
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                        ],
+                                      )
+                                    ],
+                                  ),
+                                if (hasNoGate)
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      const Text('Portão',
                                           style: TextStyle(
                                               color: Colors.white54,
                                               fontSize: 10)),
                                       const SizedBox(height: 4),
                                       Container(
-                                        width: 22,
-                                        height: 22,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 3),
                                         decoration: BoxDecoration(
-                                          color: parsedHouseColor,
-                                          shape: BoxShape.circle,
-                                          border:
-                                              Border.all(color: Colors.white30),
+                                          color: Colors.orange.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(
+                                              color: Colors.orange.withOpacity(0.4)),
                                         ),
-                                      )
+                                        child: const Text(
+                                          'Sem portão',
+                                          style: TextStyle(
+                                              color: Colors.orangeAccent,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
                                     ],
-                                  ),
-                                if (parsedGateColor != null)
+                                  )
+                                else if (parsedGateColor != null)
                                   Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
                                     children: [
                                       const Text('Cor do Portão',
                                           style: TextStyle(

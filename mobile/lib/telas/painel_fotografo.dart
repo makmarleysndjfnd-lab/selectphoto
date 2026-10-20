@@ -44,6 +44,23 @@ const Set<String> _validBrazilianUfs = {
 
 typedef PhoneInputFormatter = BrazilianPhoneFormatter;
 
+class _ChildFormItem {
+  final TextEditingController nameController;
+  final TextEditingController ageController;
+  final FocusNode nameFocusNode;
+
+  _ChildFormItem({String name = '', String age = ''})
+      : nameController = TextEditingController(text: name),
+        ageController = TextEditingController(text: age),
+        nameFocusNode = FocusNode();
+
+  void dispose() {
+    nameController.dispose();
+    ageController.dispose();
+    nameFocusNode.dispose();
+  }
+}
+
 class PhotographerDashboard extends StatefulWidget {
   const PhotographerDashboard({super.key});
 
@@ -69,6 +86,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   final _cepController = TextEditingController();
   final _streetController = TextEditingController();
   final _numberController = TextEditingController();
+  final _complementController = TextEditingController();
   final _condoController = TextEditingController();
   final _blockController = TextEditingController();
   final _aptController = TextEditingController();
@@ -80,13 +98,19 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   final _referenceController = TextEditingController();
   final _professionController = TextEditingController();
 
+  bool _noNumber = false;
+  String? _propertyType; // 'CASA', 'APARTAMENTO', 'OUTRO'
+  bool _showAdditionalAddressFields = false;
+
   Color? _selectedHouseColor;
+  String? _houseFinish; // 'NO_REBOCO', 'SEM_REBOCO'
   Color? _selectedGateColor;
+  bool _hasNoGate = false;
   final _gateObservationController = TextEditingController();
   TimeOfDay? _visitTime;
 
-  // Children
-  final List<Map<String, String>> _children = [];
+  // Children Inline
+  final List<_ChildFormItem> _childFormItems = [];
   final _clothesColorController = TextEditingController();
 
   final SignatureController _signatureController = SignatureController(
@@ -118,6 +142,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _animController.forward();
 
+    if (_childFormItems.isEmpty) {
+      _childFormItems.add(_createChildItem());
+    }
+
     _loadProfessions();
     _restoreFormDraft();
 
@@ -129,6 +157,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       _cepController,
       _streetController,
       _numberController,
+      _complementController,
       _condoController,
       _blockController,
       _aptController,
@@ -296,13 +325,83 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     }
   }
 
+  _ChildFormItem _createChildItem({String name = '', String age = ''}) {
+    final item = _ChildFormItem(name: name, age: age);
+    item.nameController.addListener(_saveFormDraft);
+    item.ageController.addListener(_saveFormDraft);
+    return item;
+  }
+
+  void _addNewChildItem() {
+    final newItem = _createChildItem();
+    setState(() {
+      _childFormItems.add(newItem);
+    });
+    _saveFormDraft();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      newItem.nameFocusNode.requestFocus();
+      if (_formScrollController.hasClients) {
+        _formScrollController.animateTo(
+          _formScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _confirmRemoveChild(int index) async {
+    if (index >= _childFormItems.length) return;
+    final item = _childFormItems[index];
+    final hasContent = item.nameController.text.trim().isNotEmpty ||
+        item.ageController.text.trim().isNotEmpty;
+
+    if (hasContent) {
+      final nameToShow = item.nameController.text.trim().isNotEmpty
+          ? item.nameController.text.trim()
+          : 'Criança ${index + 1}';
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text('Remover criança?',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          content: Text('Deseja realmente remover os dados de "$nameToShow"?',
+              style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              child: const Text('Remover', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+    }
+
+    setState(() {
+      final removed = _childFormItems.removeAt(index);
+      removed.dispose();
+      if (_childFormItems.isEmpty) {
+        _childFormItems.add(_createChildItem());
+      }
+    });
+    _saveFormDraft();
+  }
+
   Future<void> _saveFormDraft() async {
     if (_isResetting) return;
     if (_generatedQrCodeData != null) return;
     final hasAnyData = _nameController.text.trim().isNotEmpty ||
         _phoneController.text.trim().isNotEmpty ||
         _phone2Controller.text.trim().isNotEmpty ||
-        _streetController.text.trim().isNotEmpty;
+        _streetController.text.trim().isNotEmpty ||
+        _childFormItems.any((c) => c.nameController.text.trim().isNotEmpty);
     if (!hasAnyData) {
       await _clearFormDraft();
       return;
@@ -321,6 +420,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         'cep': _cepController.text,
         'street': _streetController.text,
         'number': _numberController.text,
+        'noNumber': _noNumber,
+        'propertyType': _propertyType,
+        'showAdditionalAddressFields': _showAdditionalAddressFields,
+        'complement': _complementController.text,
         'condo': _condoController.text,
         'block': _blockController.text,
         'apt': _aptController.text,
@@ -328,11 +431,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         'city': _cityController.text,
         'state': _stateController.text,
         'reference': _referenceController.text,
+        'houseColor': _selectedHouseColor?.value,
+        'houseFinish': _houseFinish,
+        'hasNoGate': _hasNoGate,
+        'gateColor': _selectedGateColor?.value,
         'gateObs': _gateObservationController.text,
         'clothesColor': _clothesColorController.text,
-        'children': _children,
-        'houseColor': _selectedHouseColor?.value,
-        'gateColor': _selectedGateColor?.value,
+        'children': _childFormItems
+            .map((c) => {
+                  'name': c.nameController.text,
+                  'age': c.ageController.text,
+                })
+            .toList(),
         'visitTimeHour': _visitTime?.hour,
         'visitTimeMinute': _visitTime?.minute,
       };
@@ -357,6 +467,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
           _cepController.text = draft['cep'] ?? '';
           _streetController.text = draft['street'] ?? '';
           _numberController.text = draft['number'] ?? '';
+          _noNumber = draft['noNumber'] == true;
+          _propertyType = draft['propertyType']?.toString();
+          _complementController.text = draft['complement'] ?? '';
           _condoController.text = draft['condo'] ?? '';
           _blockController.text = draft['block'] ?? '';
           _aptController.text = draft['apt'] ?? '';
@@ -367,16 +480,33 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
           _gateObservationController.text = draft['gateObs'] ?? '';
           _clothesColorController.text = draft['clothesColor'] ?? '';
 
+          final hasAdditionalData = _complementController.text.isNotEmpty ||
+              _condoController.text.isNotEmpty ||
+              _blockController.text.isNotEmpty ||
+              _aptController.text.isNotEmpty;
+          _showAdditionalAddressFields = draft['showAdditionalAddressFields'] == true ||
+              _propertyType == 'APARTAMENTO' ||
+              hasAdditionalData;
+
+          _houseFinish = draft['houseFinish']?.toString();
+          _hasNoGate = draft['hasNoGate'] == true;
+
           if (draft['children'] != null && draft['children'] is List) {
-            _children.clear();
+            for (final item in _childFormItems) {
+              item.dispose();
+            }
+            _childFormItems.clear();
             for (final c in draft['children']) {
               if (c is Map) {
-                _children.add({
-                  'name': c['name']?.toString() ?? '',
-                  'age': c['age']?.toString() ?? '',
-                });
+                _childFormItems.add(_createChildItem(
+                  name: c['name']?.toString() ?? '',
+                  age: c['age']?.toString() ?? '',
+                ));
               }
             }
+          }
+          if (_childFormItems.isEmpty) {
+            _childFormItems.add(_createChildItem());
           }
 
           if (draft['houseColor'] != null) {
@@ -426,6 +556,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     _cepController.dispose();
     _streetController.dispose();
     _numberController.dispose();
+    _complementController.dispose();
     _condoController.dispose();
     _blockController.dispose();
     _aptController.dispose();
@@ -439,6 +570,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     _clothesColorController.dispose();
     _gateObservationController.dispose();
     _signatureController.dispose();
+
+    for (final item in _childFormItems) {
+      item.dispose();
+    }
+
     super.dispose();
   }
 
@@ -608,10 +744,11 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   Future<void> _onCepChanged(String value) async {
     final cleanCep = value.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleanCep.length == 8) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Buscando CEP...'),
             duration: Duration(milliseconds: 1000)));
+      }
       try {
         final response = await http
             .get(Uri.parse('https://viacep.com.br/ws/$cleanCep/json/'));
@@ -622,107 +759,43 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               _streetController.text = data['logradouro'] ?? '';
               _neighborhoodController.text = data['bairro'] ?? '';
               _cityController.text = data['localidade'] ?? '';
-              _stateController.text = data['uf'] ?? '';
+              _stateController.text =
+                  (data['uf'] ?? '').toString().toUpperCase();
+              final comp = data['complemento']?.toString() ?? '';
+              if (comp.isNotEmpty &&
+                  _complementController.text.trim().isEmpty) {
+                _complementController.text = comp;
+              }
             });
-            if (mounted)
+            if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Endereço preenchido!'),
+                  content: Text('Endereço preenchido com sucesso!'),
                   backgroundColor: Colors.green,
                   duration: Duration(milliseconds: 1500)));
+            }
+          } else {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text(
+                      'CEP não encontrado. Preencha o endereço manualmente.'),
+                  backgroundColor: Colors.orange,
+                  duration: Duration(seconds: 3)));
+            }
           }
         }
       } catch (e) {
-        // Ignorar erros de rede
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Não foi possível consultar o CEP online. Você pode preencher manualmente.'),
+              backgroundColor: Colors.blueGrey,
+              duration: Duration(seconds: 2)));
+        }
       }
     }
   }
 
   // ── Form Actions ────────────────────────────────────────────────────────────
-  void _addChild() {
-    final nameCtrl = TextEditingController();
-    final ageCtrl = TextEditingController();
-
-    showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            backgroundColor: const Color(0xFF1A1A2E),
-            title: const Text('Adicionar Criança',
-                style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold)),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Nome da Criança',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF1A2535),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide.none),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: ageCtrl,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Idade (Somente Números)',
-                    labelStyle: const TextStyle(color: Colors.white54),
-                    filled: true,
-                    fillColor: const Color(0xFF1A2535),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide.none),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar',
-                      style: TextStyle(color: Colors.white54))),
-              LedButton(
-                onPressed: () {
-                  final name = nameCtrl.text.trim();
-                  final age = ageCtrl.text.trim();
-                  if (name.isEmpty || age.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                            'É obrigatório preencher NOME e IDADE da criança!'),
-                        backgroundColor: Colors.redAccent,
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                    return;
-                  }
-                  setState(() {
-                    _children.add({'name': name, 'age': age});
-                  });
-                  Navigator.pop(context);
-                },
-                style: LedButton.styleFrom(
-                    backgroundColor: const Color(0xFFCE93D8)),
-                child: const Text('Adicionar',
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          );
-        });
-  }
-
   Future<void> _pickTime() async {
     final TimeOfDay? picked = await showTimePicker(
       context: context,
@@ -757,17 +830,25 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
-    if (_selectedHouseColor == null) {
+    if (!_noNumber && _numberController.text.trim().isEmpty) {
       _scrollToTop();
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('A cor da casa é obrigatória.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Informe o número do imóvel ou marque "Sem número".')));
       return;
     }
 
-    if (_selectedGateColor == null) {
+    if (_selectedHouseColor == null && _houseFinish == null) {
       _scrollToTop();
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('A cor do portão é obrigatória.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('A cor da casa ou acabamento é obrigatório.')));
+      return;
+    }
+
+    if (!_hasNoGate && _selectedGateColor == null) {
+      _scrollToTop();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('A cor do portão é obrigatória (ou marque "Sem portão").')));
       return;
     }
 
@@ -777,7 +858,15 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
-    if (_children.isEmpty) {
+    final validChildren = _childFormItems
+        .where((c) => c.nameController.text.trim().isNotEmpty)
+        .map((c) => {
+              'name': c.nameController.text.trim(),
+              'age': c.ageController.text.trim(),
+            })
+        .toList();
+
+    if (validChildren.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('É obrigatório adicionar pelo menos uma criança.')));
       return;
@@ -856,34 +945,53 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       _cityController.text = _sanitizeCityName(_cityController.text);
       _stateController.text = _stateController.text.trim().toUpperCase();
 
+      final finalNumber = (_noNumber && _numberController.text.trim().isEmpty)
+          ? 'S/N'
+          : _numberController.text.trim();
+
+      final houseColorValue = _selectedHouseColor != null
+          ? (_houseFinish != null
+              ? '${_selectedHouseColor!.value};$_houseFinish'
+              : _selectedHouseColor!.value.toString())
+          : (_houseFinish != null ? ';$_houseFinish' : null);
+
+      final gateColorValue =
+          _hasNoGate ? 'NO_GATE' : _selectedGateColor?.value.toString();
+
       final payload = {
         'localId': localId,
         'uuid': fichaUuid,
         'sequenceNumber': sequenceNumber,
         'createdAt': DateTime.now().toIso8601String(),
         'event': _currentEventName,
-        'name': _nameController.text,
-        'phone1': _phoneController.text,
-        'phone2': _phone2Controller.text,
-        'cep': _cepController.text,
-        'street': _streetController.text,
-        'number': _numberController.text,
-        'condo': _condoController.text,
-        'block': _blockController.text,
-        'apartment': _aptController.text,
-        'neighborhood': _neighborhoodController.text,
-        'city': _cityController.text,
-        'state': _stateController.text,
-        'referencePoint': _referenceController.text,
-        'houseColor': _selectedHouseColor?.value.toString(),
-        'gateColor': _selectedGateColor?.value.toString(),
-        'gateObservation': _gateObservationController.text,
-        'profession': _professionController.text,
+        'name': _nameController.text.trim(),
+        'phone1': _phoneController.text.trim(),
+        'phone2': _phone2Controller.text.trim(),
+        'cep': _cepController.text.trim(),
+        'street': _streetController.text.trim(),
+        'number': finalNumber,
+        'propertyType': _propertyType,
+        'complement': _complementController.text.trim(),
+        'condo': _condoController.text.trim(),
+        'block': _blockController.text.trim(),
+        'apartment': _aptController.text.trim(),
+        'neighborhood': _neighborhoodController.text.trim(),
+        'city': _cityController.text.trim(),
+        'state': _stateController.text.trim().toUpperCase(),
+        'referencePoint': _referenceController.text.trim(),
+        'houseColor': houseColorValue,
+        'houseFinish': _houseFinish,
+        'hasNoGate': _hasNoGate,
+        'hasGate': !_hasNoGate,
+        'gateColor': gateColorValue,
+        'gateObservation':
+            _hasNoGate ? '' : _gateObservationController.text.trim(),
+        'profession': _professionController.text.trim(),
         'visitTime': _visitTime != null
             ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}'
             : null,
-        'clothesColor': _clothesColorController.text,
-        'children': _children,
+        'clothesColor': _clothesColorController.text.trim(),
+        'children': validChildren,
         'signatureBase64': base64Signature,
       };
 
@@ -898,9 +1006,13 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         final details = syncResult['details'];
         String? confirmedCode;
         if (details is List && details.isNotEmpty && details[0] is Map) {
-          confirmedCode = details[0]['visibleCode']?.toString() ?? details[0]['sequenceNumber']?.toString();
+          confirmedCode = details[0]['visibleCode']?.toString() ??
+              details[0]['sequenceNumber']?.toString();
         }
-        _confirmedVisibleCode = (confirmedCode != null && confirmedCode.isNotEmpty) ? confirmedCode : sequenceNumber;
+        _confirmedVisibleCode =
+            (confirmedCode != null && confirmedCode.isNotEmpty)
+                ? confirmedCode
+                : sequenceNumber;
         _isFichaSynced = true;
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -975,6 +1087,10 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       _cepController.clear();
       _streetController.clear();
       _numberController.clear();
+      _noNumber = false;
+      _propertyType = null;
+      _showAdditionalAddressFields = false;
+      _complementController.clear();
       _condoController.clear();
       _blockController.clear();
       _aptController.clear();
@@ -987,9 +1103,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       _professionController.clear();
       _clothesColorController.clear();
       _gateObservationController.clear();
-      _children.clear();
+
+      for (final item in _childFormItems) {
+        item.dispose();
+      }
+      _childFormItems.clear();
+      _childFormItems.add(_createChildItem());
+
       _selectedHouseColor = null;
+      _houseFinish = null;
       _selectedGateColor = null;
+      _hasNoGate = false;
       _visitTime = null;
       _signatureController.clear();
 
@@ -1034,20 +1158,57 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     bluetooth.printCustom("Endereco", 1, 0);
     bluetooth.printCustom(
         "${_streetController.text}, ${_numberController.text}", 0, 0);
+    if (_condoController.text.isNotEmpty ||
+        _blockController.text.isNotEmpty ||
+        _aptController.text.isNotEmpty ||
+        _complementController.text.isNotEmpty) {
+      final compStr = [
+        if (_condoController.text.isNotEmpty) 'Cond: ${_condoController.text}',
+        if (_blockController.text.isNotEmpty) 'Bl: ${_blockController.text}',
+        if (_aptController.text.isNotEmpty) 'Apto: ${_aptController.text}',
+        if (_complementController.text.isNotEmpty)
+          'Compl: ${_complementController.text}',
+      ].join(' | ');
+      bluetooth.printCustom(compStr, 0, 0);
+    }
     bluetooth.printCustom("Bairro: ${_neighborhoodController.text}", 0, 0);
     bluetooth.printCustom("Cep: ${_cepController.text}", 0, 0);
     bluetooth.printCustom("Ref: ${_referenceController.text}", 0, 0);
     bluetooth.printNewLine();
-    bluetooth.printCustom("Cor da Casa: ${_selectedHouseColor?.value}", 0, 0);
-    bluetooth.printCustom("Cor do Portao: ${_selectedGateColor?.value}", 0, 0);
+    if (_selectedHouseColor != null) {
+      bluetooth.printCustom("Cor da Casa: ${_selectedHouseColor?.value}", 0, 0);
+    }
+    if (_houseFinish != null) {
+      bluetooth.printCustom(
+          "Acabamento Casa: ${_houseFinish == 'NO_REBOCO' ? 'No reboco' : 'Sem reboco'}",
+          0,
+          0);
+    }
+    if (_hasNoGate) {
+      bluetooth.printCustom("Portao: Sem portao", 0, 0);
+    } else {
+      bluetooth.printCustom(
+          "Cor do Portao: ${_selectedGateColor?.value}", 0, 0);
+      if (_gateObservationController.text.isNotEmpty) {
+        bluetooth.printCustom(
+            "Obs Portao: ${_gateObservationController.text}", 0, 0);
+      }
+    }
     bluetooth.printCustom(
         "Horario Visita: ${_visitTime != null ? '${_visitTime!.hour.toString().padLeft(2, '0')}:${_visitTime!.minute.toString().padLeft(2, '0')}' : ''}",
         0,
         0);
     bluetooth.printNewLine();
     bluetooth.printCustom("Criancas:", 1, 0);
-    for (var child in _children) {
-      bluetooth.printCustom("- ${child['name']} (${child['age']} anos)", 0, 0);
+    final validChildren = _childFormItems
+        .where((c) => c.nameController.text.trim().isNotEmpty)
+        .toList();
+    for (var child in validChildren) {
+      final name = child.nameController.text.trim();
+      final age = child.ageController.text.trim();
+      final ageStr =
+          age.isNotEmpty ? (age == '1' ? ' — 1 ano' : ' — $age anos') : '';
+      bluetooth.printCustom("- $name$ageStr", 0, 0);
     }
     bluetooth.printCustom("Roupa: ${_clothesColorController.text}", 0, 0);
     bluetooth.printNewLine();
@@ -1469,23 +1630,31 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.event_note,
-                              color: Colors.white70, size: 16),
-                          const SizedBox(width: 8),
-                          Text(
-                            _currentCityLote == null
-                                ? 'Lote Não Configurado'
-                                : 'Lote: $_currentCityLote | Evento: $_currentEventName',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                      Expanded(
+                        child: Row(
+                          children: [
+                            const Icon(Icons.event_note,
+                                color: Colors.white70, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _currentCityLote == null
+                                    ? 'Lote Não Configurado'
+                                    : 'Lote: $_currentCityLote | Evento: $_currentEventName',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
                       Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           if (_currentCityLote != null)
                             IconButton(
@@ -1681,81 +1850,287 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
             // ── Endereço
             _buildSectionTitle('Endereço do cliente'),
-            _buildTextField(_cepController, 'CEP', Icons.map,
-                keyboardType: TextInputType.number, onChanged: _onCepChanged),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                    flex: 3,
-                    child: _buildTextField(
-                        _streetController, 'Rua/Av', Icons.location_on)),
-                const SizedBox(width: 8),
-                Expanded(
-                    flex: 1,
-                    child: _buildTextField(
-                        _numberController, 'Num', Icons.numbers)),
+            _buildTextField(
+              _cepController,
+              'CEP',
+              Icons.map,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(8),
               ],
+              onChanged: _onCepChanged,
+            ),
+            const SizedBox(height: 12),
+            _buildTextField(
+              _streetController,
+              'Rua / Logradouro',
+              Icons.location_on,
+              textCapitalization: TextCapitalization.words,
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Rua / Logradouro é obrigatório'
+                  : null,
             ),
             const SizedBox(height: 12),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                    child: _buildTextField(_neighborhoodController, 'Bairro',
-                        Icons.holiday_village)),
+                  flex: 3,
+                  child: _buildTextField(
+                    _numberController,
+                    _noNumber ? 'Número (S/N)' : 'Número',
+                    Icons.numbers,
+                    enabled: !_noNumber,
+                    validator: (v) {
+                      if (_noNumber) return null;
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Obrigatório';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
-                    child: _buildTextField(
-                        _cityController, 'Cidade', Icons.location_city)),
-                const SizedBox(width: 8),
+                  flex: 3,
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        _noNumber = !_noNumber;
+                        if (_noNumber) {
+                          _numberController.text = 'S/N';
+                        } else if (_numberController.text == 'S/N') {
+                          _numberController.clear();
+                        }
+                      });
+                      _saveFormDraft();
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      height: 58,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        color: _noNumber
+                            ? const Color(0xFFCE93D8).withOpacity(0.15)
+                            : const Color(0xFF1A2535),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _noNumber
+                              ? const Color(0xFFCE93D8)
+                              : Colors.white12,
+                          width: _noNumber ? 1.5 : 1.0,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: _noNumber,
+                            onChanged: (val) {
+                              setState(() {
+                                _noNumber = val ?? false;
+                                if (_noNumber) {
+                                  _numberController.text = 'S/N';
+                                } else if (_numberController.text == 'S/N') {
+                                  _numberController.clear();
+                                }
+                              });
+                              _saveFormDraft();
+                            },
+                            activeColor: const Color(0xFFCE93D8),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'Sem número',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildTextField(
+              _neighborhoodController,
+              'Bairro',
+              Icons.holiday_village,
+              textCapitalization: TextCapitalization.words,
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Bairro é obrigatório'
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Expanded(
-                    flex: 0,
-                    child: SizedBox(
-                        width: 75,
+                  child: _buildTextField(
+                    _cityController,
+                    'Cidade',
+                    Icons.location_city,
+                    textCapitalization: TextCapitalization.words,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? 'Cidade é obrigatória'
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 85,
+                  child: _buildTextField(
+                    _stateController,
+                    'UF',
+                    Icons.flag,
+                    textCapitalization: TextCapitalization.characters,
+                    inputFormatters: [
+                      LengthLimitingTextInputFormatter(2),
+                      FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z]')),
+                    ],
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) return 'UF';
+                      final uf = v.trim().toUpperCase();
+                      if (!_validBrazilianUfs.contains(uf)) return 'Inválida';
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildTextField(
+              _referenceController,
+              'Ponto de Referência (Pesquisa de Local)',
+              Icons.place,
+            ),
+
+            const SizedBox(height: 16),
+
+            // ── Tipo de Imóvel e Campos Adicionais
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Tipo de Imóvel',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildPropertyTypeOption(
+                        'CASA',
+                        'Casa',
+                        Icons.home,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildPropertyTypeOption(
+                        'APARTAMENTO',
+                        'Apto / Cond.',
+                        Icons.apartment,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildPropertyTypeOption(
+                        'OUTRO',
+                        'Outro',
+                        Icons.business,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _showAdditionalAddressFields =
+                            !_showAdditionalAddressFields;
+                      });
+                      _saveFormDraft();
+                    },
+                    icon: Icon(
+                      _showAdditionalAddressFields
+                          ? Icons.remove_circle_outline
+                          : Icons.add_circle_outline,
+                      size: 16,
+                      color: const Color(0xFFCE93D8),
+                    ),
+                    label: Text(
+                      _showAdditionalAddressFields
+                          ? 'Ocultar complemento / condomínio'
+                          : '+ Complemento / condomínio / bloco / apartamento',
+                      style: const TextStyle(
+                        color: Color(0xFFCE93D8),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                ),
+                if (_showAdditionalAddressFields) ...[
+                  const SizedBox(height: 10),
+                  _buildTextField(
+                    _condoController,
+                    'Nome do condomínio (Opcional)',
+                    Icons.apartment,
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
                         child: _buildTextField(
-                            _stateController,
-                            'UF',
-                            Icons.flag,
-                            inputFormatters: [
-                              LengthLimitingTextInputFormatter(2),
-                              FilteringTextInputFormatter.allow(
-                                  RegExp(r'[a-zA-Z]')),
-                            ],
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Obrigatório';
-                              }
-                              final uf = v.trim().toUpperCase();
-                              if (!_validBrazilianUfs.contains(uf)) {
-                                return 'Inválida';
-                              }
-                              return null;
-                            }))),
+                          _blockController,
+                          'Bloco / Torre (Opcional)',
+                          Icons.domain,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildTextField(
+                          _aptController,
+                          'Apto / Unidade (Opcional)',
+                          Icons.meeting_room,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _buildTextField(
+                    _complementController,
+                    'Complemento adicional (Opcional)',
+                    Icons.info_outline,
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                    child: _buildTextField(_condoController,
-                        'Condomínio (Opcional)', Icons.apartment)),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: _buildTextField(
-                        _blockController, 'Bloco (Opcional)', null)),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: _buildTextField(
-                        _aptController, 'Apto (Opcional)', null)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _buildTextField(_referenceController,
-                'Ponto de Referência (Pesquisa de Local)', Icons.place),
 
             const SizedBox(height: 24),
 
-            // ── Cor da Casa (Visual)
+            // ── Cor da Casa (Visual) + Acabamento
             _buildSectionTitle('Cor da Casa'),
             SizedBox(
               height: 50,
@@ -1766,53 +2141,16 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                   final color = _houseColors[index];
                   final isSelected = _selectedHouseColor == color;
                   return GestureDetector(
-                    onTap: () => setState(() => _selectedHouseColor = color),
-                    child: Container(
-                      width: 40,
-                      margin: const EdgeInsets.only(right: 12),
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color: isSelected
-                                ? const Color(0xFFCE93D8)
-                                : Colors.white24,
-                            width: isSelected ? 3 : 1),
-                        boxShadow: isSelected
-                            ? [
-                                BoxShadow(
-                                    color: const Color(0xFFCE93D8)
-                                        .withOpacity(0.5),
-                                    blurRadius: 8)
-                              ]
-                            : [],
-                      ),
-                      child: isSelected
-                          ? Icon(Icons.check,
-                              color: color.computeLuminance() > 0.5
-                                  ? Colors.black
-                                  : Colors.white,
-                              size: 20)
-                          : null,
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // ── Cor do Portão (Visual)
-            _buildSectionTitle('Cor do Portão'),
-            SizedBox(
-              height: 50,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _houseColors.length,
-                itemBuilder: (context, index) {
-                  final color = _houseColors[index];
-                  final isSelected = _selectedGateColor == color;
-                  return GestureDetector(
-                    onTap: () => setState(() => _selectedGateColor = color),
+                    onTap: () {
+                      setState(() {
+                        if (_selectedHouseColor == color) {
+                          _selectedHouseColor = null;
+                        } else {
+                          _selectedHouseColor = color;
+                        }
+                      });
+                      _saveFormDraft();
+                    },
                     child: Container(
                       width: 40,
                       margin: const EdgeInsets.only(right: 12),
@@ -1846,12 +2184,268 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               ),
             ),
             const SizedBox(height: 12),
-            _buildTextField(_gateObservationController,
-                'Observação sobre o Portão (Opcional)', Icons.edit_note),
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        _houseFinish = (_houseFinish == 'NO_REBOCO')
+                            ? null
+                            : 'NO_REBOCO';
+                      });
+                      _saveFormDraft();
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _houseFinish == 'NO_REBOCO'
+                            ? const Color(0xFFCE93D8).withOpacity(0.15)
+                            : const Color(0xFF1A2535),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _houseFinish == 'NO_REBOCO'
+                              ? const Color(0xFFCE93D8)
+                              : Colors.white12,
+                          width: _houseFinish == 'NO_REBOCO' ? 1.5 : 1.0,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: _houseFinish == 'NO_REBOCO',
+                            onChanged: (val) {
+                              setState(() {
+                                _houseFinish =
+                                    (val == true) ? 'NO_REBOCO' : null;
+                              });
+                              _saveFormDraft();
+                            },
+                            activeColor: const Color(0xFFCE93D8),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'No reboco',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        _houseFinish = (_houseFinish == 'SEM_REBOCO')
+                            ? null
+                            : 'SEM_REBOCO';
+                      });
+                      _saveFormDraft();
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _houseFinish == 'SEM_REBOCO'
+                            ? const Color(0xFFCE93D8).withOpacity(0.15)
+                            : const Color(0xFF1A2535),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _houseFinish == 'SEM_REBOCO'
+                              ? const Color(0xFFCE93D8)
+                              : Colors.white12,
+                          width: _houseFinish == 'SEM_REBOCO' ? 1.5 : 1.0,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: _houseFinish == 'SEM_REBOCO',
+                            onChanged: (val) {
+                              setState(() {
+                                _houseFinish =
+                                    (val == true) ? 'SEM_REBOCO' : null;
+                              });
+                              _saveFormDraft();
+                            },
+                            activeColor: const Color(0xFFCE93D8),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'Sem reboco',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
 
             const SizedBox(height: 24),
 
-            // ── Informações da Visita
+            // ── Cor do Portão (Visual) + Sem portão
+            Row(
+              children: [
+                Expanded(child: _buildSectionTitle('Cor do Portão')),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _hasNoGate = !_hasNoGate;
+                    });
+                    _saveFormDraft();
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Checkbox(
+                          value: _hasNoGate,
+                          onChanged: (val) {
+                            setState(() {
+                              _hasNoGate = val ?? false;
+                            });
+                            _saveFormDraft();
+                          },
+                          activeColor: const Color(0xFFCE93D8),
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        const Text(
+                          'Sem portão',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_hasNoGate)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline,
+                        color: Colors.orangeAccent, size: 16),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Imóvel marcado como sem portão. Cores e observação desabilitadas.',
+                        style:
+                            TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Opacity(
+              opacity: _hasNoGate ? 0.35 : 1.0,
+              child: IgnorePointer(
+                ignoring: _hasNoGate,
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 50,
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _houseColors.length,
+                        itemBuilder: (context, index) {
+                          final color = _houseColors[index];
+                          final isSelected =
+                              !_hasNoGate && _selectedGateColor == color;
+                          return GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                if (_selectedGateColor == color) {
+                                  _selectedGateColor = null;
+                                } else {
+                                  _selectedGateColor = color;
+                                }
+                              });
+                              _saveFormDraft();
+                            },
+                            child: Container(
+                              width: 40,
+                              margin: const EdgeInsets.only(right: 12),
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: isSelected
+                                        ? const Color(0xFFCE93D8)
+                                        : Colors.white24,
+                                    width: isSelected ? 3 : 1),
+                                boxShadow: isSelected
+                                    ? [
+                                        BoxShadow(
+                                            color: const Color(0xFFCE93D8)
+                                                .withOpacity(0.5),
+                                            blurRadius: 8)
+                                      ]
+                                    : [],
+                              ),
+                              child: isSelected
+                                  ? Icon(Icons.check,
+                                      color: color.computeLuminance() > 0.5
+                                          ? Colors.black
+                                          : Colors.white,
+                                      size: 20)
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildTextField(
+                      _gateObservationController,
+                      'Observação sobre o Portão (Opcional)',
+                      Icons.edit_note,
+                      enabled: !_hasNoGate,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // ── Informações da Visita & Crianças Inline
             _buildSectionTitle('Detalhes da Visita & Crianças'),
             GestureDetector(
               onTap: _pickTime,
@@ -1882,9 +2476,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                   color: const Color(0xFF1A2535),
                   borderRadius: BorderRadius.circular(12),
@@ -1894,6 +2488,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                 children: [
                   Row(
                     children: [
+                      const Icon(Icons.face,
+                          color: Color(0xFFCE93D8), size: 18),
+                      const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
                           'Crianças / Identificação',
@@ -1903,46 +2500,105 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                               fontSize: 14),
                         ),
                       ),
-                      InkWell(
-                        onTap: _addChild,
-                        borderRadius: BorderRadius.circular(20),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFCE93D8).withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                                color: const Color(0xFFCE93D8), width: 1.5),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.add_rounded,
-                                  color: Color(0xFFCE93D8), size: 16),
-                              SizedBox(width: 4),
-                              Text('Adicionar Criança',
-                                  style: TextStyle(
-                                      color: Color(0xFFCE93D8),
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12)),
-                            ],
-                          ),
-                        ),
+                      Text(
+                        '${_childFormItems.where((c) => c.nameController.text.trim().isNotEmpty).length} cadastrada(s)',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 11),
                       ),
                     ],
                   ),
-                  if (_children.isEmpty)
-                    const Text('Nenhuma criança adicionada.',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                  ..._children.map((c) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text('• ${c['name']} (${c['age']} anos)',
-                            style: const TextStyle(color: Colors.white70)),
-                      )),
                   const SizedBox(height: 12),
-                  _buildTextField(_clothesColorController,
-                      'Cores de Roupa da(s) criança(s)', Icons.checkroom),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: _childFormItems.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (ctx, index) {
+                      final item = _childFormItems[index];
+                      final isOnlyItem = _childFormItems.length == 1;
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: _buildTextField(
+                              item.nameController,
+                              'Nome da criança ${index + 1}',
+                              Icons.child_care,
+                              focusNode: item.nameFocusNode,
+                              textCapitalization: TextCapitalization.words,
+                              validator: (v) {
+                                if (index == 0 &&
+                                    (v == null || v.trim().isEmpty)) {
+                                  return 'Informe o nome da criança';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 3,
+                            child: _buildTextField(
+                              item.ageController,
+                              'Idade (anos)',
+                              Icons.cake,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(2),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          IconButton(
+                            icon: Icon(
+                              isOnlyItem
+                                  ? Icons.clear
+                                  : Icons.delete_outline,
+                              color: isOnlyItem
+                                  ? Colors.white38
+                                  : Colors.redAccent.withOpacity(0.85),
+                              size: 20,
+                            ),
+                            tooltip: isOnlyItem
+                                ? 'Limpar campos da criança'
+                                : 'Remover criança',
+                            onPressed: () => _confirmRemoveChild(index),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _addNewChildItem,
+                      icon: const Icon(Icons.add_rounded,
+                          color: Color(0xFFCE93D8), size: 18),
+                      label: const Text(
+                        'Adicionar outra criança',
+                        style: TextStyle(
+                            color: Color(0xFFCE93D8),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(
+                            color: Color(0xFFCE93D8), width: 1.2),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildTextField(
+                    _clothesColorController,
+                    'Cores de Roupa da(s) criança(s) (Opcional)',
+                    Icons.checkroom,
+                  ),
                 ],
               ),
             ),
@@ -2007,11 +2663,18 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       child: Row(
         children: [
           const Icon(Icons.arrow_right, color: Color(0xFFCE93D8)),
-          Text(title,
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   color: Color(0xFFCE93D8),
                   fontSize: 14,
-                  fontWeight: FontWeight.bold)),
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
         ],
       ),
     );
@@ -2025,23 +2688,32 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     List<TextInputFormatter>? inputFormatters,
     String? Function(String?)? validator,
     void Function(String)? onChanged,
+    FocusNode? focusNode,
+    bool enabled = true,
+    TextCapitalization textCapitalization = TextCapitalization.none,
   }) {
     return TextFormField(
       controller: controller,
+      focusNode: focusNode,
+      enabled: enabled,
+      textCapitalization: textCapitalization,
       keyboardType: keyboardType,
       inputFormatters: inputFormatters,
       onChanged: onChanged,
-      style: const TextStyle(color: Colors.white),
+      style: TextStyle(color: enabled ? Colors.white : Colors.white38),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: Colors.white54),
+        labelStyle: TextStyle(color: enabled ? Colors.white54 : Colors.white24),
         filled: true,
-        fillColor: const Color(0xFF1A2535),
+        fillColor: enabled ? const Color(0xFF1A2535) : const Color(0xFF141C28),
         prefixIcon:
-            icon != null ? Icon(icon, color: Colors.white54, size: 20) : null,
+            icon != null ? Icon(icon, color: enabled ? Colors.white54 : Colors.white24, size: 20) : null,
         enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Colors.white12)),
+        disabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Colors.white10)),
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: Color(0xFFCE93D8), width: 1.5)),
@@ -2056,6 +2728,61 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
           (v) => label.contains('Opcional')
               ? null
               : (v == null || v.trim().isEmpty ? 'Obrigatório' : null),
+    );
+  }
+
+  Widget _buildPropertyTypeOption(String value, String label, IconData icon) {
+    final isSelected = _propertyType == value;
+    return InkWell(
+      onTap: () {
+        setState(() {
+          if (_propertyType == value) {
+            _propertyType = null;
+          } else {
+            _propertyType = value;
+            if (value == 'APARTAMENTO') {
+              _showAdditionalAddressFields = true;
+            }
+          }
+        });
+        _saveFormDraft();
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFFCE93D8).withOpacity(0.2)
+              : const Color(0xFF1A2535),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFCE93D8) : Colors.white12,
+            width: isSelected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: isSelected ? const Color(0xFFCE93D8) : Colors.white54,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white70,
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

@@ -10,7 +10,7 @@ const prisma = new PrismaClient();
 
 // Allowed client fields for sync
 const ALLOWED_SYNC_CLIENT_FIELDS = [
-  'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'condo',
+  'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'complement', 'condo',
   'block', 'apartment', 'neighborhood', 'city', 'state', 'referencePoint',
   'houseColor', 'gateColor', 'gateObservation', 'profession', 'visitTime',
   'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded', 'event'
@@ -157,6 +157,28 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         }
 
         // Se ainda está em CREATED, atualiza com os dados mais recentes do formulário
+        const validChildrenToSync = Array.isArray(clientData.children)
+          ? clientData.children
+              .filter((c: any) => String(c?.name || '').trim().length > 0)
+              .map((c: any) => ({
+                name: String(c.name).trim(),
+                age: typeof c.age === 'string' ? (parseInt(c.age, 10) || 0) : (c.age || 0),
+              }))
+          : null;
+
+        if (validChildrenToSync) {
+          await prisma.child.deleteMany({ where: { clientId: existing.id } });
+          if (validChildrenToSync.length > 0) {
+            await prisma.child.createMany({
+              data: validChildrenToSync.map((c: any) => ({
+                name: c.name,
+                age: c.age,
+                clientId: existing.id,
+              })),
+            });
+          }
+        }
+
         const updated = await prisma.client.update({
           where: { id: existing.id },
           data: {
@@ -183,6 +205,15 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       // 2. Ficha nova: criação atômica com geração de visibleCode
       const { created } = await prisma.$transaction(async (tx) => {
         const visibleCode = await getNextVisibleCode(tx);
+        const validNewChildren = Array.isArray(clientData.children)
+          ? clientData.children
+              .filter((c: any) => String(c?.name || '').trim().length > 0)
+              .map((c: any) => ({
+                name: String(c.name).trim(),
+                age: typeof c.age === 'string' ? (parseInt(c.age, 10) || 0) : (c.age || 0),
+              }))
+          : [];
+
         const newClient = await tx.client.create({
           data: {
             ...sanitizedData,
@@ -198,12 +229,9 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
             companyId,
             photographerId,
             assignedSellerId,
-            children: Array.isArray(clientData.children)
+            children: validNewChildren.length > 0
               ? {
-                  create: clientData.children.map((c: any) => ({
-                    name: String(c.name || '').trim(),
-                    age: typeof c.age === 'string' ? parseInt(c.age, 10) : (c.age || 0),
-                  })),
+                  create: validNewChildren,
                 }
               : undefined,
           },
