@@ -1810,10 +1810,94 @@ class ApiService {
     }
   }
 
-  Future<List<dynamic>> getSellerCreditPortfolio() async {
+  Future<Map<String, dynamic>> payCreditCommissionsBatch({
+    required String sellerId,
+    required List<String> commissionIds,
+    String paymentMethod = 'PIX',
+    String? notes,
+    String? receiptUrl,
+    String? idempotencyKey,
+  }) async {
     try {
-      final resp = await _dio.get('/credit/seller/portfolio');
+      final resp = await _dio.post('/credit/commissions/pay', data: {
+        'sellerId': sellerId,
+        'commissionIds': commissionIds,
+        'paymentMethod': paymentMethod,
+        'notes': notes,
+        'receiptUrl': receiptUrl,
+        'idempotencyKey': idempotencyKey,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<List<dynamic>> getSellersCreditSummary() async {
+    try {
+      final resp = await _dio.get('/credit/sellers-summary');
       return List<dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getSellerCreditPortfolio({String? sellerId}) async {
+    try {
+      final query = sellerId != null ? '?sellerId=$sellerId' : '';
+      final resp = await _dio.get('/credit/seller/portfolio$query');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getAsaasConfig() async {
+    try {
+      final resp = await _dio.get('/credit/asaas/config');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateAsaasConfig(Map<String, dynamic> data) async {
+    try {
+      final resp = await _dio.post('/credit/asaas/config', data: data);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> emitAsaasCharges(String agreementId) async {
+    try {
+      final resp = await _dio.post('/credit/agreements/$agreementId/emit-asaas');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<List<dynamic>> getAsaasDuplicateAlerts({String? status}) async {
+    try {
+      final query = status != null ? {'status': status} : null;
+      final resp = await _dio.get('/credit/asaas/duplicate-alerts', queryParameters: query);
+      return List<dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> resolveAsaasDuplicateAlert(
+      String id, String action, {String? notes}) async {
+    try {
+      final resp = await _dio
+          .post('/credit/asaas/duplicate-alerts/$id/resolve', data: {
+        'action': action,
+        'notes': notes,
+      });
+      return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

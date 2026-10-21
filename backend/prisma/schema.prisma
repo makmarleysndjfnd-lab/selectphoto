@@ -32,9 +32,14 @@ model Company {
   clientEditRequests   ClientEditRequest[]
   tripSettings         TripSettings?
   sellerCityClosings   SellerCityClosing[]
-  creditAgreements     CreditAgreement[]
-  creditPayments       CreditPayment[]
-  creditCommissions    CreditCommission[]
+  creditAgreements            CreditAgreement[]
+  creditPayments              CreditPayment[]
+  creditCommissions           CreditCommission[]
+  creditCommissionAdjustments CreditCommissionAdjustment[]
+  asaasConfig                 AsaasConfig?
+  asaasCharges                AsaasCharge[]
+  asaasSyncQueues             AsaasSyncQueue[]
+  asaasDuplicateAlerts        AsaasDuplicatePaymentAlert[]
 }
 
 model Team {
@@ -100,8 +105,9 @@ model User {
   creditAgreementsSeller  CreditAgreement[]              @relation("CreditAgreementSeller")
   creditPaymentsReceived  CreditPayment[]                @relation("CreditPaymentReceiver")
   creditPaymentsReversed  CreditPayment[]                @relation("CreditPaymentReverser")
-  creditCommissions       CreditCommission[]             @relation("CreditCommissionSeller")
-  creditRenegotiations    CreditAgreementRenegotiation[] @relation("CreditRenegotiationAuthor")
+  creditCommissions           CreditCommission[]             @relation("CreditCommissionSeller")
+  creditCommissionAdjustments CreditCommissionAdjustment[]   @relation("CreditCommissionAdjustmentSeller")
+  creditRenegotiations        CreditAgreementRenegotiation[] @relation("CreditRenegotiationAuthor")
 }
 
 model Client {
@@ -591,10 +597,13 @@ model CreditAgreement {
   client         Client                         @relation(fields: [clientId], references: [id])
   seller         User                           @relation("CreditAgreementSeller", fields: [sellerId], references: [id])
   company        Company                        @relation(fields: [companyId], references: [id])
-  installments   CreditInstallment[]
-  payments       CreditPayment[]
-  commissions    CreditCommission[]
-  renegotiations CreditAgreementRenegotiation[]
+  installments          CreditInstallment[]
+  payments              CreditPayment[]
+  commissions           CreditCommission[]
+  renegotiations        CreditAgreementRenegotiation[]
+  commissionAdjustments CreditCommissionAdjustment[]
+  asaasCharges          AsaasCharge[]
+  asaasDuplicateAlerts  AsaasDuplicatePaymentAlert[]
 
   @@index([companyId, sellerId])
   @@index([companyId, status])
@@ -613,8 +622,10 @@ model CreditInstallment {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  agreement   CreditAgreement           @relation(fields: [agreementId], references: [id], onDelete: Cascade)
-  allocations CreditPaymentAllocation[]
+  agreement            CreditAgreement              @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  allocations          CreditPaymentAllocation[]
+  asaasCharge          AsaasCharge?
+  asaasDuplicateAlerts AsaasDuplicatePaymentAlert[]
 
   @@index([agreementId, dueDate])
   @@index([status])
@@ -636,6 +647,11 @@ model CreditPayment {
   reversedAt       DateTime?
   reversedByUserId String?
   reversalReason   String?
+  bankFeeCents     Int       @default(0)
+  externalPaymentId String?
+  isAsaasSettled   Boolean   @default(false)
+  settledAt        DateTime?
+  idempotencyKey   String?   @unique
   createdAt        DateTime  @default(now())
 
   agreement   CreditAgreement           @relation(fields: [agreementId], references: [id], onDelete: Cascade)
@@ -648,6 +664,7 @@ model CreditPayment {
   @@index([agreementId])
   @@index([companyId, paidAt])
   @@index([receiverUserId, paidAt])
+  @@index([externalPaymentId])
 }
 
 model CreditPaymentAllocation {
@@ -675,9 +692,14 @@ model CreditCommission {
   paidAt         DateTime?
   paidByUserId   String?
   costId         String?
+  payoutId       String?
+  paidMethod     String?
+  paidReceiptUrl String?
+  paidNotes      String?
   isReversed     Boolean   @default(false)
   reversedAt     DateTime?
   reversalReason String?
+  idempotencyKey String?   @unique
   createdAt      DateTime  @default(now())
 
   agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
@@ -688,6 +710,7 @@ model CreditCommission {
   @@index([sellerId, status])
   @@index([companyId, status])
   @@index([agreementId])
+  @@index([payoutId])
 }
 
 model CreditAgreementRenegotiation {
@@ -699,10 +722,140 @@ model CreditAgreementRenegotiation {
   reason                 String
   previousSchedule       Json
   newSchedule            Json
+  idempotencyKey         String?  @unique
   createdAt              DateTime @default(now())
 
   agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
   author    User            @relation("CreditRenegotiationAuthor", fields: [authorId], references: [id])
 
   @@index([agreementId])
+}
+
+model CreditCommissionAdjustment {
+  id              String    @id @default(uuid())
+  companyId       String
+  sellerId        String
+  agreementId     String
+  paymentId       String?
+  commissionId    String?
+  amountCents     Int
+  reason          String
+  status          String    @default("PENDING")
+  appliedPayoutId String?
+  appliedAt       DateTime?
+  idempotencyKey  String?   @unique
+  createdAt       DateTime  @default(now())
+
+  company   Company         @relation(fields: [companyId], references: [id])
+  seller    User            @relation("CreditCommissionAdjustmentSeller", fields: [sellerId], references: [id])
+  agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, status])
+  @@index([companyId, status])
+}
+
+model AsaasConfig {
+  id           String   @id @default(uuid())
+  companyId    String   @unique
+  mode         String   @default("DISABLED")
+  apiKey       String?
+  webhookToken String?
+  walletId     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+}
+
+model AsaasCharge {
+  id                  String    @id @default(uuid())
+  companyId           String
+  agreementId         String
+  installmentId       String    @unique
+  externalId          String    @unique
+  customerExternalId  String
+  billingType         String    @default("UNDEFINED")
+  status              String    @default("PENDING")
+  nominalValueCents   Int
+  netValueCents       Int?
+  feeCents            Int?
+  dueDate             DateTime
+  paymentDate         DateTime?
+  clientPaymentDate   DateTime?
+  settledAt           DateTime?
+  bankSlipUrl         String?
+  invoiceUrl          String?
+  identificationField String?
+  pixQrCodeUrl        String?
+  pixPayload          String?
+  isManualPaymentSync Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  company     Company           @relation(fields: [companyId], references: [id])
+  agreement   CreditAgreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  installment CreditInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([agreementId])
+  @@index([externalId])
+}
+
+model AsaasSyncQueue {
+  id             String   @id @default(uuid())
+  companyId      String
+  agreementId    String
+  installmentId  String?
+  action         String
+  payload        Json
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  maxAttempts    Int      @default(5)
+  lastError      String?
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, status])
+  @@index([agreementId])
+}
+
+model AsaasWebhookEvent {
+  id                String    @id @default(uuid())
+  companyId         String?
+  eventId           String?
+  event             String
+  externalPaymentId String
+  payload           Json
+  processed         Boolean   @default(false)
+  processingError   String?
+  processedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([externalPaymentId])
+  @@index([event])
+  @@index([createdAt])
+}
+
+model AsaasDuplicatePaymentAlert {
+  id                String    @id @default(uuid())
+  companyId         String
+  agreementId       String
+  installmentId     String
+  externalPaymentId String
+  amountCents       Int
+  reason            String
+  status            String    @default("PENDING")
+  resolvedAt        DateTime?
+  resolvedByUserId  String?
+  notes             String?
+  createdAt         DateTime  @default(now())
+
+  company     Company           @relation(fields: [companyId], references: [id])
+  agreement   CreditAgreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  installment CreditInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
 }

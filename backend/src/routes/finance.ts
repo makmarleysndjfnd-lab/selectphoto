@@ -14,27 +14,65 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       return;
     }
 
-    // Agregação total de vendas (entradas) de toda a empresa
+    const salesFilter = {
+      ...(userCompanyId ? { companyId: userCompanyId } : {}),
+    };
+
+    // 1. Faturamento Total Bruto (Soma nominal de todas as vendas e contratos)
     const salesAggregate = await prisma.sale.aggregate({
-      where: { companyId: userCompanyId, receiptUrl: { not: null } },
+      where: salesFilter,
       _sum: { value: true }
     });
+    const faturamentoBruto = salesAggregate._sum.value || 0;
+
+    // 2. Vendas À Vista (Sem contrato de crediário ativo ou paymentStatus != 'PARTIALLY_PAID')
+    const cashSalesAggregate = await prisma.sale.aggregate({
+      where: {
+        ...salesFilter,
+        paymentStatus: { not: 'PARTIALLY_PAID' },
+      },
+      _sum: { value: true },
+    });
+    const entradasAVista = cashSalesAggregate._sum.value || 0;
+
+    // 3. Entradas pagas no ato das vendas em Crediário (downPaymentCents) e Saldo a Receber
+    const credAgreementsAggregate = await prisma.creditAgreement.aggregate({
+      where: {
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+      _sum: { downPaymentCents: true, remainingPrincipalCents: true },
+    });
+    const entradasCrediarioAto = (credAgreementsAggregate._sum.downPaymentCents || 0) / 100.0;
+    const saldoAReceber = (credAgreementsAggregate._sum.remainingPrincipalCents || 0) / 100.0;
+
+    // 4. Recebimentos Efetivos de parcelas de Crediário (CreditPayment não estornados)
+    const creditPaymentsAggregate = await prisma.creditPayment.aggregate({
+      where: {
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        isReversed: false,
+      },
+      _sum: { amountCents: true },
+    });
+    const baixasParcelasCrediario = (creditPaymentsAggregate._sum.amountCents || 0) / 100.0;
+
+    // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais)
+    const recebimentosEfetivos = entradasAVista + entradasCrediarioAto + baixasParcelasCrediario;
 
     // Agregação total de custos aprovados (saídas) de toda a empresa
     const costsAggregate = await prisma.cost.aggregate({
-      where: { status: 'APPROVED', companyId: userCompanyId },
+      where: { status: 'APPROVED', ...(userCompanyId ? { companyId: userCompanyId } : {}) },
       _sum: { amount: true }
     });
 
     // Agregação total de receita prevista futura de toda a empresa
     const prospectsAggregate = await prisma.commercialEvent.aggregate({
-      where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
+      where: { isProspect: true, expectedRevenue: { gt: 0 }, ...(userCompanyId ? { companyId: userCompanyId } : {}) },
       _sum: { expectedRevenue: true }
     });
 
     // Listas recentes limitadas a 50 itens apenas para exibição visual
     const recentSales = await prisma.sale.findMany({
-      where: { companyId: userCompanyId, receiptUrl: { not: null } },
+      where: salesFilter,
       orderBy: { date: 'desc' },
       take: 50,
       include: {
@@ -44,7 +82,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     });
 
     const recentCosts = await prisma.cost.findMany({
-      where: { status: 'APPROVED', companyId: userCompanyId },
+      where: { status: 'APPROVED', ...(userCompanyId ? { companyId: userCompanyId } : {}) },
       orderBy: { date: 'desc' },
       take: 50,
       include: {
@@ -53,12 +91,12 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     });
 
     const recentProspects = await prisma.commercialEvent.findMany({
-      where: { isProspect: true, expectedRevenue: { gt: 0 }, companyId: userCompanyId },
+      where: { isProspect: true, expectedRevenue: { gt: 0 }, ...(userCompanyId ? { companyId: userCompanyId } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 50
     });
 
-    const totalEntradas = salesAggregate._sum.value || 0;
+    const totalEntradas = recebimentosEfetivos;
     const totalSaidas = costsAggregate._sum.amount || 0;
     const totalFuturo = prospectsAggregate._sum.expectedRevenue || 0;
     const saldo = totalEntradas - totalSaidas;
@@ -67,6 +105,9 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       totalEntradas,
       totalSaidas,
       saldo,
+      faturamentoBruto,
+      recebimentosEfetivos,
+      saldoAReceber,
       recentSales: recentSales.map(s => ({
         id: s.id,
         desc: `Venda - ${s.client?.name || 'Cliente'}`,

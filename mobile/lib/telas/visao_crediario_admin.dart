@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
-import '../widgets/led_button.dart';
 
 class VisaoCrediarioAdmin extends StatefulWidget {
   const VisaoCrediarioAdmin({super.key});
@@ -19,10 +18,15 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
 
   Map<String, dynamic> _overview = {};
   List<dynamic> _agreements = [];
-  List<dynamic> _sellers = [];
+  List<dynamic> _sellersSummary = [];
+  Map<String, dynamic>? _selectedSellerPortfolio;
+  Map<String, dynamic>? _asaasConfig;
+  List<dynamic> _asaasDuplicateAlerts = [];
 
   String _selectedStatus = 'ALL';
   String? _selectedSellerId;
+  String _periodType = 'DUE_DATE';
+  DateTimeRange? _selectedDateRange;
 
   final currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final dateFormat = DateFormat('dd/MM/yyyy');
@@ -48,21 +52,38 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
     try {
       final overviewFuture = _api.getCreditOverview(
         sellerId: _selectedSellerId,
+        startDate: _selectedDateRange?.start.toIso8601String(),
+        endDate: _selectedDateRange?.end.toIso8601String(),
       );
       final agreementsFuture = _api.getCreditAgreements(
         search: _searchController.text.trim(),
         status: _selectedStatus == 'ALL' ? null : _selectedStatus,
         sellerId: _selectedSellerId,
       );
-      final sellersFuture = _api.getSellers();
+      final sellersSummaryFuture = _api.getSellersCreditSummary();
+      final asaasConfigFuture = _api.getAsaasConfig();
+      final asaasAlertsFuture = _api.getAsaasDuplicateAlerts(status: 'PENDING');
+      final sellerPortfolioFuture = _selectedSellerId != null
+          ? _api.getSellerCreditPortfolio(sellerId: _selectedSellerId)
+          : Future.value(<String, dynamic>{});
 
-      final results = await Future.wait([overviewFuture, agreementsFuture, sellersFuture]);
+      final results = await Future.wait([
+        overviewFuture,
+        agreementsFuture,
+        sellersSummaryFuture,
+        asaasConfigFuture,
+        asaasAlertsFuture,
+        sellerPortfolioFuture,
+      ]);
 
       if (mounted) {
         setState(() {
           _overview = results[0] as Map<String, dynamic>;
           _agreements = results[1] as List<dynamic>;
-          _sellers = results[2] as List<dynamic>;
+          _sellersSummary = results[2] as List<dynamic>;
+          _asaasConfig = results[3] as Map<String, dynamic>;
+          _asaasDuplicateAlerts = results[4] as List<dynamic>;
+          _selectedSellerPortfolio = results[5] as Map<String, dynamic>;
           _isLoading = false;
         });
       }
@@ -102,6 +123,77 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
           ],
         ),
         actions: [
+          // Modo Asaas
+          InkWell(
+            onTap: _showAsaasConfigDialog,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: (_asaasConfig?['mode'] == 'PRODUCTION')
+                    ? const Color(0xFF10B981).withOpacity(0.2)
+                    : ((_asaasConfig?['mode'] == 'SANDBOX')
+                        ? Colors.amber.withOpacity(0.2)
+                        : Colors.white12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: (_asaasConfig?['mode'] == 'PRODUCTION')
+                      ? const Color(0xFF10B981)
+                      : ((_asaasConfig?['mode'] == 'SANDBOX') ? Colors.amber : Colors.white30),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.account_balance_rounded,
+                    size: 13,
+                    color: (_asaasConfig?['mode'] == 'PRODUCTION')
+                        ? const Color(0xFF10B981)
+                        : ((_asaasConfig?['mode'] == 'SANDBOX') ? Colors.amber : Colors.white70),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _asaasConfig?['mode'] ?? 'DISABLED',
+                    style: TextStyle(
+                      color: (_asaasConfig?['mode'] == 'PRODUCTION')
+                          ? const Color(0xFF10B981)
+                          : ((_asaasConfig?['mode'] == 'SANDBOX') ? Colors.amber : Colors.white70),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Alertas de duplicidade Asaas
+          if (_asaasDuplicateAlerts.isNotEmpty)
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.notifications_active_rounded, color: Colors.amberAccent),
+                  tooltip: 'Alertas de Duplicidade Asaas',
+                  onPressed: _showAsaasDuplicateAlertsDialog,
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      '${_asaasDuplicateAlerts.length}',
+                      style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Color(0xFFA855F7)),
             tooltip: 'Atualizar',
@@ -175,7 +267,6 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
     final overdueCount = (_overview['overdueInstallmentsCount'] as num?)?.toInt() ?? 0;
     final received = (_overview['periodReceived'] as num?)?.toDouble() ?? 0.0;
     final commissions = (_overview['pendingCommissions'] as num?)?.toDouble() ?? 0.0;
-    final rate = (_overview['delinquencyRate'] as num?)?.toDouble() ?? 0.0;
 
     return Column(
       children: [
@@ -396,8 +487,23 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
           ),
           onSubmitted: (_) => _loadAll(),
         ),
-        const SizedBox(height: 12),
-        // Status chips
+        const SizedBox(height: 14),
+
+        // Cards de Vendedores (Abaixo da busca: "Todos" + cards de cada vendedor)
+        _buildSellerCardsSection(),
+        const SizedBox(height: 14),
+
+        // Filtro de Período
+        _buildPeriodFilterSection(),
+        const SizedBox(height: 14),
+
+        // Se vendedor estiver selecionado: Painel de Comissões do Vendedor
+        if (_selectedSellerId != null) ...[
+          _buildSellerCommissionsPanel(),
+          const SizedBox(height: 14),
+        ],
+
+        // Status chips dos contratos
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -413,6 +519,361 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSellerCardsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Carteiras por Vendedor',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (_selectedSellerId != null)
+              GestureDetector(
+                onTap: () {
+                  setState(() => _selectedSellerId = null);
+                  _loadAll();
+                },
+                child: const Text(
+                  'Limpar filtro de vendedor',
+                  style: TextStyle(color: Color(0xFFA855F7), fontSize: 11, fontWeight: FontWeight.bold),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 110,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              // Card "Todos"
+              _buildSellerCard(
+                sellerId: null,
+                sellerName: 'Todos os Vendedores',
+                remaining: (_overview['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0,
+                overdue: (_overview['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0,
+                commission: (_overview['pendingCommissions'] as num?)?.toDouble() ?? 0.0,
+                isActive: true,
+                isSelected: _selectedSellerId == null,
+              ),
+              const SizedBox(width: 10),
+              // Cards individuais
+              ..._sellersSummary.map((s) {
+                final sid = s['sellerId']?.toString() ?? '';
+                final name = s['sellerName']?.toString() ?? 'Vendedor';
+                final remaining = (s['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0;
+                final overdue = (s['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0;
+                final comm = (s['netCommissionPayable'] as num?)?.toDouble() ?? 0.0;
+                final isActive = s['isActive'] != false;
+                final isSelected = _selectedSellerId == sid;
+
+                return Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: _buildSellerCard(
+                    sellerId: sid,
+                    sellerName: name,
+                    remaining: remaining,
+                    overdue: overdue,
+                    commission: comm,
+                    isActive: isActive,
+                    isSelected: isSelected,
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSellerCard({
+    required String? sellerId,
+    required String sellerName,
+    required double remaining,
+    required double overdue,
+    required double commission,
+    required bool isActive,
+    required bool isSelected,
+  }) {
+    return InkWell(
+      onTap: () {
+        setState(() => _selectedSellerId = sellerId);
+        _loadAll();
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 190,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFA855F7).withOpacity(0.18) : const Color(0xFF160D24),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFFA855F7) : const Color(0xFF2A1B3D),
+            width: isSelected ? 1.8 : 1.0,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    sellerName,
+                    style: TextStyle(
+                      color: isSelected ? const Color(0xFFA855F7) : Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (!isActive)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('Inativo', style: TextStyle(color: Colors.redAccent, fontSize: 8)),
+                  ),
+              ],
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('A Receber:', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                    Text(currencyFormat.format(remaining),
+                        style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Vencido:', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                    Text(currencyFormat.format(overdue),
+                        style: TextStyle(
+                            color: overdue > 0 ? const Color(0xFFEF4444) : Colors.white70,
+                            fontSize: 10,
+                            fontWeight: overdue > 0 ? FontWeight.bold : FontWeight.normal)),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Comissão Lib.:', style: TextStyle(color: Colors.white38, fontSize: 9)),
+                    Text(currencyFormat.format(commission),
+                        style: const TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPeriodFilterSection() {
+    String periodLabel = 'Todo o Histórico';
+    if (_selectedDateRange != null) {
+      periodLabel = '${dateFormat.format(_selectedDateRange!.start)} até ${dateFormat.format(_selectedDateRange!.end)}';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2A1B3D)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.date_range_rounded, color: Color(0xFFA855F7), size: 18),
+          const SizedBox(width: 8),
+          DropdownButton<String>(
+            value: _periodType,
+            dropdownColor: const Color(0xFF160D24),
+            underline: const SizedBox(),
+            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            items: const [
+              DropdownMenuItem(value: 'DUE_DATE', child: Text('Vencimento')),
+              DropdownMenuItem(value: 'PAYMENT_DATE', child: Text('Recebimento')),
+              DropdownMenuItem(value: 'COMMISSION_DATE', child: Text('Comissão')),
+            ],
+            onChanged: (val) {
+              if (val != null) {
+                setState(() => _periodType = val);
+                _loadAll();
+              }
+            },
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: InkWell(
+              onTap: () async {
+                final picked = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2023),
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                  initialDateRange: _selectedDateRange,
+                  builder: (context, child) => Theme(
+                    data: ThemeData.dark().copyWith(
+                      colorScheme: const ColorScheme.dark(
+                        primary: Color(0xFFA855F7),
+                        surface: Color(0xFF160D24),
+                      ),
+                    ),
+                    child: child!,
+                  ),
+                );
+                if (picked != null) {
+                  setState(() => _selectedDateRange = picked);
+                  _loadAll();
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  periodLabel,
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ),
+          if (_selectedDateRange != null)
+            IconButton(
+              icon: const Icon(Icons.clear, color: Colors.white54, size: 16),
+              onPressed: () {
+                setState(() => _selectedDateRange = null);
+                _loadAll();
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSellerCommissionsPanel() {
+    final portfolio = _selectedSellerPortfolio ?? {};
+    final prev = (portfolio['pendingCommissionsTotal'] as num?)?.toDouble() ?? 0.0;
+    final lib = (portfolio['releasedCommissionsTotal'] as num?)?.toDouble() ?? 0.0;
+    final pag = (portfolio['paidCommissionsTotal'] as num?)?.toDouble() ?? 0.0;
+    final adj = (portfolio['pendingAdjustmentsTotal'] as num?)?.toDouble() ?? 0.0;
+    final net = (portfolio['netCommissionPayable'] as num?)?.toDouble() ?? 0.0;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.monetization_on_rounded, color: Color(0xFF10B981), size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Gestão de Comissões do Vendedor',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ],
+              ),
+              if (net > 0)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.check_circle_rounded, size: 14),
+                  label: const Text('Pagar Comissões', style: TextStyle(fontSize: 11)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  onPressed: _showPayCommissionsDialog,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildCommissionStatBox('Prevista', currencyFormat.format(prev), Colors.white54),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _buildCommissionStatBox('Liberada', currencyFormat.format(lib), const Color(0xFF10B981)),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _buildCommissionStatBox('Paga', currencyFormat.format(pag), const Color(0xFF38BDF8)),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _buildCommissionStatBox('Compensada (Estorno)', currencyFormat.format(adj), const Color(0xFFEF4444)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Saldo Líquido a Repassar:', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600)),
+                Text(currencyFormat.format(net),
+                    style: const TextStyle(color: Color(0xFF10B981), fontSize: 13, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCommissionStatBox(String title, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          Text(title, style: const TextStyle(color: Colors.white38, fontSize: 9), textAlign: TextAlign.center, overflow: TextOverflow.ellipsis),
+          const SizedBox(height: 4),
+          Text(value, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+        ],
+      ),
     );
   }
 
@@ -480,7 +941,6 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
     final remaining = (a['remainingPrincipal'] as num?)?.toDouble() ?? 0.0;
     final total = (a['totalSale'] as num?)?.toDouble() ?? 0.0;
     final downPayment = (a['downPayment'] as num?)?.toDouble() ?? 0.0;
-    final financed = (a['financedPrincipal'] as num?)?.toDouble() ?? 0.0;
     final installmentsCount = a['installmentsCount'] ?? 1;
     final overdueCount = (a['overdueCount'] as num?)?.toInt() ?? 0;
     final status = a['status']?.toString() ?? 'ACTIVE';
@@ -824,6 +1284,21 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.account_balance_rounded, size: 18),
+                label: const Text('Emitir Cobranças no Asaas (Carnê/Boleto/Pix)'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF38BDF8),
+                  side: const BorderSide(color: Color(0xFF38BDF8)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () => _emitAsaasCharges(a['id']?.toString() ?? ''),
+              ),
+            ),
             const SizedBox(height: 20),
           ],
 
@@ -914,6 +1389,9 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
           if (isPaid) {
             badgeColor = const Color(0xFF10B981);
             badgeText = 'PAGO';
+          } else if (status == 'PARTIAL') {
+            badgeColor = const Color(0xFFF59E0B);
+            badgeText = 'PARCIAL (${currencyFormat.format(paid)})';
           } else if (isOverdue) {
             badgeColor = const Color(0xFFEF4444);
             badgeText = 'VENCIDA';
@@ -924,37 +1402,68 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
             decoration: const BoxDecoration(
               border: Border(bottom: BorderSide(color: Color(0xFF2A1B3D), width: 0.5)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Parcela $number',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Parcela $number',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12),
+                    ),
+                    Text(
+                      'Venc: $dueStr',
+                      style: TextStyle(
+                        color: isOverdue ? const Color(0xFFEF4444) : Colors.white70,
+                        fontSize: 12,
+                        fontWeight: isOverdue ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                    Text(
+                      currencyFormat.format(amount),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: badgeColor.withOpacity(0.5)),
+                      ),
+                      child: Text(
+                        badgeText,
+                        style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  'Venc: $dueStr',
-                  style: TextStyle(
-                    color: isOverdue ? const Color(0xFFEF4444) : Colors.white70,
-                    fontSize: 12,
-                    fontWeight: isOverdue ? FontWeight.bold : FontWeight.normal,
+                if (inst['asaasCharge'] != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF38BDF8).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'Asaas: ${inst['asaasCharge']['status'] ?? 'PENDING'}',
+                          style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 9, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      if ((inst['asaasCharge']['bankFeeCents'] as num?) != null &&
+                          (inst['asaasCharge']['bankFeeCents'] as num) > 0) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          'Tarifa: ${currencyFormat.format((inst['asaasCharge']['bankFeeCents'] as num).toDouble() / 100.0)}',
+                          style: const TextStyle(color: Colors.white38, fontSize: 9),
+                        ),
+                      ],
+                    ],
                   ),
-                ),
-                Text(
-                  currencyFormat.format(amount),
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: badgeColor.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: badgeColor.withOpacity(0.5)),
-                  ),
-                  child: Text(
-                    badgeText,
-                    style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
-                  ),
-                ),
+                ],
               ],
             ),
           );
@@ -1466,5 +1975,493 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
         ),
       ),
     );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DIALOGS: PAGAMENTO DE COMISSÕES, ASAAS CONFIG, ALERTAS E EMISSÃO
+  // ══════════════════════════════════════════════════════════════════════════
+  void _showPayCommissionsDialog() {
+    if (_selectedSellerId == null) return;
+    final portfolio = _selectedSellerPortfolio ?? {};
+    final releasedCommissions = (portfolio['releasedCommissions'] as List?) ?? [];
+    final pendingAdjustments = (portfolio['pendingAdjustments'] as List?) ?? [];
+    final double adjTotal = (portfolio['pendingAdjustmentsTotal'] as num?)?.toDouble() ?? 0.0;
+
+    final selectedCommissionIds = <String>{};
+    for (final c in releasedCommissions) {
+      selectedCommissionIds.add(c['id'].toString());
+    }
+
+    final methodController = TextEditingController(text: 'PIX');
+    final receiptController = TextEditingController();
+    final notesController = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          double selectedSum = 0;
+          for (final c in releasedCommissions) {
+            if (selectedCommissionIds.contains(c['id'].toString())) {
+              selectedSum += ((c['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+            }
+          }
+          final double netPayout = (selectedSum - adjTotal) > 0 ? (selectedSum - adjTotal) : 0.0;
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF10B981)),
+            ),
+            title: const Text('Acerto de Comissões do Vendedor',
+                style: TextStyle(color: Color(0xFF10B981), fontSize: 16, fontWeight: FontWeight.bold)),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Selecione as comissões a serem pagas:',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Container(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: releasedCommissions.length,
+                        itemBuilder: (context, idx) {
+                          final c = releasedCommissions[idx];
+                          final cid = c['id'].toString();
+                          final amount = ((c['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+                          final isChecked = selectedCommissionIds.contains(cid);
+                          final clientName = c['agreement']?['buyerName']?.toString() ?? 'Cliente';
+
+                          return CheckboxListTile(
+                            value: isChecked,
+                            activeColor: const Color(0xFF10B981),
+                            checkColor: Colors.black,
+                            dense: true,
+                            title: Text(
+                              '${c['type'] == 'DOWN_PAYMENT' ? 'Entrada' : 'Parcela'} · $clientName',
+                              style: const TextStyle(color: Colors.white, fontSize: 11),
+                            ),
+                            subtitle: Text(
+                              currencyFormat.format(amount),
+                              style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                            onChanged: (val) {
+                              setDialogState(() {
+                                if (val == true) {
+                                  selectedCommissionIds.add(cid);
+                                } else {
+                                  selectedCommissionIds.remove(cid);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Comissões Selecionadas:', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        Text(currencyFormat.format(selectedSum),
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    if (adjTotal > 0) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('(-) Desconto de Estorno (${pendingAdjustments.length}):', style: const TextStyle(color: Color(0xFFEF4444), fontSize: 11)),
+                          Text('- ${currencyFormat.format(adjTotal)}',
+                              style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ],
+                    const Divider(color: Colors.white24, height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Total Líquido a Pagar:',
+                            style: TextStyle(color: Color(0xFF10B981), fontSize: 12, fontWeight: FontWeight.bold)),
+                        Text(currencyFormat.format(netPayout),
+                            style: const TextStyle(color: Color(0xFF10B981), fontSize: 15, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      value: methodController.text,
+                      dropdownColor: const Color(0xFF160D24),
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Forma de Pagamento',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'PIX', child: Text('Pix')),
+                        DropdownMenuItem(value: 'TRANSFER', child: Text('Transferência Bancária')),
+                        DropdownMenuItem(value: 'CASH', child: Text('Dinheiro em Mãos')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) methodController.text = val;
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: receiptController,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Comprovante / Chave Pix (opcional)',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: notesController,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Observações do Acerto',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.black),
+                onPressed: (isSubmitting || selectedCommissionIds.isEmpty)
+                    ? null
+                    : () async {
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          await _api.payCreditCommissionsBatch(
+                            sellerId: _selectedSellerId!,
+                            commissionIds: selectedCommissionIds.toList(),
+                            paymentMethod: methodController.text,
+                            receiptUrl: receiptController.text.trim(),
+                            notes: notesController.text.trim(),
+                            idempotencyKey: 'payout_${_selectedSellerId}_${DateTime.now().millisecondsSinceEpoch}',
+                          );
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Pagamento de comissões registrado com sucesso!'),
+                                backgroundColor: Color(0xFF10B981),
+                              ),
+                            );
+                            _refresh();
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSubmitting = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro ao liquidar comissões: $e'), backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                    : const Text('Confirmar Pagamento', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showAsaasConfigDialog() {
+    String currentMode = _asaasConfig?['mode'] ?? 'DISABLED';
+    final sandboxKeyCtrl = TextEditingController(text: _asaasConfig?['sandboxApiKey'] ?? '');
+    final prodKeyCtrl = TextEditingController(text: _asaasConfig?['productionApiKey'] ?? '');
+    final webhookSecretCtrl = TextEditingController(text: _asaasConfig?['webhookSecret'] ?? '');
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF38BDF8)),
+            ),
+            title: Row(
+              children: const [
+                Icon(Icons.account_balance_rounded, color: Color(0xFF38BDF8), size: 20),
+                SizedBox(width: 8),
+                Text('Configuração Asaas', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.04),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'Diretriz LGPD: Nunca envie dados ou fotos de crianças para o Asaas. Apenas dados do titular/responsável financeiro são transmitidos.\n\nModo padrão: DISABLED (100% crediário interno).',
+                        style: TextStyle(color: Colors.white70, fontSize: 11),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text('Modo de Operação:', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      value: currentMode,
+                      dropdownColor: const Color(0xFF160D24),
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'DISABLED', child: Text('DISABLED (Crediário Interno sem emissão)')),
+                        DropdownMenuItem(value: 'SANDBOX', child: Text('SANDBOX (Ambiente de Testes)')),
+                        DropdownMenuItem(value: 'PRODUCTION', child: Text('PRODUCTION (Emissão Bancária Real)')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setDialogState(() => currentMode = val);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: sandboxKeyCtrl,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Chave API Sandbox (Servidor)',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: prodKeyCtrl,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Chave API Produção (Servidor)',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: webhookSecretCtrl,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      decoration: const InputDecoration(
+                        labelText: 'Token de Acesso do Webhook (asaas-access-token)',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: Colors.black),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        setDialogState(() => isSaving = true);
+                        try {
+                          await _api.updateAsaasConfig({
+                            'mode': currentMode,
+                            'sandboxApiKey': sandboxKeyCtrl.text.trim(),
+                            'productionApiKey': prodKeyCtrl.text.trim(),
+                            'webhookSecret': webhookSecretCtrl.text.trim(),
+                          });
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Configuração Asaas atualizada com sucesso!'),
+                                backgroundColor: Color(0xFF38BDF8),
+                              ),
+                            );
+                            _refresh();
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSaving = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro ao atualizar Asaas: $e'), backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                    : const Text('Salvar Configuração', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showAsaasDuplicateAlertsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF160D24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Colors.amberAccent),
+        ),
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Colors.amberAccent, size: 22),
+            SizedBox(width: 8),
+            Text('Pagamentos em Duplicidade',
+                style: TextStyle(color: Colors.amberAccent, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SizedBox(
+          width: 440,
+          child: _asaasDuplicateAlerts.isEmpty
+              ? const Text('Nenhum pagamento em duplicidade pendente de conciliação.',
+                  style: TextStyle(color: Colors.white70))
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _asaasDuplicateAlerts.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  itemBuilder: (context, idx) {
+                    final alert = _asaasDuplicateAlerts[idx];
+                    final amount = ((alert['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+                    final aid = alert['id'].toString();
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Contrato: ${alert['agreement']?['buyerName'] ?? 'Cliente'} · Valor: ${currencyFormat.format(amount)}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          alert['notes'] ?? 'Pagamento bancário recebido após baixa manual prévia.',
+                          style: const TextStyle(color: Colors.white60, fontSize: 11),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFF10B981),
+                                  side: const BorderSide(color: Color(0xFF10B981)),
+                                  padding: const EdgeInsets.symmetric(vertical: 6),
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    await _api.resolveAsaasDuplicateAlert(aid, 'ALLOCATE_NEXT');
+                                    Navigator.pop(ctx);
+                                    _refresh();
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+                                    );
+                                  }
+                                },
+                                child: const Text('Alocar na Próxima Parcela', style: TextStyle(fontSize: 10)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFFEF4444),
+                                  side: const BorderSide(color: Color(0xFFEF4444)),
+                                  padding: const EdgeInsets.symmetric(vertical: 6),
+                                ),
+                                onPressed: () async {
+                                  try {
+                                    await _api.resolveAsaasDuplicateAlert(aid, 'REFUND');
+                                    Navigator.pop(ctx);
+                                    _refresh();
+                                  } catch (e) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red),
+                                    );
+                                  }
+                                },
+                                child: const Text('Marcar p/ Devolução', style: TextStyle(fontSize: 10)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Fechar', style: TextStyle(color: Colors.white54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _emitAsaasCharges(String agreementId) async {
+    try {
+      final res = await _api.emitAsaasCharges(agreementId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(res['message'] ?? 'Cobranças emitidas/enfileiradas com sucesso no Asaas!'),
+            backgroundColor: const Color(0xFF38BDF8),
+          ),
+        );
+        _refresh();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao emitir no Asaas: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 }

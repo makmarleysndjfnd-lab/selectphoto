@@ -3,10 +3,10 @@ import 'package:mobile/config/app_config.dart';
 
 void main() {
   group('0. Verificação da Versão Efetivamente Compilada no AppConfig', () {
-    test('AppConfig reflete fielmente a release 1.0.12+23', () {
-      expect(AppConfig.appVersion, equals('1.0.12'));
-      expect(AppConfig.buildNumber, equals(23));
-      expect(AppConfig.fullVersion, equals('1.0.12+23'));
+    test('AppConfig reflete fielmente a release 1.0.13+24', () {
+      expect(AppConfig.appVersion, equals('1.0.13'));
+      expect(AppConfig.buildNumber, equals(24));
+      expect(AppConfig.fullVersion, equals('1.0.13+24'));
     });
   });
 
@@ -14,7 +14,7 @@ void main() {
     test('Aceita SOMENTE HTTPS com host exato selectphoto-k1ac.onrender.com', () {
       expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/apk/app-release.apk'), isTrue);
       expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/api/app-version/download'), isTrue);
-      expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/download.apk?v=1.0.12'), isTrue);
+      expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/download.apk?v=1.0.13'), isTrue);
     });
 
     test('Rejeita conexões HTTP (inseguras)', () {
@@ -49,37 +49,37 @@ void main() {
   group('2. Comparação de Build Number e Resposta Real do Backend (AppConfig.shouldPromptUpdate)', () {
     const validUrl = 'https://selectphoto-k1ac.onrender.com/apk/app-release.apk';
 
-    // Testes usando a versão instalada padrão (1.0.12+23)
-    test('instalada padrão (1.0.12+23) / remota version "1.0.12" e buildNumber 24: atualizar', () {
+    // Testes usando a versão instalada padrão (1.0.13+24)
+    test('instalada padrão (1.0.13+24) / remota version "1.0.13" e buildNumber 25: atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
-        remoteVersion: '1.0.12',
-        remoteBuildNumber: 24,
+        remoteVersion: '1.0.13',
+        remoteBuildNumber: 25,
         downloadUrl: validUrl,
       );
       expect(shouldUpdate, isTrue);
     });
 
-    test('instalada padrão (1.0.12+23) / remota version "1.0.12" e buildNumber 23: não atualizar', () {
+    test('instalada padrão (1.0.13+24) / remota version "1.0.13" e buildNumber 24: não atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
-        remoteVersion: '1.0.12',
-        remoteBuildNumber: 23,
+        remoteVersion: '1.0.13',
+        remoteBuildNumber: 24,
         downloadUrl: validUrl,
       );
       expect(shouldUpdate, isFalse);
     });
 
-    test('instalada padrão (1.0.12+23) / remota version "1.0.13" e buildNumber 1: atualizar', () {
+    test('instalada padrão (1.0.13+24) / remota version "1.0.14" e buildNumber 1: atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
-        remoteVersion: '1.0.13',
+        remoteVersion: '1.0.14',
         remoteBuildNumber: 1,
         downloadUrl: validUrl,
       );
       expect(shouldUpdate, isTrue);
     });
 
-    test('instalada padrão (1.0.12+23) / remota version "1.0.11" e buildNumber 30: não atualizar', () {
+    test('instalada padrão (1.0.13+24) / remota version "1.0.12" e buildNumber 30: não atualizar', () {
       final shouldUpdate = AppConfig.shouldPromptUpdate(
-        remoteVersion: '1.0.11',
+        remoteVersion: '1.0.12',
         remoteBuildNumber: 30,
         downloadUrl: validUrl,
       );
