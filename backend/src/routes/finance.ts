@@ -58,7 +58,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     let tarifasBancarias = 0;
     let saldoConfirmadoAsaas = 0;
     let saldoDisponivelAsaas = 0;
-    let valoresEmPoderDoVendedor = 0;
+    let recebimentosAcumuladosVendedor = 0;
 
     for (const cp of creditPayments) {
       const amt = cp.amountCents / 100.0;
@@ -68,16 +68,41 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
 
       const netAmount = Math.max(0, amt - fee);
 
-      if (cp.receivedByRole === 'BANK' || cp.externalPaymentId) {
+      const isBank =
+        ['BANK', 'ASAAS'].includes((cp.receivedByRole || '').toUpperCase()) ||
+        Boolean(cp.externalPaymentId);
+
+      const isSeller =
+        ['SELLER_HANDS', 'SELLER_RETENTION', 'SELLER'].includes((cp.destination || '').toUpperCase()) ||
+        ['SELLER', 'VENDEDOR'].includes((cp.receivedByRole || '').toUpperCase());
+
+      if (isBank) {
         if (cp.isAsaasSettled) {
           saldoDisponivelAsaas += netAmount;
         } else {
           saldoConfirmadoAsaas += netAmount;
         }
-      } else if (cp.destination === 'SELLER_RETENTION' || cp.receivedByRole === 'VENDEDOR') {
-        valoresEmPoderDoVendedor += amt;
+      } else if (isSeller) {
+        recebimentosAcumuladosVendedor += amt;
       }
     }
+
+    // Buscar acertos e repasses já realizados pelos vendedores à empresa
+    const closings = await prisma.dailyClosing.findMany({
+      where: userCompanyId ? { seller: { companyId: userCompanyId } } : {},
+      select: { repasseDebt: true },
+    });
+
+    let acertosRealizadosVendedor = 0;
+    for (const cl of closings) {
+      if (cl.repasseDebt < 0) {
+        acertosRealizadosVendedor += Math.abs(cl.repasseDebt);
+      }
+    }
+
+    // Separar recebimentos acumulados de valores ainda não repassados, incluindo os acertos já realizados
+    const valoresNaoRepassadosVendedor = Math.max(0, recebimentosAcumuladosVendedor - acertosRealizadosVendedor);
+    const valoresEmPoderDoVendedor = valoresNaoRepassadosVendedor;
 
     // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais / Principal Recebido)
     // Transferências internas entre vendedor e empresa não duplicam receita
@@ -140,6 +165,9 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       tarifasBancarias,
       saldoConfirmadoAsaas,
       saldoDisponivelAsaas,
+      recebimentosAcumuladosVendedor,
+      acertosRealizadosVendedor,
+      valoresNaoRepassadosVendedor,
       valoresEmPoderDoVendedor,
       saldoAReceber,
       recentSales: recentSales.map(s => ({

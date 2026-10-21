@@ -98,6 +98,19 @@ async function asaasRequest(
     if (method === 'DELETE') {
       return { deleted: true, simulated: true };
     }
+    if (endpoint.startsWith('/payments?externalReference=')) {
+      const parts = endpoint.split('externalReference=');
+      const ref = decodeURIComponent(parts[1] || '');
+      const simulatedPayment = (global as any).__simulatedAsaasRemotePayments?.[ref];
+      if (simulatedPayment) {
+        return {
+          totalCount: 1,
+          data: [simulatedPayment],
+          simulated: true,
+        };
+      }
+      return { totalCount: 0, data: [], simulated: true };
+    }
     return { id: `sim_${Date.now()}`, status: 'CONFIRMED', simulated: true };
   }
 
@@ -213,6 +226,56 @@ export async function createAsaasChargeForInstallment(
       status: 'PENDING',
       nominalValueCents: Math.round(chargeInput.value * 100),
     };
+  }
+
+  // 1. Reconciliação remota: consulta o Asaas pela externalReference antes de emitir nova cobrança
+  if (chargeInput.externalReference) {
+    try {
+      const searchRes = await asaasRequest(
+        config,
+        `/payments?externalReference=${encodeURIComponent(chargeInput.externalReference)}`
+      );
+      const existingRemote =
+        searchRes?.data && Array.isArray(searchRes.data) && searchRes.data.length > 0
+          ? searchRes.data[0]
+          : null;
+
+      if (existingRemote && existingRemote.id) {
+        console.log(
+          `[Asaas] Cobrança existente recuperada remotamente por externalReference ${chargeInput.externalReference}: ${existingRemote.id}`
+        );
+
+        let identificationField = existingRemote.identificationField;
+        if (!identificationField) {
+          try {
+            const idFieldRes = await asaasRequest(config, `/payments/${existingRemote.id}/identificationField`);
+            identificationField = idFieldRes.identificationField;
+          } catch {}
+        }
+
+        let pixQrCodeUrl: string | undefined;
+        let pixPayload: string | undefined;
+        try {
+          const pixRes = await asaasRequest(config, `/payments/${existingRemote.id}/pixQrCode`);
+          pixQrCodeUrl = pixRes.encodedImage ? `data:image/png;base64,${pixRes.encodedImage}` : undefined;
+          pixPayload = pixRes.payload;
+        } catch {}
+
+        return {
+          externalId: existingRemote.id,
+          status: existingRemote.status || 'PENDING',
+          nominalValueCents: Math.round((Number(existingRemote.value) || chargeInput.value) * 100),
+          netValueCents: existingRemote.netValue ? Math.round(Number(existingRemote.netValue) * 100) : undefined,
+          bankSlipUrl: existingRemote.bankSlipUrl,
+          invoiceUrl: existingRemote.invoiceUrl,
+          identificationField,
+          pixQrCodeUrl,
+          pixPayload,
+        };
+      }
+    } catch (searchErr) {
+      console.warn('[Asaas] Aviso ao consultar cobrança existente por externalReference:', searchErr);
+    }
   }
 
   const payload = {
@@ -392,22 +455,25 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
     console.warn('[Asaas Queue] Aviso ao recuperar tarefas interrompidas:', recErr);
   }
 
-  // 2. Captura atômica em transação
+  // 2. Captura exclusiva no banco com FOR UPDATE SKIP LOCKED
   const pendingItems = await prisma.$transaction(async (tx) => {
-    const items = await tx.asaasSyncQueue.findMany({
-      where: { status: 'PENDING', attempts: { lt: 5 } },
-      take: limit,
-      orderBy: { createdAt: 'asc' },
-    });
+    const captured: Array<any> = await tx.$queryRaw`
+      WITH selected AS (
+        SELECT id
+        FROM "AsaasSyncQueue"
+        WHERE status = 'PENDING' AND attempts < 5
+        ORDER BY "createdAt" ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "AsaasSyncQueue" q
+      SET status = 'PROCESSING', "updatedAt" = NOW()
+      FROM selected
+      WHERE q.id = selected.id
+      RETURNING q.*;
+    `;
 
-    if (items.length === 0) return [];
-
-    await tx.asaasSyncQueue.updateMany({
-      where: { id: { in: items.map((i) => i.id) } },
-      data: { status: 'PROCESSING' },
-    });
-
-    return items;
+    return captured || [];
   });
 
   let processed = 0;
@@ -429,7 +495,7 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
         continue;
       }
 
-      const p: any = item.payload;
+      const p: any = typeof item.payload === 'string' ? JSON.parse(item.payload) : (item.payload || {});
 
       switch (item.action) {
         case 'CREATE_CUSTOMER': {
@@ -459,6 +525,9 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
           }
 
           if (!res) {
+            if (!p.externalReference && item.installmentId) {
+              p.externalReference = item.installmentId;
+            }
             res = await createAsaasChargeForInstallment(item.companyId, p);
           }
 

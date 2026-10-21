@@ -223,16 +223,24 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
       const comissaoPendenteAjustesCents = s.creditCommissionAdjustments.reduce((sum, adj) => sum + adj.amountCents, 0);
       const comissaoLiquidaPagarCents = Math.max(0, comissaoLiberadaCents - comissaoPendenteAjustesCents);
 
+      const totalRemainingPrincipal = Number((saldoAReceberCents / 100).toFixed(2));
+      const totalOverduePrincipal = Number((valorVencidoCents / 100).toFixed(2));
+      const netCommissionPayable = Number((comissaoLiquidaPagarCents / 100).toFixed(2));
+
       return {
         sellerId: s.id,
         sellerName: s.name,
         active: s.active,
+        isActive: s.active,
         totalAgreements: s.creditAgreementsSeller.length,
         saldoAReceberCents,
         valorVencidoCents,
         comissaoLiberadaCents,
         comissaoPendenteAjustesCents,
         comissaoLiquidaPagarCents,
+        totalRemainingPrincipal,
+        totalOverduePrincipal,
+        netCommissionPayable,
       };
     });
 
@@ -1586,98 +1594,206 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
       return;
     }
 
-    if (alert.status !== 'PENDING') {
-      res.status(400).json({ error: `Alerta já se encontra com status ${alert.status}` });
-      return;
-    }
-
     if (action === 'ALLOCATE_NEXT') {
-      const nextInstallment = alert.agreement.installments[0];
-      if (!nextInstallment) {
-        res.status(400).json({ error: 'Não há parcelas em aberto no contrato para alocação' });
-        return;
-      }
+      const result = await prisma.$transaction(async (tx) => {
+        // Bloqueio pessimista no próprio alerta para evitar resoluções concorrentes simultâneas
+        await tx.$queryRaw`SELECT id FROM "AsaasDuplicatePaymentAlert" WHERE id = ${alert.id} FOR UPDATE`;
+        const freshAlert = await tx.asaasDuplicatePaymentAlert.findUniqueOrThrow({ where: { id: alert.id } });
 
-      await prisma.$transaction(async (tx) => {
-        // Bloqueio pessimista no contrato e na próxima parcela
-        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${alert.agreementId} FOR UPDATE`;
-        await tx.$queryRaw`SELECT id FROM "CreditInstallment" WHERE id = ${nextInstallment.id} FOR UPDATE`;
+        if (freshAlert.status !== 'PENDING') {
+          throw { status: 400, message: `Alerta já se encontra com status ${freshAlert.status}` };
+        }
 
-        const freshAgreement = await tx.creditAgreement.findUniqueOrThrow({ where: { id: alert.agreementId } });
-        const freshInst = await tx.creditInstallment.findUniqueOrThrow({ where: { id: nextInstallment.id } });
+        // Bloqueio pessimista no contrato
+        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${freshAlert.agreementId} FOR UPDATE`;
+        const freshAgreement = await tx.creditAgreement.findUniqueOrThrow({
+          where: { id: freshAlert.agreementId },
+          include: {
+            installments: {
+              where: { status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] } },
+              orderBy: { installmentNumber: 'asc' },
+            },
+          },
+        });
 
-        const allocatedCents = Math.min(alert.amountCents, freshInst.amountCents - freshInst.paidCents);
+        if (freshAgreement.installments.length === 0) {
+          throw { status: 400, message: 'Não há parcelas em aberto no contrato para alocação' };
+        }
+
+        // Distribuir o pagamento entre as parcelas elegíveis até esgotar o valor
+        let remainingToAllocate = freshAlert.amountCents;
+        let totalAmortizedCents = 0;
+        const allocationsToCreate: { installmentId: string; amountCents: number }[] = [];
+
+        for (const inst of freshAgreement.installments) {
+          if (remainingToAllocate <= 0) break;
+          const unpaid = inst.amountCents - inst.paidCents;
+          if (unpaid <= 0) continue;
+
+          const allocated = Math.min(remainingToAllocate, unpaid);
+          allocationsToCreate.push({ installmentId: inst.id, amountCents: allocated });
+          remainingToAllocate -= allocated;
+          totalAmortizedCents += allocated;
+        }
+
+        if (totalAmortizedCents === 0) {
+          throw { status: 400, message: 'Nenhuma parcela disponível para amortização' };
+        }
 
         const creditPayment = await tx.creditPayment.create({
           data: {
             agreementId: freshAgreement.id,
             companyId,
-            amountCents: alert.amountCents,
+            amountCents: totalAmortizedCents,
             paymentMethod: 'ASAAS_DUPLICATE_ALLOCATION',
             receivedByRole: 'BANK',
             receiverUserId: freshAgreement.sellerId,
             destination: 'COMPANY_ACCOUNT',
-            externalPaymentId: `${alert.externalPaymentId}:allocated`,
+            externalPaymentId: `${freshAlert.externalPaymentId}:allocated`,
             isAsaasSettled: true,
             settledAt: new Date(),
-            notes: `Alocação de pagamento em duplicidade (${alert.externalPaymentId}). ${notes || ''}`.trim(),
+            notes: `Alocação de pagamento em duplicidade (${freshAlert.externalPaymentId}). ${notes || ''}`.trim(),
           },
         });
 
-        const newPaidCents = freshInst.paidCents + allocatedCents;
-        const isFullyPaid = newPaidCents >= freshInst.amountCents;
+        for (const alloc of allocationsToCreate) {
+          const inst = freshAgreement.installments.find((i) => i.id === alloc.installmentId)!;
+          const newPaidCents = inst.paidCents + alloc.amountCents;
+          const isFullyPaid = newPaidCents >= inst.amountCents;
 
-        await tx.creditPaymentAllocation.create({
-          data: {
-            paymentId: creditPayment.id,
-            installmentId: freshInst.id,
-            allocatedCents,
-          },
-        });
+          await tx.creditPaymentAllocation.create({
+            data: {
+              paymentId: creditPayment.id,
+              installmentId: inst.id,
+              allocatedCents: alloc.amountCents,
+            },
+          });
 
-        await tx.creditInstallment.update({
-          where: { id: freshInst.id },
-          data: {
-            paidCents: newPaidCents,
-            status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
-            paidAt: isFullyPaid ? new Date() : undefined,
-          },
-        });
+          await tx.creditInstallment.update({
+            where: { id: inst.id },
+            data: {
+              paidCents: newPaidCents,
+              status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+              paidAt: isFullyPaid ? new Date() : undefined,
+            },
+          });
+        }
 
-        const newRemaining = Math.max(0, freshAgreement.remainingPrincipalCents - allocatedCents);
+        // Atualizar saldo do contrato
+        const newRemaining = Math.max(0, freshAgreement.remainingPrincipalCents - totalAmortizedCents);
         await tx.creditAgreement.update({
           where: { id: freshAgreement.id },
           data: {
             remainingPrincipalCents: newRemaining,
-            paidPrincipalCents: freshAgreement.paidPrincipalCents + allocatedCents,
+            paidPrincipalCents: freshAgreement.paidPrincipalCents + totalAmortizedCents,
             status: newRemaining === 0 ? 'SETTLED' : freshAgreement.status,
           },
         });
 
-        await tx.asaasDuplicatePaymentAlert.update({
-          where: { id: alert.id },
-          data: {
-            status: 'RESOLVED_ALLOCATED',
-            resolvedAt: new Date(),
-            resolvedByUserId: authorId,
-            notes: notes ? String(notes).trim() : 'Alocado na próxima parcela com sucesso',
-          },
-        });
+        // Gerar comissão de 10% sobre o principal efetivamente amortizado, uma única vez
+        const commissionCents = Math.round(totalAmortizedCents * 0.10);
+        if (commissionCents > 0) {
+          await tx.creditCommission.create({
+            data: {
+              companyId,
+              agreementId: freshAgreement.id,
+              paymentId: creditPayment.id,
+              sellerId: freshAgreement.sellerId,
+              amountCents: commissionCents,
+              type: 'INSTALLMENT',
+              status: 'RELEASED',
+            },
+          });
+        }
+
+        // Qualquer excedente deve permanecer explicitamente registrado para conciliação/devolução
+        let surplusAlertId: string | null = null;
+        if (remainingToAllocate > 0) {
+          const surplusAlert = await tx.asaasDuplicatePaymentAlert.create({
+            data: {
+              companyId,
+              agreementId: freshAgreement.id,
+              installmentId: freshAlert.installmentId,
+              externalPaymentId: `${freshAlert.externalPaymentId}:surplus`,
+              amountCents: remainingToAllocate,
+              reason: `Excedente não amortizado de pagamento em duplicidade (${freshAlert.externalPaymentId}). Saldo do contrato esgotado.`,
+              status: 'PENDING',
+              notes: `Excedente de R$ ${(remainingToAllocate / 100).toFixed(2)} registrado para conciliação/devolução.`,
+            },
+          });
+          surplusAlertId = surplusAlert.id;
+
+          await tx.asaasDuplicatePaymentAlert.update({
+            where: { id: freshAlert.id },
+            data: {
+              status: 'RESOLVED_ALLOCATED',
+              resolvedAt: new Date(),
+              resolvedByUserId: authorId,
+              notes: `Amortizado R$ ${(totalAmortizedCents / 100).toFixed(2)}. Excedente de R$ ${(remainingToAllocate / 100).toFixed(2)} registrado em alerta residual (${surplusAlert.id}) para devolução/conciliação. ${notes ? notes.trim() : ''}`.trim(),
+            },
+          });
+        } else {
+          await tx.asaasDuplicatePaymentAlert.update({
+            where: { id: freshAlert.id },
+            data: {
+              status: 'RESOLVED_ALLOCATED',
+              resolvedAt: new Date(),
+              resolvedByUserId: authorId,
+              notes: notes ? String(notes).trim() : 'Alocado integralmente nas parcelas pendentes com sucesso',
+            },
+          });
+        }
+
+        return {
+          totalAmortizedCents,
+          surplusCents: remainingToAllocate,
+          surplusAlertId,
+          commissionCents,
+        };
       });
 
-      res.json({ success: true, action: 'ALLOCATE_NEXT', status: 'RESOLVED_ALLOCATED' });
+      res.json({
+        success: true,
+        action: 'ALLOCATE_NEXT',
+        status: 'RESOLVED_ALLOCATED',
+        ...result,
+      });
       return;
     }
 
     if (action === 'REFUND') {
       const asaasConfig = await getCompanyAsaasConfig(companyId);
-      let refundStatus = 'REFUND_PROCESSING';
 
+      // Trava pessimista e releitura do alerta antes do estorno
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "AsaasDuplicatePaymentAlert" WHERE id = ${alert.id} FOR UPDATE`;
+        const freshAlert = await tx.asaasDuplicatePaymentAlert.findUniqueOrThrow({ where: { id: alert.id } });
+        if (freshAlert.status !== 'PENDING' && freshAlert.status !== 'REFUND_REQUESTED') {
+          throw { status: 400, message: `Alerta já se encontra com status ${freshAlert.status}` };
+        }
+        await tx.asaasDuplicatePaymentAlert.update({
+          where: { id: alert.id },
+          data: {
+            status: 'REFUND_PROCESSING',
+            resolvedByUserId: authorId,
+            notes: notes ? String(notes).trim() : 'Estorno bancário solicitado',
+          },
+        });
+      });
+
+      let refundStatus = 'REFUND_PROCESSING';
       if (asaasConfig.mode !== 'DISABLED') {
         try {
           const refundRes = await refundAsaasPayment(companyId, alert.externalPaymentId, alert.amountCents / 100.0, notes);
           if (refundRes?.status === 'REFUNDED') {
             refundStatus = 'REFUNDED';
+            await prisma.asaasDuplicatePaymentAlert.update({
+              where: { id: alert.id },
+              data: {
+                status: 'REFUNDED',
+                resolvedAt: new Date(),
+              },
+            });
           }
         } catch (refundErr: any) {
           console.error('[Asaas Refund] Erro ao solicitar estorno no Asaas:', refundErr);
@@ -1686,21 +1802,14 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
         }
       }
 
-      await prisma.asaasDuplicatePaymentAlert.update({
-        where: { id: alert.id },
-        data: {
-          status: refundStatus,
-          resolvedAt: refundStatus === 'REFUNDED' ? new Date() : null,
-          resolvedByUserId: authorId,
-          notes: notes ? String(notes).trim() : 'Estorno bancário solicitado',
-        },
-      });
-
       res.json({ success: true, action: 'REFUND', status: refundStatus });
       return;
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err?.status && err?.message) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    res.status(500).json({ error: err.message || 'Erro ao resolver alerta' });
   }
 });
 

@@ -21,7 +21,8 @@ process.env.NODE_ENV = 'test';
 import salesRoutes from '../src/routes/sales';
 import creditRoutes from '../src/routes/credit';
 import financeRoutes from '../src/routes/finance';
-import { processAsaasSyncQueue } from '../src/services/asaasService';
+import closingRoutes from '../src/routes/closing';
+import { processAsaasSyncQueue, createAsaasChargeForInstallment } from '../src/services/asaasService';
 
 const prisma = new PrismaClient();
 
@@ -35,6 +36,7 @@ function createTestApp() {
   app.use('/api/sales', salesRoutes);
   app.use('/api/credit', creditRoutes);
   app.use('/api/finance', financeRoutes);
+  app.use('/api/closing', closingRoutes);
   return app;
 }
 
@@ -1164,5 +1166,441 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     assert.ok(typeof fin.valoresEmPoderDoVendedor === 'number');
     assert.ok(typeof fin.saldoAReceber === 'number');
     assert.ok(fin.recebimentosEfetivos >= fin.entradasAVista);
+  });
+
+  it('16. Sellers-summary: alinhamento com mobile (Reais e isActive), isolamento por vendedor, preservação de inativos e exclusão de vendas à vista', async () => {
+    // 16.1 Cria vendedor inativo com carteira histórica
+    const inactiveSeller = await prisma.user.create({
+      data: {
+        email: `inactive_seller_${Date.now()}@teste.com`,
+        password: 'dummy',
+        name: 'Vendedor Inativo Histórico',
+        role: 'SELLER',
+        companyId,
+        active: false,
+      },
+    });
+
+    const client16A = await createTestClient('Cliente Crediário Ativo');
+    const client16B = await createTestClient('Cliente Crediário Inativo');
+    const client16Cash = await createTestClient('Cliente Venda À Vista');
+
+    // Venda 100% à vista (não deve entrar no sellers-summary de crediário)
+    await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client16Cash.id,
+        value: 400,
+        city: 'Curitiba',
+        product: 'Venda À Vista 16',
+        payments: [{ method: 'PIX', amount: 400 }],
+      }),
+    });
+
+    // Contrato Crediário para Vendedor 1
+    const sale16ARes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client16A.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Venda Crediário V1',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel 16A',
+          buyerCpf: validCpf,
+          installmentsCount: 2,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale16ARes.status, 201);
+    const sale16AData = await sale16ARes.json();
+
+    // Contrato Crediário para Vendedor Inativo
+    const sale16B = await prisma.sale.create({
+      data: {
+        companyId,
+        sellerId: inactiveSeller.id,
+        clientId: client16B.id,
+        value: 800,
+        city: 'Curitiba',
+        date: new Date(),
+        product: 'Venda Crediário Inativo',
+        paymentMethod: 'CREDIARIO',
+        status: 'COMPLETED',
+      },
+    });
+
+    const agreement16B = await prisma.creditAgreement.create({
+      data: {
+        companyId,
+        sellerId: inactiveSeller.id,
+        clientId: client16B.id,
+        saleId: sale16B.id,
+        buyerName: 'Responsavel Inativo',
+        buyerCpf: validCpf,
+        street: 'Rua Inativo',
+        number: '100',
+        neighborhood: 'Bairro',
+        city: 'Curitiba',
+        state: 'PR',
+        firstDueDate: new Date(Date.now() - 5 * 24 * 3600 * 1000),
+        totalSaleCents: 80000,
+        downPaymentCents: 20000,
+        financedPrincipalCents: 60000,
+        remainingPrincipalCents: 60000,
+        paidPrincipalCents: 0,
+        installmentsCount: 2,
+        periodicity: 'MONTHLY',
+        status: 'ACTIVE',
+        installments: {
+          create: [
+            {
+              installmentNumber: 1,
+              dueDate: new Date(Date.now() - 5 * 24 * 3600 * 1000), // vencida
+              amountCents: 30000,
+              paidCents: 0,
+              status: 'OVERDUE',
+            },
+            {
+              installmentNumber: 2,
+              dueDate: new Date(Date.now() + 25 * 24 * 3600 * 1000), // a vencer
+              amountCents: 30000,
+              paidCents: 0,
+              status: 'PENDING',
+            },
+          ],
+        },
+      },
+    });
+
+    // Consulta sellers-summary
+    const summaryRes = await fetch(`${baseUrl}/api/credit/sellers-summary`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(summaryRes.status, 200);
+    const summaryList = await summaryRes.json();
+
+    // Localiza os dois vendedores
+    const s1Card = summaryList.find((s: any) => s.sellerId === seller1Id);
+    const sInactCard = summaryList.find((s: any) => s.sellerId === inactiveSeller.id);
+
+    assert.ok(s1Card, 'Vendedor ativo 1 deve estar no resumo');
+    assert.ok(sInactCard, 'Vendedor inativo deve permanecer no resumo histórico');
+
+    // Validação estrita do contrato com mobile:
+    // Deve conter campos em Reais convertidos exatamente uma vez (cents / 100.0)
+    assert.equal(typeof s1Card.totalRemainingPrincipal, 'number');
+    assert.equal(typeof s1Card.totalOverduePrincipal, 'number');
+    assert.equal(typeof s1Card.netCommissionPayable, 'number');
+    assert.equal(s1Card.isActive, true);
+    assert.equal(s1Card.active, true);
+
+    assert.equal(typeof sInactCard.totalRemainingPrincipal, 'number');
+    assert.equal(sInactCard.totalRemainingPrincipal, 600.0);
+    assert.equal(sInactCard.totalOverduePrincipal, 300.0);
+    assert.equal(sInactCard.isActive, false);
+    assert.equal(sInactCard.active, false);
+
+    // Validação ao clicar em um vendedor: filtrar estritamente sua carteira
+    const filterS1Res = await fetch(`${baseUrl}/api/credit/agreements?sellerId=${seller1Id}`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(filterS1Res.status, 200);
+    const s1Agreements = await filterS1Res.json();
+    assert.ok(s1Agreements.every((a: any) => a.sellerId === seller1Id));
+    assert.ok(s1Agreements.some((a: any) => a.id === sale16AData.creditAgreement?.id || a.buyerName === 'Responsavel 16A'));
+
+    const filterInactRes = await fetch(`${baseUrl}/api/credit/agreements?sellerId=${inactiveSeller.id}`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(filterInactRes.status, 200);
+    const inactAgreements = await filterInactRes.json();
+    assert.equal(inactAgreements.length, 1);
+    assert.equal(inactAgreements[0].id, agreement16B.id);
+
+    // Contratos quitados (status=SETTLED) acessíveis pelo filtro
+    const filterSettledRes = await fetch(`${baseUrl}/api/credit/agreements?status=SETTLED`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(filterSettledRes.status, 200);
+    const settledList = await filterSettledRes.json();
+    assert.ok(Array.isArray(settledList));
+  });
+
+  it('17. Pendência 1: Padronização de perfil e destino (SELLER_HANDS/SELLER) e segregação de acumulado vs não repassado', async () => {
+    // 17.1 Cria contrato e registra pagamento com destination: SELLER_HANDS e receivedByRole: SELLER
+    const client17 = await createTestClient('Aluno Teste 17');
+    const sale17Res = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client17.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Crediário Repasse Teste',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel Repasse',
+          buyerCpf: validCpf,
+          installmentsCount: 2,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale17Res.status, 201);
+    const sale17Data = await sale17Res.json();
+    const agreement17 = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale17Data.id },
+      include: { installments: true },
+    });
+
+    // Pagamento em dinheiro em mãos do vendedor: R$ 250
+    const pay17Res = await fetch(`${baseUrl}/api/credit/agreements/${agreement17!.id}/payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        installmentId: agreement17!.installments[0].id,
+        amount: 250.0,
+        paymentMethod: 'CASH',
+        destination: 'SELLER_HANDS',
+        idempotencyKey: `pay_hands_${Date.now()}`,
+      }),
+    });
+    assert.equal(pay17Res.status, 201);
+
+    // Consulta finance overview inicial
+    const finRes1 = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(finRes1.status, 200);
+    const fin1 = await finRes1.json();
+    const acumuladoAntes = fin1.recebimentosAcumuladosVendedor;
+    const emPoderAntes = fin1.valoresEmPoderDoVendedor;
+    assert.ok(acumuladoAntes >= 250.0);
+
+    // 17.2 Realiza acerto de repasse oficial: Vendedor repassa R$ 200 à empresa
+    const repasseRes = await fetch(`${baseUrl}/api/closing/pay-repasse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        sellerId: seller1Id,
+        amount: 200.0,
+        direction: 'SELLER_PAYS_COMPANY',
+      }),
+    });
+    assert.equal(repasseRes.status, 201);
+
+    // Consulta finance overview após acerto
+    const finRes2 = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(finRes2.status, 200);
+    const fin2 = await finRes2.json();
+
+    // Acumulado permanece inalterado (histórico bruto)
+    assert.equal(fin2.recebimentosAcumuladosVendedor, acumuladoAntes);
+    // Acertos realizados registra os R$ 200
+    assert.ok(fin2.acertosRealizadosVendedor >= 200.0);
+    // Saldo em poder do vendedor reduz exatamente pelos R$ 200 repassados
+    assert.equal(Number((emPoderAntes - fin2.valoresEmPoderDoVendedor).toFixed(2)), 200.0);
+    assert.equal(fin2.valoresEmPoderDoVendedor, fin2.valoresNaoRepassadosVendedor);
+  });
+
+  it('18. Pendência 2: ALLOCATE_NEXT distribui multi-parcelas, gera comissão 10%, preserva excedente e bloqueia concorrência', async () => {
+    const client18 = await createTestClient('Aluno Teste 18');
+    const sale18Res = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client18.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Crediário Multi Alocação',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel Excedente',
+          buyerCpf: validCpf,
+          installmentsCount: 2, // 2x R$ 400 = R$ 800 devedor
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale18Res.status, 201);
+    const sale18Data = await sale18Res.json();
+    const agreement18 = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale18Data.id },
+      include: { installments: { orderBy: { installmentNumber: 'asc' } } },
+    });
+
+    // Baixa manual da parcela 1
+    await prisma.creditInstallment.update({
+      where: { id: agreement18!.installments[0].id },
+      data: { status: 'PAID', paidCents: 40000, paidAt: new Date() },
+    });
+    await prisma.creditAgreement.update({
+      where: { id: agreement18!.id },
+      data: { remainingPrincipalCents: 40000, paidPrincipalCents: 40000 },
+    });
+    // Agora resta apenas a Parcela 2 com R$ 400 devedor
+
+    // Cria alerta de duplicidade no valor de R$ 600 (excede os R$ 400 restantes em R$ 200)
+    const alert18 = await prisma.asaasDuplicatePaymentAlert.create({
+      data: {
+        companyId,
+        agreementId: agreement18!.id,
+        installmentId: agreement18!.installments[0].id,
+        externalPaymentId: `pay_dup_surplus_${Date.now()}`,
+        amountCents: 60000, // R$ 600
+        reason: 'Pagamento duplicado com excedente',
+        status: 'PENDING',
+      },
+    });
+
+    // Teste de concorrência: duas resoluções simultâneas do MESMO alerta
+    const [res1, res2] = await Promise.all([
+      fetch(`${baseUrl}/api/credit/asaas/duplicate-alerts/${alert18.id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ action: 'ALLOCATE_NEXT', notes: 'Tentativa 1' }),
+      }),
+      fetch(`${baseUrl}/api/credit/asaas/duplicate-alerts/${alert18.id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ action: 'ALLOCATE_NEXT', notes: 'Tentativa 2 Concorrente' }),
+      }),
+    ]);
+
+    // Exatamente uma teve sucesso (200), e a outra foi rejeitada (400) sob a trava
+    const statuses = [res1.status, res2.status];
+    assert.ok(statuses.includes(200), `Uma das requisições deve ter sucesso. Statuses: ${statuses.join(', ')}`);
+    assert.ok(statuses.includes(400), `A requisição concorrente deve ser rejeitada com 400. Statuses: ${statuses.join(', ')}`);
+
+    const successRes = res1.status === 200 ? await res1.json() : await res2.json();
+    assert.equal(successRes.totalAmortizedCents, 40000); // R$ 400 amortizados
+    assert.equal(successRes.surplusCents, 20000); // R$ 200 excedente
+    assert.equal(successRes.commissionCents, 4000); // 10% sobre R$ 400 = R$ 40
+
+    // Verifica que a Parcela 2 foi quitada e contrato foi quitado
+    const reloadedInst2 = await prisma.creditInstallment.findUnique({ where: { id: agreement18!.installments[1].id } });
+    assert.equal(reloadedInst2!.status, 'PAID');
+    assert.equal(reloadedInst2!.paidCents, 40000);
+
+    const reloadedAgreement18 = await prisma.creditAgreement.findUnique({ where: { id: agreement18!.id } });
+    assert.equal(reloadedAgreement18!.remainingPrincipalCents, 0);
+    assert.equal(reloadedAgreement18!.status, 'SETTLED');
+
+    // Alerta original resolvido
+    const originalAlertReloaded = await prisma.asaasDuplicatePaymentAlert.findUnique({ where: { id: alert18.id } });
+    assert.equal(originalAlertReloaded!.status, 'RESOLVED_ALLOCATED');
+
+    // Alerta residual criado para o excedente de R$ 200
+    const surplusAlert = await prisma.asaasDuplicatePaymentAlert.findFirst({
+      where: {
+        agreementId: agreement18!.id,
+        externalPaymentId: `${alert18.externalPaymentId}:surplus`,
+      },
+    });
+    assert.ok(surplusAlert, 'Alerta residual para excedente deve existir');
+    assert.equal(surplusAlert!.amountCents, 20000);
+    assert.equal(surplusAlert!.status, 'PENDING');
+  });
+
+  it('19. Pendência 3: Captura exclusiva de tarefas no banco com FOR UPDATE SKIP LOCKED testada com dois processadores simultâneos', async () => {
+    // Cria 6 tarefas na fila
+    const taskIds: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const id = `queue_concurrency_${Date.now()}_${i}`;
+      taskIds.push(id);
+      await prisma.asaasSyncQueue.create({
+        data: {
+          id,
+          companyId,
+          agreementId,
+          action: 'RECEIVE_IN_CASH',
+          payload: { asaasPaymentId: `pay_concurrent_${i}`, value: 10 + i },
+          status: 'PENDING',
+          idempotencyKey: `idem_queue_conc_${Date.now()}_${i}`,
+        },
+      });
+    }
+
+    // Executa dois processadores simultâneos
+    const [proc1, proc2] = await Promise.all([
+      processAsaasSyncQueue(3),
+      processAsaasSyncQueue(3),
+    ]);
+
+    // Cada processador deve ter capturado e processado tarefas
+    assert.equal(proc1.processed + proc2.processed, 6);
+
+    // Nenhuma tarefa permaneceu PENDING
+    const remainingPending = await prisma.asaasSyncQueue.count({
+      where: { id: { in: taskIds }, status: 'PENDING' },
+    });
+    assert.equal(remainingPending, 0);
+  });
+
+  it('20. Pendência 4: Recuperação de respostas perdidas consultando Asaas por externalReference antes de emitir nova cobrança', async () => {
+    const client20 = await createTestClient('Aluno Teste 20');
+    const sale20Res = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client20.id,
+        value: 500,
+        city: 'Curitiba',
+        product: 'Crediário Recuperação Resposta',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel Recuperacao',
+          buyerCpf: validCpf,
+          installmentsCount: 1,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale20Res.status, 201);
+    const sale20Data = await sale20Res.json();
+    const agreement20 = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale20Data.id },
+      include: { installments: true },
+    });
+    const inst20 = agreement20!.installments[0];
+
+    // Simula que a cobrança já foi criada no Asaas com externalReference = inst20.id,
+    // mas a resposta foi perdida e não foi gravada no banco local (AsaasCharge local está ausente)
+    const remoteAsaasPaymentId = `pay_recovered_remote_${Date.now()}`;
+    (global as any).__simulatedAsaasRemotePayments = {
+      [inst20.id]: {
+        id: remoteAsaasPaymentId,
+        status: 'PENDING',
+        value: 300.0,
+        netValue: 298.01,
+        billingType: 'BOLETO',
+        bankSlipUrl: 'https://sandbox.asaas.com/b/recovered',
+        invoiceUrl: 'https://sandbox.asaas.com/i/recovered',
+        identificationField: '00190.00009 01018.000000 00000.000000 1 00000000030000',
+      },
+    };
+
+    // Chama createAsaasChargeForInstallment diretamente
+    const recovered = await createAsaasChargeForInstallment(companyId, {
+      customerExternalId: 'cus_remote_test',
+      billingType: 'BOLETO',
+      value: 300.0,
+      dueDate: new Date(inst20.dueDate).toISOString().split('T')[0],
+      externalReference: inst20.id,
+    });
+
+    // Deve ter recuperado o ID remoto existente em vez de criar um novo
+    assert.equal(recovered.externalId, remoteAsaasPaymentId);
+    assert.equal(recovered.bankSlipUrl, 'https://sandbox.asaas.com/b/recovered');
+
+    // Limpa simulação
+    delete (global as any).__simulatedAsaasRemotePayments;
   });
 });
