@@ -101,6 +101,7 @@ import statsRoutes from './routes/stats';
 import creditRoutes from './routes/credit';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
+import { initAsaasQueueCron } from './jobs/asaasQueueCron';
 
 // Limite JSON aumentado (50MB) especificamente para rotas que transmitem lotes de fichas / assinaturas base64
 app.use('/api/clients', express.json({ limit: '50mb' }), clientRoutes);
@@ -137,6 +138,7 @@ if (
 ) {
   initWarrantyCron();
   initBackupCron();
+  initAsaasQueueCron();
 }
 
 // Bind exclusivo em 127.0.0.1 quando em staging/testes ou host padrão

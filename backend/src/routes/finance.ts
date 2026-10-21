@@ -25,11 +25,11 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     });
     const faturamentoBruto = salesAggregate._sum.value || 0;
 
-    // 2. Vendas À Vista (Sem contrato de crediário ativo ou paymentStatus != 'PARTIALLY_PAID')
+    // 2. Vendas À Vista (vendas que NÃO possuem contrato de crediário vinculado, independente do status)
     const cashSalesAggregate = await prisma.sale.aggregate({
       where: {
         ...salesFilter,
-        paymentStatus: { not: 'PARTIALLY_PAID' },
+        creditAgreement: null,
       },
       _sum: { value: true },
     });
@@ -39,6 +39,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     const credAgreementsAggregate = await prisma.creditAgreement.aggregate({
       where: {
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        status: { not: 'CANCELLED' },
       },
       _sum: { downPaymentCents: true, remainingPrincipalCents: true },
     });
@@ -46,17 +47,42 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     const saldoAReceber = (credAgreementsAggregate._sum.remainingPrincipalCents || 0) / 100.0;
 
     // 4. Recebimentos Efetivos de parcelas de Crediário (CreditPayment não estornados)
-    const creditPaymentsAggregate = await prisma.creditPayment.aggregate({
+    const creditPayments = await prisma.creditPayment.findMany({
       where: {
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
         isReversed: false,
       },
-      _sum: { amountCents: true },
     });
-    const baixasParcelasCrediario = (creditPaymentsAggregate._sum.amountCents || 0) / 100.0;
 
-    // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais)
-    const recebimentosEfetivos = entradasAVista + entradasCrediarioAto + baixasParcelasCrediario;
+    let baixasParcelasCrediario = 0;
+    let tarifasBancarias = 0;
+    let saldoConfirmadoAsaas = 0;
+    let saldoDisponivelAsaas = 0;
+    let valoresEmPoderDoVendedor = 0;
+
+    for (const cp of creditPayments) {
+      const amt = cp.amountCents / 100.0;
+      const fee = (cp.bankFeeCents || 0) / 100.0;
+      baixasParcelasCrediario += amt;
+      tarifasBancarias += fee;
+
+      const netAmount = Math.max(0, amt - fee);
+
+      if (cp.receivedByRole === 'BANK' || cp.externalPaymentId) {
+        if (cp.isAsaasSettled) {
+          saldoDisponivelAsaas += netAmount;
+        } else {
+          saldoConfirmadoAsaas += netAmount;
+        }
+      } else if (cp.destination === 'SELLER_RETENTION' || cp.receivedByRole === 'VENDEDOR') {
+        valoresEmPoderDoVendedor += amt;
+      }
+    }
+
+    // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais / Principal Recebido)
+    // Transferências internas entre vendedor e empresa não duplicam receita
+    const principalRecebido = entradasAVista + entradasCrediarioAto + baixasParcelasCrediario;
+    const recebimentosEfetivos = principalRecebido;
 
     // Agregação total de custos aprovados (saídas) de toda a empresa
     const costsAggregate = await prisma.cost.aggregate({
@@ -107,6 +133,14 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       saldo,
       faturamentoBruto,
       recebimentosEfetivos,
+      principalRecebido,
+      entradasAVista,
+      entradasCrediarioAto,
+      baixasParcelasCrediario,
+      tarifasBancarias,
+      saldoConfirmadoAsaas,
+      saldoDisponivelAsaas,
+      valoresEmPoderDoVendedor,
       saldoAReceber,
       recentSales: recentSales.map(s => ({
         id: s.id,

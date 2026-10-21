@@ -9,6 +9,7 @@ import {
   notifyAsaasReceiveInCash,
   updateAsaasPayment,
   cancelAsaasPayment,
+  refundAsaasPayment,
 } from '../services/asaasService';
 
 const router = Router();
@@ -723,18 +724,33 @@ router.post('/agreements/:id/payments', authenticateToken, async (req: AuthReque
     // 8. Sincronização assíncrona não-bloqueante com o Asaas se cobrança bancária existir
     for (const c of result.chargesToSyncInCash) {
       try {
-        await notifyAsaasReceiveInCash(
-          companyId,
-          c.chargeId,
-          new Date().toISOString().split('T')[0],
-          c.amountCents / 100.0
-        );
-        await prisma.asaasCharge.update({
-          where: { externalId: c.chargeId },
-          data: { isManualPaymentSync: true, status: c.residualCents === 0 ? 'RECEIVED_IN_CASH' : 'PENDING' },
-        });
+        if (c.residualCents === 0) {
+          // Parcela quitada integralmente -> registra recebimento em dinheiro no Asaas
+          await notifyAsaasReceiveInCash(
+            companyId,
+            c.chargeId,
+            new Date().toISOString().split('T')[0],
+            c.amountCents / 100.0
+          );
+          await prisma.asaasCharge.update({
+            where: { externalId: c.chargeId },
+            data: { isManualPaymentSync: true, status: 'RECEIVED_IN_CASH' },
+          });
+        } else {
+          // Parcela com saldo residual: NÃO liquidar a cobrança inteira com receiveInCash!
+          // Reduz o valor da cobrança no Asaas para o saldo devedor restante mantendo o boleto/Pix válido
+          const remainingValue = c.residualCents / 100.0;
+          await updateAsaasPayment(companyId, c.chargeId, { value: remainingValue });
+          await prisma.asaasCharge.update({
+            where: { externalId: c.chargeId },
+            data: {
+              nominalValueCents: c.residualCents,
+              isManualPaymentSync: true,
+            },
+          });
+        }
       } catch (err) {
-        console.warn(`[Asaas Sync] Aviso ao notificar receiveInCash para ${c.chargeId}:`, err);
+        console.warn(`[Asaas Sync] Aviso ao sincronizar parcela ${c.chargeId}:`, err);
       }
     }
 
@@ -1537,29 +1553,152 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
   try {
     const id = req.params.id as string;
     const { action, notes } = req.body; // 'ALLOCATE_NEXT' | 'REFUND'
+    const companyId = req.user?.companyId;
     const authorId = req.user?.id;
 
-    const alert = await prisma.asaasDuplicatePaymentAlert.findUnique({
-      where: { id },
-      include: { agreement: true, installment: true },
-    });
-
-    if (!alert) {
-      res.status(404).json({ error: 'Alerta não encontrado' });
+    if (!companyId || !authorId) {
+      res.status(403).json({ error: 'Empresa ou usuário não identificado' });
       return;
     }
 
-    await prisma.asaasDuplicatePaymentAlert.update({
-      where: { id },
-      data: {
-        status: action === 'ALLOCATE_NEXT' ? 'RESOLVED_NEXT_INSTALLMENT' : 'RESOLVED_REFUNDED',
-        resolvedAt: new Date(),
-        resolvedByUserId: authorId,
-        notes,
+    if (!['ALLOCATE_NEXT', 'REFUND'].includes(action)) {
+      res.status(400).json({ error: 'Ação inválida. Use ALLOCATE_NEXT ou REFUND.' });
+      return;
+    }
+
+    const alert = await prisma.asaasDuplicatePaymentAlert.findFirst({
+      where: { id, companyId },
+      include: {
+        agreement: {
+          include: {
+            installments: {
+              where: { status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] } },
+              orderBy: { installmentNumber: 'asc' },
+            },
+          },
+        },
+        installment: true,
       },
     });
 
-    res.json({ success: true, resolvedStatus: action });
+    if (!alert) {
+      res.status(404).json({ error: 'Alerta de conciliação não encontrado para esta empresa' });
+      return;
+    }
+
+    if (alert.status !== 'PENDING') {
+      res.status(400).json({ error: `Alerta já se encontra com status ${alert.status}` });
+      return;
+    }
+
+    if (action === 'ALLOCATE_NEXT') {
+      const nextInstallment = alert.agreement.installments[0];
+      if (!nextInstallment) {
+        res.status(400).json({ error: 'Não há parcelas em aberto no contrato para alocação' });
+        return;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        // Bloqueio pessimista no contrato e na próxima parcela
+        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${alert.agreementId} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM "CreditInstallment" WHERE id = ${nextInstallment.id} FOR UPDATE`;
+
+        const freshAgreement = await tx.creditAgreement.findUniqueOrThrow({ where: { id: alert.agreementId } });
+        const freshInst = await tx.creditInstallment.findUniqueOrThrow({ where: { id: nextInstallment.id } });
+
+        const allocatedCents = Math.min(alert.amountCents, freshInst.amountCents - freshInst.paidCents);
+
+        const creditPayment = await tx.creditPayment.create({
+          data: {
+            agreementId: freshAgreement.id,
+            companyId,
+            amountCents: alert.amountCents,
+            paymentMethod: 'ASAAS_DUPLICATE_ALLOCATION',
+            receivedByRole: 'BANK',
+            receiverUserId: freshAgreement.sellerId,
+            destination: 'COMPANY_ACCOUNT',
+            externalPaymentId: `${alert.externalPaymentId}:allocated`,
+            isAsaasSettled: true,
+            settledAt: new Date(),
+            notes: `Alocação de pagamento em duplicidade (${alert.externalPaymentId}). ${notes || ''}`.trim(),
+          },
+        });
+
+        const newPaidCents = freshInst.paidCents + allocatedCents;
+        const isFullyPaid = newPaidCents >= freshInst.amountCents;
+
+        await tx.creditPaymentAllocation.create({
+          data: {
+            paymentId: creditPayment.id,
+            installmentId: freshInst.id,
+            allocatedCents,
+          },
+        });
+
+        await tx.creditInstallment.update({
+          where: { id: freshInst.id },
+          data: {
+            paidCents: newPaidCents,
+            status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
+            paidAt: isFullyPaid ? new Date() : undefined,
+          },
+        });
+
+        const newRemaining = Math.max(0, freshAgreement.remainingPrincipalCents - allocatedCents);
+        await tx.creditAgreement.update({
+          where: { id: freshAgreement.id },
+          data: {
+            remainingPrincipalCents: newRemaining,
+            paidPrincipalCents: freshAgreement.paidPrincipalCents + allocatedCents,
+            status: newRemaining === 0 ? 'SETTLED' : freshAgreement.status,
+          },
+        });
+
+        await tx.asaasDuplicatePaymentAlert.update({
+          where: { id: alert.id },
+          data: {
+            status: 'RESOLVED_ALLOCATED',
+            resolvedAt: new Date(),
+            resolvedByUserId: authorId,
+            notes: notes ? String(notes).trim() : 'Alocado na próxima parcela com sucesso',
+          },
+        });
+      });
+
+      res.json({ success: true, action: 'ALLOCATE_NEXT', status: 'RESOLVED_ALLOCATED' });
+      return;
+    }
+
+    if (action === 'REFUND') {
+      const asaasConfig = await getCompanyAsaasConfig(companyId);
+      let refundStatus = 'REFUND_PROCESSING';
+
+      if (asaasConfig.mode !== 'DISABLED') {
+        try {
+          const refundRes = await refundAsaasPayment(companyId, alert.externalPaymentId, alert.amountCents / 100.0, notes);
+          if (refundRes?.status === 'REFUNDED') {
+            refundStatus = 'REFUNDED';
+          }
+        } catch (refundErr: any) {
+          console.error('[Asaas Refund] Erro ao solicitar estorno no Asaas:', refundErr);
+          res.status(502).json({ error: `Falha ao processar estorno no Asaas: ${refundErr.message}` });
+          return;
+        }
+      }
+
+      await prisma.asaasDuplicatePaymentAlert.update({
+        where: { id: alert.id },
+        data: {
+          status: refundStatus,
+          resolvedAt: refundStatus === 'REFUNDED' ? new Date() : null,
+          resolvedByUserId: authorId,
+          notes: notes ? String(notes).trim() : 'Estorno bancário solicitado',
+        },
+      });
+
+      res.json({ success: true, action: 'REFUND', status: refundStatus });
+      return;
+    }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1567,166 +1706,229 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
 
 /**
  * POST /api/credit/webhooks/asaas
- * Webhook oficial do Asaas com persistência prévia de auditoria e máquina de estados
+ * Webhook oficial do Asaas com autenticação estrita, trava pessimista,
+ * releitura de saldos atualizados dentro da transação e máquina de estados idempotente
  */
 router.post('/webhooks/asaas', async (req, res) => {
-  // 1. Responde 200 OK imediatamente após registrar o evento bruto para evitar retentativas agressivas
-  const rawPayload = req.body;
-  const tokenHeader = req.headers['asaas-access-token'] as string | undefined;
+  // 1. AUTENTICAÇÃO OBRIGATÓRIA ANTES DE QUALQUER MUTAÇÃO
+  const tokenHeader = (req.headers['asaas-access-token'] || req.headers['asaas-webhook-token']) as string | undefined;
+  if (!tokenHeader || !tokenHeader.trim()) {
+    return res.status(401).json({ error: 'Token de autenticação do webhook ausente' });
+  }
 
+  const asaasConfig = await prisma.asaasConfig.findFirst({
+    where: { webhookToken: tokenHeader.trim() },
+    include: { company: true },
+  });
+
+  if (!asaasConfig) {
+    return res.status(401).json({ error: 'Token de webhook inválido ou não autorizado' });
+  }
+
+  // 2. RESPEITO ESTRITO AO MODO OPERACIONAL
+  if (asaasConfig.mode === 'DISABLED') {
+    return res.status(403).json({ error: 'Integração bancária Asaas está DESATIVADA para esta empresa' });
+  }
+
+  const rawPayload = req.body;
   const eventName = rawPayload?.event;
   const paymentData = rawPayload?.payment;
-  const externalPaymentId = paymentData?.id || 'unknown';
+  const externalPaymentId = paymentData?.id;
 
+  if (!eventName || !paymentData || !externalPaymentId) {
+    return res.status(400).json({ error: 'Payload de webhook inválido' });
+  }
+
+  // 3. Persistência de auditoria apenas após autenticação e validação
   let savedEventId: string | null = null;
   try {
     const saved = await prisma.asaasWebhookEvent.create({
       data: {
-        eventId: rawPayload?.id,
-        event: eventName || 'UNKNOWN',
+        companyId: asaasConfig.companyId,
+        eventId: rawPayload?.id ? String(rawPayload.id) : undefined,
+        event: eventName,
         externalPaymentId,
         payload: rawPayload as any,
+        processed: false,
       },
     });
     savedEventId = saved.id;
   } catch (logErr) {
-    console.error('[Asaas Webhook] Erro ao salvar auditoria de webhook:', logErr);
+    console.error('[Asaas Webhook] Erro ao gravar auditoria do webhook:', logErr);
   }
 
-  // 2. Processamento seguro do evento
-  if (!eventName || !paymentData) {
-    return res.status(200).json({ received: true, ignored: true });
+  // 4. Deduplicação idempotente de eventos
+  if (rawPayload?.id) {
+    const duplicateEvent = await prisma.asaasWebhookEvent.findFirst({
+      where: {
+        companyId: asaasConfig.companyId,
+        eventId: String(rawPayload.id),
+        processed: true,
+        id: { not: savedEventId || undefined },
+      },
+    });
+    if (duplicateEvent) {
+      return res.status(200).json({ received: true, deduplicated: true });
+    }
   }
 
   try {
-    const extRef = paymentData.externalReference ? String(paymentData.externalReference).trim() : '';
-    const parsedInstallmentId = extRef.includes(':') ? extRef.split(':')[1] : extRef;
-
-    let charge = await prisma.asaasCharge.findFirst({
+    // 5. Localizar cobrança pertencente exclusivamente a esta empresa autenticada
+    const charge = await prisma.asaasCharge.findFirst({
       where: {
-        OR: [
-          { externalId: externalPaymentId },
-          ...(parsedInstallmentId ? [{ installmentId: parsedInstallmentId }] : []),
-        ],
+        companyId: asaasConfig.companyId,
+        externalId: externalPaymentId,
       },
       include: {
         agreement: true,
         installment: true,
-        company: { include: { asaasConfig: true } },
       },
     });
 
-    if (!charge && parsedInstallmentId) {
-      const inst = await prisma.creditInstallment.findUnique({
-        where: { id: parsedInstallmentId },
-        include: { agreement: { include: { company: { include: { asaasConfig: true } } } } },
-      });
-      if (inst) {
-        charge = await prisma.asaasCharge.create({
-          data: {
-            companyId: inst.agreement.companyId,
-            agreementId: inst.agreementId,
-            installmentId: inst.id,
-            externalId: externalPaymentId,
-            customerExternalId: paymentData.customer || 'cus_unknown',
-            billingType: paymentData.billingType || 'UNDEFINED',
-            status: paymentData.status || 'PENDING',
-            nominalValueCents: Math.round(Number(paymentData.value) * 100),
-            dueDate: inst.dueDate,
-          },
-          include: {
-            agreement: true,
-            installment: true,
-            company: { include: { asaasConfig: true } },
-          },
+    // Se não encontrou cobrança, verifica se há alerta de duplicidade registrado para esta empresa
+    const duplicateAlert = !charge
+      ? await prisma.asaasDuplicatePaymentAlert.findFirst({
+          where: { externalPaymentId, companyId: asaasConfig.companyId },
+        })
+      : null;
+
+    // REGRA DE SEGURANÇA: Não aceitar eventos de referências externas não vinculadas à empresa
+    if (!charge && !duplicateAlert) {
+      console.warn(`[Asaas Webhook] Cobrança/referência externa ${externalPaymentId} não cadastrada localmente para empresa ${asaasConfig.companyId}.`);
+      if (savedEventId) {
+        await prisma.asaasWebhookEvent.update({
+          where: { id: savedEventId },
+          data: { processed: true, processedAt: new Date(), processingError: 'Cobrança não vinculada localmente' },
         });
       }
-    }
-
-    if (!charge) {
-      console.warn(`[Asaas Webhook] Cobrança externa ${externalPaymentId} não vinculada a nenhum contrato local.`);
       return res.status(200).json({ received: true, unlinked: true });
     }
 
-    // Validar token de webhook se configurado
-    if (charge.company.asaasConfig?.webhookToken) {
-      if (tokenHeader !== charge.company.asaasConfig.webhookToken) {
-        console.error(`[Asaas Webhook] Token inválido para empresa ${charge.companyId}`);
-        return res.status(401).json({ error: 'Token inválido' });
-      }
-    }
-
-    const nominalValueCents = Math.round(paymentData.value * 100);
-    const netValueCents = paymentData.netValue ? Math.round(paymentData.netValue * 100) : nominalValueCents;
+    const nominalValueCents = Math.round(Number(paymentData.value) * 100);
+    const netValueCents = paymentData.netValue ? Math.round(Number(paymentData.netValue) * 100) : nominalValueCents;
     const feeCents = Math.max(0, nominalValueCents - netValueCents);
 
     // =========================================================================
     // EVENTO: PAYMENT_CONFIRMED ou PAYMENT_RECEIVED (Máquina de estados bancária)
     // =========================================================================
-    if (eventName === 'PAYMENT_CONFIRMED' || eventName === 'PAYMENT_RECEIVED') {
-      // 1. Se a cobrança já foi confirmada anteriormente no Asaas e agora chega PAYMENT_RECEIVED:
-      // Apenas atualiza a liquidação do saldo (settledAt) sem duplicar pagamento nem comissão!
-      if (charge.status === 'CONFIRMED' && eventName === 'PAYMENT_RECEIVED') {
-        await prisma.asaasCharge.update({
-          where: { id: charge.id },
-          data: {
-            status: 'RECEIVED',
-            settledAt: new Date(),
-            netValueCents,
-            feeCents,
-          },
-        });
-        await prisma.creditPayment.updateMany({
-          where: { externalPaymentId },
-          data: { isAsaasSettled: true, settledAt: new Date() },
-        });
-        return res.status(200).json({ received: true, settled: true });
-      }
+    if ((eventName === 'PAYMENT_CONFIRMED' || eventName === 'PAYMENT_RECEIVED') && charge) {
+      await prisma.$transaction(async (tx) => {
+        // Bloqueio pessimista no contrato, na parcela e na cobrança
+        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${charge.agreementId} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM "CreditInstallment" WHERE id = ${charge.installmentId} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM "AsaasCharge" WHERE id = ${charge.id} FOR UPDATE`;
 
-      // 2. Se a parcela já estiver QUITADA
-      if (charge.installment.status === 'PAID') {
-        // Se foi baixa manual registrada internamente (receiveInCash)
-        if (charge.isManualPaymentSync || paymentData.billingType === 'RECEIVED_IN_CASH') {
-          await prisma.asaasCharge.update({
-            where: { id: charge.id },
+        // RELEITURA OBRIGATÓRIA DE SALDOS E ESTADOS ATUALIZADOS SOB A TRAVA
+        const freshAgreement = await tx.creditAgreement.findUniqueOrThrow({ where: { id: charge.agreementId } });
+        const freshInstallment = await tx.creditInstallment.findUniqueOrThrow({ where: { id: charge.installmentId } });
+        const freshCharge = await tx.asaasCharge.findUniqueOrThrow({ where: { id: charge.id } });
+
+        // A. Se a parcela já foi QUITADA anteriormente
+        if (freshInstallment.status === 'PAID') {
+          // Se foi baixa manual interna (receiveInCash) notificada pelo Asaas
+          if (paymentData.billingType === 'RECEIVED_IN_CASH') {
+            await tx.asaasCharge.update({
+              where: { id: freshCharge.id },
+              data: {
+                status: eventName === 'PAYMENT_RECEIVED' ? 'RECEIVED' : 'CONFIRMED',
+                settledAt: eventName === 'PAYMENT_RECEIVED' ? new Date() : freshCharge.settledAt,
+                netValueCents,
+                feeCents,
+              },
+            });
+            return;
+          }
+
+          // Verificar se este externalPaymentId já foi gravado
+          const existingPaymentForCharge = await tx.creditPayment.findFirst({
+            where: { externalPaymentId },
+          });
+
+          if (existingPaymentForCharge) {
+            if (eventName === 'PAYMENT_RECEIVED' && !existingPaymentForCharge.isAsaasSettled) {
+              await tx.creditPayment.update({
+                where: { id: existingPaymentForCharge.id },
+                data: { isAsaasSettled: true, settledAt: new Date() },
+              });
+              await tx.asaasCharge.update({
+                where: { id: freshCharge.id },
+                data: { status: 'RECEIVED', settledAt: new Date(), netValueCents, feeCents },
+              });
+            }
+            return;
+          }
+
+          // Parcela foi paga por outro meio e agora entra pagamento bancário real -> DUPLICIDADE
+          const existingAlert = await tx.asaasDuplicatePaymentAlert.findFirst({
+            where: { externalPaymentId },
+          });
+          if (!existingAlert) {
+            await tx.asaasDuplicatePaymentAlert.create({
+              data: {
+                companyId: asaasConfig.companyId,
+                agreementId: freshAgreement.id,
+                installmentId: freshInstallment.id,
+                externalPaymentId,
+                amountCents: nominalValueCents,
+                reason: 'Pagamento bancário recebido via Asaas após parcela já ter sido quitada no sistema.',
+              },
+            });
+          }
+          return;
+        }
+
+        // B. Se a cobrança já foi confirmada anteriormente no Asaas e agora chega PAYMENT_RECEIVED:
+        // Apenas atualiza a liquidação do saldo (settledAt) sem duplicar pagamento nem comissão
+        if (freshCharge.status === 'CONFIRMED' && eventName === 'PAYMENT_RECEIVED') {
+          await tx.asaasCharge.update({
+            where: { id: freshCharge.id },
             data: {
-              status: eventName === 'PAYMENT_RECEIVED' ? 'RECEIVED' : 'CONFIRMED',
-              settledAt: eventName === 'PAYMENT_RECEIVED' ? new Date() : charge.settledAt,
+              status: 'RECEIVED',
+              settledAt: new Date(),
               netValueCents,
               feeCents,
             },
           });
-          return res.status(200).json({ received: true, manualSync: true });
+          await tx.creditPayment.updateMany({
+            where: { externalPaymentId },
+            data: { isAsaasSettled: true, settledAt: new Date() },
+          });
+          return;
         }
 
-        // Se a parcela foi paga no app E agora entra dinheiro real pelo banco -> DUPLICIDADE!
-        await prisma.asaasDuplicatePaymentAlert.create({
-          data: {
-            companyId: charge.companyId,
-            agreementId: charge.agreementId,
-            installmentId: charge.installmentId,
-            externalPaymentId,
-            amountCents: nominalValueCents,
-            reason: 'Pagamento bancário recebido via Asaas após parcela já ter sido quitada no sistema.',
-          },
+        // C. Se a cobrança já estiver RECEIVED e chega PAYMENT_CONFIRMED fora de ordem: no-op
+        if (freshCharge.status === 'RECEIVED' && eventName === 'PAYMENT_CONFIRMED') {
+          return;
+        }
+
+        // D. Parcela PENDING / PARTIALLY_PAID / OVERDUE -> Realizar baixa legítima
+        // Deduplicação de CreditPayment por externalPaymentId
+        const existingPayment = await tx.creditPayment.findFirst({
+          where: { externalPaymentId },
         });
-        return res.status(200).json({ received: true, duplicateAlert: true });
-      }
 
-      // Parcela PENDING / PARTIALLY_PAID / OVERDUE -> Realizar baixa legítima
-      await prisma.$transaction(async (tx) => {
-        // Bloqueio pessimista no contrato
-        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${charge.agreementId} FOR UPDATE`;
+        if (existingPayment) {
+          if (eventName === 'PAYMENT_RECEIVED' && !existingPayment.isAsaasSettled) {
+            await tx.creditPayment.update({
+              where: { id: existingPayment.id },
+              data: { isAsaasSettled: true, settledAt: new Date() },
+            });
+            await tx.asaasCharge.update({
+              where: { id: freshCharge.id },
+              data: { status: 'RECEIVED', settledAt: new Date(), netValueCents, feeCents },
+            });
+          }
+          return;
+        }
 
-        // Criar CreditPayment vinculando tarifa bancária
         const creditPayment = await tx.creditPayment.create({
           data: {
-            agreementId: charge.agreementId,
-            companyId: charge.companyId,
+            agreementId: freshAgreement.id,
+            companyId: asaasConfig.companyId,
             amountCents: nominalValueCents,
             paymentMethod: paymentData.billingType || 'BOLETO',
             receivedByRole: 'BANK',
-            receiverUserId: charge.agreement.sellerId,
+            receiverUserId: freshAgreement.sellerId,
             destination: 'COMPANY_ACCOUNT',
             bankFeeCents: feeCents,
             externalPaymentId,
@@ -1736,20 +1938,19 @@ router.post('/webhooks/asaas', async (req, res) => {
           },
         });
 
-        // Alocação direta na parcela vinculada
-        const newPaidCents = charge.installment.paidCents + nominalValueCents;
-        const isFullyPaid = newPaidCents >= charge.installment.amountCents;
+        const newPaidCents = freshInstallment.paidCents + nominalValueCents;
+        const isFullyPaid = newPaidCents >= freshInstallment.amountCents;
 
         await tx.creditPaymentAllocation.create({
           data: {
             paymentId: creditPayment.id,
-            installmentId: charge.installmentId,
+            installmentId: freshInstallment.id,
             allocatedCents: nominalValueCents,
           },
         });
 
         await tx.creditInstallment.update({
-          where: { id: charge.installmentId },
+          where: { id: freshInstallment.id },
           data: {
             paidCents: newPaidCents,
             status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
@@ -1757,28 +1958,28 @@ router.post('/webhooks/asaas', async (req, res) => {
           },
         });
 
-        // Atualizar saldo do contrato (abatimento do valor NOMINAL completo)
-        const newRemainingCents = Math.max(0, charge.agreement.remainingPrincipalCents - nominalValueCents);
-        const newPaidPrincipalCents = charge.agreement.paidPrincipalCents + nominalValueCents;
+        // Abatimento estrito do valor NOMINAL sobre o saldo relido dentro da trava
+        const newRemainingCents = Math.max(0, freshAgreement.remainingPrincipalCents - nominalValueCents);
+        const newPaidPrincipalCents = freshAgreement.paidPrincipalCents + nominalValueCents;
 
         await tx.creditAgreement.update({
-          where: { id: charge.agreementId },
+          where: { id: freshAgreement.id },
           data: {
             remainingPrincipalCents: newRemainingCents,
             paidPrincipalCents: newPaidPrincipalCents,
-            status: newRemainingCents <= 0 ? 'SETTLED' : charge.agreement.status,
+            status: newRemainingCents <= 0 ? 'SETTLED' : freshAgreement.status,
           },
         });
 
-        // Gerar 10% de comissão sobre o principal nominal amortizado
-        const commissionCents = Math.round(nominalValueCents * charge.agreement.installmentCommissionRate);
+        // Comissão sobre o principal nominal
+        const commissionCents = Math.round(nominalValueCents * freshAgreement.installmentCommissionRate);
         if (commissionCents > 0) {
           await tx.creditCommission.create({
             data: {
-              agreementId: charge.agreementId,
+              agreementId: freshAgreement.id,
               paymentId: creditPayment.id,
-              sellerId: charge.agreement.sellerId,
-              companyId: charge.companyId,
+              sellerId: freshAgreement.sellerId,
+              companyId: asaasConfig.companyId,
               amountCents: commissionCents,
               status: 'RELEASED',
               type: 'INSTALLMENT',
@@ -1786,9 +1987,8 @@ router.post('/webhooks/asaas', async (req, res) => {
           });
         }
 
-        // Atualizar AsaasCharge
         await tx.asaasCharge.update({
-          where: { id: charge.id },
+          where: { id: freshCharge.id },
           data: {
             status: eventName === 'PAYMENT_RECEIVED' ? 'RECEIVED' : 'CONFIRMED',
             nominalValueCents,
@@ -1806,16 +2006,31 @@ router.post('/webhooks/asaas', async (req, res) => {
     // EVENTO: PAYMENT_REFUNDED (Estorno bancário / Chargeback)
     // =========================================================================
     else if (eventName === 'PAYMENT_REFUNDED') {
+      // 1. Verificar se há alerta de duplicidade em estorno
+      const alert = await prisma.asaasDuplicatePaymentAlert.findFirst({
+        where: { externalPaymentId, companyId: asaasConfig.companyId },
+      });
+      if (alert) {
+        await prisma.asaasDuplicatePaymentAlert.update({
+          where: { id: alert.id },
+          data: {
+            status: 'REFUNDED',
+            resolvedAt: new Date(),
+            notes: 'Devolução confirmada via webhook Asaas (PAYMENT_REFUNDED).',
+          },
+        });
+      }
+
+      // 2. Verificar se há pagamento efetivo estornado
       const payment = await prisma.creditPayment.findFirst({
-        where: { externalPaymentId, isReversed: false },
+        where: { externalPaymentId, companyId: asaasConfig.companyId, isReversed: false },
         include: { commissions: true },
       });
 
       if (payment) {
         await prisma.$transaction(async (tx) => {
-          await tx.$queryRawUnsafe('SELECT id FROM "CreditAgreement" WHERE id = $1 FOR UPDATE', payment.agreementId);
+          await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${payment.agreementId} FOR UPDATE`;
 
-          // Reverter alocação
           const allocs = await tx.creditPaymentAllocation.findMany({ where: { paymentId: payment.id } });
           for (const a of allocs) {
             await tx.creditInstallment.update({
@@ -1824,7 +2039,6 @@ router.post('/webhooks/asaas', async (req, res) => {
             });
           }
 
-          // Restaurar saldo devedor
           await tx.creditAgreement.update({
             where: { id: payment.agreementId },
             data: {
@@ -1834,12 +2048,11 @@ router.post('/webhooks/asaas', async (req, res) => {
             },
           });
 
-          // Tratar comissões geradas
           for (const c of payment.commissions) {
             if (c.status === 'PAID') {
               await tx.creditCommissionAdjustment.create({
                 data: {
-                  companyId: charge.companyId,
+                  companyId: asaasConfig.companyId,
                   sellerId: c.sellerId,
                   agreementId: payment.agreementId,
                   paymentId: payment.id,
@@ -1862,10 +2075,12 @@ router.post('/webhooks/asaas', async (req, res) => {
             data: { isReversed: true, reversedAt: new Date(), reversalReason: 'Estorno bancário Asaas' },
           });
 
-          await tx.asaasCharge.update({
-            where: { id: charge.id },
-            data: { status: 'REFUNDED' },
-          });
+          if (charge) {
+            await tx.asaasCharge.update({
+              where: { id: charge.id },
+              data: { status: 'REFUNDED' },
+            });
+          }
         });
       }
     }
@@ -1876,6 +2091,7 @@ router.post('/webhooks/asaas', async (req, res) => {
         data: { processed: true, processedAt: new Date() },
       });
     }
+
     return res.status(200).json({ received: true, processed: true });
   } catch (procErr: any) {
     console.error('[Asaas Webhook] Erro no processamento do evento:', procErr);
@@ -1885,7 +2101,7 @@ router.post('/webhooks/asaas', async (req, res) => {
         data: { processingError: procErr.message || String(procErr) },
       });
     }
-    return res.status(200).json({ received: true, error: procErr.message });
+    return res.status(500).json({ error: procErr.message || 'Erro interno no processamento do webhook' });
   }
 });
 

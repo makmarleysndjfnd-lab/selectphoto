@@ -88,6 +88,19 @@ async function asaasRequest(
     throw new Error('Integração Asaas está desativada (DISABLED).');
   }
 
+  if (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') {
+    if (endpoint.includes('/refund')) {
+      return { status: 'REFUND_PROCESSING', simulated: true };
+    }
+    if (endpoint.includes('/receiveInCash')) {
+      return { success: true, simulated: true };
+    }
+    if (method === 'DELETE') {
+      return { deleted: true, simulated: true };
+    }
+    return { id: `sim_${Date.now()}`, status: 'CONFIRMED', simulated: true };
+  }
+
   if (!config.apiKey) {
     throw new Error('Chave de API do Asaas não configurada para este ambiente.');
   }
@@ -104,6 +117,7 @@ async function asaasRequest(
   const options: RequestInit = {
     method,
     headers,
+    signal: AbortSignal.timeout(15000),
   };
 
   if (body && (method === 'POST' || method === 'PUT')) {
@@ -302,6 +316,26 @@ export async function cancelAsaasPayment(
 }
 
 /**
+ * Solicita estorno/devolução de cobrança paga no Asaas
+ */
+export async function refundAsaasPayment(
+  companyId: string,
+  asaasPaymentId: string,
+  value?: number,
+  description?: string
+): Promise<any> {
+  const config = await getCompanyAsaasConfig(companyId);
+  if (config.mode === 'DISABLED') {
+    return { status: 'REFUND_PROCESSING', mode: 'DISABLED' };
+  }
+
+  return asaasRequest(config, `/payments/${asaasPaymentId}/refund`, 'POST', {
+    ...(value !== undefined ? { value } : {}),
+    ...(description ? { description } : {}),
+  });
+}
+
+/**
  * Enfileira uma ação de sincronização bancária na fila persistente
  */
 export async function enqueueAsaasSync(params: {
@@ -336,31 +370,62 @@ export async function enqueueAsaasSync(params: {
 
 /**
  * Processador da fila de sincronização persistente do Asaas
+ * - Recuperação de tarefas interrompidas (stalled tasks)
+ * - Captura atômica de tarefas
+ * - Respeito ao modo operacional (não marca SUCCESS se DISABLED)
+ * - Reconciliação de respostas perdidas para evitar duplicação de cobranças
  */
 export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: number; errors: number }> {
-  const pendingItems = await prisma.asaasSyncQueue.findMany({
-    where: { status: 'PENDING', attempts: { lt: 5 } },
-    take: limit,
-    orderBy: { createdAt: 'asc' },
+  // 1. Recuperação de tarefas interrompidas (stalled tasks > 5 minutos em PROCESSING)
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  try {
+    await prisma.asaasSyncQueue.updateMany({
+      where: {
+        status: 'PROCESSING',
+        updatedAt: { lt: fiveMinutesAgo },
+      },
+      data: {
+        status: 'PENDING',
+      },
+    });
+  } catch (recErr) {
+    console.warn('[Asaas Queue] Aviso ao recuperar tarefas interrompidas:', recErr);
+  }
+
+  // 2. Captura atômica em transação
+  const pendingItems = await prisma.$transaction(async (tx) => {
+    const items = await tx.asaasSyncQueue.findMany({
+      where: { status: 'PENDING', attempts: { lt: 5 } },
+      take: limit,
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (items.length === 0) return [];
+
+    await tx.asaasSyncQueue.updateMany({
+      where: { id: { in: items.map((i) => i.id) } },
+      data: { status: 'PROCESSING' },
+    });
+
+    return items;
   });
 
   let processed = 0;
   let errors = 0;
 
   for (const item of pendingItems) {
-    await prisma.asaasSyncQueue.update({
-      where: { id: item.id },
-      data: { status: 'PROCESSING', attempts: item.attempts + 1 },
-    });
-
     try {
       const config = await getCompanyAsaasConfig(item.companyId);
+
+      // Regra estrita: NÃO considerar tarefa bancária executada quando estiver desativada
       if (config.mode === 'DISABLED') {
         await prisma.asaasSyncQueue.update({
           where: { id: item.id },
-          data: { status: 'SUCCESS' },
+          data: {
+            status: 'PENDING_ACTIVATION',
+            lastError: 'Integração bancária Asaas está DESATIVADA. Tarefa mantida pendente de ativação.',
+          },
         });
-        processed++;
         continue;
       }
 
@@ -372,7 +437,31 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
           break;
         }
         case 'CREATE_CHARGE': {
-          const res = await createAsaasChargeForInstallment(item.companyId, p);
+          // Reconciliação de respostas perdidas: verifica se cobrança já existe antes de emitir nova
+          let res: any;
+          if (item.installmentId) {
+            const existing = await prisma.asaasCharge.findUnique({
+              where: { installmentId: item.installmentId },
+            });
+            if (existing && existing.externalId) {
+              res = {
+                externalId: existing.externalId,
+                status: existing.status,
+                nominalValueCents: existing.nominalValueCents,
+                netValueCents: existing.netValueCents,
+                bankSlipUrl: existing.bankSlipUrl,
+                invoiceUrl: existing.invoiceUrl,
+                identificationField: existing.identificationField,
+                pixQrCodeUrl: existing.pixQrCodeUrl,
+                pixPayload: existing.pixPayload,
+              };
+            }
+          }
+
+          if (!res) {
+            res = await createAsaasChargeForInstallment(item.companyId, p);
+          }
+
           if (item.installmentId) {
             await prisma.asaasCharge.upsert({
               where: { installmentId: item.installmentId },
@@ -433,6 +522,7 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
         where: { id: item.id },
         data: {
           status: item.attempts + 1 >= item.maxAttempts ? 'FAILED' : 'PENDING',
+          attempts: item.attempts + 1,
           lastError: err.message || String(err),
         },
       });
