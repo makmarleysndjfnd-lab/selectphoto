@@ -471,6 +471,7 @@ model DailyClosing {
   creditValue     Float
   commission      Float
   repasseDebt     Float
+  closingType     String   @default("SALES")
   seller          User     @relation(fields: [sellerId], references: [id])
 }
 
@@ -845,6 +846,7 @@ model AsaasDuplicatePaymentAlert {
   agreementId       String
   installmentId     String
   externalPaymentId String
+  bankPaymentId     String?
   amountCents       Int
   reason            String
   status            String    @default("PENDING")

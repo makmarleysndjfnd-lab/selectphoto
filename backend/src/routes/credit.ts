@@ -1709,16 +1709,21 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
         // Qualquer excedente deve permanecer explicitamente registrado para conciliação/devolução
         let surplusAlertId: string | null = null;
         if (remainingToAllocate > 0) {
+          const realBankPaymentId =
+            freshAlert.bankPaymentId ||
+            (freshAlert.externalPaymentId ? freshAlert.externalPaymentId.replace(/:surplus$/, '') : '');
+
           const surplusAlert = await tx.asaasDuplicatePaymentAlert.create({
             data: {
               companyId,
               agreementId: freshAgreement.id,
               installmentId: freshAlert.installmentId,
               externalPaymentId: `${freshAlert.externalPaymentId}:surplus`,
+              bankPaymentId: realBankPaymentId,
               amountCents: remainingToAllocate,
               reason: `Excedente não amortizado de pagamento em duplicidade (${freshAlert.externalPaymentId}). Saldo do contrato esgotado.`,
               status: 'PENDING',
-              notes: `Excedente de R$ ${(remainingToAllocate / 100).toFixed(2)} registrado para conciliação/devolução.`,
+              notes: `Excedente de R$ ${(remainingToAllocate / 100).toFixed(2)} registrado para conciliação/devolução. Cobrança bancária real: ${realBankPaymentId}.`,
             },
           });
           surplusAlertId = surplusAlert.id;
@@ -1765,26 +1770,52 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
       const asaasConfig = await getCompanyAsaasConfig(companyId);
 
       // Trava pessimista e releitura do alerta antes do estorno
-      await prisma.$transaction(async (tx) => {
+      const { freshAlert, realBankPaymentId } = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM "AsaasDuplicatePaymentAlert" WHERE id = ${alert.id} FOR UPDATE`;
-        const freshAlert = await tx.asaasDuplicatePaymentAlert.findUniqueOrThrow({ where: { id: alert.id } });
-        if (freshAlert.status !== 'PENDING' && freshAlert.status !== 'REFUND_REQUESTED') {
-          throw { status: 400, message: `Alerta já se encontra com status ${freshAlert.status}` };
+        const reloaded = await tx.asaasDuplicatePaymentAlert.findUniqueOrThrow({ where: { id: alert.id } });
+        if (reloaded.status !== 'PENDING' && reloaded.status !== 'REFUND_REQUESTED') {
+          throw { status: 400, message: `Alerta já se encontra com status ${reloaded.status}` };
         }
+
+        // Reconciliar identificador bancário real para alertas novos e legados
+        let bankId = reloaded.bankPaymentId;
+        if (!bankId) {
+          const rawId = reloaded.externalPaymentId.replace(/:surplus$/, '');
+          const linkedCharge = await tx.asaasCharge.findFirst({
+            where: {
+              companyId,
+              OR: [
+                { externalId: rawId },
+                { externalId: reloaded.externalPaymentId },
+                { installmentId: reloaded.installmentId },
+              ],
+            },
+          });
+          bankId = linkedCharge?.externalId || rawId;
+        }
+
         await tx.asaasDuplicatePaymentAlert.update({
           where: { id: alert.id },
           data: {
             status: 'REFUND_PROCESSING',
+            bankPaymentId: bankId,
             resolvedByUserId: authorId,
             notes: notes ? String(notes).trim() : 'Estorno bancário solicitado',
           },
         });
+
+        return { freshAlert: reloaded, realBankPaymentId: bankId };
       });
 
       let refundStatus = 'REFUND_PROCESSING';
       if (asaasConfig.mode !== 'DISABLED') {
         try {
-          const refundRes = await refundAsaasPayment(companyId, alert.externalPaymentId, alert.amountCents / 100.0, notes);
+          const refundRes = await refundAsaasPayment(
+            companyId,
+            realBankPaymentId,
+            freshAlert.amountCents / 100.0,
+            notes
+          );
           if (refundRes?.status === 'REFUNDED') {
             refundStatus = 'REFUNDED';
             await prisma.asaasDuplicatePaymentAlert.update({
@@ -1802,7 +1833,13 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
         }
       }
 
-      res.json({ success: true, action: 'REFUND', status: refundStatus });
+      res.json({
+        success: true,
+        action: 'REFUND',
+        status: refundStatus,
+        bankPaymentId: realBankPaymentId,
+        refundAmountCents: freshAlert.amountCents,
+      });
       return;
     }
   } catch (err: any) {

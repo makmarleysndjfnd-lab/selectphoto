@@ -996,28 +996,58 @@ class _SaleTabState extends State<_SaleTab> {
     return true;
   }
 
-  List<Map<String, dynamic>> _calculateSchedule(
-      int financedCents, int count, String periodicity, DateTime firstDate) {
-    if (count <= 0 || financedCents <= 0) return [];
-    final baseAmount = financedCents ~/ count;
-    final remainder = financedCents % count;
+  List<Map<String, dynamic>> _calculateSchedule({
+    required int financedCents,
+    required String calculationMode,
+    required int installmentsCount,
+    required int desiredInstallmentAmountCents,
+    required String periodicity,
+    required DateTime firstDate,
+  }) {
+    if (financedCents <= 0) return [];
 
     final List<Map<String, dynamic>> schedule = [];
-    for (int i = 0; i < count; i++) {
-      DateTime due;
+
+    DateTime calculateDueDate(int i) {
       if (periodicity == 'BIWEEKLY') {
-        due = firstDate.add(Duration(days: i * 14));
+        return firstDate.add(Duration(days: i * 15)); // Regra quinzenal a cada 15 dias
       } else {
-        due = DateTime(firstDate.year, firstDate.month + i, firstDate.day);
+        return DateTime(firstDate.year, firstDate.month + i, firstDate.day);
       }
-      final amountCents = (i == count - 1) ? (baseAmount + remainder) : baseAmount;
-      schedule.add({
-        'number': i + 1,
-        'dueDate': due,
-        'amountCents': amountCents,
-        'amount': amountCents / 100.0,
-      });
     }
+
+    if (calculationMode == 'BY_AMOUNT' && desiredInstallmentAmountCents > 0) {
+      int remaining = financedCents;
+      int i = 0;
+      while (remaining > 0 && i < 48) {
+        final amountCents = remaining >= desiredInstallmentAmountCents
+            ? desiredInstallmentAmountCents
+            : remaining;
+        remaining -= amountCents;
+        schedule.add({
+          'number': i + 1,
+          'dueDate': calculateDueDate(i),
+          'amountCents': amountCents,
+          'amount': amountCents / 100.0,
+        });
+        i++;
+      }
+    } else {
+      final count = installmentsCount.clamp(1, 48);
+      final baseAmount = financedCents ~/ count;
+      final remainder = financedCents % count;
+
+      for (int i = 0; i < count; i++) {
+        final amountCents = (i == count - 1) ? (baseAmount + remainder) : baseAmount;
+        schedule.add({
+          'number': i + 1,
+          'dueDate': calculateDueDate(i),
+          'amountCents': amountCents,
+          'amount': amountCents / 100.0,
+        });
+      }
+    }
+
     return schedule;
   }
 
@@ -1153,14 +1183,37 @@ class _SaleTabState extends State<_SaleTab> {
       final sigBytes = await _signatureController.toPngBytes();
       final sigBase64 = sigBytes != null ? 'data:image/png;base64,${base64Encode(sigBytes)}' : null;
 
-      int finalCount = _installmentsCount;
+      final financedCents = totalCents - sumCents;
+      final desiredCents = _parseCents(_desiredInstallmentAmountController.text);
+
       if (_installmentCalculationMode == 'BY_AMOUNT') {
-        final desiredCents = _parseCents(_desiredInstallmentAmountController.text);
-        final financedCents = totalCents - sumCents;
-        if (desiredCents > 0 && financedCents > 0) {
-          finalCount = (financedCents / desiredCents).ceil().clamp(1, 24);
+        if (desiredCents <= 0) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Informe um valor desejado por parcela válido maior que zero.'),
+            backgroundColor: Colors.red,
+          ));
+          return;
+        }
+        final calculatedCount = (financedCents / desiredCents).ceil();
+        if (calculatedCount > 24) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+              'O valor desejado de R\$ ${(desiredCents / 100.0).toStringAsFixed(2)} resulta em $calculatedCount parcelas, excedendo o limite de 24 parcelas. Aumente o valor por parcela.',
+            ),
+            backgroundColor: Colors.red,
+          ));
+          return;
         }
       }
+
+      final schedule = _calculateSchedule(
+        financedCents: financedCents,
+        calculationMode: _installmentCalculationMode,
+        installmentsCount: _installmentsCount,
+        desiredInstallmentAmountCents: desiredCents,
+        periodicity: _periodicity,
+        firstDate: _firstDueDate,
+      );
 
       creditPayload = {
         'buyerName': buyerName,
@@ -1173,7 +1226,14 @@ class _SaleTabState extends State<_SaleTab> {
         'city': city,
         'state': state,
         'complement': _complementController.text.trim(),
-        'installmentsCount': finalCount,
+        'installmentsCount': schedule.length,
+        'installmentCalculationMode': _installmentCalculationMode,
+        'desiredInstallmentAmountCents': _installmentCalculationMode == 'BY_AMOUNT' ? desiredCents : null,
+        'installments': schedule.map((s) => {
+          'installmentNumber': s['number'],
+          'dueDate': (s['dueDate'] as DateTime).toIso8601String(),
+          'amountCents': s['amountCents'],
+        }).toList(),
         'periodicity': _periodicity,
         'firstDueDate': _firstDueDate.toIso8601String(),
         'signedAgreementUrl': sigBase64,
@@ -2152,17 +2212,17 @@ class _SaleTabState extends State<_SaleTab> {
       }
     }
     final financedCents = (totalCents > sumCents) ? (totalCents - sumCents) : 0;
-
-    int activeCount = _installmentsCount;
-    if (_installmentCalculationMode == 'BY_AMOUNT') {
-      final desiredCents = _parseCents(_desiredInstallmentAmountController.text);
-      if (desiredCents > 0 && financedCents > 0) {
-        activeCount = (financedCents / desiredCents).ceil().clamp(1, 24);
-      }
-    }
+    final desiredCents = _parseCents(_desiredInstallmentAmountController.text);
 
     final schedule = _calculateSchedule(
-        financedCents, activeCount, _periodicity, _firstDueDate);
+      financedCents: financedCents,
+      calculationMode: _installmentCalculationMode,
+      installmentsCount: _installmentsCount,
+      desiredInstallmentAmountCents: desiredCents,
+      periodicity: _periodicity,
+      firstDate: _firstDueDate,
+    );
+    final activeCount = schedule.length;
     final bool isCpfValid = _validateCpf(_buyerCpfController.text);
 
     return Container(

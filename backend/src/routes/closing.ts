@@ -923,7 +923,8 @@ router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (
                     debitValue: 0,
                     creditValue: 0,
                     commission: 0,
-                    repasseDebt: direction === 'SELLER_PAYS_COMPANY' ? -parsedAmount : parsedAmount
+                    repasseDebt: direction === 'SELLER_PAYS_COMPANY' ? -parsedAmount : parsedAmount,
+                    closingType: 'REPASSE_SETTLEMENT',
                 }
             });
 

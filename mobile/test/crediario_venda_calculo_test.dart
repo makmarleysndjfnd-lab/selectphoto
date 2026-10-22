@@ -43,26 +43,50 @@ double parseMonetaryHelper(String text) {
 }
 
 List<Map<String, dynamic>> calculateScheduleHelper(
-    int financedCents, int count, String periodicity, DateTime firstDate) {
-  if (count <= 0 || financedCents <= 0) return [];
-  final baseAmount = financedCents ~/ count;
-  final remainder = financedCents % count;
+    int financedCents, int count, String periodicity, DateTime firstDate,
+    {String calculationMode = 'BY_COUNT', int desiredInstallmentAmountCents = 0}) {
+  if (financedCents <= 0) return [];
+
+  DateTime calculateDueDate(int i) {
+    if (periodicity == 'BIWEEKLY') {
+      return firstDate.add(Duration(days: i * 15));
+    } else {
+      return DateTime(firstDate.year, firstDate.month + i, firstDate.day);
+    }
+  }
 
   final List<Map<String, dynamic>> schedule = [];
-  for (int i = 0; i < count; i++) {
-    DateTime due;
-    if (periodicity == 'BIWEEKLY') {
-      due = firstDate.add(Duration(days: i * 14));
-    } else {
-      due = DateTime(firstDate.year, firstDate.month + i, firstDate.day);
+
+  if (calculationMode == 'BY_AMOUNT' && desiredInstallmentAmountCents > 0) {
+    int remaining = financedCents;
+    int i = 0;
+    while (remaining > 0 && i < 48) {
+      final amountCents = remaining >= desiredInstallmentAmountCents
+          ? desiredInstallmentAmountCents
+          : remaining;
+      remaining -= amountCents;
+      schedule.add({
+        'number': i + 1,
+        'dueDate': calculateDueDate(i),
+        'amountCents': amountCents,
+        'amount': amountCents / 100.0,
+      });
+      i++;
     }
-    final amountCents = (i == count - 1) ? (baseAmount + remainder) : baseAmount;
-    schedule.add({
-      'number': i + 1,
-      'dueDate': due,
-      'amountCents': amountCents,
-      'amount': amountCents / 100.0,
-    });
+  } else {
+    if (count <= 0) return [];
+    final baseAmount = financedCents ~/ count;
+    final remainder = financedCents % count;
+
+    for (int i = 0; i < count; i++) {
+      final amountCents = (i == count - 1) ? (baseAmount + remainder) : baseAmount;
+      schedule.add({
+        'number': i + 1,
+        'dueDate': calculateDueDate(i),
+        'amountCents': amountCents,
+        'amount': amountCents / 100.0,
+      });
+    }
   }
   return schedule;
 }
@@ -189,6 +213,45 @@ void main() {
 
       final sum = schedule.fold<int>(0, (acc, item) => acc + (item['amountCents'] as int));
       expect(sum, equals(10000));
+    });
+
+    test('Modo Valor Desejado: saldo R\$ 600 e parcela desejada R\$ 250 resulta em R\$ 250 + R\$ 250 + R\$ 100', () {
+      final financedCents = 60000; // R$ 600.00
+      final desiredInstallmentCents = 25000; // R$ 250.00
+      final schedule = calculateScheduleHelper(
+        financedCents,
+        0,
+        'MONTHLY',
+        DateTime(2026, 11, 20),
+        calculationMode: 'BY_AMOUNT',
+        desiredInstallmentAmountCents: desiredInstallmentCents,
+      );
+
+      expect(schedule.length, equals(3));
+      expect(schedule[0]['amountCents'], equals(25000)); // R$ 250.00
+      expect(schedule[0]['amount'], equals(250.0));
+      expect(schedule[1]['amountCents'], equals(25000)); // R$ 250.00
+      expect(schedule[1]['amount'], equals(250.0));
+      expect(schedule[2]['amountCents'], equals(10000)); // R$ 100.00
+      expect(schedule[2]['amount'], equals(100.0));
+
+      final sum = schedule.fold<int>(0, (acc, item) => acc + (item['amountCents'] as int));
+      expect(sum, equals(60000));
+    });
+
+    test('Periodicidade quinzenal utiliza rigorosamente intervalos de 15 dias para novos cronogramas', () {
+      final firstDate = DateTime(2026, 11, 1);
+      final schedule = calculateScheduleHelper(
+        30000,
+        3,
+        'BIWEEKLY',
+        firstDate,
+      );
+
+      expect(schedule.length, equals(3));
+      expect(schedule[0]['dueDate'], equals(firstDate));
+      expect(schedule[1]['dueDate'], equals(firstDate.add(const Duration(days: 15))));
+      expect(schedule[2]['dueDate'], equals(firstDate.add(const Duration(days: 30))));
     });
   });
 

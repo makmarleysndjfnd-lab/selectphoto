@@ -12,8 +12,11 @@ export interface CreditScheduleParams {
   totalSaleCents: number;
   downPaymentCents: number;
   installmentsCount: number;
-  periodicity: 'UNIQUE' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY';
-  firstDueDate: Date;
+  periodicity: 'UNIQUE' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | string;
+  firstDueDate: Date | string;
+  calculationMode?: 'BY_COUNT' | 'BY_AMOUNT';
+  desiredInstallmentAmountCents?: number;
+  customInstallments?: Array<{ installmentNumber: number; dueDate: Date | string; amountCents: number }>;
 }
 
 /**
@@ -60,24 +63,43 @@ export function formatCpf(cpf: string | null | undefined): string {
 }
 
 /**
- * Calcula o cronograma de parcelas sem juros/multas, ajustando o residual na última parcela
- * e tratando meses sem o dia escolhido sem deslocamento cumulativo das datas.
+ * Calcula o cronograma de parcelas sem juros/multas.
+ * - Suporta modo BY_COUNT (divisão inteira em centavos com residual na última parcela)
+ * - Suporta modo BY_AMOUNT (valor desejado por parcela: ex: 600 com 250 -> 250 + 250 + 100)
+ * - Suporta cronograma customizado pré-validado do mobile
+ * - Quinzenal configurado a cada 15 dias para novos contratos
  */
 export function calculateCreditSchedule(params: CreditScheduleParams): InstallmentScheduleItem[] {
-  const { totalSaleCents, downPaymentCents, installmentsCount, periodicity, firstDueDate } = params;
+  const {
+    totalSaleCents,
+    downPaymentCents,
+    installmentsCount,
+    periodicity,
+    firstDueDate,
+    calculationMode = 'BY_COUNT',
+    desiredInstallmentAmountCents,
+    customInstallments,
+  } = params;
 
   const financedPrincipalCents = totalSaleCents - downPaymentCents;
   if (financedPrincipalCents <= 0) {
     return [];
   }
 
-  if (installmentsCount < 1) {
-    throw new Error('Número de parcelas deve ser pelo menos 1');
+  // 1. Cronograma aceito explicitamente no mobile/app
+  if (customInstallments && Array.isArray(customInstallments) && customInstallments.length > 0) {
+    const sumCustom = customInstallments.reduce((sum, inst) => sum + (inst.amountCents || 0), 0);
+    if (sumCustom !== financedPrincipalCents) {
+      throw new Error(
+        `A soma das parcelas (R$ ${(sumCustom / 100).toFixed(2)}) não confere com o saldo financiado (R$ ${(financedPrincipalCents / 100).toFixed(2)})`
+      );
+    }
+    return customInstallments.map((inst, idx) => ({
+      installmentNumber: inst.installmentNumber || idx + 1,
+      dueDate: new Date(inst.dueDate),
+      amountCents: inst.amountCents,
+    }));
   }
-
-  // Divisão em centavos inteiros
-  const baseInstallmentCents = Math.floor(financedPrincipalCents / installmentsCount);
-  const residualCents = financedPrincipalCents - (baseInstallmentCents * installmentsCount);
 
   const anchorDate = new Date(firstDueDate);
   const anchorYear = anchorDate.getUTCFullYear();
@@ -86,40 +108,69 @@ export function calculateCreditSchedule(params: CreditScheduleParams): Installme
   const anchorHours = anchorDate.getUTCHours();
   const anchorMinutes = anchorDate.getUTCMinutes();
 
+  const getDueDate = (i: number): Date => {
+    if (periodicity === 'WEEKLY') {
+      const d = new Date(anchorDate);
+      d.setUTCDate(d.getUTCDate() + (7 * i));
+      return d;
+    } else if (periodicity === 'BIWEEKLY') {
+      const d = new Date(anchorDate);
+      d.setUTCDate(d.getUTCDate() + (15 * i)); // Quinzenal a cada 15 dias
+      return d;
+    } else if (periodicity === 'UNIQUE') {
+      return new Date(anchorDate);
+    } else {
+      // MONTHLY
+      const targetMonthIndex = anchorMonth + i;
+      const targetYear = anchorYear + Math.floor(targetMonthIndex / 12);
+      const targetMonth = targetMonthIndex % 12;
+      const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+      const targetDay = Math.min(anchorDay, daysInTargetMonth);
+      return new Date(Date.UTC(targetYear, targetMonth, targetDay, anchorHours, anchorMinutes, 0, 0));
+    }
+  };
+
+  // 2. Modo Valor Desejado
+  if (calculationMode === 'BY_AMOUNT' && desiredInstallmentAmountCents && desiredInstallmentAmountCents > 0) {
+    const count = Math.ceil(financedPrincipalCents / desiredInstallmentAmountCents);
+    if (count > 48) {
+      throw new Error(
+        `O valor desejado de R$ ${(desiredInstallmentAmountCents / 100).toFixed(2)} resulta em ${count} parcelas, excedendo o limite permitido de 48 parcelas. Aumente o valor por parcela.`
+      );
+    }
+
+    const schedule: InstallmentScheduleItem[] = [];
+    let remaining = financedPrincipalCents;
+    let i = 0;
+    while (remaining > 0) {
+      const amountCents = remaining >= desiredInstallmentAmountCents ? desiredInstallmentAmountCents : remaining;
+      remaining -= amountCents;
+      schedule.push({
+        installmentNumber: i + 1,
+        dueDate: getDueDate(i),
+        amountCents,
+      });
+      i++;
+    }
+    return schedule;
+  }
+
+  // 3. Modo Quantidade de Parcelas (divisão em centavos inteiros com residual na última parcela)
+  if (installmentsCount < 1) {
+    throw new Error('Número de parcelas deve ser pelo menos 1');
+  }
+
+  const baseInstallmentCents = Math.floor(financedPrincipalCents / installmentsCount);
+  const residualCents = financedPrincipalCents - (baseInstallmentCents * installmentsCount);
   const schedule: InstallmentScheduleItem[] = [];
 
   for (let i = 0; i < installmentsCount; i++) {
     const installmentNumber = i + 1;
-    // O residual é somado na última parcela para manter centavo exato
     const isLast = installmentNumber === installmentsCount;
     const amountCents = isLast ? (baseInstallmentCents + residualCents) : baseInstallmentCents;
-
-    let dueDate: Date;
-
-    if (periodicity === 'WEEKLY') {
-      dueDate = new Date(anchorDate);
-      dueDate.setUTCDate(dueDate.getUTCDate() + (7 * i));
-    } else if (periodicity === 'BIWEEKLY') {
-      dueDate = new Date(anchorDate);
-      dueDate.setUTCDate(dueDate.getUTCDate() + (14 * i));
-    } else if (periodicity === 'UNIQUE') {
-      dueDate = new Date(anchorDate);
-    } else {
-      // MONTHLY: tratamento estrito de fim de mês sem deslocamento cumulativo
-      const targetMonthIndex = anchorMonth + i;
-      const targetYear = anchorYear + Math.floor(targetMonthIndex / 12);
-      const targetMonth = targetMonthIndex % 12;
-
-      // Quantos dias tem o mês de destino (ano bissexto incluso via Date)
-      const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-      const targetDay = Math.min(anchorDay, daysInTargetMonth);
-
-      dueDate = new Date(Date.UTC(targetYear, targetMonth, targetDay, anchorHours, anchorMinutes, 0, 0));
-    }
-
     schedule.push({
       installmentNumber,
-      dueDate,
+      dueDate: getDueDate(i),
       amountCents,
     });
   }

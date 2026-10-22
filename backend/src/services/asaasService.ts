@@ -90,6 +90,9 @@ async function asaasRequest(
 
   if (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') {
     if (endpoint.includes('/refund')) {
+      if ((global as any).__lastSimulatedRefunds) {
+        (global as any).__lastSimulatedRefunds.push({ endpoint, method, payload: body });
+      }
       return { status: 'REFUND_PROCESSING', simulated: true };
     }
     if (endpoint.includes('/receiveInCash')) {
@@ -99,6 +102,9 @@ async function asaasRequest(
       return { deleted: true, simulated: true };
     }
     if (endpoint.startsWith('/payments?externalReference=')) {
+      if ((global as any).__simulatedAsaasRemotePaymentsError) {
+        throw new Error((global as any).__simulatedAsaasRemotePaymentsError);
+      }
       const parts = endpoint.split('externalReference=');
       const ref = decodeURIComponent(parts[1] || '');
       const simulatedPayment = (global as any).__simulatedAsaasRemotePayments?.[ref];
@@ -230,51 +236,67 @@ export async function createAsaasChargeForInstallment(
 
   // 1. Reconciliação remota: consulta o Asaas pela externalReference antes de emitir nova cobrança
   if (chargeInput.externalReference) {
+    let searchRes: any;
     try {
-      const searchRes = await asaasRequest(
+      searchRes = await asaasRequest(
         config,
         `/payments?externalReference=${encodeURIComponent(chargeInput.externalReference)}`
       );
-      const existingRemote =
-        searchRes?.data && Array.isArray(searchRes.data) && searchRes.data.length > 0
-          ? searchRes.data[0]
-          : null;
+    } catch (searchErr: any) {
+      console.warn('[Asaas] Falha/Timeout na reconciliação remota por externalReference:', searchErr);
+      throw new Error(
+        `[RECONCILIAÇÃO_INCONCLUSIVA] Falha/timeout na consulta remota por externalReference ${chargeInput.externalReference}: ${searchErr.message || searchErr}. Nova emissão bloqueada.`
+      );
+    }
 
-      if (existingRemote && existingRemote.id) {
-        console.log(
-          `[Asaas] Cobrança existente recuperada remotamente por externalReference ${chargeInput.externalReference}: ${existingRemote.id}`
-        );
+    if (!searchRes || typeof searchRes !== 'object' || !Array.isArray(searchRes.data)) {
+      throw new Error(
+        `[RECONCILIAÇÃO_INCONCLUSIVA] Resposta inválida na consulta remota por externalReference ${chargeInput.externalReference}. Nova emissão bloqueada.`
+      );
+    }
 
-        let identificationField = existingRemote.identificationField;
-        if (!identificationField) {
-          try {
-            const idFieldRes = await asaasRequest(config, `/payments/${existingRemote.id}/identificationField`);
-            identificationField = idFieldRes.identificationField;
-          } catch {}
-        }
-
-        let pixQrCodeUrl: string | undefined;
-        let pixPayload: string | undefined;
-        try {
-          const pixRes = await asaasRequest(config, `/payments/${existingRemote.id}/pixQrCode`);
-          pixQrCodeUrl = pixRes.encodedImage ? `data:image/png;base64,${pixRes.encodedImage}` : undefined;
-          pixPayload = pixRes.payload;
-        } catch {}
-
-        return {
-          externalId: existingRemote.id,
-          status: existingRemote.status || 'PENDING',
-          nominalValueCents: Math.round((Number(existingRemote.value) || chargeInput.value) * 100),
-          netValueCents: existingRemote.netValue ? Math.round(Number(existingRemote.netValue) * 100) : undefined,
-          bankSlipUrl: existingRemote.bankSlipUrl,
-          invoiceUrl: existingRemote.invoiceUrl,
-          identificationField,
-          pixQrCodeUrl,
-          pixPayload,
-        };
+    // Filtrar cobrança compatível com a empresa e status ativo (não deletada)
+    const compatibleRemote = searchRes.data.find((p: any) => {
+      if (!p || !p.id) return false;
+      if (p.deleted === true || p.status === 'DELETED') return false;
+      if (chargeInput.customerExternalId && p.customer && p.customer !== chargeInput.customerExternalId) {
+        return false;
       }
-    } catch (searchErr) {
-      console.warn('[Asaas] Aviso ao consultar cobrança existente por externalReference:', searchErr);
+      return true;
+    });
+
+    if (compatibleRemote && compatibleRemote.id) {
+      console.log(
+        `[Asaas] Cobrança existente compatível recuperada remotamente por externalReference ${chargeInput.externalReference}: ${compatibleRemote.id}`
+      );
+
+      let identificationField = compatibleRemote.identificationField;
+      if (!identificationField) {
+        try {
+          const idFieldRes = await asaasRequest(config, `/payments/${compatibleRemote.id}/identificationField`);
+          identificationField = idFieldRes?.identificationField;
+        } catch {}
+      }
+
+      let pixQrCodeUrl: string | undefined;
+      let pixPayload: string | undefined;
+      try {
+        const pixRes = await asaasRequest(config, `/payments/${compatibleRemote.id}/pixQrCode`);
+        pixQrCodeUrl = pixRes?.encodedImage ? `data:image/png;base64,${pixRes.encodedImage}` : undefined;
+        pixPayload = pixRes?.payload;
+      } catch {}
+
+      return {
+        externalId: compatibleRemote.id,
+        status: compatibleRemote.status || 'PENDING',
+        nominalValueCents: Math.round((Number(compatibleRemote.value) || chargeInput.value) * 100),
+        netValueCents: compatibleRemote.netValue ? Math.round(Number(compatibleRemote.netValue) * 100) : undefined,
+        bankSlipUrl: compatibleRemote.bankSlipUrl,
+        invoiceUrl: compatibleRemote.invoiceUrl,
+        identificationField,
+        pixQrCodeUrl,
+        pixPayload,
+      };
     }
   }
 
@@ -587,10 +609,11 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
       processed++;
     } catch (err: any) {
       errors++;
+      const isInconclusive = String(err.message || '').includes('[RECONCILIAÇÃO_INCONCLUSIVA]');
       await prisma.asaasSyncQueue.update({
         where: { id: item.id },
         data: {
-          status: item.attempts + 1 >= item.maxAttempts ? 'FAILED' : 'PENDING',
+          status: isInconclusive ? 'PENDING' : (item.attempts + 1 >= item.maxAttempts ? 'FAILED' : 'PENDING'),
           attempts: item.attempts + 1,
           lastError: err.message || String(err),
         },

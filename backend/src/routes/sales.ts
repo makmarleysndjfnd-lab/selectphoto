@@ -164,6 +164,9 @@ function parseSaleInput(body: any) {
       referencePoint: rawCredit.referencePoint ? String(rawCredit.referencePoint).trim() : null,
       downPaymentCents,
       financedPrincipalCents,
+      calculationMode: rawCredit.calculationMode || rawCredit.installmentCalculationMode || 'BY_COUNT',
+      desiredInstallmentAmountCents: rawCredit.desiredInstallmentAmountCents ? Math.round(Number(rawCredit.desiredInstallmentAmountCents)) : undefined,
+      customInstallments: Array.isArray(rawCredit.installments) ? rawCredit.installments : undefined,
     };
   } else {
     // Venda tradicional à vista ou cartão sem crediário interno
@@ -489,6 +492,9 @@ async function finalizeSaleWithReceipt(params: {
           installmentsCount: creditInput.installmentsCount,
           periodicity: creditInput.periodicity,
           firstDueDate: creditInput.firstDueDate,
+          calculationMode: creditInput.calculationMode,
+          desiredInstallmentAmountCents: creditInput.desiredInstallmentAmountCents,
+          customInstallments: creditInput.customInstallments,
         });
 
         const agreement = await tx.creditAgreement.create({
@@ -513,7 +519,7 @@ async function finalizeSaleWithReceipt(params: {
             financedPrincipalCents: creditInput.financedPrincipalCents,
             remainingPrincipalCents: creditInput.financedPrincipalCents,
             paidPrincipalCents: 0,
-            installmentsCount: creditInput.installmentsCount,
+            installmentsCount: schedule.length,
             periodicity: creditInput.periodicity,
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',
@@ -731,6 +737,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
           installmentsCount: postCredit.installmentsCount,
           periodicity: postCredit.periodicity,
           firstDueDate: postCredit.firstDueDate,
+          calculationMode: postCredit.calculationMode,
+          desiredInstallmentAmountCents: postCredit.desiredInstallmentAmountCents,
+          customInstallments: postCredit.customInstallments,
         });
 
         const agreement = await tx.creditAgreement.create({
@@ -755,7 +764,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             financedPrincipalCents: postCredit.financedPrincipalCents,
             remainingPrincipalCents: postCredit.financedPrincipalCents,
             paidPrincipalCents: 0,
-            installmentsCount: postCredit.installmentsCount,
+            installmentsCount: schedule.length,
             periodicity: postCredit.periodicity,
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',

@@ -1603,4 +1603,480 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     // Limpa simulação
     delete (global as any).__simulatedAsaasRemotePayments;
   });
+
+  it('21. Consulta remota com timeout não executa POST de emissão; retentativa recupera cobrança existente', async () => {
+    const client21 = await createTestClient('Aluno Teste 21 Reconciliação');
+    const sale21Res = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client21.id,
+        value: 700,
+        city: 'Curitiba',
+        product: 'Crediário Teste 21',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel Teste 21',
+          buyerCpf: validCpf,
+          installmentsCount: 1,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale21Res.status, 201);
+    const sale21Data = await sale21Res.json();
+    const agreement21 = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale21Data.id },
+      include: { installments: true },
+    });
+    const inst21 = agreement21!.installments[0];
+
+    // Simula falha/timeout na consulta remota por externalReference
+    (global as any).__simulatedAsaasRemotePaymentsError = 'ETIMEDOUT: Connection timeout na API do Asaas';
+
+    // Enfileira emissão da parcela
+    const queueItem = await prisma.asaasSyncQueue.create({
+      data: {
+        companyId,
+        agreementId: agreement21!.id,
+        installmentId: inst21.id,
+        action: 'CREATE_CHARGE',
+        payload: {
+          customerExternalId: 'cus_test_21',
+          billingType: 'BOLETO',
+          value: 500.0,
+          dueDate: new Date().toISOString().split('T')[0],
+          externalReference: inst21.id,
+        },
+        idempotencyKey: `sync_charge_timeout_${Date.now()}`,
+        status: 'PENDING',
+        attempts: 0,
+      },
+    });
+
+    // Processa a fila: consulta remota falha
+    const run1 = await processAsaasSyncQueue(10);
+    assert.equal(run1.errors, 1);
+
+    // Tarefa DEVE permanecer em PENDING para retentativa controlada e NÃO criar cobrança
+    const itemAfterTimeout = await prisma.asaasSyncQueue.findUnique({ where: { id: queueItem.id } });
+    assert.equal(itemAfterTimeout!.status, 'PENDING');
+    assert.ok(itemAfterTimeout!.lastError?.includes('RECONCILIAÇÃO_INCONCLUSIVA'));
+
+    const chargeAfterTimeout = await prisma.asaasCharge.findUnique({ where: { installmentId: inst21.id } });
+    assert.equal(chargeAfterTimeout, null, 'Nenhuma cobrança local deve ter sido criada após consulta inconclusiva');
+
+    // Agora resolve o timeout: o Asaas responde com a cobrança existente
+    delete (global as any).__simulatedAsaasRemotePaymentsError;
+    const remoteId21 = `pay_recovered_remote_21_${Date.now()}`;
+    (global as any).__simulatedAsaasRemotePayments = {
+      [inst21.id]: {
+        id: remoteId21,
+        status: 'PENDING',
+        value: 500.0,
+        netValue: 497.01,
+        billingType: 'BOLETO',
+        bankSlipUrl: 'https://sandbox.asaas.com/b/recovered21',
+      },
+    };
+
+    // Retentativa processa a fila
+    const run2 = await processAsaasSyncQueue(10);
+    assert.ok(run2.processed >= 1);
+
+    // Tarefa concluída com sucesso recuperando a cobrança existente
+    const itemRecovered = await prisma.asaasSyncQueue.findUnique({ where: { id: queueItem.id } });
+    assert.equal(itemRecovered!.status, 'SUCCESS');
+
+    const chargeRecovered = await prisma.asaasCharge.findUnique({ where: { installmentId: inst21.id } });
+    assert.ok(chargeRecovered);
+    assert.equal(chargeRecovered!.externalId, remoteId21);
+
+    delete (global as any).__simulatedAsaasRemotePayments;
+  });
+
+  it('22. Alocação distribuída e devolução residual usam ID bancário real, somente valor excedente e não repetem devolução', async () => {
+    const client22 = await createTestClient('Aluno Teste 22 Residual');
+    const sale22Res = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client22.id,
+        value: 800,
+        city: 'Curitiba',
+        product: 'Crediário Teste 22 Residual',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel Teste 22',
+          buyerCpf: validCpf,
+          installmentsCount: 2, // 2x R$ 300 = R$ 600
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale22Res.status, 201);
+    const sale22Data = await sale22Res.json();
+    const agreement22 = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale22Data.id },
+      include: { installments: { orderBy: { installmentNumber: 'asc' } } },
+    });
+
+    // Baixa manual da Parcela 1 (R$ 300)
+    await prisma.creditInstallment.update({
+      where: { id: agreement22!.installments[0].id },
+      data: { status: 'PAID', paidCents: 30000, paidAt: new Date() },
+    });
+    await prisma.creditAgreement.update({
+      where: { id: agreement22!.id },
+      data: { remainingPrincipalCents: 30000, paidPrincipalCents: 30000 },
+    });
+    // Resta apenas Parcela 2 com R$ 300
+
+    // Pagamento duplicado no banco no valor de R$ 500 (excede R$ 300 em R$ 200)
+    const realBankId22 = `pay_real_bank_22_${Date.now()}`;
+    const alert22 = await prisma.asaasDuplicatePaymentAlert.create({
+      data: {
+        companyId,
+        agreementId: agreement22!.id,
+        installmentId: agreement22!.installments[0].id,
+        externalPaymentId: realBankId22,
+        bankPaymentId: realBankId22,
+        amountCents: 50000, // R$ 500
+        reason: 'Duplicidade com excedente para devolução',
+        status: 'PENDING',
+      },
+    });
+
+    // 1. Resolve com ALLOCATE_NEXT
+    const allocRes = await fetch(`${baseUrl}/api/credit/asaas/duplicate-alerts/${alert22.id}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ action: 'ALLOCATE_NEXT' }),
+    });
+    assert.equal(allocRes.status, 200);
+    const allocData = await allocRes.json();
+    assert.equal(allocData.totalAmortizedCents, 30000); // R$ 300 amortizados
+    assert.equal(allocData.surplusCents, 20000); // R$ 200 excedente
+
+    // Alerta residual criado para o excedente preserva o identificador bancário real
+    const surplusAlert = await prisma.asaasDuplicatePaymentAlert.findFirst({
+      where: {
+        agreementId: agreement22!.id,
+        status: 'PENDING',
+      },
+    });
+    assert.ok(surplusAlert);
+    assert.equal(surplusAlert!.amountCents, 20000);
+    assert.equal(surplusAlert!.bankPaymentId, realBankId22); // Identificador bancário REAL preservado!
+
+    // 2. Solicita estorno/devolução do excedente
+    (global as any).__lastSimulatedRefunds = [];
+    const refundRes = await fetch(`${baseUrl}/api/credit/asaas/duplicate-alerts/${surplusAlert!.id}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ action: 'REFUND', notes: 'Devolução de excedente' }),
+    });
+    assert.equal(refundRes.status, 200);
+    const refundData = await refundRes.json();
+    assert.equal(refundData.bankPaymentId, realBankId22); // Usou o ID bancário real, não o sufixo sintético!
+    assert.equal(refundData.refundAmountCents, 20000); // Devolveu estritamente R$ 200 (não os R$ 300 alocados)
+
+    // Se tentar devolver novamente o mesmo alerta, rejeita com 400
+    const retryRefundRes = await fetch(`${baseUrl}/api/credit/asaas/duplicate-alerts/${surplusAlert!.id}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ action: 'REFUND' }),
+    });
+    assert.equal(retryRefundRes.status, 400);
+
+    delete (global as any).__lastSimulatedRefunds;
+  });
+
+  it('3. Dois vendedores com recebimentos diferentes; pagamento direto à empresa não vira posse do vendedor; fechamento negativo sem transferência não abate saldo; repasse efetivo abate apenas o saldo correspondente', async () => {
+    // Vendedor 1 recebe R$ 250 em dinheiro em mãos (SELLER_HANDS)
+    const client23A = await createTestClient('Aluno Teste 23A');
+    const sale23ARes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client23A.id,
+        value: 500,
+        city: 'Curitiba',
+        product: 'Crediário Vendedor 1',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel 23A',
+          buyerCpf: validCpf,
+          installmentsCount: 1,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale23ARes.status, 201);
+    const sale23AData = await sale23ARes.json();
+    const agreement23A = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale23AData.id },
+      include: { installments: true },
+    });
+
+    await fetch(`${baseUrl}/api/credit/agreements/${agreement23A!.id}/payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        installmentId: agreement23A!.installments[0].id,
+        amount: 250.0,
+        paymentMethod: 'CASH',
+        destination: 'SELLER_HANDS',
+        idempotencyKey: `pay_s1_hands_${Date.now()}`,
+      }),
+    });
+
+    // Vendedor 2 recebe R$ 300 via Pix direto na conta da empresa (COMPANY_ACCOUNT)
+    const client23B = await createTestClient('Aluno Teste 23B');
+    const sale23BRes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller2Token}` },
+      body: JSON.stringify({
+        clientId: client23B.id,
+        value: 600,
+        city: 'Curitiba',
+        product: 'Crediário Vendedor 2',
+        payments: [{ method: 'CASH', amount: 200 }],
+        credit: {
+          buyerName: 'Responsavel 23B',
+          buyerCpf: validCpf,
+          installmentsCount: 1,
+          periodicity: 'MONTHLY',
+        },
+      }),
+    });
+    assert.equal(sale23BRes.status, 201);
+    const sale23BData = await sale23BRes.json();
+    const agreement23B = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale23BData.id },
+      include: { installments: true },
+    });
+
+    await fetch(`${baseUrl}/api/credit/agreements/${agreement23B!.id}/payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller2Token}` },
+      body: JSON.stringify({
+        installmentId: agreement23B!.installments[0].id,
+        amount: 300.0,
+        paymentMethod: 'PIX',
+        destination: 'COMPANY_ACCOUNT',
+        idempotencyKey: `pay_s2_company_${Date.now()}`,
+      }),
+    });
+
+    // Consulta overview inicial
+    const finRes1 = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const fin1 = await finRes1.json();
+    const possevendedorAntes = fin1.valoresEmPoderDoVendedor;
+    // O valor em poder dos vendedores deve incluir os R$ 250 do Vendedor 1, mas NÃO os R$ 300 do Vendedor 2
+    assert.ok(possevendedorAntes >= 250.0);
+
+    // Vendedor 2 tem um fechamento diário normal de vendas com repasseDebt negativo (empresa deve comissão a ele)
+    await prisma.dailyClosing.create({
+      data: {
+        sellerId: seller2Id,
+        totalSalesValue: 1000,
+        commission: 400,
+        cashValue: 250,
+        pixValue: 0,
+        debitValue: 0,
+        creditValue: 0,
+        repasseDebt: -150, // Empresa deve R$ 150 de comissão líquida
+        closingType: 'SALES',
+      },
+    });
+
+    // Consulta overview: Fechamento com repasseDebt negativo NÃO abate saldo em poder do vendedor!
+    const finRes2 = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const fin2 = await finRes2.json();
+    assert.equal(fin2.valoresEmPoderDoVendedor, possevendedorAntes, 'Fechamento com repasseDebt negativo não pode abater saldo em poder do vendedor');
+
+    // Agora Vendedor 1 realiza acerto efetivo de R$ 200 à empresa via pay-repasse
+    const repasseRes = await fetch(`${baseUrl}/api/closing/pay-repasse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        sellerId: seller1Id,
+        amount: 200.0,
+        direction: 'SELLER_PAYS_COMPANY',
+      }),
+    });
+    assert.equal(repasseRes.status, 201);
+
+    // Consulta overview: Abateu exatamente os R$ 200 do Vendedor 1
+    const finRes3 = await fetch(`${baseUrl}/api/finance/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const fin3 = await finRes3.json();
+    assert.equal(Number((possevendedorAntes - fin3.valoresEmPoderDoVendedor).toFixed(2)), 200.0);
+  });
+
+  it('24. Venda com quatro entradas de R$ 100; saldo R$ 600 por quantidade e por valor desejado R$ 250 (R$ 250 + R$ 250 + R$ 100)', async () => {
+    const client24A = await createTestClient('Aluno Teste 24A Qtd');
+    // Venda de R$ 1.000 com 4 formas de entrada de R$ 100 (total entrada R$ 400 >= 150)
+    // Financiado R$ 600 em 6 parcelas de R$ 100
+    const sale24ARes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client24A.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Composição 4 Entradas Qtd',
+        payments: [
+          { method: 'CASH', amount: 100 },
+          { method: 'PIX', amount: 100 },
+          { method: 'CREDIT', amount: 100 },
+          { method: 'DEBIT', amount: 100 },
+        ],
+        credit: {
+          buyerName: 'Responsavel 24A',
+          buyerCpf: validCpf,
+          installmentsCount: 6,
+          periodicity: 'MONTHLY',
+          calculationMode: 'BY_COUNT',
+        },
+      }),
+    });
+    assert.equal(sale24ARes.status, 201);
+    const sale24AData = await sale24ARes.json();
+    const agreement24A = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale24AData.id },
+      include: { installments: { orderBy: { installmentNumber: 'asc' } } },
+    });
+    assert.equal(agreement24A!.installmentsCount, 6);
+    assert.equal(agreement24A!.downPaymentCents, 40000);
+    assert.equal(agreement24A!.financedPrincipalCents, 60000);
+    assert.equal(agreement24A!.installments.length, 6);
+    for (const inst of agreement24A!.installments) {
+      assert.equal(inst.amountCents, 10000); // 6x R$ 100
+    }
+
+    // Venda de R$ 1.000 com 4 entradas de R$ 100 e saldo R$ 600 em modo VALOR DESEJADO de R$ 250
+    const client24B = await createTestClient('Aluno Teste 24B Desejado');
+    const sale24BRes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client24B.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Composição 4 Entradas Desejado',
+        payments: [
+          { method: 'CASH', amount: 100 },
+          { method: 'PIX', amount: 100 },
+          { method: 'CREDIT', amount: 100 },
+          { method: 'DEBIT', amount: 100 },
+        ],
+        credit: {
+          buyerName: 'Responsavel 24B',
+          buyerCpf: validCpf,
+          installmentsCount: 3,
+          periodicity: 'BIWEEKLY',
+          calculationMode: 'BY_AMOUNT',
+          desiredInstallmentAmountCents: 25000, // R$ 250
+        },
+      }),
+    });
+    assert.equal(sale24BRes.status, 201);
+    const sale24BData = await sale24BRes.json();
+    const agreement24B = await prisma.creditAgreement.findFirst({
+      where: { saleId: sale24BData.id },
+      include: { installments: { orderBy: { installmentNumber: 'asc' } } },
+    });
+
+    // Deve resultar em 3 parcelas: R$ 250 + R$ 250 + R$ 100 (NÃO 3x R$ 200!)
+    assert.equal(agreement24B!.installmentsCount, 3);
+    assert.equal(agreement24B!.installments.length, 3);
+    assert.equal(agreement24B!.installments[0].amountCents, 25000); // R$ 250
+    assert.equal(agreement24B!.installments[1].amountCents, 25000); // R$ 250
+    assert.equal(agreement24B!.installments[2].amountCents, 10000); // R$ 100
+
+    // Verifica que periodicidade quinzenal foi configurada a cada 15 dias
+    const d0 = new Date(agreement24B!.installments[0].dueDate).getTime();
+    const d1 = new Date(agreement24B!.installments[1].dueDate).getTime();
+    const diffDays = Math.round((d1 - d0) / (24 * 3600 * 1000));
+    assert.equal(diffDays, 15, 'Periodicidade quinzenal deve ter 15 dias de intervalo');
+
+    // Validação de entrada mínima de R$ 150 na soma: rejeita soma de 2x R$ 50 = R$ 100 (< 150)
+    const client24C = await createTestClient('Aluno Teste 24C Entrada Minima');
+    const sale24CRes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client24C.id,
+        value: 1000,
+        city: 'Curitiba',
+        product: 'Crediário Entrada Insuficiente',
+        payments: [
+          { method: 'CASH', amount: 50 },
+          { method: 'PIX', amount: 50 },
+        ],
+        credit: {
+          buyerName: 'Responsavel 24C',
+          buyerCpf: validCpf,
+          installmentsCount: 5,
+        },
+      }),
+    });
+    assert.equal(sale24CRes.status, 400);
+    const err24C = await sale24CRes.json();
+    assert.ok(err24C.error?.includes('150,00'));
+  });
+
+  it('25. Cards do Admin apresentam valores corretos exclusivamente de crediário sem incluir vendas à vista', async () => {
+    // Registra uma venda totalmente à vista (R$ 500 em dinheiro, sem crediário) para o Vendedor 1
+    const client25Vista = await createTestClient('Aluno Venda A Vista');
+    const vistaRes = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      body: JSON.stringify({
+        clientId: client25Vista.id,
+        value: 500,
+        city: 'Curitiba',
+        product: 'Venda Totalmente A Vista',
+        paymentMethod: 'CASH',
+        payments: [{ method: 'CASH', amount: 500 }],
+      }),
+    });
+    assert.equal(vistaRes.status, 201);
+
+    // Consulta sellers-summary
+    const summaryRes = await fetch(`${baseUrl}/api/credit/sellers-summary`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(summaryRes.status, 200);
+    const sellersSummary = await summaryRes.json();
+
+    // Vendedor 1 deve aparecer com seus contratos de crediário
+    const s1 = sellersSummary.find((s: any) => s.sellerId === seller1Id);
+    assert.ok(s1);
+    assert.equal(typeof s1.totalRemainingPrincipal, 'number');
+    assert.equal(typeof s1.totalOverduePrincipal, 'number');
+    assert.equal(typeof s1.netCommissionPayable, 'number');
+    assert.equal(s1.active, true);
+    assert.equal(s1.isActive, true);
+
+    // Consulta os contratos filtrados por vendedor 1:
+    const agreementsRes = await fetch(`${baseUrl}/api/credit/agreements?sellerId=${seller1Id}`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(agreementsRes.status, 200);
+    const agreements = await agreementsRes.json();
+    assert.ok(Array.isArray(agreements));
+    for (const a of agreements) {
+      assert.equal(a.sellerId, seller1Id, 'Contratos devem ser estritamente do vendedor 1');
+      assert.ok(a.installmentsCount > 0, 'Todos os contratos retornados devem ser de crediário');
+    }
+  });
 });
+

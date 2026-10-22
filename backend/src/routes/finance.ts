@@ -52,13 +52,20 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
         isReversed: false,
       },
+      include: {
+        agreement: {
+          select: { sellerId: true },
+        },
+      },
     });
 
     let baixasParcelasCrediario = 0;
     let tarifasBancarias = 0;
     let saldoConfirmadoAsaas = 0;
     let saldoDisponivelAsaas = 0;
-    let recebimentosAcumuladosVendedor = 0;
+
+    // Rastrear recebimentos e custódia real por vendedor
+    const sellerRecebimentos: Record<string, number> = {};
 
     for (const cp of creditPayments) {
       const amt = cp.amountCents / 100.0;
@@ -72,9 +79,12 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         ['BANK', 'ASAAS'].includes((cp.receivedByRole || '').toUpperCase()) ||
         Boolean(cp.externalPaymentId);
 
-      const isSeller =
-        ['SELLER_HANDS', 'SELLER_RETENTION', 'SELLER'].includes((cp.destination || '').toUpperCase()) ||
-        ['SELLER', 'VENDEDOR'].includes((cp.receivedByRole || '').toUpperCase());
+      const destUpper = (cp.destination || '').toUpperCase();
+      const isDirectToCompany = ['COMPANY_ACCOUNT', 'COMPANY_BANK', 'BANK', 'COMPANY'].includes(destUpper);
+      const isSellerCustody =
+        !isDirectToCompany &&
+        !isBank &&
+        ['SELLER_HANDS', 'SELLER_RETENTION', 'SELLER'].includes(destUpper);
 
       if (isBank) {
         if (cp.isAsaasSettled) {
@@ -82,27 +92,45 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         } else {
           saldoConfirmadoAsaas += netAmount;
         }
-      } else if (isSeller) {
-        recebimentosAcumuladosVendedor += amt;
+      } else if (isSellerCustody) {
+        const sid = cp.receiverUserId || cp.agreement?.sellerId || 'unknown';
+        sellerRecebimentos[sid] = (sellerRecebimentos[sid] || 0) + amt;
       }
     }
 
-    // Buscar acertos e repasses já realizados pelos vendedores à empresa
+    // Buscar acertos e repasses efetivamente realizados pelos vendedores à empresa
     const closings = await prisma.dailyClosing.findMany({
       where: userCompanyId ? { seller: { companyId: userCompanyId } } : {},
-      select: { repasseDebt: true },
+      select: { sellerId: true, repasseDebt: true, closingType: true, totalSalesValue: true, commission: true },
     });
 
-    let acertosRealizadosVendedor = 0;
+    const sellerAcertos: Record<string, number> = {};
     for (const cl of closings) {
-      if (cl.repasseDebt < 0) {
-        acertosRealizadosVendedor += Math.abs(cl.repasseDebt);
+      // Somente acertos de repasse efetivos (não confundir com fechamento onde a empresa deve comissão ao vendedor)
+      const isRepasseSettlement =
+        cl.closingType === 'REPASSE_SETTLEMENT' ||
+        (cl.totalSalesValue === 0 && cl.commission === 0 && cl.repasseDebt < 0);
+
+      if (isRepasseSettlement) {
+        sellerAcertos[cl.sellerId] = (sellerAcertos[cl.sellerId] || 0) + Math.abs(cl.repasseDebt);
       }
     }
 
-    // Separar recebimentos acumulados de valores ainda não repassados, incluindo os acertos já realizados
-    const valoresNaoRepassadosVendedor = Math.max(0, recebimentosAcumuladosVendedor - acertosRealizadosVendedor);
-    const valoresEmPoderDoVendedor = valoresNaoRepassadosVendedor;
+    // Calcular valores em poder do vendedor por carteira individual para não compensar vendedores distintos
+    const allSellerIds = Array.from(new Set([...Object.keys(sellerRecebimentos), ...Object.keys(sellerAcertos)]));
+    let recebimentosAcumuladosVendedor = 0;
+    let acertosRealizadosVendedor = 0;
+    let valoresEmPoderDoVendedor = 0;
+
+    for (const sid of allSellerIds) {
+      const rec = sellerRecebimentos[sid] || 0;
+      const acet = sellerAcertos[sid] || 0;
+      recebimentosAcumuladosVendedor += rec;
+      acertosRealizadosVendedor += acet;
+      valoresEmPoderDoVendedor += Math.max(0, rec - acet);
+    }
+
+    const valoresNaoRepassadosVendedor = valoresEmPoderDoVendedor;
 
     // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais / Principal Recebido)
     // Transferências internas entre vendedor e empresa não duplicam receita
