@@ -102,6 +102,7 @@ import creditRoutes from './routes/credit';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 import { initAsaasQueueCron } from './jobs/asaasQueueCron';
+import { initMonthlyCreditClosingCron } from './jobs/monthlyCreditClosingCron';
 
 // Limite JSON aumentado (50MB) especificamente para rotas que transmitem lotes de fichas / assinaturas base64
 app.use('/api/clients', express.json({ limit: '50mb' }), clientRoutes);
@@ -128,6 +129,9 @@ app.use('/api/quotes', quotesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
 app.use('/api/stats', statsRoutes);
 
+// Servir páginas estáticas de conformidade jurídica para lojas (Google Play & App Store)
+app.use('/legal', express.static(path.join(__dirname, '../public/legal')));
+
 app.use(centralErrorHandler);
 
 // Desativar cron jobs em modo de teste ou quando serviços externos estiverem desabilitados
@@ -139,6 +143,7 @@ if (
   initWarrantyCron();
   initBackupCron();
   initAsaasQueueCron();
+  initMonthlyCreditClosingCron();
 }
 
 // Bind exclusivo em 127.0.0.1 quando em staging/testes ou host padrão

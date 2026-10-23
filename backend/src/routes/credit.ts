@@ -11,9 +11,30 @@ import {
   cancelAsaasPayment,
   refundAsaasPayment,
 } from '../services/asaasService';
+import {
+  getCompetenceRange,
+  getCompetenceForDate,
+  isCompetenceEnded,
+  getRelevantCompetences,
+  calculateSellerMonthlyCreditClosing,
+  processMonthlyCreditClosing,
+  recordMonthlyCreditPayout,
+  handleCreditPaymentReversalCommission,
+  getSellerFourCommissionStates,
+} from '../services/monthlyCreditClosingService';
 
 const router = Router();
 const prisma = new PrismaClient();
+
+/**
+ * Middleware para bloquear acesso de perfis sem permissão ao crediário (ex: PHOTOGRAPHER).
+ */
+function requireCreditAccess(req: AuthRequest, res: Response, next: any) {
+  if (req.user?.role === 'PHOTOGRAPHER') {
+    return res.status(403).json({ error: 'Acesso negado: fotógrafos não têm acesso ao módulo de crediário.' });
+  }
+  next();
+}
 
 /**
  * Verifica se o usuário tem privilégios administrativos/gerenciais
@@ -28,7 +49,7 @@ function isUserAdmin(req: AuthRequest): boolean {
  * Visão consolidada para o Painel Administrativo de Crediário e Cobranças
  * Restrito: Vendedor só enxerga métricas de sua própria carteira
  */
-router.get('/overview', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/overview', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
     if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
@@ -44,6 +65,11 @@ router.get('/overview', authenticateToken, async (req: AuthRequest, res: Respons
     };
 
     // Vendedor comum só vê a própria carteira
+    if (!isAdmin && querySellerId && querySellerId !== req.user?.id) {
+      res.status(403).json({ error: 'Acesso negado: você só pode consultar dados da sua própria carteira' });
+      return;
+    }
+
     const effectiveSellerId = isAdmin ? (querySellerId || undefined) : req.user?.id;
 
     const whereAgreement: any = {
@@ -255,7 +281,7 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
  * GET /api/credit/agreements
  * Listagem de contratos com filtros e restrição estrita por carteira
  */
-router.get('/agreements', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/agreements', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const companyId = req.user?.companyId;
     if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
@@ -274,6 +300,11 @@ router.get('/agreements', authenticateToken, async (req: AuthRequest, res: Respo
     };
 
     // Vendedor comum só vê a própria carteira
+    if (!isAdmin && sellerId && sellerId !== req.user?.id) {
+      res.status(403).json({ error: 'Acesso negado: você só pode consultar contratos da sua própria carteira' });
+      return;
+    }
+
     const effectiveSellerId = isAdmin ? (sellerId || undefined) : req.user?.id;
 
     const where: any = {
@@ -282,7 +313,29 @@ router.get('/agreements', authenticateToken, async (req: AuthRequest, res: Respo
     };
 
     if (status && status !== 'ALL') {
-      where.status = status;
+      if (status === 'OVERDUE') {
+        where.status = { in: ['ACTIVE', 'RENEGOTIATED'] };
+        where.installments = {
+          some: {
+            dueDate: { lt: new Date() },
+            status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          },
+        };
+      } else if (status === 'DUE_TODAY') {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        where.status = { in: ['ACTIVE', 'RENEGOTIATED'] };
+        where.installments = {
+          some: {
+            dueDate: { gte: todayStart, lte: todayEnd },
+            status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          },
+        };
+      } else {
+        where.status = status;
+      }
     }
 
     if (search && search.trim()) {
@@ -450,7 +503,7 @@ router.get('/agreements', authenticateToken, async (req: AuthRequest, res: Respo
  * GET /api/credit/agreements/:id
  * Detalhes de um contrato específico (com autorização estrita por perfil)
  */
-router.get('/agreements/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const companyId = req.user?.companyId;
@@ -513,16 +566,23 @@ router.get('/agreements/:id', authenticateToken, async (req: AuthRequest, res: R
  * Registrar recebimento / baixa parcial ou total do principal financiado
  * Com idempotência persistente, bloqueio pessimista e sincronização manual Asaas
  */
-router.post('/agreements/:id/payments', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const companyId = req.user?.companyId;
     const currentUserId = req.user?.id;
-    const currentUserRole = req.user?.role || 'SELLER';
+    const currentUserRole = req.user?.role || 'ADMIN';
     const isAdmin = isUserAdmin(req);
 
     if (!companyId || !currentUserId) {
       res.status(401).json({ error: 'Usuário ou empresa não identificado' });
+      return;
+    }
+
+    if (!isAdmin) {
+      res.status(403).json({
+        error: 'Acesso negado: a carteira do vendedor é estritamente de consulta após a venda. Baixas manuais são restritas a gestores administrativos.',
+      });
       return;
     }
 
@@ -603,14 +663,15 @@ router.post('/agreements/:id/payments', authenticateToken, async (req: AuthReque
       }
 
       // 3. Criar registro do pagamento
+      const effectiveReceiverId = destination === 'SELLER_HANDS' ? agreement.sellerId : currentUserId;
       const payment = await tx.creditPayment.create({
         data: {
           agreementId: agreement.id,
           companyId,
           amountCents: paymentAmountCents,
           paymentMethod,
-          receivedByRole: currentUserRole,
-          receiverUserId: currentUserId,
+          receivedByRole: destination === 'SELLER_HANDS' ? 'SELLER' : currentUserRole,
+          receiverUserId: effectiveReceiverId,
           destination,
           receiptUrl,
           notes,
@@ -727,6 +788,9 @@ router.post('/agreements/:id/payments', authenticateToken, async (req: AuthReque
         commission: createdCommission,
         chargesToSyncInCash,
       };
+    }, {
+      timeout: 20000,
+      maxWait: 10000,
     });
 
     // 8. Sincronização assíncrona não-bloqueante com o Asaas se cobrança bancária existir
@@ -875,8 +939,9 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
 
       // Tratar comissões geradas por este recebimento
       for (const commission of payment.commissions) {
-        if (commission.status === 'PAID') {
-          // Se já foi paga, NÃO apaga o histórico! Gera registro de ajuste/débito rastreável
+        if (commission.monthlyClosingId || commission.status === 'PAID') {
+          // Se já foi incluída em fechamento mensal ou já foi paga, NÃO apaga o histórico!
+          // Gera registro de ajuste/débito rastreável para a próxima competência
           await tx.creditCommissionAdjustment.create({
             data: {
               companyId,
@@ -884,14 +949,24 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
               agreementId: payment.agreementId,
               paymentId: payment.id,
               commissionId: commission.id,
-              amountCents: commission.amountCents,
-              reason: `Estorno de recebimento pago #${payment.id}. Motivo: ${reason}`,
+              monthlyClosingId: commission.monthlyClosingId || null,
+              amountCents: -Math.abs(commission.amountCents),
+              reason: `Estorno de recebimento pago/fechado #${payment.id}. Motivo: ${reason}`,
               status: 'PENDING',
               idempotencyKey: idempotencyKey ? `${idempotencyKey}_adj_${commission.id}` : undefined,
             },
           });
+          await tx.creditCommission.update({
+            where: { id: commission.id },
+            data: {
+              isReversed: true,
+              reversedAt: new Date(),
+              reversalReason: String(reason).trim(),
+              status: 'REVERSED',
+            },
+          });
         } else {
-          // Se ainda estava liberada (não paga), apenas cancela
+          // Se ainda estava liberada em mês aberto (não paga), cancela a comissão diretamente
           await tx.creditCommission.update({
             where: { id: commission.id },
             data: {
@@ -946,15 +1021,22 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
  * POST /api/credit/agreements/:id/renegotiate
  * Renegociar saldo em aberto marcando parcelas anteriores como RENEGOTIATED sem duplicação de dívida
  */
-router.post('/agreements/:id/renegotiate', authenticateToken, async (req: AuthRequest, res: Response) => {
+router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const companyId = req.user?.companyId;
     const authorId = req.user?.id;
-    const userRole = req.user?.role;
+    const userRole = req.user?.role || 'ADMIN';
 
     if (!companyId || !authorId) {
       res.status(401).json({ error: 'Usuário ou empresa não identificado' });
+      return;
+    }
+
+    if (!isUserAdmin(req)) {
+      res.status(403).json({
+        error: 'Acesso negado: a carteira do vendedor é estritamente de consulta após a venda. Renegociações são restritas a gestores administrativos.',
+      });
       return;
     }
 
@@ -1126,6 +1208,12 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
       return;
     }
 
+    // Se não for admin e tentar passar sellerId de outro vendedor, rejeita com 403
+    if (!isAdmin && req.query.sellerId && req.query.sellerId !== currentUserId) {
+      res.status(403).json({ error: 'Acesso negado: você só pode consultar sua própria carteira' });
+      return;
+    }
+
     // Se admin, permite consultar qualquer vendedor via query; senão, estritamente o próprio
     const targetSellerId = (isAdmin && req.query.sellerId) ? String(req.query.sellerId) : currentUserId;
 
@@ -1215,8 +1303,8 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
   }
 }
 
-router.get('/seller/portfolio', authenticateToken, handleSellerPortfolio);
-router.get('/seller/my-portfolio', authenticateToken, handleSellerPortfolio);
+router.get('/seller/portfolio', authenticateToken, requireCreditAccess, handleSellerPortfolio);
+router.get('/seller/my-portfolio', authenticateToken, requireCreditAccess, handleSellerPortfolio);
 
 /**
  * POST /api/credit/commissions/pay
@@ -1266,6 +1354,16 @@ router.post('/commissions/pay', authenticateToken, requireAdminOrSupervisor, asy
 
       if (commissions.length !== ids.length) {
         throw { status: 400, message: 'Alguma das comissões selecionadas não pertence a este vendedor/empresa' };
+      }
+
+      // Comissões dos 10% das parcelas pertencem exclusivamente ao Fechamento Mensal de Crediário
+      const installmentCommissions = commissions.filter((c) => c.type === 'INSTALLMENT');
+      if (installmentCommissions.length > 0) {
+        throw {
+          status: 400,
+          code: 'INSTALLMENT_COMMISSION_MONTHLY_ONLY',
+          message: 'Comissões de parcelas posteriores (10%) devem ser liquidadas exclusivamente pelo Fechamento Mensal de Crediário, não pelo pagamento avulso.',
+        };
       }
 
       const invalid = commissions.filter((c) => c.status !== 'RELEASED' || c.isReversed);
@@ -1334,7 +1432,7 @@ router.post('/commissions/pay', authenticateToken, requireAdminOrSupervisor, asy
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
-      res.status(error.status).json({ error: error.message });
+      res.status(error.status).json({ error: error.message, code: error.code });
       return;
     }
     console.error('Error paying credit commissions:', error);
@@ -1357,6 +1455,346 @@ router.post('/commissions/:id/pay', authenticateToken, requireAdminOrSupervisor,
   req.body.sellerId = commission.sellerId;
   req.body.commissionIds = [commission.id];
   (router as any).handle(req, res, () => {});
+});
+
+/**
+ * =========================================================================
+ * ENDPOINTS DO FECHAMENTO MENSAL DO CREDIÁRIO (10% DAS PARCELAS)
+ * =========================================================================
+ */
+
+/**
+ * GET /api/credit/monthly-closings
+ * Lista fechamentos mensais por competência e vendedor
+ * Admin vê de todos os vendedores; Vendedor comum só vê os próprios
+ */
+router.get('/monthly-closings', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
+    const isAdmin = isUserAdmin(req);
+    const { competence, sellerId: querySellerId, status } = req.query as {
+      competence?: string;
+      sellerId?: string;
+      status?: string;
+    };
+
+    if (!isAdmin && querySellerId && querySellerId !== req.user?.id) {
+      res.status(403).json({ error: 'Acesso negado: você só pode consultar seus próprios fechamentos' });
+      return;
+    }
+
+    const effectiveSellerId = isAdmin ? (querySellerId || undefined) : req.user?.id;
+
+    const where: any = {
+      ...(companyId ? { companyId } : {}),
+      ...(effectiveSellerId ? { sellerId: effectiveSellerId } : {}),
+      ...(competence ? { competence } : {}),
+      ...(status ? { status } : {}),
+    };
+
+    const closings = await prisma.monthlyCreditClosing.findMany({
+      where,
+      orderBy: [{ competence: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        seller: {
+          select: { id: true, name: true, email: true, active: true },
+        },
+        payouts: {
+          orderBy: { paidAt: 'desc' },
+        },
+      },
+    });
+
+    res.json({
+      closings: closings.map((c) => ({
+        id: c.id,
+        competence: c.competence,
+        status: c.status,
+        sellerId: c.sellerId,
+        sellerName: c.seller.name,
+        sellerActive: c.seller.active,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        totalPrincipalReceived: Number((c.totalPrincipalReceivedCents / 100).toFixed(2)),
+        totalCommission: Number((c.totalCommissionCents / 100).toFixed(2)),
+        adjustments: Number((c.adjustmentsCents / 100).toFixed(2)),
+        netCommission: Number((c.netCommissionCents / 100).toFixed(2)),
+        paidAmount: Number((c.paidAmountCents / 100).toFixed(2)),
+        remainingBalance: Number((c.remainingBalanceCents / 100).toFixed(2)),
+        itemsCount: c.itemsCount,
+        calculatedAt: c.calculatedAt,
+        notes: c.notes,
+        payoutsCount: c.payouts.length,
+      })),
+    });
+  } catch (error: any) {
+    console.error('Error fetching monthly credit closings:', error);
+    res.status(500).json({ error: error.message || 'Erro ao listar fechamentos mensais' });
+  }
+});
+
+/**
+ * GET /api/credit/monthly-closings/:id
+ * Detalhes de um fechamento mensal com suas comissões, ajustes e pagamentos
+ */
+router.get('/monthly-closings/:id', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    const closingId = req.params.id as string;
+
+    const closing = await prisma.monthlyCreditClosing.findFirst({
+      where: {
+        id: closingId,
+        ...(companyId ? { companyId } : {}),
+      },
+      include: {
+        seller: { select: { id: true, name: true, email: true } },
+        payouts: {
+          orderBy: { paidAt: 'desc' },
+          include: { author: { select: { id: true, name: true } } },
+        },
+        commissions: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            payment: {
+              include: {
+                agreement: {
+                  select: {
+                    id: true,
+                    buyerName: true,
+                    client: { select: { id: true, name: true, sequenceNumber: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        adjustments: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    if (!closing) {
+      res.status(404).json({ error: 'Fechamento mensal não encontrado' });
+      return;
+    }
+
+    const isAdmin = isUserAdmin(req);
+    if (!isAdmin && closing.sellerId !== req.user?.id) {
+      res.status(403).json({ error: 'Acesso negado: fechamento pertence a outro vendedor' });
+      return;
+    }
+
+    res.json({
+      closing: {
+        id: closing.id,
+        competence: closing.competence,
+        status: closing.status,
+        seller: closing.seller,
+        startDate: closing.startDate,
+        endDate: closing.endDate,
+        totalPrincipalReceived: Number((closing.totalPrincipalReceivedCents / 100).toFixed(2)),
+        totalCommission: Number((closing.totalCommissionCents / 100).toFixed(2)),
+        adjustmentsAmount: Number((closing.adjustmentsCents / 100).toFixed(2)),
+        netCommission: Number((closing.netCommissionCents / 100).toFixed(2)),
+        paidAmount: Number((closing.paidAmountCents / 100).toFixed(2)),
+        remainingBalance: Number((closing.remainingBalanceCents / 100).toFixed(2)),
+        itemsCount: closing.itemsCount,
+        calculatedAt: closing.calculatedAt,
+        notes: closing.notes,
+        payouts: closing.payouts.map((p) => ({
+          id: p.id,
+          amount: Number((p.amountCents / 100).toFixed(2)),
+          paymentMethod: p.paymentMethod,
+          receiptUrl: p.receiptUrl,
+          notes: p.notes,
+          paidAt: p.paidAt,
+          authorName: p.author?.name || 'Administrador',
+        })),
+        commissions: closing.commissions.map((c) => ({
+          id: c.id,
+          type: c.type,
+          amount: Number((c.amountCents / 100).toFixed(2)),
+          status: c.status,
+          rate: (c as any).rate ?? 0.10,
+          createdAt: c.createdAt,
+          buyerName: c.payment?.agreement?.buyerName || c.payment?.agreement?.client?.name || 'Cliente',
+          agreementId: c.agreementId,
+        })),
+        adjustments: closing.adjustments.map((a) => ({
+          id: a.id,
+          amount: Number((a.amountCents / 100).toFixed(2)),
+          reason: a.reason,
+          status: a.status,
+          createdAt: a.createdAt,
+        })),
+      },
+    });
+  } catch (error: any) {
+    console.error('Error fetching monthly closing detail:', error);
+    res.status(500).json({ error: error.message || 'Erro ao obter detalhes do fechamento' });
+  }
+});
+
+/**
+ * POST /api/credit/monthly-closings/process
+ * Executa ou recupera a apuração formal de competência encerrada para um vendedor
+ * Exclusivo Admin / Supervisor
+ */
+router.post('/monthly-closings/process', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
+    const { sellerId, competence, notes } = req.body;
+    if (!sellerId || !competence) {
+      res.status(400).json({ error: 'sellerId e competence (YYYY-MM) são obrigatórios' });
+      return;
+    }
+
+    const result = await processMonthlyCreditClosing({
+      companyId,
+      sellerId,
+      competence: String(competence).trim(),
+      closedByUserId: req.user?.id,
+      notes,
+    });
+
+    const closing = result.closing!;
+    res.json({
+      success: true,
+      created: result.created,
+      closing: {
+        id: closing.id,
+        competence: closing.competence,
+        status: closing.status,
+        totalPrincipalReceived: Number((closing.totalPrincipalReceivedCents / 100).toFixed(2)),
+        totalCommission: Number((closing.totalCommissionCents / 100).toFixed(2)),
+        adjustments: Number((closing.adjustmentsCents / 100).toFixed(2)),
+        netCommission: Number((closing.netCommissionCents / 100).toFixed(2)),
+        paidAmount: Number((closing.paidAmountCents / 100).toFixed(2)),
+        remainingBalance: Number((closing.remainingBalanceCents / 100).toFixed(2)),
+        itemsCount: closing.itemsCount,
+      },
+    });
+  } catch (error: any) {
+    if (error?.status && error?.message) {
+      res.status(error.status).json({ error: error.message, code: error.code });
+      return;
+    }
+    console.error('Error processing monthly credit closing:', error);
+    res.status(500).json({ error: error.message || 'Erro ao processar fechamento mensal' });
+  }
+});
+
+/**
+ * POST /api/credit/monthly-closings/:id/payout
+ * Registra acerto (parcial ou integral) do fechamento mensal de comissão
+ * Exclusivo Admin / Supervisor. Suporta chave de idempotência persistente.
+ */
+router.post('/monthly-closings/:id/payout', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    const authorId = req.user?.id;
+    if (!companyId || !authorId) {
+      res.status(403).json({ error: 'Empresa ou usuário não identificado' });
+      return;
+    }
+
+    const closingId = req.params.id as string;
+    const { amount, amountCents: bodyAmountCents, paymentMethod = 'PIX', receiptUrl, notes, idempotencyKey } = req.body;
+
+    const amountCents = typeof bodyAmountCents === 'number'
+      ? bodyAmountCents
+      : (typeof amount === 'number' ? Math.round(amount * 100) : NaN);
+
+    if (isNaN(amountCents) || amountCents <= 0) {
+      res.status(400).json({ error: 'Informe um valor de pagamento válido maior que zero' });
+      return;
+    }
+
+    const result = await recordMonthlyCreditPayout({
+      companyId,
+      closingId,
+      amountCents,
+      paymentMethod,
+      receiptUrl,
+      notes,
+      authorId,
+      idempotencyKey,
+    });
+
+    res.json({
+      success: true,
+      idempotentReplay: result.idempotentReplay,
+      payout: {
+        id: result.payout.id,
+        amount: Number((result.payout.amountCents / 100).toFixed(2)),
+        paymentMethod: result.payout.paymentMethod,
+        paidAt: result.payout.paidAt,
+      },
+      closing: {
+        id: result.closing?.id || closingId,
+        status: result.closing?.status,
+        paidAmount: Number(((result.closing?.paidAmountCents || 0) / 100).toFixed(2)),
+        remainingBalance: Number(((result.closing?.remainingBalanceCents || 0) / 100).toFixed(2)),
+      },
+    });
+  } catch (error: any) {
+    if (error?.status && error?.message) {
+      res.status(error.status).json({ error: error.message, code: error.code });
+      return;
+    }
+    console.error('Error recording monthly closing payout:', error);
+    res.status(500).json({ error: error.message || 'Erro ao registrar acerto mensal' });
+  }
+});
+
+/**
+ * GET /api/credit/seller/four-states
+ * Retorna os 4 estados visíveis da comissão do crediário:
+ * 1. Prevista / Futura
+ * 2. Acumulada no Mês Aberto
+ * 3. Mês Fechado — A Pagar
+ * 4. Parcialmente Paga / Paga
+ */
+router.get('/seller/four-states', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId || (req.query.companyId as string);
+    if (!companyId) {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
+    const isAdmin = isUserAdmin(req);
+    const { sellerId: querySellerId } = req.query as { sellerId?: string };
+
+    if (!isAdmin && querySellerId && querySellerId !== req.user?.id) {
+      res.status(403).json({ error: 'Acesso negado: vendedor só pode consultar seus próprios estados de comissão' });
+      return;
+    }
+
+    const effectiveSellerId = (isAdmin && querySellerId) ? querySellerId : req.user?.id;
+    if (!effectiveSellerId) {
+      res.status(400).json({ error: 'Vendedor não identificado' });
+      return;
+    }
+
+    const data = await getSellerFourCommissionStates(companyId, effectiveSellerId);
+    res.json(data);
+  } catch (error: any) {
+    console.error('Error fetching four commission states:', error);
+    res.status(500).json({ error: error.message || 'Erro ao consultar estados de comissão' });
+  }
 });
 
 /**

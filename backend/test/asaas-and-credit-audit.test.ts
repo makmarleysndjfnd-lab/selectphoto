@@ -227,10 +227,10 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     assert.equal(agreement.remainingPrincipalCents, 80000);
     assert.equal(agreement.installments.length, 4);
 
-    // Comissão de entrada (25% sobre R$ 200 = R$ 50)
+    // Comissão de entrada (20% sobre R$ 200 = R$ 40 com carro da empresa)
     const downComm = agreement.commissions.find((c) => c.type === 'DOWN_PAYMENT');
     assert.ok(downComm);
-    assert.equal(downComm.amountCents, 5000);
+    assert.equal(downComm.amountCents, 4000);
     assert.equal(downComm.status, 'RELEASED');
   });
 

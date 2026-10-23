@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../servicos/servico_api.dart';
 
 class VisaoCrediarioAdmin extends StatefulWidget {
@@ -9,9 +11,11 @@ class VisaoCrediarioAdmin extends StatefulWidget {
   State<VisaoCrediarioAdmin> createState() => _VisaoCrediarioAdminState();
 }
 
-class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
+class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTickerProviderStateMixin {
   final ApiService _api = ApiService();
   final TextEditingController _searchController = TextEditingController();
+
+  late TabController _tabController;
 
   bool _isLoading = true;
   String? _errorMessage;
@@ -22,6 +26,13 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
   Map<String, dynamic>? _selectedSellerPortfolio;
   Map<String, dynamic>? _asaasConfig;
   List<dynamic> _asaasDuplicateAlerts = [];
+
+  // Fechamentos Mensais (10%)
+  List<dynamic> _monthlyClosings = [];
+  bool _isLoadingMonthlyClosings = false;
+  String _selectedClosingCompetence = 'ALL';
+  String? _selectedClosingSellerId;
+  String _selectedClosingStatus = 'ALL';
 
   String _selectedStatus = 'ALL';
   String? _selectedSellerId;
@@ -34,11 +45,18 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.index == 1 && _monthlyClosings.isEmpty && !_isLoadingMonthlyClosings) {
+        _loadMonthlyClosings();
+      }
+    });
     _loadAll();
   }
 
   @override
   void dispose() {
+    _tabController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -97,8 +115,48 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
     }
   }
 
+  Future<void> _loadMonthlyClosings() async {
+    setState(() {
+      _isLoadingMonthlyClosings = true;
+    });
+
+    try {
+      final closings = await _api.getMonthlyCreditClosings(
+        competence: _selectedClosingCompetence == 'ALL' ? null : _selectedClosingCompetence,
+        sellerId: _selectedClosingSellerId,
+        status: _selectedClosingStatus == 'ALL' ? null : _selectedClosingStatus,
+      );
+      if (mounted) {
+        setState(() {
+          _monthlyClosings = closings;
+          _isLoadingMonthlyClosings = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMonthlyClosings = false;
+        });
+      }
+    }
+  }
+
+  List<String> _getCompetenceOptions() {
+    final list = <String>['ALL'];
+    final now = DateTime.now();
+    for (int i = 0; i < 12; i++) {
+      final d = DateTime(now.year, now.month - i, 1);
+      final comp = '${d.year}-${d.month.toString().padLeft(2, '0')}';
+      list.add(comp);
+    }
+    return list;
+  }
+
   Future<void> _refresh() async {
-    await _loadAll();
+    await Future.wait([
+      _loadAll(),
+      _loadMonthlyClosings(),
+    ]);
   }
 
   @override
@@ -200,33 +258,57 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
             onPressed: _refresh,
           ),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: const Color(0xFFA855F7),
+          indicatorWeight: 3,
+          labelColor: const Color(0xFFA855F7),
+          unselectedLabelColor: Colors.white60,
+          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          tabs: const [
+            Tab(
+              icon: Icon(Icons.receipt_long_rounded, size: 20),
+              text: 'Contratos',
+            ),
+            Tab(
+              icon: Icon(Icons.event_repeat_rounded, size: 20),
+              text: 'Fechamento Mensal (10%)',
+            ),
+          ],
+        ),
       ),
-      body: RefreshIndicator(
-        color: const Color(0xFFA855F7),
-        backgroundColor: const Color(0xFF160D24),
-        onRefresh: _refresh,
-        child: _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFA855F7)),
-              )
-            : _errorMessage != null
-                ? _buildErrorView()
-                : SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildKpiSection(),
-                        const SizedBox(height: 20),
-                        _buildInadimplenciaBanner(),
-                        const SizedBox(height: 20),
-                        _buildFilterSection(),
-                        const SizedBox(height: 16),
-                        _buildAgreementsList(),
-                      ],
-                    ),
-                  ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          RefreshIndicator(
+            color: const Color(0xFFA855F7),
+            backgroundColor: const Color(0xFF160D24),
+            onRefresh: _refresh,
+            child: _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(color: Color(0xFFA855F7)),
+                  )
+                : _errorMessage != null
+                    ? _buildErrorView()
+                    : SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildKpiSection(),
+                            const SizedBox(height: 20),
+                            _buildInadimplenciaBanner(),
+                            const SizedBox(height: 20),
+                            _buildFilterSection(),
+                            const SizedBox(height: 16),
+                            _buildAgreementsList(),
+                          ],
+                        ),
+                      ),
+          ),
+          _buildMonthlyClosingsTab(),
+        ],
       ),
     );
   }
@@ -503,18 +585,37 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
           const SizedBox(height: 14),
         ],
 
-        // Status chips dos contratos
+        // Status chips e atalhos rápidos
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
               _buildFilterChip('Todos', 'ALL'),
               const SizedBox(width: 8),
+              _buildFilterChip('Vence Hoje', 'DUE_TODAY'),
+              const SizedBox(width: 8),
+              _buildFilterChip('Vencidas', 'OVERDUE'),
+              const SizedBox(width: 8),
               _buildFilterChip('Em Aberto / Em dia', 'ACTIVE'),
               const SizedBox(width: 8),
               _buildFilterChip('Quitados', 'SETTLED'),
               const SizedBox(width: 8),
               _buildFilterChip('Renegociados', 'RENEGOTIATED'),
+              const SizedBox(width: 8),
+              ActionChip(
+                avatar: const Icon(Icons.event_repeat_rounded, size: 14, color: Color(0xFFF59E0B)),
+                label: const Text('Fechadas a Repassar'),
+                backgroundColor: const Color(0xFFF59E0B).withOpacity(0.15),
+                side: const BorderSide(color: Color(0xFFF59E0B)),
+                labelStyle: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
+                onPressed: () {
+                  _tabController.animateTo(1);
+                  setState(() {
+                    _selectedClosingStatus = 'CLOSED';
+                  });
+                  _loadMonthlyClosings();
+                },
+              ),
             ],
           ),
         ),
@@ -806,17 +907,39 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
                   ),
                 ],
               ),
-              if (net > 0)
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.check_circle_rounded, size: 14),
-                  label: const Text('Pagar Comissões', style: TextStyle(fontSize: 11)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.event_repeat_rounded, size: 13, color: Color(0xFFA855F7)),
+                    label: const Text('Fechamentos 10%', style: TextStyle(color: Color(0xFFA855F7), fontSize: 11)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFFA855F7)),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    ),
+                    onPressed: () {
+                      _tabController.animateTo(1);
+                      setState(() {
+                        _selectedClosingSellerId = _selectedSellerId;
+                      });
+                      _loadMonthlyClosings();
+                    },
                   ),
-                  onPressed: _showPayCommissionsDialog,
-                ),
+                  if (net > 0) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.check_circle_rounded, size: 14),
+                      label: const Text('Pagar Entrada', style: TextStyle(fontSize: 11)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      ),
+                      onPressed: _showPayCommissionsDialog,
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1097,6 +1220,45 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 10),
+                const Divider(color: Color(0xFF2A1B3D), height: 1),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (remaining > 0)
+                      InkWell(
+                        onTap: () => _showWhatsAppReviewDialog(a),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF25D366).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF25D366).withOpacity(0.4)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.chat_bubble_outline_rounded, size: 13, color: Color(0xFF25D366)),
+                              SizedBox(width: 5),
+                              Text(
+                                'WhatsApp Cobrança',
+                                style: TextStyle(color: Color(0xFF25D366), fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      const SizedBox(),
+                    TextButton.icon(
+                      onPressed: () => _openAgreementDetailsModal(id),
+                      icon: const Icon(Icons.visibility_outlined, size: 14, color: Color(0xFFA855F7)),
+                      label: const Text('Ver Detalhes', style: TextStyle(color: Color(0xFFA855F7), fontSize: 11)),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1299,6 +1461,21 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
                 onPressed: () => _emitAsaasCharges(a['id']?.toString() ?? ''),
               ),
             ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18, color: Color(0xFF25D366)),
+                label: const Text('Revisar e Enviar Cobrança WhatsApp (sem dados de criança)',
+                    style: TextStyle(color: Color(0xFF25D366), fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFF25D366)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () => _showWhatsAppReviewDialog(a),
+              ),
+            ),
             const SizedBox(height: 20),
           ],
 
@@ -1312,7 +1489,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
             ),
           ),
           const SizedBox(height: 10),
-          _buildInstallmentsTable(installments),
+          _buildInstallmentsTable(installments, a),
 
           const SizedBox(height: 20),
 
@@ -1359,7 +1536,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
     );
   }
 
-  Widget _buildInstallmentsTable(List installments) {
+  Widget _buildInstallmentsTable(List installments, [Map<String, dynamic>? agreement]) {
     if (installments.isEmpty) {
       return const Text('Nenhuma parcela cadastrada.', style: TextStyle(color: Colors.white54, fontSize: 12));
     }
@@ -1424,17 +1601,32 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
                       currencyFormat.format(amount),
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: badgeColor.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: badgeColor.withOpacity(0.5)),
-                      ),
-                      child: Text(
-                        badgeText,
-                        style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: badgeColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: badgeColor.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            badgeText,
+                            style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (!isPaid && agreement != null) ...[
+                          const SizedBox(width: 4),
+                          IconButton(
+                            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 14, color: Color(0xFF25D366)),
+                            tooltip: 'Cobrança via WhatsApp',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () => _showWhatsAppReviewDialog(agreement, inst),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
@@ -2463,5 +2655,1072 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> {
         );
       }
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // REVISÃO DE TEXTO WHATSAPP (SEM ENVIO AUTOMÁTICO E SEM DADOS DE CRIANÇA)
+  // ══════════════════════════════════════════════════════════════════════════
+  void _showWhatsAppReviewDialog(Map<String, dynamic> agreement, [Map<String, dynamic>? installment]) {
+    final buyerName = agreement['buyerName']?.toString() ?? 'Cliente';
+    final rawPhone = agreement['client']?['phone1'] ?? agreement['buyerPhone'] ?? agreement['client']?['phone2'] ?? '';
+    final phoneController = TextEditingController(text: rawPhone.toString().replaceAll(RegExp(r'\D'), ''));
+
+    String defaultMessage = '';
+    if (installment != null) {
+      final instNum = installment['installmentNumber']?.toString() ?? '1';
+      final amount = ((installment['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+      final due = DateTime.tryParse(installment['dueDate'] ?? '');
+      final dueStr = due != null ? dateFormat.format(due) : 'vencimento';
+      defaultMessage = 'Olá, $buyerName!\n\nTudo bem? Aqui é da equipe SelectPhoto / Lumora.\nPassando para lembrar sobre a parcela nº $instNum do seu crediário, no valor de ${currencyFormat.format(amount)}, com vencimento em $dueStr.\n\nCaso já tenha realizado o pagamento, por favor desconsidere este aviso.\nSe precisar de 2ª via ou chave Pix para pagamento, estamos à inteira disposição!';
+    } else {
+      final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ?? 0.0) > 0
+          ? ((agreement['remainingPrincipalCents'] as num).toDouble() / 100.0)
+          : ((agreement['remainingPrincipal'] as num?)?.toDouble() ?? 0.0);
+      defaultMessage = 'Olá, $buyerName!\n\nTudo bem? Aqui é da equipe SelectPhoto / Lumora.\nPassando para informar o extrato do seu crediário. O saldo devedor atual é de ${currencyFormat.format(remaining)}.\n\nCaso queira consultar suas parcelas ou realizar a quitação antecipada, estamos à sua inteira disposição!';
+    }
+
+    final messageController = TextEditingController(text: defaultMessage);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF160D24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF25D366)),
+        ),
+        title: Row(
+          children: const [
+            Icon(Icons.chat_bubble_outline_rounded, color: Color(0xFF25D366), size: 20),
+            SizedBox(width: 8),
+            Text('Revisão de Cobrança WhatsApp', style: TextStyle(color: Color(0xFF25D366), fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF25D366).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF25D366).withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Icon(Icons.shield_outlined, color: Color(0xFF25D366), size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '🔒 Proteção e LGPD: O texto foi gerado exclusivamente com os dados do titular financeiro. Não há menção a fotos, crianças ou identificadores escolares. Revise antes de enviar.',
+                          style: TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: phoneController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'WhatsApp do Titular (com DDD)',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    prefixIcon: Icon(Icons.phone_rounded, color: Color(0xFF25D366), size: 18),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF25D366))),
+                  ),
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 14),
+                const Text('Mensagem a Enviar (Editável):', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: messageController,
+                  maxLines: 7,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    hintText: 'Digite ou revise a mensagem...',
+                    hintStyle: TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: Color(0xFF0D0714),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF25D366))),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy_rounded, size: 15, color: Colors.white70),
+            label: const Text('Copiar Texto', style: TextStyle(color: Colors.white70)),
+            style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white24)),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: messageController.text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Mensagem copiada para a área de transferência!'), backgroundColor: Color(0xFF10B981)),
+              );
+            },
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.open_in_new_rounded, size: 15),
+            label: const Text('Abrir WhatsApp', style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF25D366),
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () async {
+              final raw = phoneController.text.replaceAll(RegExp(r'\D'), '');
+              if (raw.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Telefone inválido ou não informado.'), backgroundColor: Colors.red),
+                );
+                return;
+              }
+              final fullNum = raw.startsWith('55') ? raw : '55$raw';
+              final encodedMsg = Uri.encodeComponent(messageController.text);
+              final uri = Uri.parse('https://wa.me/$fullNum?text=$encodedMsg');
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+                if (mounted) Navigator.pop(ctx);
+              } else {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Não foi possível abrir o WhatsApp no aparelho.'), backgroundColor: Colors.red),
+                  );
+                }
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ABA: FECHAMENTOS MENSAIS DE CREDIÁRIO (10% SOBRE PARCELAS POSTERIORES)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildMonthlyClosingsTab() {
+    return RefreshIndicator(
+      color: const Color(0xFFA855F7),
+      backgroundColor: const Color(0xFF160D24),
+      onRefresh: _loadMonthlyClosings,
+      child: _isLoadingMonthlyClosings
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)))
+          : SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildMonthlyClosingKpis(),
+                  const SizedBox(height: 16),
+                  _buildMonthlyClosingFilterBar(),
+                  const SizedBox(height: 16),
+                  _buildMonthlyClosingsList(),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildMonthlyClosingKpis() {
+    double totalPendente = 0;
+    double totalPago = 0;
+    int competenciasAberto = 0;
+
+    for (final c in _monthlyClosings) {
+      final rem = ((c['remainingBalanceCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+      final paid = ((c['paidAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+      totalPendente += rem;
+      totalPago += paid;
+      if (c['status'] == 'CLOSED' || c['status'] == 'PARTIALLY_PAID') {
+        competenciasAberto++;
+      }
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: _buildKpiCard(
+            title: 'A Repassar (10%)',
+            subtitle: '$competenciasAberto competência(s) a quitar',
+            value: currencyFormat.format(totalPendente),
+            icon: Icons.pending_actions_rounded,
+            accentColor: totalPendente > 0 ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildKpiCard(
+            title: 'Total Quitado',
+            subtitle: 'Comissões de parcelas pagas',
+            value: currencyFormat.format(totalPago),
+            icon: Icons.check_circle_outline_rounded,
+            accentColor: const Color(0xFF10B981),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMonthlyClosingFilterBar() {
+    final competences = _getCompetenceOptions();
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF2A1B3D)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.filter_list_rounded, color: Color(0xFFA855F7), size: 18),
+                  SizedBox(width: 8),
+                  Text('Filtros do Fechamento', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                ],
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.play_arrow_rounded, size: 16),
+                label: const Text('Processar Mês Fechado', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                ),
+                onPressed: _showProcessMonthlyClosingDialog,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              // Competência
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedClosingCompetence,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                  decoration: const InputDecoration(
+                    labelText: 'Competência',
+                    labelStyle: TextStyle(color: Colors.white70, fontSize: 11),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                  items: competences.map((c) {
+                    return DropdownMenuItem(
+                      value: c,
+                      child: Text(c == 'ALL' ? 'Todas as Competências' : c, style: const TextStyle(fontSize: 11)),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _selectedClosingCompetence = val);
+                      _loadMonthlyClosings();
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Vendedor
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedClosingSellerId ?? 'ALL',
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                  decoration: const InputDecoration(
+                    labelText: 'Vendedor',
+                    labelStyle: TextStyle(color: Colors.white70, fontSize: 11),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: 'ALL', child: Text('Todos os Vendedores', style: TextStyle(fontSize: 11))),
+                    ..._sellersSummary.map((s) => DropdownMenuItem(
+                          value: s['sellerId']?.toString() ?? '',
+                          child: Text(s['sellerName']?.toString() ?? 'Vendedor', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+                        )),
+                  ],
+                  onChanged: (val) {
+                    setState(() {
+                      _selectedClosingSellerId = (val == null || val == 'ALL') ? null : val;
+                    });
+                    _loadMonthlyClosings();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Status Chips
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildClosingStatusChip('Todos os Status', 'ALL'),
+                const SizedBox(width: 8),
+                _buildClosingStatusChip('Aguardando Repasse', 'CLOSED'),
+                const SizedBox(width: 8),
+                _buildClosingStatusChip('Parcialmente Pagos', 'PARTIALLY_PAID'),
+                const SizedBox(width: 8),
+                _buildClosingStatusChip('Quitados / Pagos', 'PAID'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClosingStatusChip(String label, String statusKey) {
+    final isSelected = _selectedClosingStatus == statusKey;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      onSelected: (val) {
+        if (val) {
+          setState(() => _selectedClosingStatus = statusKey);
+          _loadMonthlyClosings();
+        }
+      },
+      selectedColor: const Color(0xFFA855F7).withOpacity(0.3),
+      backgroundColor: const Color(0xFF160D24),
+      side: BorderSide(
+        color: isSelected ? const Color(0xFFA855F7) : const Color(0xFF2A1B3D),
+      ),
+      labelStyle: TextStyle(
+        color: isSelected ? const Color(0xFFA855F7) : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 11,
+      ),
+    );
+  }
+
+  Widget _buildMonthlyClosingsList() {
+    if (_monthlyClosings.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(32),
+        alignment: Alignment.center,
+        child: Column(
+          children: const [
+            Icon(Icons.event_busy_rounded, color: Colors.white24, size: 48),
+            SizedBox(height: 12),
+            Text(
+              'Nenhum fechamento mensal de crediário encontrado com os filtros selecionados.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _monthlyClosings.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final closing = _monthlyClosings[index] as Map<String, dynamic>;
+        return _buildMonthlyClosingCard(closing);
+      },
+    );
+  }
+
+  Widget _buildMonthlyClosingCard(Map<String, dynamic> c) {
+    final closingId = c['id']?.toString() ?? '';
+    final competence = c['competence']?.toString() ?? '---';
+    final sellerName = c['seller']?['name']?.toString() ?? 'Vendedor';
+    final status = c['status']?.toString() ?? 'CLOSED';
+
+    final base = ((c['baseAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final gross = ((c['grossCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final adj = ((c['adjustmentDeductionsCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final net = ((c['netCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final paid = ((c['paidAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final remaining = ((c['remainingBalanceCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+    Color statusColor = const Color(0xFFEF4444);
+    String statusLabel = 'A PAGAR';
+    if (status == 'PAID' || remaining == 0) {
+      statusColor = const Color(0xFF10B981);
+      statusLabel = 'QUITADO';
+    } else if (status == 'PARTIALLY_PAID') {
+      statusColor = const Color(0xFFF59E0B);
+      statusLabel = 'PARCIAL';
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: remaining > 0 ? statusColor.withOpacity(0.5) : const Color(0xFF2A1B3D),
+          width: 1.2,
+        ),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFA855F7).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.calendar_month_rounded, color: Color(0xFFA855F7), size: 18),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Competência: $competence',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                      Text(
+                        'Vendedor: $sellerName',
+                        style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: statusColor.withOpacity(0.6)),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 10),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(color: Color(0xFF2A1B3D), height: 1),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildClosingStat('Base Parcelas', currencyFormat.format(base), Colors.white70),
+              ),
+              Expanded(
+                child: _buildClosingStat('Comissão (10%)', currencyFormat.format(gross), const Color(0xFF38BDF8)),
+              ),
+              if (adj > 0)
+                Expanded(
+                  child: _buildClosingStat('(-) Estornos', '- ${currencyFormat.format(adj)}', const Color(0xFFEF4444)),
+                ),
+              Expanded(
+                child: _buildClosingStat('Líquido Final', currencyFormat.format(net), const Color(0xFF10B981)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.25),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Text('Já Repassado: ', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    Text(currencyFormat.format(paid), style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('Saldo Restante: ', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                    Text(
+                      currencyFormat.format(remaining),
+                      style: TextStyle(
+                        color: remaining > 0 ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.receipt_outlined, size: 14, color: Color(0xFFA855F7)),
+                label: const Text('Extrato Detalhado', style: TextStyle(color: Color(0xFFA855F7), fontSize: 11)),
+                onPressed: () => _openMonthlyClosingDetailsModal(closingId),
+              ),
+              if (remaining > 0) ...[
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.check_circle_rounded, size: 14),
+                  label: const Text('Quitar / Acerto', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  onPressed: () => _showMonthlyPayoutDialog(c),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClosingStat(String title, String value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 9), overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 2),
+        Text(value, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+      ],
+    );
+  }
+
+  void _showMonthlyPayoutDialog(Map<String, dynamic> closing) {
+    final closingId = closing['id']?.toString() ?? '';
+    final sellerName = closing['seller']?['name']?.toString() ?? 'Vendedor';
+    final competence = closing['competence']?.toString() ?? '';
+    final remaining = ((closing['remainingBalanceCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+    final amountCtrl = TextEditingController(text: remaining.toStringAsFixed(2));
+    final receiptCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+    String method = 'PIX';
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF10B981)),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.payments_rounded, color: Color(0xFF10B981), size: 20),
+              SizedBox(width: 8),
+              Text('Quitação de Comissão Mensal', style: TextStyle(color: Color(0xFF10B981), fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Vendedor: $sellerName', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                Text('Competência: $competence', style: const TextStyle(color: Color(0xFFA855F7), fontSize: 12)),
+                const SizedBox(height: 8),
+                Text('Saldo Restante a Repassar: ${currencyFormat.format(remaining)}',
+                    style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'Valor do Repasse (R\$) *',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    prefixText: 'R\$ ',
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF10B981))),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: method,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Forma de Pagamento',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'PIX', child: Text('Pix')),
+                    DropdownMenuItem(value: 'TRANSFER', child: Text('Transferência Bancária (TED/DOC)')),
+                    DropdownMenuItem(value: 'CASH', child: Text('Dinheiro em Mãos')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) method = val;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: receiptCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Comprovante / Chave Pix (opcional)',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Observações / Motivo',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF10B981),
+                foregroundColor: Colors.black,
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final val = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0.0;
+                      if (val <= 0 || val > (remaining + 0.001)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Valor inválido ou superior ao saldo restante a repassar.')),
+                        );
+                        return;
+                      }
+
+                      setDialogState(() => isSubmitting = true);
+                      final amountCents = (val * 100).round();
+                      final idemKey = 'payout_${closingId}_${DateTime.now().millisecondsSinceEpoch}';
+
+                      try {
+                        await _api.recordMonthlyCreditPayout(
+                          closingId: closingId,
+                          amountCents: amountCents,
+                          paymentMethod: method,
+                          receiptUrl: receiptCtrl.text.trim(),
+                          notes: notesCtrl.text.trim(),
+                          idempotencyKey: idemKey,
+                        );
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Acerto de comissão mensal registrado com sucesso!'),
+                              backgroundColor: Color(0xFF10B981),
+                            ),
+                          );
+                          _loadMonthlyClosings();
+                          _loadAll();
+                        }
+                      } catch (e) {
+                        setDialogState(() => isSubmitting = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro ao registrar acerto: $e'), backgroundColor: Colors.red),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Text('Confirmar Quitação', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showProcessMonthlyClosingDialog() {
+    final competences = _getCompetenceOptions().where((c) => c != 'ALL').toList();
+    String selectedComp = competences.isNotEmpty ? competences.first : '2026-09';
+    String? selectedSellerId = _sellersSummary.isNotEmpty ? _sellersSummary.first['sellerId']?.toString() : null;
+    final notesCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFA855F7)),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.calendar_month_rounded, color: Color(0xFFA855F7), size: 20),
+              SizedBox(width: 8),
+              Text('Apuração Manual de Fechamento', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Gera o fechamento formal (10% das parcelas pagas) para uma competência já encerrada.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<String>(
+                  value: selectedComp,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Competência (YYYY-MM)',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                  items: competences.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                  onChanged: (val) {
+                    if (val != null) setDialogState(() => selectedComp = val);
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: selectedSellerId,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Vendedor',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                  items: _sellersSummary.map((s) => DropdownMenuItem(
+                        value: s['sellerId']?.toString() ?? '',
+                        child: Text(s['sellerName']?.toString() ?? 'Vendedor'),
+                      )).toList(),
+                  onChanged: (val) {
+                    if (val != null) setDialogState(() => selectedSellerId = val);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesCtrl,
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  decoration: const InputDecoration(
+                    labelText: 'Observações (opcional)',
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: (isSubmitting || selectedSellerId == null)
+                  ? null
+                  : () async {
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        await _api.processMonthlyCreditClosing(
+                          sellerId: selectedSellerId!,
+                          competence: selectedComp,
+                          notes: notesCtrl.text.trim(),
+                        );
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Fechamento mensal apurado com sucesso!'),
+                              backgroundColor: Color(0xFF10B981),
+                            ),
+                          );
+                          _loadMonthlyClosings();
+                        }
+                      } catch (e) {
+                        setDialogState(() => isSubmitting = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro ao processar fechamento: $e'), backgroundColor: Colors.red),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Processar Fechamento', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openMonthlyClosingDetailsModal(String closingId) async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF160D24),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollCtrl) {
+          return FutureBuilder<Map<String, dynamic>>(
+            future: _api.getMonthlyCreditClosingDetail(closingId),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)));
+              }
+              if (snapshot.hasError || !snapshot.hasData) {
+                return Center(
+                  child: Text('Erro ao carregar detalhes: ${snapshot.error}', style: const TextStyle(color: Color(0xFFEF4444))),
+                );
+              }
+
+              final closing = snapshot.data!;
+              final competence = closing['competence']?.toString() ?? '';
+              final sellerName = closing['seller']?['name']?.toString() ?? 'Vendedor';
+              final status = closing['status']?.toString() ?? 'CLOSED';
+
+              final base = ((closing['baseAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+              final gross = ((closing['grossCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+              final net = ((closing['netCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+              final remaining = ((closing['remainingBalanceCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+              final installments = (closing['installments'] as List?) ?? [];
+              final payouts = (closing['payouts'] as List?) ?? [];
+              final adjustments = (closing['adjustments'] as List?) ?? [];
+
+              return SingleChildScrollView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text('Extrato: $competence', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: (status == 'PAID' ? const Color(0xFF10B981) : const Color(0xFFEF4444)).withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      status == 'PAID' ? 'QUITADO' : (status == 'PARTIALLY_PAID' ? 'PARCIAL' : 'A PAGAR'),
+                                      style: TextStyle(
+                                        color: status == 'PAID' ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Text('Vendedor: $sellerName', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                        IconButton(icon: const Icon(Icons.close, color: Colors.white70), onPressed: () => Navigator.pop(context)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Resumo
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0714),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF2A1B3D)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _buildModalStat('Base Parcelas', currencyFormat.format(base), Colors.white),
+                          _buildModalStat('Bruto (10%)', currencyFormat.format(gross), const Color(0xFF38BDF8)),
+                          _buildModalStat('Líquido', currencyFormat.format(net), const Color(0xFF10B981)),
+                          _buildModalStat('Saldo a Pagar', currencyFormat.format(remaining), remaining > 0 ? const Color(0xFFEF4444) : const Color(0xFF10B981)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Parcelas que geraram comissão
+                    Text('Parcelas Pagas no Período (${installments.length})', style: const TextStyle(color: Color(0xFFA855F7), fontWeight: FontWeight.bold, fontSize: 14)),
+                    const SizedBox(height: 8),
+                    if (installments.isEmpty)
+                      const Text('Nenhuma parcela listada.', style: TextStyle(color: Colors.white54, fontSize: 12))
+                    else
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0D0714),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF2A1B3D)),
+                        ),
+                        child: Column(
+                          children: installments.map((inst) {
+                            final instNum = inst['installment']?['installmentNumber'] ?? '';
+                            final clientName = inst['installment']?['agreement']?['buyerName'] ?? 'Cliente';
+                            final paidPrincipal = ((inst['paidPrincipalCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+                            final comm = ((inst['commissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: const BoxDecoration(
+                                border: Border(bottom: BorderSide(color: Color(0xFF2A1B3D), width: 0.5)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text('Parc. $instNum · $clientName', style: const TextStyle(color: Colors.white, fontSize: 12), overflow: TextOverflow.ellipsis),
+                                  ),
+                                  Text('Base: ${currencyFormat.format(paidPrincipal)}', style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                  const SizedBox(width: 8),
+                                  Text(currencyFormat.format(comm), style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12)),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    const SizedBox(height: 20),
+                    // Histórico de Quitações / Payouts
+                    Text('Histórico de Repasses / Quitações (${payouts.length})', style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 14)),
+                    const SizedBox(height: 8),
+                    if (payouts.isEmpty)
+                      const Text('Nenhum repasse registrado ainda.', style: TextStyle(color: Colors.white54, fontSize: 12))
+                    else
+                      Column(
+                        children: payouts.map((p) {
+                          final val = ((p['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+                          final date = DateTime.tryParse(p['paidAt'] ?? '');
+                          final dateStr = date != null ? dateFormat.format(date) : '';
+                          final pMethod = p['paymentMethod'] ?? 'PIX';
+                          final rcpt = p['receiptUrl'];
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0D0714),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFF2A1B3D)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(currencyFormat.format(val), style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 13)),
+                                    Text('$dateStr · $pMethod ${rcpt != null ? "· Comprovante: $rcpt" : ""}', style: TextStyle(color: Colors.white.withOpacity(0.55), fontSize: 10)),
+                                  ],
+                                ),
+                                const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 16),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    if (adjustments.isNotEmpty) ...[
+                      const SizedBox(height: 20),
+                      Text('Ajustes e Deduções de Estornos (${adjustments.length})', style: const TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.bold, fontSize: 14)),
+                      const SizedBox(height: 8),
+                      Column(
+                        children: adjustments.map((adj) {
+                          final adjVal = ((adj['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+                          final rsn = adj['reason'] ?? 'Estorno';
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0D0714),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.4)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(rsn, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                                Text('- ${currencyFormat.format(adjVal)}', style: const TextStyle(color: Color(0xFFEF4444), fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 }

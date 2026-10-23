@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mobile</string>
+	<string>SelectPhoto</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>mobile</string>
+	<string>SelectPhoto</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -45,5 +45,17 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- Descrições estritas de uso real para Apple App Store e TestFlight -->
+	<key>NSCameraUsageDescription</key>
+	<string>O SelectPhoto necessita de acesso à câmera para leitura de QR Code/código de barras de fichas e captura de fotos de documentos em campo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>O SelectPhoto necessita de acesso à galeria de fotos para anexar comprovantes de pagamento e fotos de documentos às fichas.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>O SelectPhoto utiliza a localização durante o uso para registrar o ponto geográfico da venda e validar o atendimento em campo.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>O SelectPhoto necessita de acesso ao calendário para registrar agendamentos de visitas e retornos aos clientes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>O SelectPhoto utiliza autenticação biométrica local (Face ID / Touch ID) para login seguro do operador.</string>
 </dict>
 </plist>

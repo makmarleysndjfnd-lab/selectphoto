@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
+import { resolveSellerCommissionRate } from '../utils/commission';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -26,6 +27,7 @@ function parseSaleInput(body: any) {
     contactRating,
     credit,
     creditAgreement,
+    receiptUrl,
   } = body;
   const parsedValue = Number(value);
 
@@ -215,6 +217,7 @@ function parseSaleInput(body: any) {
     sellerRating: parseRating(sellerRating),
     photographerRating: parseRating(photographerRating),
     contactRating: parseRating(contactRating),
+    receiptUrl: receiptUrl ? String(receiptUrl).trim() : null,
     credit: parsedCredit,
   };
 }
@@ -497,6 +500,12 @@ async function finalizeSaleWithReceipt(params: {
           customInstallments: creditInput.customInstallments,
         });
 
+        const sellerUser = await tx.user.findUnique({
+          where: { id: params.sellerId },
+          select: { usesOwnCar: true },
+        });
+        const initialCommissionRate = resolveSellerCommissionRate(sellerUser);
+
         const agreement = await tx.creditAgreement.create({
           data: {
             saleId: sale.id,
@@ -523,7 +532,7 @@ async function finalizeSaleWithReceipt(params: {
             periodicity: creditInput.periodicity,
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',
-            initialCommissionRate: 0.25,
+            initialCommissionRate,
             installmentCommissionRate: 0.10,
             signedAgreementUrl: creditInput.signedAgreementUrl || null,
             notes: creditInput.notes || null,
@@ -541,7 +550,7 @@ async function finalizeSaleWithReceipt(params: {
           })),
         });
 
-        const downPaymentCommissionCents = Math.round(creditInput.downPaymentCents * 0.25);
+        const downPaymentCommissionCents = Math.round(creditInput.downPaymentCents * initialCommissionRate);
         await tx.creditCommission.create({
           data: {
             agreementId: agreement.id,
@@ -685,14 +694,15 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         throw { status: 409, message: 'Venda já registrada para esta ficha por outro fluxo' };
       }
 
-      // 4. Criar a venda pendente de comprovante
+      // 4. Criar a venda (com comprovante se fornecido, ou pendente)
       const { payments: postPayments, credit: postCredit, ...postSaleData } = input;
+      const hasReceipt = Boolean(postSaleData.receiptUrl);
       const sale = await tx.sale.create({
         data: {
           ...postSaleData,
           sellerId,
-          status: 'PENDING_RECEIPT',
-          paymentStatus: postCredit ? 'PARTIALLY_PAID' : 'PENDING_RECEIPT',
+          status: hasReceipt ? 'PRONTO' : 'PENDING_RECEIPT',
+          paymentStatus: postCredit ? 'PARTIALLY_PAID' : (hasReceipt ? 'PAID' : 'PENDING_RECEIPT'),
           companyId,
         },
       });
@@ -703,7 +713,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             saleId: sale.id,
             method: p.method,
             amount: p.amount,
-            receiptUrl: null,
+            receiptUrl: p.receiptUrl || postSaleData.receiptUrl || null,
           })),
         });
       }
@@ -742,6 +752,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
           customInstallments: postCredit.customInstallments,
         });
 
+        const sellerUser = await tx.user.findUnique({
+          where: { id: sellerId },
+          select: { usesOwnCar: true },
+        });
+        const initialCommissionRate = resolveSellerCommissionRate(sellerUser);
+
         const agreement = await tx.creditAgreement.create({
           data: {
             saleId: sale.id,
@@ -768,7 +784,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             periodicity: postCredit.periodicity,
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',
-            initialCommissionRate: 0.25,
+            initialCommissionRate,
             installmentCommissionRate: 0.10,
             signedAgreementUrl: postCredit.signedAgreementUrl || null,
             notes: postCredit.notes || null,
@@ -786,7 +802,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
           })),
         });
 
-        const downPaymentCommissionCents = Math.round(postCredit.downPaymentCents * 0.25);
+        const downPaymentCommissionCents = Math.round(postCredit.downPaymentCents * initialCommissionRate);
         await tx.creditCommission.create({
           data: {
             agreementId: agreement.id,

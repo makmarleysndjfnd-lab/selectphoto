@@ -40,6 +40,8 @@ model Company {
   asaasCharges                AsaasCharge[]
   asaasSyncQueues             AsaasSyncQueue[]
   asaasDuplicateAlerts        AsaasDuplicatePaymentAlert[]
+  monthlyCreditClosings       MonthlyCreditClosing[]
+  accountDeletionRequests     AccountDeletionRequest[]
 }
 
 model Team {
@@ -108,6 +110,11 @@ model User {
   creditCommissions           CreditCommission[]             @relation("CreditCommissionSeller")
   creditCommissionAdjustments CreditCommissionAdjustment[]   @relation("CreditCommissionAdjustmentSeller")
   creditRenegotiations        CreditAgreementRenegotiation[] @relation("CreditRenegotiationAuthor")
+  monthlyCreditClosingsSeller MonthlyCreditClosing[]         @relation("MonthlyClosingSeller")
+  monthlyCreditClosingsClosed MonthlyCreditClosing[]         @relation("MonthlyClosingCloser")
+  monthlyClosingPayoutsAuthor MonthlyCreditClosingPayout[]   @relation("MonthlyClosingPayoutAuthor")
+  accountDeletionRequests     AccountDeletionRequest[]       @relation("UserDeletionRequests")
+  processedDeletionRequests   AccountDeletionRequest[]       @relation("ProcessedDeletionRequests")
 }
 
 model Client {
@@ -707,11 +714,14 @@ model CreditCommission {
   payment   CreditPayment?  @relation(fields: [paymentId], references: [id])
   seller    User            @relation("CreditCommissionSeller", fields: [sellerId], references: [id])
   company   Company         @relation(fields: [companyId], references: [id])
+  monthlyClosingId String?
+  monthlyClosing   MonthlyCreditClosing? @relation(fields: [monthlyClosingId], references: [id])
 
   @@index([sellerId, status])
   @@index([companyId, status])
   @@index([agreementId])
   @@index([payoutId])
+  @@index([monthlyClosingId])
 }
 
 model CreditAgreementRenegotiation {
@@ -750,9 +760,12 @@ model CreditCommissionAdjustment {
   company   Company         @relation(fields: [companyId], references: [id])
   seller    User            @relation("CreditCommissionAdjustmentSeller", fields: [sellerId], references: [id])
   agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+  monthlyClosingId String?
+  monthlyClosing   MonthlyCreditClosing? @relation(fields: [monthlyClosingId], references: [id])
 
   @@index([sellerId, status])
   @@index([companyId, status])
+  @@index([monthlyClosingId])
 }
 
 model AsaasConfig {
@@ -861,3 +874,84 @@ model AsaasDuplicatePaymentAlert {
 
   @@index([companyId, status])
 }
+
+model MonthlyCreditClosing {
+  id                          String    @id @default(uuid())
+  companyId                   String
+  sellerId                    String
+  competence                  String    // "YYYY-MM", ex: "2026-08"
+  status                      String    @default("CLOSED") // "CLOSED", "PARTIALLY_PAID", "PAID"
+  
+  startDate                   DateTime
+  endDate                     DateTime
+  
+  totalPrincipalReceivedCents Int       @default(0)
+  totalCommissionCents        Int       @default(0)
+  adjustmentsCents            Int       @default(0)
+  netCommissionCents          Int       @default(0)
+  paidAmountCents             Int       @default(0)
+  remainingBalanceCents       Int       @default(0)
+  
+  itemsCount                  Int       @default(0)
+  calculatedAt                DateTime  @default(now())
+  closedByUserId              String?
+  notes                       String?
+  
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  company                     Company   @relation(fields: [companyId], references: [id])
+  seller                      User      @relation("MonthlyClosingSeller", fields: [sellerId], references: [id])
+  closedByUser                User?     @relation("MonthlyClosingCloser", fields: [closedByUserId], references: [id])
+  payouts                     MonthlyCreditClosingPayout[]
+  commissions                 CreditCommission[]
+  adjustments                 CreditCommissionAdjustment[]
+
+  @@unique([companyId, sellerId, competence])
+  @@index([companyId, competence])
+  @@index([sellerId, competence])
+  @@index([companyId, status])
+}
+
+model MonthlyCreditClosingPayout {
+  id              String   @id @default(uuid())
+  closingId       String
+  amountCents     Int
+  paymentMethod   String   @default("PIX")
+  receiptUrl      String?
+  notes           String?
+  authorId        String
+  idempotencyKey  String?  @unique
+  paidAt          DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  closing         MonthlyCreditClosing @relation(fields: [closingId], references: [id], onDelete: Cascade)
+  author          User                 @relation("MonthlyClosingPayoutAuthor", fields: [authorId], references: [id])
+
+  @@index([closingId])
+  @@index([authorId])
+}
+
+model AccountDeletionRequest {
+  id                   String    @id @default(uuid())
+  userId               String
+  companyId            String?
+  status               String    @default("PENDING_REVIEW")
+  reason               String?
+  scheduledAnonymizeAt DateTime
+  processedAt          DateTime?
+  processedByUserId    String?
+  rejectionReason      String?
+  metadata             String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user                 User      @relation("UserDeletionRequests", fields: [userId], references: [id], onDelete: Cascade)
+  processedBy          User?     @relation("ProcessedDeletionRequests", fields: [processedByUserId], references: [id], onDelete: SetNull)
+  company              Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([companyId, status])
+  @@index([status, scheduledAnonymizeAt])
+}
+

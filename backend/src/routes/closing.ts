@@ -544,10 +544,13 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             }
         });
 
-        // Fetch credit payments collected by this seller on this day
+        // Fetch credit payments collected by or for this seller on this day
         const creditPaymentsCollected = await prisma.creditPayment.findMany({
             where: {
-                receiverUserId: sellerId as string,
+                OR: [
+                    { receiverUserId: sellerId as string },
+                    { agreement: { sellerId: sellerId as string } }
+                ],
                 ...(userCompanyId ? { companyId: userCompanyId } : {}),
                 isReversed: false,
                 paidAt: {
@@ -612,6 +615,9 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const seller = await prisma.user.findUnique({
             where: { id: sellerId }
         });
+        const requester = req.user?.id
+            ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
+            : null;
         const commissionRate = resolveSellerCommissionRate(seller);
 
         sales.forEach(sale => {
@@ -624,8 +630,9 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 const financedVal = Number((sale.creditAgreement.financedPrincipalCents / 100).toFixed(2));
                 crediarioDownPaymentValue += downPaymentVal;
                 crediarioFinancedValue += financedVal;
-                // 25% fixo sobre a entrada efetivamente recebida
-                crediarioDownPaymentCommission += Number((downPaymentVal * 0.25).toFixed(2));
+                // Utilizar a taxa histórica salva no contrato de crediário
+                const downPaymentRate = sale.creditAgreement.initialCommissionRate ?? commissionRate;
+                crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
             } else {
                 aVistaSalesCount += 1;
                 aVistaSalesValue += sale.value;
@@ -654,12 +661,14 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         let crediarioPaymentsCollectedValue = 0;
         creditPaymentsCollected.forEach(payment => {
             const amountVal = Number((payment.amountCents / 100).toFixed(2));
-            crediarioPaymentsCollectedValue += amountVal;
-            // 10% fixo sobre principal recebido de parcelas
-            crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
+            if (payment.agreement?.sellerId === sellerId) {
+                // 10% fixo sobre principal recebido de parcelas
+                crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
+            }
 
             // Cobrança em mãos do vendedor (aumenta o dinheiro em posse do vendedor)
-            if (payment.destination === 'SELLER_HANDS') {
+            if (payment.receiverUserId === sellerId && payment.destination === 'SELLER_HANDS') {
+                crediarioPaymentsCollectedValue += amountVal;
                 const pm = (payment.paymentMethod || '').toUpperCase();
                 if (pm === 'CASH' || pm === 'DINHEIRO') cashValue += amountVal;
                 else if (pm === 'PIX') pixValue += amountVal;
@@ -671,11 +680,9 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
 
         const totalFichas = sales.length + nonSales.length;
 
-        const requester = req.user?.id
-          ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
-          : null;
-
-        const commissionAmount = Number((aVistaCommission + crediarioDownPaymentCommission + crediarioInstallmentsCommission).toFixed(2));
+        // A comissão do acerto diário contempla vendas à vista e a entrada do crediário.
+        // A comissão dos 10% das parcelas posteriores integra exclusivamente a apuração mensal.
+        const commissionAmount = Number((aVistaCommission + crediarioDownPaymentCommission).toFixed(2));
 
         // Regra explícita de repasse:
         // Dinheiro em mãos do vendedor: cashValue
@@ -825,7 +832,9 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
 
             if (s.creditAgreement) {
                 const downPaymentVal = Number((s.creditAgreement.downPaymentCents / 100).toFixed(2));
-                crediarioDownPaymentCommission += Number((downPaymentVal * 0.25).toFixed(2));
+                // Utilizar a taxa histórica salva no contrato de crediário
+                const downPaymentRate = s.creditAgreement.initialCommissionRate ?? commRate;
+                crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
             } else {
                 aVistaCommission += Number((s.value * commRate).toFixed(2));
             }
@@ -849,20 +858,9 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
             }
         });
 
-        creditPaymentsCollected.forEach(payment => {
-            const amountVal = Number((payment.amountCents / 100).toFixed(2));
-            crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
-            if (payment.destination === 'SELLER_HANDS') {
-                const pm = (payment.paymentMethod || '').toUpperCase();
-                if (pm === 'CASH' || pm === 'DINHEIRO') cashVal += amountVal;
-                else if (pm === 'PIX') pixVal += amountVal;
-                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitVal += amountVal;
-                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditVal += amountVal;
-                else cashVal += amountVal;
-            }
-        });
-
-        const commAmt = Number((aVistaCommission + crediarioDownPaymentCommission + crediarioInstallmentsCommission).toFixed(2));
+        // A comissão do acerto diário contempla vendas à vista e entrada do crediário.
+        // Os 10% de parcelas posteriores integram exclusivamente o fechamento mensal e não abatem repasse diário.
+        const commAmt = Number((aVistaCommission + crediarioDownPaymentCommission).toFixed(2));
         const netRepasse = Number((cashVal - commAmt).toFixed(2));
 
         const closing = await prisma.dailyClosing.create({

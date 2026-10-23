@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minuta da Política de Privacidade — SelectPhoto / Lumora</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1f2937; margin: 0; padding: 24px; background: #f9fafb; }
+    .container { max-width: 900px; margin: 0 auto; background: #ffffff; padding: 36px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    h1 { color: #111827; font-size: 1.8rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }
+    h2 { color: #1f2937; font-size: 1.3rem; margin-top: 28px; }
+    h3 { color: #374151; font-size: 1.1rem; margin-top: 20px; }
+    p, li { color: #4b5563; font-size: 0.95rem; }
+    .badge-draft { display: inline-block; padding: 4px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 9999px; background: #fee2e2; color: #991b1b; margin-bottom: 16px; border: 1px solid #f87171; }
+    .notice-box { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 14px 18px; border-radius: 6px; margin: 20px 0; font-size: 0.92rem; color: #92400e; }
+    .placeholder { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.9em; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 0.88rem; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px 12px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; color: #111827; font-weight: 600; }
+    tr:nth-child(even) { background: #fafafa; }
+    ul { padding-left: 20px; }
+    footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #9ca3af; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <span class="badge-draft">MINUTA PRELIMINAR PARA VALIDAÇÃO JURÍDICA — DOCUMENTO EM ELABORAÇÃO</span>
+    <h1>Política de Privacidade (Minuta Provisória) — SelectPhoto / Lumora</h1>
+    <p><strong>Status do Documento:</strong> Minuta técnica em elaboração. Não constitui documento legal definitivo.</p>
+    <p><strong>Última revisão técnica:</strong> 22 de outubro de 2026</p>
+    
+    <div class="notice-box">
+      <strong>Aviso de Transparência Institucional e Regulatória:</strong><br>
+      Este documento é uma minuta de engenharia elaborada para mapear os fluxos reais de dados do aplicativo móvel e do backend. Todos os dados cadastrais da empresa controladora destacados como <span class="placeholder">[A CONFIRMAR]</span>, bem como as bases legais específicas, prazos de retenção e procedimentos de descarte, devem ser formalmente validados e aprovados pelo departamento jurídico da empresa antes da publicação definitiva nas lojas Google Play e Apple App Store.
+    </div>
+
+    <h2>1. Identificação Provisória do Controlador</h2>
+    <ul>
+      <li><strong>Razão Social:</strong> <span class="placeholder">[RAZÃO SOCIAL A CONFIRMAR PELA EMPRESA]</span></li>
+      <li><strong>Nome Fantasia:</strong> SelectPhoto / Lumora</li>
+      <li><strong>CNPJ:</strong> <span class="placeholder">[CNPJ A CONFIRMAR PELA EMPRESA]</span></li>
+      <li><strong>Endereço Comercial da Sede:</strong> <span class="placeholder">[ENDEREÇO COMPLETO A CONFIRMAR]</span></li>
+      <li><strong>Canal Oficial do Encarregado de Dados (DPO):</strong> <span class="placeholder">[E-MAIL DE DPO/CONTATO A CONFIRMAR]</span></li>
+    </ul>
+
+    <h2>2. Natureza da Aplicação e Modelo Operacional</h2>
+    <p>O <strong>SelectPhoto</strong> é uma ferramenta corporativa de força de vendas e gestão de campo (B2B), de uso restrito por operadores, vendedores e fotógrafos credenciados por suas respectivas empresas contratantes. As contas de acesso não são abertas ao público em geral, sendo criadas exclusivamente por administradores autorizados.</p>
+
+    <h2>3. Matriz de Tratamento, Retenção e Procedimento de Eliminação por Categoria de Dados</h2>
+    <p>Abaixo detalha-se o inventário técnico dos dados tratados no ecossistema:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Categoria de Dado</th>
+          <th>Finalidade Técnica / Operacional</th>
+          <th>Destinatários / Compartilhamento</th>
+          <th>Retenção Proposta e Fundamento a Validar</th>
+          <th>Procedimento de Eliminação / Anonimização</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Registros de Conexão e Acesso (Logs IP)</strong><br><small>IP de origem, porta lógica, data/hora de login/requisições.</small></td>
+          <td>Segurança da aplicação, prevenção contra fraudes e atendimento à obrigação legal de registro.</td>
+          <td>Armazenamento em infraestrutura em nuvem segura (Render/PostgreSQL). Sem compartilhamento com terceiros.</td>
+          <td><strong>6 meses</strong>, em estrito cumprimento ao <strong>Artigo 15 da Lei Federal nº 12.965/2014 (Marco Civil da Internet)</strong>.</td>
+          <td>Descarte automático periódico após o decurso do prazo legal de 6 meses.</td>
+        </tr>
+        <tr>
+          <td><strong>Cadastro do Operador</strong><br><small>Nome, CPF, senha (hash bcrypt), telefone, foto de perfil, veículo alocado.</small></td>
+          <td>Autenticação, controle de perfil multi-tenant e rastreamento de rotas e equipes.</td>
+          <td>Empresa contratante/empregadora.</td>
+          <td>Durante a vigência do contrato de trabalho/prestação de serviços. Prazo prescricional trabalhista e cível pós-desligamento (fundamento e prazo específico a serem validados pelo jurídico).</td>
+          <td>Mediante pedido de exclusão: inativação imediata da conta, revogação de tokens push e, após o prazo de auditoria administrativa, anonimização dos dados pessoais (substituição de nome/CPF por identificador mock e invalidação de senha).</td>
+        </tr>
+        <tr>
+          <td><strong>Localização Geográfica (GPS)</strong><br><small>Latitude e longitude capturadas no momento da venda/check-in.</small></td>
+          <td>Validação do ponto de atendimento presencial em rota. Não realiza rastreamento em segundo plano contínuo.</td>
+          <td>Armazenamento interno na base da empresa contratante.</td>
+          <td>Retenção vinculada ao histórico da venda e auditoria de campo (prazo a validar, ex: 1 a 2 anos).</td>
+          <td>Eliminação juntamente com o expurgo dos registros de rota ou anonimização de coordenadas.</td>
+        </tr>
+        <tr>
+          <td><strong>Clientes e Compradores</strong><br><small>Nome do responsável, CPF, endereço, telefone, assinatura digital colhida em tela.</small></td>
+          <td>Formalização do contrato de compra de material fotográfico, entrega física e cobrança de crediário/parcelas.</td>
+          <td>Empresa contratante. <em>(Gateways bancários como Asaas permanecem DESABILITADOS em produção)</em>.</td>
+          <td>Prazo de prescrição e decadência aplicável a contratos e obrigações tributárias (ex: 5 anos sob Código Civil e CTN, sujeito a parecer jurídico tributário).</td>
+          <td>Arquivamento com controle estrito de acesso e eliminação após a extinção das obrigações contratuais e prazos prescricionais.</td>
+        </tr>
+        <tr>
+          <td><strong>Alunos e Menores Fotografados</strong><br><small>Nome do estudante, turma, fotos escolares de formatura e eventos.</small></td>
+          <td>Produção e encadernação exclusiva dos álbuns/books contratados pelos pais ou responsáveis legais.</td>
+          <td>Laboratório gráfico/fotográfico credenciado para impressão física.</td>
+          <td>Tratamento fundado na execução do contrato celebrado com os responsáveis legais. <em>(A base legal específica aplicável ao tratamento de dados de menores no contexto escolar requer validação jurídica formal nos termos do Art. 14 da LGPD)</em>.</td>
+          <td>Exclusão dos arquivos temporários locais dos aparelhos após sincronização. Arquivamento seguro no servidor para reimpressão de garantia e posterior eliminação.</td>
+        </tr>
+        <tr>
+          <td><strong>Registros Financeiros e Comissões</strong><br><small>Valores de entrada, parcelas de crediário, percentuais históricos de comissão, custos e fechamentos mensais.</small></td>
+          <td>Cálculo e pagamento de comissões aos vendedores/fotógrafos, apuração de resultados e escrituração fiscal.</td>
+          <td>Gestão financeira da empresa e órgãos fazendários sob obrigação legal.</td>
+          <td>Prazos prescricionais fiscais e contábeis (ex: 5 anos sob os Arts. 173 e 174 do Código Tributário Nacional — a confirmar pela contabilidade).</td>
+          <td>Preservação em livros e arquivos fiscais auditáveis, não passíveis de exclusão arbitrária antecipada.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>4. Mídias Digitais e Modelo Comercial</h2>
+    <p>O modelo comercial primário do SelectPhoto envolve a confecção física e venda presencial de álbuns e produtos impressos. Quaisquer disponibilizações complementares de arquivos fotográficos em mídia digital serão objeto de parecer prévio perante as diretrizes da Apple (App Store Review Guideline 3.1.1) e do Google Play para assegurar a correta classificação de bens físicos prestados fora do app versus compras digitais in-app.</p>
+
+    <h2>5. Classificação Indicativa</h2>
+    <p>A classificação etária e indicativa do aplicativo será submetida formalmente aos questionários oficiais do Google Play (IARC) e da Apple, refletindo a natureza restrita de força de vendas corporativa, sem conteúdo sensível desprovido de finalidade profissional.</p>
+
+    <h2>6. Procedimento de Exclusão de Conta</h2>
+    <p>Os operadores credenciados podem registrar solicitação de inativação e anonimização conforme descrito na página de <a href="account-deletion.html">Procedimento de Exclusão de Conta</a>.</p>
+
+    <footer>
+      &copy; 2026 SelectPhoto / Lumora — Minuta técnica para validação jurídica.
+    </footer>
+  </div>
+</body>
+</html>

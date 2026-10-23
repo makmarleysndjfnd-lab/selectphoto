@@ -77,7 +77,7 @@ describe('MÓDULO DE CREDIÁRIO INTERNO / PARCELADO — ENTREGA 1', { concurrenc
           name: 'Vendedor Crediário',
           role: 'SELLER',
           password: 'dummy',
-          usesOwnCar: false, // 20% à vista
+          usesOwnCar: true, // 25% carro próprio (25% à vista e entrada)
         },
         {
           id: adminId,

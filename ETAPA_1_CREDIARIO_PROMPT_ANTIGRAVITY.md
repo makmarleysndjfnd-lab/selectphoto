@@ -51,7 +51,7 @@ Preservar separação entre venda, recebimento, custódia do dinheiro, transfer�
 - Área de Crediário/Boletos contém somente contratos de crediário; vendas inteiramente à vista ficam fora. Entrada paga e saldo financiado compõem uma única venda/contrato.
 - Cards mostram vendedores com carteira e permitem filtrar contratos, parcelas e comissões pelo sellerId. Preservar quitados e vendedores inativos com histórico.
 - Manter campos de sellers-summary compatíveis, valores em reais convertidos uma única vez, e active/isActive consistentes.
-- Preservar comissões: à vista 20% com carro da empresa e 25% com carro próprio; no crediário 25% sobre a entrada e 10% sobre principal recebido posteriormente. Preservar taxas e vendedor gravados no contrato, inclusive no rebolo.
+- Regra atualizada pelo usuário após esta entrega: à vista E entrada do crediário, 20% com carro da empresa e 25% com carro próprio; 10% sobre principal recebido posteriormente em ambos os casos. Esta definição substitui a entrada fixa de 25% dos comandos antigos. Preservar taxas e vendedor gravados no contrato, inclusive no rebolo, sem recalcular silenciosamente acertos históricos.
 - Não duplicar comissão/receita em retentativas, alocação de excedente, transferência ou quitação.
 - A alteração de pagamento dos 10% para fechamento mensal será feita na etapa 2; não implementar um fechamento mensal incompleto nesta etapa.
 

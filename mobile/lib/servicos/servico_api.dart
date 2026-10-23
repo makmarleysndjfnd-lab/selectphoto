@@ -1902,4 +1902,88 @@ class ApiService {
       throw Exception(_extractError(e));
     }
   }
+
+  // ================= Fechamento Mensal do Crediário (Etapa 2) =================
+
+  /// Retorna os 4 estados visíveis de comissão para a carteira do vendedor
+  Future<Map<String, dynamic>> getSellerFourStates({String? sellerId}) async {
+    try {
+      final query = sellerId != null ? {'sellerId': sellerId} : null;
+      final resp = await _dio.get('/credit/seller/four-states', queryParameters: query);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Lista fechamentos mensais de crediário
+  Future<List<dynamic>> getMonthlyCreditClosings({
+    String? competence,
+    String? sellerId,
+    String? status,
+  }) async {
+    try {
+      final params = <String, dynamic>{
+        if (competence != null) 'competence': competence,
+        if (sellerId != null) 'sellerId': sellerId,
+        if (status != null) 'status': status,
+      };
+      final resp = await _dio.get('/credit/monthly-closings', queryParameters: params);
+      return List<dynamic>.from(resp.data['closings'] ?? []);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Detalhes de um fechamento mensal
+  Future<Map<String, dynamic>> getMonthlyCreditClosingDetail(String id) async {
+    try {
+      final resp = await _dio.get('/credit/monthly-closings/$id');
+      return Map<String, dynamic>.from(resp.data['closing'] ?? resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Processa fechamento formal de uma competência encerrada para um vendedor
+  Future<Map<String, dynamic>> processMonthlyCreditClosing({
+    required String sellerId,
+    required String competence,
+    String? notes,
+  }) async {
+    try {
+      final resp = await _dio.post('/credit/monthly-closings/process', data: {
+        'sellerId': sellerId,
+        'competence': competence,
+        if (notes != null) 'notes': notes,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Registra acerto (parcial ou integral) do fechamento mensal
+  Future<Map<String, dynamic>> recordMonthlyCreditPayout({
+    required String closingId,
+    required int amountCents,
+    String paymentMethod = 'PIX',
+    String? receiptUrl,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final resp = await _dio.post('/credit/monthly-closings/$closingId/payout', data: {
+        'amountCents': amountCents,
+        'paymentMethod': paymentMethod,
+        if (receiptUrl != null) 'receiptUrl': receiptUrl,
+        if (notes != null) 'notes': notes,
+        if (idempotencyKey != null) 'idempotencyKey': idempotencyKey,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
 }
+

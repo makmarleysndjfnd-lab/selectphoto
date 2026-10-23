@@ -3,10 +3,10 @@ import 'package:mobile/config/app_config.dart';
 
 void main() {
   group('0. Verificação da Versão Efetivamente Compilada no AppConfig', () {
-    test('AppConfig reflete fielmente a release 1.0.14+25', () {
-      expect(AppConfig.appVersion, equals('1.0.14'));
-      expect(AppConfig.buildNumber, equals(25));
-      expect(AppConfig.fullVersion, equals('1.0.14+25'));
+    test('AppConfig reflete fielmente a release 1.0.16+27', () {
+      expect(AppConfig.appVersion, equals('1.0.16'));
+      expect(AppConfig.buildNumber, equals(27));
+      expect(AppConfig.fullVersion, equals('1.0.16+27'));
     });
   });
 
@@ -14,7 +14,7 @@ void main() {
     test('Aceita SOMENTE HTTPS com host exato selectphoto-k1ac.onrender.com', () {
       expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/apk/app-release.apk'), isTrue);
       expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/api/app-version/download'), isTrue);
-      expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/download.apk?v=1.0.14'), isTrue);
+      expect(AppConfig.isValidApkDownloadUrl('https://selectphoto-k1ac.onrender.com/download.apk?v=1.0.16'), isTrue);
     });
 
     test('Rejeita conexões HTTP (inseguras)', () {
@@ -55,6 +55,7 @@ void main() {
         remoteVersion: '1.0.14',
         remoteBuildNumber: 26,
         downloadUrl: validUrl,
+        currentVersion: '1.0.14+25',
       );
       expect(shouldUpdate, isTrue);
     });
@@ -64,6 +65,7 @@ void main() {
         remoteVersion: '1.0.14',
         remoteBuildNumber: 25,
         downloadUrl: validUrl,
+        currentVersion: '1.0.14+25',
       );
       expect(shouldUpdate, isFalse);
     });
@@ -73,6 +75,7 @@ void main() {
         remoteVersion: '1.0.15',
         remoteBuildNumber: 1,
         downloadUrl: validUrl,
+        currentVersion: '1.0.14+25',
       );
       expect(shouldUpdate, isTrue);
     });
@@ -82,6 +85,7 @@ void main() {
         remoteVersion: '1.0.13',
         remoteBuildNumber: 30,
         downloadUrl: validUrl,
+        currentVersion: '1.0.14+25',
       );
       expect(shouldUpdate, isFalse);
     });

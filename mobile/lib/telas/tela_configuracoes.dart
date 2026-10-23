@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SettingsScreen extends StatefulWidget {
   /// Somente administradores devem receber [canManageRoi] = true.
@@ -146,6 +147,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         MaterialPageRoute(builder: (_) => const LoginScreen()),
         (route) => false,
       );
+    }
+  }
+
+  void _openLegalUrl(String path) async {
+    final uri = Uri.parse('https://selectphoto-k1ac.onrender.com/legal/$path');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Não foi possível abrir o link: $e')),
+        );
+      }
     }
   }
 
@@ -891,6 +907,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined, color: Colors.blueAccent),
+                  title: const Text('Política de Privacidade (Minuta)',
+                      style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Minuta técnica em validação jurídica',
+                      style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  trailing: const Icon(Icons.open_in_new, color: Colors.white38, size: 18),
+                  onTap: () => _openLegalUrl('privacy.html'),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                ListTile(
+                  leading: const Icon(Icons.person_remove_outlined, color: Colors.orangeAccent),
+                  title: const Text('Exclusão de Conta (Procedimento)',
+                      style: TextStyle(color: Colors.white)),
+                  subtitle: const Text('Instruções e canal de inativação/exclusão',
+                      style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  trailing: const Icon(Icons.open_in_new, color: Colors.white38, size: 18),
+                  onTap: () => _openLegalUrl('account-deletion.html'),
                 ),
                 const Divider(color: Colors.white12, height: 1),
                 ListTile(

@@ -70,7 +70,7 @@ Três ajustes residuais integram esta etapa, sem exigir outro pacote separado:
 ### Regra de comissão preservada
 
 - Vendas à vista: regra existente de 20% com carro da empresa e 25% com carro próprio.
-- Crediário: 25% sobre a entrada confirmada e 10% sobre o principal recebido posteriormente. Taxas e vendedor da venda ficam preservados no contrato.
+- Crediário: entrada segue 20% com carro da empresa e 25% com carro próprio, como a venda à vista; 10% sobre o principal recebido posteriormente em ambos os casos. Esta definição substitui a entrada fixa de 25% dos comandos antigos. Taxas e vendedor da venda ficam preservados no contrato.
 - A NOVA regra mensal aplica-se aos 10% dos recebimentos posteriores. Não mover a comissão da entrada nem as vendas à vista para esse fechamento mensal.
 
 ### Competência mensal definida pelo usuário

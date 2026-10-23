@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
@@ -111,6 +112,246 @@ router.put('/me/fcm-token', authenticateToken, async (req: AuthRequest, res: Res
   } catch (error) {
     console.error('Error updating fcm token:', error);
     res.status(500).json({ error: 'Failed to update fcm token' });
+  }
+});
+
+// Solicitação Persistente de Inativação / Exclusão de Conta (Apple Guideline 5.1.1(v) & Google Play User Data)
+router.post('/me/request-deletion', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { confirmation, reason, acknowledgeUnsyncedData } = req.body;
+    if (confirmation !== 'DELETE_MY_ACCOUNT') {
+      return res.status(400).json({
+        error: 'Confirmation string "DELETE_MY_ACCOUNT" required',
+        message: 'Para registrar a solicitação de inativação e exclusão, envie confirmation: "DELETE_MY_ACCOUNT".',
+      });
+    }
+
+    // 1. Verificação de idempotência: se já existir pedido ativo em PENDING_REVIEW, retornar existente sem duplicar
+    const existingRequest = await prisma.accountDeletionRequest.findFirst({
+      where: {
+        userId,
+        status: 'PENDING_REVIEW',
+      },
+    });
+
+    if (existingRequest) {
+      return res.status(200).json({
+        success: true,
+        alreadyRequested: true,
+        message: 'Já existe uma solicitação de exclusão em andamento para esta conta.',
+        request: {
+          id: existingRequest.id,
+          status: existingRequest.status,
+          requestedAt: existingRequest.createdAt,
+          scheduledAnonymizeAt: existingRequest.scheduledAnonymizeAt,
+        },
+        notice: 'A conta permanece inativada aguardando o processamento do prazo de carência e auditoria contábil.',
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, cpf: true, role: true, companyId: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const scheduledDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 dias para auditoria contábil/trabalhista
+
+    // 2. Criar registro persistente do pedido com metadata de auditoria
+    const deletionRequest = await prisma.accountDeletionRequest.create({
+      data: {
+        userId,
+        companyId: user.companyId,
+        status: 'PENDING_REVIEW',
+        reason: typeof reason === 'string' && reason.trim().length > 0 ? reason.trim().substring(0, 500) : 'Solicitação iniciada pelo operador',
+        scheduledAnonymizeAt: scheduledDate,
+        metadata: JSON.stringify({
+          clientIp: req.ip || req.socket.remoteAddress,
+          userAgent: req.headers['user-agent'] || 'unknown',
+          role: user.role,
+          acknowledgeUnsyncedData: !!acknowledgeUnsyncedData,
+        }),
+      },
+    });
+
+    // 3. Inativar acesso ao app e revogar push tokens (sem apagar senha nem dados relacionais prematuramente)
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        active: false,
+        fcmToken: null,
+      },
+    });
+
+    // 4. Notificar administradores da empresa sobre a solicitação
+    if (user.companyId) {
+      const admins = await prisma.user.findMany({
+        where: {
+          companyId: user.companyId,
+          role: { in: ['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'] },
+          active: true,
+        },
+        select: { id: true },
+      });
+
+      for (const admin of admins) {
+        await prisma.notification.create({
+          data: {
+            companyId: user.companyId,
+            recipientId: admin.id,
+            title: 'Solicitação de Exclusão de Conta',
+            message: `O operador ${user.name} (CPF: ${user.cpf || 'N/A'}) solicitou a exclusão de sua conta. Protocolo: ${deletionRequest.id}.`,
+            type: 'SYSTEM',
+            status: 'UNREAD',
+          },
+        }).catch(() => {});
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Sua conta foi inativada imediatamente e o pedido formal de exclusão foi registrado com protocolo rastreável.',
+      request: {
+        id: deletionRequest.id,
+        status: deletionRequest.status,
+        requestedAt: deletionRequest.createdAt,
+        scheduledAnonymizeAt: deletionRequest.scheduledAnonymizeAt,
+      },
+      retentionNotice: {
+        summary: 'Dados pessoais serão tratados conforme as normas legais aplicáveis:',
+        accessLogs: {
+          period: '6 meses',
+          legalBasis: 'Art. 15 da Lei nº 12.965/2014 (Marco Civil da Internet) — guarda sob sigilo de registros de acesso a aplicações.',
+        },
+        taxAndCommercialRecords: {
+          period: '5 anos',
+          legalBasis: 'Arts. 173/174 do Código Tributário Nacional, Art. 206 § 5º do Código Civil e Art. 27 do Código de Defesa do Consumidor — contratos, vendas, fichas e comissões pertencentes à empresa controladora.',
+        },
+        localQueueNotice: 'Rascunhos ou fotos pendentes no dispositivo não sincronizados antes da inativação devem ser sincronizados ou exportados pelo suporte antes da desinstalação.',
+      },
+    });
+  } catch (error) {
+    console.error('Error processing account deletion request:', error);
+    res.status(500).json({ error: 'Falha ao processar solicitação de exclusão' });
+  }
+});
+
+// Listar solicitações de exclusão de conta (Admin only)
+router.get('/deletion-requests', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
+
+    const requests = await prisma.accountDeletionRequest.findMany({
+      where: isSuperAdmin ? {} : { companyId },
+      include: {
+        user: {
+          select: { id: true, name: true, cpf: true, role: true, active: true },
+        },
+        processedBy: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json({ requests });
+  } catch (error) {
+    console.error('Error listing deletion requests:', error);
+    res.status(500).json({ error: 'Falha ao listar solicitações de exclusão' });
+  }
+});
+
+// Processar solicitação de exclusão (Admin only) -> Executar anonimização efetiva ou rejeitar
+router.post('/deletion-requests/:id/process', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { action, reason } = req.body; // action: 'ANONYMIZE' | 'REJECT' | 'CANCEL'
+
+    if (!['ANONYMIZE', 'REJECT', 'CANCEL'].includes(action)) {
+      return res.status(400).json({ error: 'Ação inválida. Use ANONYMIZE, REJECT ou CANCEL.' });
+    }
+
+    const request = await prisma.accountDeletionRequest.findUnique({
+      where: { id: id as string },
+      include: { user: true },
+    });
+
+    if (!request) {
+      return res.status(404).json({ error: 'Solicitação de exclusão não encontrada' });
+    }
+
+    if (request.companyId !== req.user?.companyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden: Acesso não autorizado a esta empresa' });
+    }
+
+    if (request.status !== 'PENDING_REVIEW') {
+      return res.status(400).json({ error: `Solicitação já se encontra no status ${request.status}` });
+    }
+
+    if (action === 'REJECT' || action === 'CANCEL') {
+      const updated = await prisma.accountDeletionRequest.update({
+        where: { id: id as string },
+        data: {
+          status: action === 'REJECT' ? 'REJECTED' : 'CANCELLED',
+          rejectionReason: reason || null,
+          processedAt: new Date(),
+          processedByUserId: req.user?.id,
+        },
+      });
+      return res.json({ success: true, request: updated });
+    }
+
+    // Execução real da ANONIMIZAÇÃO dos dados elegíveis do operador
+    const targetUserId = request.userId;
+    const anonIdentifier = targetUserId.substring(0, 8);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: targetUserId },
+        data: {
+          name: `Operador Anonimizado (${anonIdentifier})`,
+          cpf: request.user.cpf ? `anon_${anonIdentifier}` : null,
+          email: null,
+          phone: null,
+          emergencyPhone: null,
+          address: null,
+          rg: null,
+          criminalRecordUrl: null,
+          profilePhotoUrl: null,
+          password: `$2b$10$ANONYMIZED_${crypto.randomBytes(16).toString('hex')}`,
+          active: false,
+          fcmToken: null,
+          pixKey: null,
+        },
+      }),
+      prisma.accountDeletionRequest.update({
+        where: { id: id as string },
+        data: {
+          status: 'APPROVED_ANONYMIZED',
+          processedAt: new Date(),
+          processedByUserId: req.user?.id,
+        },
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Anonimização efetiva dos dados pessoais do operador executada com sucesso.',
+      status: 'APPROVED_ANONYMIZED',
+      userId: targetUserId,
+    });
+  } catch (error) {
+    console.error('Error processing deletion request:', error);
+    res.status(500).json({ error: 'Falha ao executar processamento da solicitação' });
   }
 });
 
