@@ -136,8 +136,14 @@ export const authenticateToken = async (
     }
 
     if (!user.active) {
-      res.status(403).json({ error: 'User account is inactive' });
-      return;
+      const isDeletionRoute =
+        (req.baseUrl === '/api/users' && req.path === '/me/request-deletion') ||
+        (req.originalUrl && req.originalUrl.includes('/api/users/me/request-deletion'));
+
+      if (!isDeletionRoute) {
+        res.status(403).json({ error: 'User account is inactive' });
+        return;
+      }
     }
 
     // Para qualquer papel que não seja SUPER_ADMIN, exige empresa existente e ativa
