@@ -4,12 +4,17 @@ import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { isExternalServicesDisabled } from '../utils/externalServices';
+import {
+  resolveCompanyIntegration,
+  recordApiUsage,
+  checkCompanyApiBudget,
+} from '../services/integrationResolver';
 
 const router = Router();
 const prisma = new PrismaClient();
 
-// Initialize Gemini AI Client
-const ai = (!isExternalServicesDisabled() && process.env.GEMINI_API_KEY) 
+// Fallback do cliente global Gemini (usado apenas se não houver resolução dinâmica por empresa)
+const globalAi = (!isExternalServicesDisabled() && process.env.GEMINI_API_KEY) 
   ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
   : null;
 
@@ -123,8 +128,34 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       return;
     }
 
-    // Retorno mockado quando serviços externos estão desabilitados
-    if (isExternalServicesDisabled() || !ai) {
+    // Resolução dinâmica de integração por empresa em tempo de execução
+    let activeAiClient = globalAi;
+    let resolvedIntegrationId: string | undefined = undefined;
+    let providerName = 'GEMINI';
+
+    if (companyId) {
+      // 1. Verifica teto/orçamento mensal de IA da empresa
+      const budgetCheck = await checkCompanyApiBudget(companyId, 'AI_RESEARCH');
+      if (!budgetCheck.withinBudget) {
+        res.status(429).json({
+          error: 'Limite de orçamento mensal interno de IA atingido para esta empresa.',
+          spentCents: budgetCheck.currentSpentCents,
+          limitCents: budgetCheck.limitCents,
+        });
+        return;
+      }
+
+      // 2. Resolve credencial dinâmica da empresa
+      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
+      if (resolved && resolved.status === 'ACTIVE' && resolved.secret) {
+        providerName = resolved.provider;
+        resolvedIntegrationId = resolved.integration?.id;
+        activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+      }
+    }
+
+    // Retorno mockado quando serviços externos estão desabilitados ou sem chave
+    if (isExternalServicesDisabled() || !activeAiClient) {
       const mockResult = {
         cityInfo: {
           name: sanitizedCity,
@@ -200,9 +231,10 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
     let text = '';
     let aiSource = '';
+    const callStart = Date.now();
     try {
       const response: any = await executeWithTimeout(async (signal) => {
-        return await ai.models.generateContent({
+        return await activeAiClient!.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: prompt,
           config: { 
@@ -213,8 +245,37 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }, 25000);
 
       text = (response.text || '').slice(0, 50000);
-      aiSource = 'Gemini (Google Search Grounding)';
+      aiSource = `${providerName} (Search Grounding)`;
+
+      // Registra consumo de API sem dados pessoais de prompts
+      if (companyId) {
+        await recordApiUsage({
+          companyId,
+          integrationId: resolvedIntegrationId,
+          category: 'AI_RESEARCH',
+          provider: providerName,
+          operation: 'SEARCH_EVENTS',
+          unitsUsed: 1,
+          estimatedCostCents: 2, // ~R$ 0,02 estimado
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
     } catch (err: any) {
+      if (companyId) {
+        await recordApiUsage({
+          companyId,
+          integrationId: resolvedIntegrationId,
+          category: 'AI_RESEARCH',
+          provider: providerName,
+          operation: 'SEARCH_EVENTS',
+          unitsUsed: 1,
+          status: 'FAILED',
+          latencyMs: Date.now() - callStart,
+          errorMessage: err.message,
+        });
+      }
+
       if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
         res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
         return;
@@ -290,7 +351,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     if (!resultData) {
-      if (isExternalServicesDisabled() || !ai) {
+      let activeAiClient = globalAi;
+      if (companyId) {
+        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
+        if (resolved && resolved.status === 'ACTIVE' && resolved.secret) {
+          activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+        }
+      }
+
+      if (isExternalServicesDisabled() || !activeAiClient) {
         const mockRadar = {
           state: stateUF,
           updatedAt: new Date().toISOString(),
@@ -331,7 +400,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
       try {
         const response: any = await executeWithTimeout(async (signal) => {
-          return await ai.models.generateContent({
+          return await activeAiClient!.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: { 

@@ -55,6 +55,9 @@ model Company {
   accountDeletionRequests     AccountDeletionRequest[]
   platformRates               CompanyPlatformRate[]
   contractAuditEvents         ContractAuditEvent[]
+  integrations                CompanyIntegration[]
+  apiUsageRecords             ApiUsageRecord[]
+  integrationAuditEvents      IntegrationAuditEvent[]
 }
 
 model Team {
@@ -133,6 +136,9 @@ model User {
   platformRatesCreated        CompanyPlatformRate[]          @relation("PlatformRatesCreated")
   contractAuditEvents         ContractAuditEvent[]           @relation("ContractAuditAuthor")
   stepUpSessions              StepUpSession[]                @relation("UserStepUpSessions")
+  integrationsCreated         CompanyIntegration[]          @relation("IntegrationsCreated")
+  integrationsUpdated         CompanyIntegration[]          @relation("IntegrationsUpdated")
+  integrationAuditEvents      IntegrationAuditEvent[]        @relation("IntegrationAuditAuthor")
 }
 
 model Client {
@@ -1037,6 +1043,89 @@ model StepUpSession {
   user      User      @relation("UserStepUpSessions", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+model CompanyIntegration {
+  id                      String    @id @default(uuid())
+  companyId               String
+  category                String    // AI_RESEARCH | PAYMENT_GATEWAY | MESSAGING | GEO_LOCATION
+  provider                String    // GEMINI | GROK | ASAAS | META_WHATSAPP | VIACEP
+  scope                   String    // PLATFORM_SHARED | COMPANY_EXCLUSIVE | SHARED_CONTROLLED | EXCLUSIVE_OWN_KEY
+  status                  String    @default("ACTIVE") // ACTIVE | DISABLED | TESTING | REVOKED
+  environment             String    @default("PRODUCTION") // SANDBOX | PRODUCTION
+  accountName             String?
+  costPayer               String    @default("PLATFORM") // PLATFORM | COMPANY | SPLIT
+  changeApplicability     String    @default("DYNAMIC") // DYNAMIC | REQUIRES_REBUILD
+  credentialSource        String    @default("VAULT_ENCRYPTED") // VAULT_ENCRYPTED | ENV_REFERENCE | MANUAL_FALLBACK | DISABLED
+  encryptedSecret         String?   @db.Text
+  secretIv                String?
+  secretTag               String?
+  secretMasked            String?
+  envVarName              String?
+  configMetadata          Json?
+  version                 Int       @default(1)
+  monthlyBudgetLimitCents  Int?
+  monthlyUnitsLimit       Int?
+  lastValidatedAt         DateTime?
+  lastValidationStatus    String?   // SUCCESS | FAILED | PENDING
+  lastValidationError     String?
+  createdByUserId         String
+  updatedByUserId         String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  company                 Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdByUser           User      @relation("IntegrationsCreated", fields: [createdByUserId], references: [id])
+  updatedByUser           User?     @relation("IntegrationsUpdated", fields: [updatedByUserId], references: [id])
+  usageRecords            ApiUsageRecord[]
+  auditEvents             IntegrationAuditEvent[]
+
+  @@unique([companyId, category, environment])
+  @@index([companyId, status])
+  @@index([category, status])
+}
+
+model ApiUsageRecord {
+  id                 String              @id @default(uuid())
+  companyId          String
+  integrationId      String?
+  category           String
+  provider           String
+  operation          String
+  unitsUsed          Int                 @default(1)
+  estimatedCostCents Int?
+  measuredCostCents  Int?
+  status             String              @default("SUCCESS")
+  latencyMs          Int?
+  errorMessage       String?
+  timestamp          DateTime            @default(now())
+
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration        CompanyIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, category, timestamp])
+  @@index([integrationId, timestamp])
+}
+
+model IntegrationAuditEvent {
+  id            String              @id @default(uuid())
+  companyId     String
+  integrationId String?
+  action        String              // CREATE | UPDATE_KEY | ROTATE | ENABLE | DISABLE | REVOKE | TEST_CONNECTION
+  authorUserId  String
+  authorName    String
+  details       String              @db.Text
+  result        String              @default("SUCCESS")
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime            @default(now())
+
+  company       Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  authorUser    User                @relation("IntegrationAuditAuthor", fields: [authorUserId], references: [id])
+  integration   CompanyIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([integrationId, createdAt])
 }
 
 

@@ -2177,5 +2177,172 @@ class ApiService {
       throw Exception(_extractError(e));
     }
   }
+
+  // ── ETAPA 2: CENTRAL DE INTEGRAÇÕES E APIS ───────────────────────────────────
+
+  /// Catálogo de integrações suportadas
+  Future<List<Map<String, dynamic>>> getIntegrationCatalogs() async {
+    try {
+      final resp = await _dio.get('/owner/integrations/catalogs');
+      final list = resp.data['catalogs'] as List? ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Lista integrações configuradas por empresa
+  Future<List<Map<String, dynamic>>> getCompanyIntegrations(String companyId) async {
+    try {
+      final resp = await _dio.get('/owner/integrations/companies/$companyId');
+      final list = resp.data['integrations'] as List? ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Detalhes de uma integração com auditoria recente
+  Future<Map<String, dynamic>> getIntegrationDetails(String id) async {
+    try {
+      final resp = await _dio.get('/owner/integrations/$id');
+      return Map<String, dynamic>.from(resp.data['integration'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Cadastrar nova integração para empresa (requer Step-Up Auth)
+  Future<Map<String, dynamic>> createCompanyIntegration(
+    Map<String, dynamic> data, {
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = Map<String, dynamic>.from(data);
+      if (passwordConfirmation != null) body['passwordConfirmation'] = passwordConfirmation;
+
+      final resp = await _dio.post(
+        '/owner/integrations',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Rotacionar ou atualizar credencial criptografada no Vault (requer Step-Up Auth)
+  Future<Map<String, dynamic>> rotateIntegrationCredentials(
+    String id,
+    String plainSecret, {
+    String? reason,
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = <String, dynamic>{
+        'plainSecret': plainSecret,
+        if (reason != null) 'reason': reason,
+        if (passwordConfirmation != null) 'passwordConfirmation': passwordConfirmation,
+      };
+
+      final resp = await _dio.post(
+        '/owner/integrations/$id/credentials',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Atualizar status da integração (ACTIVE, DISABLED, TESTING, REVOKED) (requer Step-Up Auth)
+  Future<Map<String, dynamic>> updateIntegrationStatus(
+    String id,
+    String status, {
+    String? reason,
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = <String, dynamic>{
+        'status': status,
+        if (reason != null) 'reason': reason,
+        if (passwordConfirmation != null) 'passwordConfirmation': passwordConfirmation,
+      };
+
+      final resp = await _dio.post(
+        '/owner/integrations/$id/status',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Testar conexão não destrutiva com o provedor
+  Future<Map<String, dynamic>> testIntegrationConnection(String id) async {
+    try {
+      final resp = await _dio.post('/owner/integrations/$id/test');
+      return Map<String, dynamic>.from(resp.data['testResult'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Histórico de consumo e métricas
+  Future<List<Map<String, dynamic>>> getIntegrationUsage(String id) async {
+    try {
+      final resp = await _dio.get('/owner/integrations/$id/usage');
+      final list = resp.data['usage'] as List? ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Executar homologação oficial no Asaas Sandbox
+  Future<Map<String, dynamic>> runAsaasSandboxHomologation({
+    required String companyId,
+    String? sandboxApiKey,
+    String? webhookToken,
+    bool? forceSimulation,
+  }) async {
+    try {
+      final resp = await _dio.post('/owner/integrations/sandbox/run-homologation', data: {
+        'companyId': companyId,
+        if (sandboxApiKey != null) 'sandboxApiKey': sandboxApiKey,
+        if (webhookToken != null) 'webhookToken': webhookToken,
+        if (forceSimulation != null) 'forceSimulation': forceSimulation,
+      });
+      return Map<String, dynamic>.from(resp.data['report'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Obter relatório de prontidão para entrada futura em modo LIVE
+  Future<Map<String, dynamic>> getAsaasLiveReadinessReport() async {
+    try {
+      final resp = await _dio.get('/owner/integrations/sandbox/readiness-report');
+      return Map<String, dynamic>.from(resp.data['readinessReport'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
 }
 

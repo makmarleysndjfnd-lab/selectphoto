@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
+import 'painel_proprietario_integracoes.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
   const PainelProprietarioEmpresas({super.key});
@@ -749,6 +750,18 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
               },
             ),
           IconButton(
+            icon: const Icon(Icons.hub_rounded, color: Color(0xFF38BDF8)),
+            tooltip: 'Central de Integrações e APIs',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PainelProprietarioIntegracoes(),
+                ),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
             onPressed: _carregarDados,
           ),
@@ -1001,6 +1014,24 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   icon: const Icon(Icons.percent_rounded, size: 16),
                   label: const Text('Ajustar Taxa', style: TextStyle(fontSize: 12)),
                   onPressed: () => _abrirModalConfigurarTaxa(empresa),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF34D399)),
+                    foregroundColor: const Color(0xFF34D399),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(Icons.hub_rounded, size: 16),
+                  label: const Text('APIs', style: TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PainelProprietarioIntegracoes(initialCompany: empresa),
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(width: 8),
                 IconButton(

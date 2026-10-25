@@ -100,6 +100,7 @@ import appointmentsRoutes from './routes/appointments';
 import statsRoutes from './routes/stats';
 import creditRoutes from './routes/credit';
 import ownerRoutes from './routes/owner';
+import integrationsRoutes from './routes/integrations';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 import { initAsaasQueueCron } from './jobs/asaasQueueCron';
@@ -129,6 +130,8 @@ app.use('/api/edit-requests', editRequestsRoutes);
 app.use('/api/quotes', quotesRoutes);
 app.use('/api/appointments', appointmentsRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/owner/integrations', integrationsRoutes);
+app.use('/api/integrations', integrationsRoutes);
 app.use('/api/owner', ownerRoutes);
 
 // Servir páginas estáticas de conformidade jurídica para lojas (Google Play & App Store)

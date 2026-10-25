@@ -109,6 +109,13 @@
           <td>Durante a vigência do contrato empresarial de licenciamento e prazos prescricionais de cobrança e governança cível (sujeito a validação contratual definitiva).</td>
           <td>Inativação do cadastro corporativo mediante distrato; preservação dos registros históricos de faturamento e auditoria pelo prazo prescricional aplicável.</td>
         </tr>
+        <tr>
+          <td><strong>Central de Integrações e APIs em Vault Criptografado (B2B)</strong><br><small>Credenciais de provedores (chaves Sandbox, tokens de WhatsApp, chaves de IA), metadados de consumo (chamadas, unidades, latência, tarifas estimadas) e logs de auditoria de configuração.</small></td>
+          <td>Interoperabilidade segura com provedores externos (Asaas Sandbox, Google Gemini, Meta WhatsApp, ViaCEP), proteção contra vazamentos, auditoria de rotação e aplicação de limites orçamentários internos.</td>
+          <td>Provedores externos autorizados conforme o serviço contratado. Segredos armazenados exclusivamente em cofre criptografado no servidor (AES-256-GCM) com chave mestra isolada. <em>Blindagem de isolamento: proibido fallback ou compartilhamento silencioso entre empresas. Métricas de consumo NÃO gravam dados pessoais (PII) dos prompts de pesquisa.</em></td>
+          <td>Credenciais ativas enquanto vigentes; histórico de auditoria e métricas agregadas mantidos pelo período contratual.</td>
+          <td>Revogação ou rotação imediata mediante comando autenticado (Step-Up Auth) pelo proprietário da plataforma.</td>
+        </tr>
       </tbody>
     </table>
 
