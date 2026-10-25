@@ -3,8 +3,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-export const CURRENT_APP_VERSION = '1.0.16';
-export const CURRENT_BUILD_NUMBER = 27;
+export const CURRENT_APP_VERSION = '1.0.17';
+export const CURRENT_BUILD_NUMBER = 28;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -20,9 +20,9 @@ export interface ApkReleaseDescriptor {
  * endpoint exclusivamente ao artefato que passou pela auditoria do manifesto.
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
-  version: '1.0.16',
-  buildNumber: 27,
-  sha256: '07A95E08DDD3E1386358660CC4DC8E079AD65688183EF5B4C13391077BD79A80',
+  version: '1.0.17',
+  buildNumber: 28,
+  sha256: '4E603F418BDDD6C9422C1DAFB9724D542E4EBF4B6E8E6DA2025F05C27926F8C1',
   packageName: 'com.example.mobile',
 });
 

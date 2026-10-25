@@ -16,6 +16,17 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  legalName          String?
+  tradeName          String?
+  adminContactName   String?
+  adminContactEmail  String?
+  adminContactPhone  String?
+  contractNotes      String?
+  status             String   @default("ACTIVE")
+  suspensionReason   String?
+  suspendedAt        DateTime?
+  suspendedByUserId  String?
+
   users                User[]
   teams                Team[]
   clients              Client[]
@@ -42,6 +53,8 @@ model Company {
   asaasDuplicateAlerts        AsaasDuplicatePaymentAlert[]
   monthlyCreditClosings       MonthlyCreditClosing[]
   accountDeletionRequests     AccountDeletionRequest[]
+  platformRates               CompanyPlatformRate[]
+  contractAuditEvents         ContractAuditEvent[]
 }
 
 model Team {
@@ -115,6 +128,11 @@ model User {
   monthlyClosingPayoutsAuthor MonthlyCreditClosingPayout[]   @relation("MonthlyClosingPayoutAuthor")
   accountDeletionRequests     AccountDeletionRequest[]       @relation("UserDeletionRequests")
   processedDeletionRequests   AccountDeletionRequest[]       @relation("ProcessedDeletionRequests")
+  ownerCapabilities           OwnerCapability[]              @relation("UserCapabilities")
+  grantedCapabilities         OwnerCapability[]              @relation("GrantedCapabilities")
+  platformRatesCreated        CompanyPlatformRate[]          @relation("PlatformRatesCreated")
+  contractAuditEvents         ContractAuditEvent[]           @relation("ContractAuditAuthor")
+  stepUpSessions              StepUpSession[]                @relation("UserStepUpSessions")
 }
 
 model Client {
@@ -954,4 +972,71 @@ model AccountDeletionRequest {
   @@index([companyId, status])
   @@index([status, scheduledAnonymizeAt])
 }
+
+model CompanyPlatformRate {
+  id              String    @id @default(uuid())
+  companyId       String
+  version         Int       @default(1)
+  ratePercentage  Decimal   @db.Decimal(6, 3)
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  reason          String
+  createdByUserId String
+  createdByName   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdByUser   User      @relation("PlatformRatesCreated", fields: [createdByUserId], references: [id])
+
+  @@index([companyId, effectiveFrom])
+  @@index([companyId, effectiveTo])
+}
+
+model OwnerCapability {
+  id              String   @id @default(uuid())
+  userId          String
+  capability      String
+  grantedByUserId String?
+  createdAt       DateTime @default(now())
+
+  user            User     @relation("UserCapabilities", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy       User?    @relation("GrantedCapabilities", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, capability])
+  @@index([userId])
+}
+
+model ContractAuditEvent {
+  id           String   @id @default(uuid())
+  companyId    String?
+  action       String
+  authorUserId String
+  authorName   String
+  details      String   @db.Text
+  reason       String?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  company    Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  authorUser User     @relation("ContractAuditAuthor", fields: [authorUserId], references: [id])
+
+  @@index([companyId, createdAt])
+  @@index([authorUserId, createdAt])
+}
+
+model StepUpSession {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation("UserStepUpSessions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
 

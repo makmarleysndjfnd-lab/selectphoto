@@ -3,6 +3,7 @@ import 'tela_login.dart';
 import 'painel_admin.dart';
 import 'painel_vendedor.dart';
 import 'painel_fotografo.dart';
+import 'painel_proprietario_empresas.dart';
 
 class HomeScreen extends StatefulWidget {
   final String role;
@@ -397,6 +398,14 @@ class _HomeScreenState extends State<HomeScreen>
             style: TextStyle(color: Color(0xFF90CAF9), fontSize: 14),
           ),
           const SizedBox(height: 24),
+          _actionButton(
+            icon: Icons.business_center_rounded,
+            title: 'Central do Proprietário',
+            subtitle: 'Empresas, contratos, taxas Lumora e auditoria.',
+            gradientColors: const [Color(0xFF1E3C72), Color(0xFF2A5298)],
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PainelProprietarioEmpresas())),
+          ),
+          const SizedBox(height: 16),
           _actionButton(
             icon: Icons.admin_panel_settings_rounded,
             title: 'Painel Admin',

@@ -1985,5 +1985,197 @@ class ApiService {
       throw Exception(_extractError(e));
     }
   }
+
+  // ── Central do Proprietário (Bloco 1) ──────────────────────────────────────
+
+  /// Reautenticação reforçada (Step-Up Auth) com senha
+  Future<Map<String, dynamic>> ownerStepUpAuth(String password, {String? reason}) async {
+    try {
+      final resp = await _dio.post('/owner/auth/step-up', data: {
+        'password': password,
+        if (reason != null) 'reason': reason,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Revoga a sessão de step-up auth atual
+  Future<void> ownerRevokeStepUp({String? stepUpToken}) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) {
+        headers['X-Step-Up-Token'] = stepUpToken;
+      }
+      await _dio.post('/owner/auth/step-up/revoke', options: Options(headers: headers));
+    } catch (_) {}
+  }
+
+  /// Perfil e capacidades do proprietário
+  Future<Map<String, dynamic>> getOwnerProfile() async {
+    try {
+      final resp = await _dio.get('/owner/profile');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Listar empresas na Central do Proprietário
+  Future<List<Map<String, dynamic>>> getOwnerCompanies({String? status, String? search}) async {
+    try {
+      final queryParams = <String, dynamic>{};
+      if (status != null && status != 'ALL') queryParams['status'] = status;
+      if (search != null && search.trim().isNotEmpty) queryParams['search'] = search.trim();
+
+      final resp = await _dio.get('/owner/companies', queryParameters: queryParams);
+      return (resp.data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Detalhes completos da empresa (com histórico de taxas e auditoria)
+  Future<Map<String, dynamic>> getOwnerCompanyDetails(String companyId) async {
+    try {
+      final resp = await _dio.get('/owner/companies/$companyId');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Cadastrar nova empresa
+  Future<Map<String, dynamic>> createOwnerCompany(
+    Map<String, dynamic> data, {
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = Map<String, dynamic>.from(data);
+      if (passwordConfirmation != null) body['passwordConfirmation'] = passwordConfirmation;
+
+      final resp = await _dio.post(
+        '/owner/companies',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Atualizar dados contratuais da empresa
+  Future<Map<String, dynamic>> updateOwnerCompany(
+    String companyId,
+    Map<String, dynamic> data, {
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = Map<String, dynamic>.from(data);
+      if (passwordConfirmation != null) body['passwordConfirmation'] = passwordConfirmation;
+
+      final resp = await _dio.put(
+        '/owner/companies/$companyId',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Configurar nova taxa de remuneração do Lumora com vigência
+  Future<Map<String, dynamic>> setOwnerCompanyRate(
+    String companyId, {
+    required double ratePercentage,
+    required DateTime effectiveFrom,
+    required String reason,
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = <String, dynamic>{
+        'ratePercentage': ratePercentage,
+        'effectiveFrom': effectiveFrom.toIso8601String(),
+        'reason': reason,
+        if (passwordConfirmation != null) 'passwordConfirmation': passwordConfirmation,
+      };
+
+      final resp = await _dio.post(
+        '/owner/companies/$companyId/rates',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Suspender ou Reativar Empresa
+  Future<Map<String, dynamic>> setOwnerCompanyStatus(
+    String companyId, {
+    required String status,
+    required String reason,
+    String? stepUpToken,
+    String? passwordConfirmation,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final body = <String, dynamic>{
+        'status': status,
+        'reason': reason,
+        if (passwordConfirmation != null) 'passwordConfirmation': passwordConfirmation,
+      };
+
+      final resp = await _dio.post(
+        '/owner/companies/$companyId/status',
+        data: body,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Trilha de auditoria contratual
+  Future<List<Map<String, dynamic>>> getOwnerAuditLogs({String? companyId, int limit = 50}) async {
+    try {
+      final queryParams = <String, dynamic>{'limit': limit};
+      if (companyId != null) queryParams['companyId'] = companyId;
+
+      final resp = await _dio.get('/owner/audit-logs', queryParameters: queryParams);
+      return (resp.data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Consulta de contrato próprio da empresa (COMPANY_ADMIN)
+  Future<Map<String, dynamic>> getMyCompanyContract() async {
+    try {
+      final resp = await _dio.get('/owner/my-company-contract');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
 }
 

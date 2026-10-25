@@ -207,3 +207,99 @@ export const requireSuperAdmin = requireRoles(
   ['SUPER_ADMIN'],
   'Forbidden: Requires Super Admin role'
 );
+
+export const OWNER_CAPABILITIES = [
+  'PLATFORM_FINANCE',
+  'CONTRACT_MANAGEMENT',
+  'INTEGRATION_CONFIG',
+  'TECHNICAL_SUPPORT',
+] as const;
+
+export type OwnerCapabilityType = (typeof OWNER_CAPABILITIES)[number];
+
+export const requireCapability = (capability: OwnerCapabilityType | OwnerCapabilityType[]) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user || !req.user.id) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    if (req.user.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Acesso restrito à Central do Proprietário (SUPER_ADMIN).' });
+      return;
+    }
+
+    const caps = Array.isArray(capability) ? capability : [capability];
+    const userCaps = await getPrisma().ownerCapability.findMany({
+      where: {
+        userId: req.user.id,
+        capability: { in: caps },
+      },
+      select: { capability: true },
+    });
+
+    if (userCaps.length === 0) {
+      res.status(403).json({
+        error: 'FORBIDDEN_CAPABILITY',
+        message: `Acesso negado: Requer uma das seguintes capacidades da Central do Proprietário: [${caps.join(', ')}].`,
+      });
+      return;
+    }
+
+    next();
+  };
+};
+
+export const requireStepUpAuth = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  if (!req.user || !req.user.id) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  // 1. Header X-Step-Up-Token
+  const stepUpToken = req.headers['x-step-up-token'] as string | undefined;
+  if (stepUpToken && typeof stepUpToken === 'string' && stepUpToken.trim().length > 0) {
+    const crypto = await import('crypto');
+    const tokenHash = crypto.createHash('sha256').update(stepUpToken.trim()).digest('hex');
+    const session = await getPrisma().stepUpSession.findFirst({
+      where: {
+        userId: req.user.id,
+        tokenHash,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    if (session) {
+      next();
+      return;
+    }
+  }
+
+  // 2. Fallback: passwordConfirmation no corpo da requisição
+  const passwordConfirmation = req.body?.passwordConfirmation;
+  if (passwordConfirmation && typeof passwordConfirmation === 'string') {
+    const user = await getPrisma().user.findUnique({
+      where: { id: req.user.id },
+      select: { password: true },
+    });
+
+    if (user && user.password) {
+      const bcrypt = await import('bcrypt');
+      const valid = await bcrypt.compare(passwordConfirmation, user.password);
+      if (valid) {
+        next();
+        return;
+      }
+    }
+  }
+
+  res.status(403).json({
+    error: 'STEP_UP_AUTH_REQUIRED',
+    message: 'Esta ação contratual sensível exige reautenticação reforçada com confirmação de senha.',
+  });
+};

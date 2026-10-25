@@ -165,6 +165,251 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _showMyContractDialog(BuildContext context) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator(color: Color(0xFF4FC3F7))),
+    );
+
+    Map<String, dynamic>? data;
+    String? errorMsg;
+    try {
+      data = await ApiService().getMyCompanyContract();
+    } catch (e) {
+      errorMsg = e.toString().replaceAll('Exception: ', '');
+    }
+
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    if (errorMsg != null || data == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao consultar contrato: $errorMsg'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
+
+    final company = data['company'] as Map<String, dynamic>? ?? {};
+    final currentRate = data['currentRate'] as Map<String, dynamic>?;
+    final rateHistory = (data['rateHistory'] as List<dynamic>?) ?? [];
+    final note = data['note']?.toString() ?? '';
+
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF141E2E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (_, scrollCtrl) {
+            return SingleChildScrollView(
+              controller: scrollCtrl,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4FC3F7).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.description_rounded, color: Color(0xFF4FC3F7), size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              company['name']?.toString() ?? 'Empresa',
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              company['cnpj'] != null && company['cnpj'].toString().isNotEmpty
+                                  ? 'CNPJ: ${company['cnpj']}'
+                                  : 'Contrato Lumora',
+                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: company['status'] == 'ACTIVE' ? Colors.green.withOpacity(0.2) : Colors.orange.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: company['status'] == 'ACTIVE' ? Colors.green : Colors.orange),
+                        ),
+                        child: Text(
+                          company['status'] == 'ACTIVE' ? 'ATIVO' : (company['status']?.toString() ?? 'INATIVO'),
+                          style: TextStyle(
+                            color: company['status'] == 'ACTIVE' ? Colors.greenAccent : Colors.orangeAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [const Color(0xFF0D3B6E).withOpacity(0.4), const Color(0xFF1B2A4A)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.3)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Taxa Lumora Vigente',
+                          style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              currentRate != null ? '${currentRate['percentage']}%' : 'Não configurada',
+                              style: TextStyle(
+                                color: currentRate != null ? const Color(0xFF4FC3F7) : Colors.orangeAccent,
+                                fontSize: 26,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (currentRate != null)
+                              Text(
+                                '(versão ${currentRate['contractVersion']})',
+                                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                              ),
+                          ],
+                        ),
+                        if (currentRate != null && currentRate['effectiveFrom'] != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Vigência desde: ${currentRate['effectiveFrom'].toString().split('T')[0]}',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                        if (currentRate?['changeReason'] != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Justificativa: ${currentRate!['changeReason']}',
+                            style: const TextStyle(color: Colors.white54, fontSize: 11, fontStyle: FontStyle.italic),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.info_outline, color: Color(0xFF90CAF9), size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            note.isNotEmpty
+                                ? note
+                                : 'A remuneração do Lumora é configurada exclusivamente pelo proprietário da plataforma. Esta consulta é apenas informativa.',
+                            style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Histórico Contratual da Remuneração',
+                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 10),
+                  if (rateHistory.isEmpty)
+                    const Text('Nenhum histórico registrado até o momento.', style: TextStyle(color: Colors.white54, fontSize: 12))
+                  else
+                    ...rateHistory.map((r) {
+                      final p = r['percentage']?.toString() ?? '-';
+                      final v = r['contractVersion']?.toString() ?? '-';
+                      final from = r['effectiveFrom']?.toString().split('T')[0] ?? '-';
+                      final to = r['effectiveTo'] != null ? r['effectiveTo'].toString().split('T')[0] : 'Vigente';
+                      final reason = r['changeReason']?.toString() ?? '';
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E293B),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Text('v$v', style: const TextStyle(color: Color(0xFF4FC3F7), fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('$p% ($from \u2192 $to)', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                                  if (reason.isNotEmpty)
+                                    Text(reason, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: LedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Fechar'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _handleSync(BuildContext context) async {
     final syncService = Provider.of<SyncService>(context, listen: false);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -600,6 +845,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const Icon(Icons.description_rounded, color: Color(0xFF4FC3F7)),
+                title: const Text('Contrato Lumora (Consulta)',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Consulte os dados da sua empresa, taxa e vigência atual',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                onTap: () => _showMyContractDialog(context),
               ),
             ),
             const SizedBox(height: 16),
