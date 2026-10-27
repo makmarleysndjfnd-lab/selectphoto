@@ -185,6 +185,13 @@ class _PainelProprietarioIntegracoesState
     );
   }
 
+  void _mostrarAlerta(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: const Color(0xFFF59E0B)),
+    );
+  }
+
   // ── Ações de Integração ─────────────────────────────────────────────────────
 
   Future<void> _testarConexao(Map<String, dynamic> integracao) async {
@@ -373,16 +380,25 @@ class _PainelProprietarioIntegracoesState
       return;
     }
 
+    final authed = await _garantirStepUpAuth('executar roteiro de homologação Sandbox');
+    if (!authed) return;
+
     setState(() => _carregando = true);
     try {
       final report = await _api.runAsaasSandboxHomologation(
         companyId: _empresaSelecionada!['id'],
         forceSimulation: false,
+        stepUpToken: _stepUpToken,
       );
       setState(() {
         _harnessReport = report;
       });
-      _mostrarSucesso('Roteiro Sandbox executado com sucesso.');
+      final bool homologated = report['readinessForLive']?['sandboxHomologated'] == true;
+      if (homologated) {
+        _mostrarSucesso('Homologação oficial externa no Asaas Sandbox aprovada com sucesso.');
+      } else {
+        _mostrarAlerta('Roteiro executado. Homologação oficial externa pendente de credenciais ou validação no portal.');
+      }
     } catch (e) {
       _mostrarErro('Falha ao rodar homologação: $e');
     } finally {
@@ -759,6 +775,8 @@ class _PainelProprietarioIntegracoesState
   Widget _buildReportCard(Map<String, dynamic> report) {
     final steps = (report['steps'] as List? ?? []);
     final bool passed = report['overallStatus'] == 'PASSED';
+    final String env = report['environment'] ?? 'SANDBOX';
+    final bool isSimulation = env == 'SIMULATION_TEST';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -780,12 +798,29 @@ class _PainelProprietarioIntegracoesState
                 color: passed ? const Color(0xFF10B981) : Colors.redAccent,
               ),
               const SizedBox(width: 8),
-              Text(
-                'Resultado do Roteiro: [${report['overallStatus']}]',
-                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+              Expanded(
+                child: Text(
+                  'Resultado: [${report['overallStatus']}] — ${isSimulation ? 'SIMULAÇÃO LOCAL CONTROLADA' : 'EXECUÇÃO OFICIAL SANDBOX'}',
+                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           ),
+          if (isSimulation) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.4)),
+              ),
+              child: const Text(
+                'Nota de Integridade: Esta execução foi simulada em ambiente controlado local. Ela valida cenários internos, mas mantém sandboxHomologated: false até que credenciais oficiais sejam validadas diretamente contra o Asaas.',
+                style: TextStyle(color: Color(0xFFFBBF24), fontSize: 11),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           ...steps.map((st) {
             final bool stepOk = st['status'] == 'SUCCESS';
@@ -825,6 +860,11 @@ class _PainelProprietarioIntegracoesState
   }
 
   Widget _buildReadinessCard() {
+    final bool officialHomologated =
+        _harnessReport != null && _harnessReport!['readinessForLive']?['sandboxHomologated'] == true;
+    final bool wasSimulated =
+        _harnessReport != null && _harnessReport!['environment'] == 'SIMULATION_TEST';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -845,7 +885,15 @@ class _PainelProprietarioIntegracoesState
             ],
           ),
           const SizedBox(height: 12),
-          _buildCheckItem('Homologação Sandbox Concluída', _harnessReport != null),
+          _buildCheckItem('Homologação Externa Oficial no Asaas Sandbox', officialHomologated),
+          if (wasSimulated && !officialHomologated)
+            const Padding(
+              padding: EdgeInsets.only(left: 24, bottom: 6),
+              child: Text(
+                '↳ Cenários simulados com sucesso. Homologação oficial no provedor pendente de credenciais.',
+                style: TextStyle(color: Color(0xFFFBBF24), fontSize: 11, fontStyle: FontStyle.italic),
+              ),
+            ),
           _buildCheckItem('Armazenamento em Vault Criptografado (AES-256-GCM)', true),
           _buildCheckItem('Isolamento Multi-Tenant e Anti-Fallback', true),
           _buildCheckItem('Proteção contra SSRF e Bloqueio de IPs Privados', true),

@@ -8,10 +8,26 @@ export interface ConnectionTestResult {
   details?: any;
 }
 
+export interface AdapterTestOptions {
+  mockResponse?: boolean;
+  mockLatencyMs?: number;
+}
+
+/**
+ * URL base oficial do Asaas Sandbox conforme documentação: https://docs.asaas.com/docs/sandbox
+ */
+export const ASAAS_SANDBOX_BASE_URL = 'https://api-sandbox.asaas.com/v3';
+export const ASAAS_PRODUCTION_BASE_URL = 'https://api.asaas.com/v3';
+
 /**
  * Teste não destrutivo de conexão com a API Google Gemini.
+ * Mocks são controlados estritamente via parâmetro de teste explícito (AdapterTestOptions).
+ * Atalhos baseados no conteúdo da chave (como conter 'test') foram eliminados do runtime operacional.
  */
-export async function testGeminiConnection(apiKey: string): Promise<ConnectionTestResult> {
+export async function testGeminiConnection(
+  apiKey: string,
+  options?: AdapterTestOptions
+): Promise<ConnectionTestResult> {
   const start = Date.now();
   if (!apiKey || apiKey.trim().length < 10) {
     return {
@@ -21,19 +37,19 @@ export async function testGeminiConnection(apiKey: string): Promise<ConnectionTe
     };
   }
 
-  // Se a chave for fixture de teste/mock, retorna resultado simulado seguro
-  if (apiKey.startsWith('AIzaSy_mock') || apiKey.includes('test') || process.env.NODE_ENV === 'test') {
+  // Injeção de mock controlada exclusivamente por opção explícita em teste
+  if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão com Gemini validada com sucesso (Ambiente de Teste).',
-      latencyMs: 12,
-      details: { model: 'gemini-2.5-flash', status: 'READY' },
+      message: 'Conexão com Gemini validada com sucesso (Ambiente de Teste Controlado).',
+      latencyMs: options.mockLatencyMs ?? 15,
+      details: { model: 'gemini-2.5-flash', status: 'READY', simulated: true },
     };
   }
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    // Operação mínima: gera 1 token com prompt simples
+    // Operação mínima: prompt de 1 token para validar autenticação e cota
     const response: any = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: 'Ping',
@@ -43,7 +59,7 @@ export async function testGeminiConnection(apiKey: string): Promise<ConnectionTe
     if (response && response.text) {
       return {
         success: true,
-        message: 'Conexão com Gemini estabelecida com sucesso.',
+        message: 'Conexão com Gemini estabelecida e autenticada com sucesso.',
         latencyMs,
         details: { model: 'gemini-2.5-flash', status: 'READY' },
       };
@@ -56,9 +72,11 @@ export async function testGeminiConnection(apiKey: string): Promise<ConnectionTe
     };
   } catch (err: any) {
     const latencyMs = Date.now() - start;
+    // Sanitiza mensagem de erro para nunca expor a chave
+    const cleanError = (err.message || 'Erro desconhecido').replace(apiKey, '••••••••');
     return {
       success: false,
-      message: `Falha ao conectar com Gemini: ${err.message || 'Erro desconhecido'}`,
+      message: `Falha ao conectar com Gemini: ${cleanError}`,
       latencyMs,
     };
   }
@@ -69,8 +87,9 @@ export async function testGeminiConnection(apiKey: string): Promise<ConnectionTe
  */
 export async function testViaCepConnection(): Promise<ConnectionTestResult> {
   const start = Date.now();
+  const endpoint = 'https://viacep.com.br/ws/01001000/json/';
   try {
-    const urlValidation = await validateExternalUrl('https://viacep.com.br/ws/01001000/json/');
+    const urlValidation = await validateExternalUrl(endpoint);
     if (!urlValidation.valid) {
       return {
         success: false,
@@ -79,7 +98,7 @@ export async function testViaCepConnection(): Promise<ConnectionTestResult> {
       };
     }
 
-    const res = await fetch('https://viacep.com.br/ws/01001000/json/', {
+    const res = await fetch(endpoint, {
       method: 'GET',
       headers: { 'User-Agent': 'LumoraPlatform-Test/2.0' },
     });
@@ -113,8 +132,12 @@ export async function testViaCepConnection(): Promise<ConnectionTestResult> {
 
 /**
  * Teste não destrutivo de conexão com o Asaas Sandbox (GET /customers?limit=1).
+ * Utiliza o endpoint oficial centralizado: https://api-sandbox.asaas.com/v3
  */
-export async function testAsaasSandboxConnection(apiKey: string): Promise<ConnectionTestResult> {
+export async function testAsaasSandboxConnection(
+  apiKey: string,
+  options?: AdapterTestOptions
+): Promise<ConnectionTestResult> {
   const start = Date.now();
   if (!apiKey || apiKey.trim().length < 10) {
     return {
@@ -124,17 +147,17 @@ export async function testAsaasSandboxConnection(apiKey: string): Promise<Connec
     };
   }
 
-  // Em ambiente de teste automatizado com chave simulada
-  if (apiKey.startsWith('$aact_test') || apiKey.includes('sandbox') || apiKey.includes('test') || process.env.NODE_ENV === 'test') {
+  // Injeção de mock controlada exclusivamente por opção explícita em teste
+  if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão com Asaas Sandbox autenticada com sucesso (Ambiente de Teste).',
-      latencyMs: 25,
-      details: { environment: 'SANDBOX', authorized: true },
+      message: 'Conexão com Asaas Sandbox autenticada com sucesso (Ambiente de Teste Controlado).',
+      latencyMs: options.mockLatencyMs ?? 25,
+      details: { environment: 'SANDBOX', authorized: true, simulated: true },
     };
   }
 
-  const endpoint = 'https://sandbox.asaas.com/api/v3/customers?limit=1';
+  const endpoint = `${ASAAS_SANDBOX_BASE_URL}/customers?limit=1`;
   try {
     const urlValidation = await validateExternalUrl(endpoint);
     if (!urlValidation.valid) {
@@ -158,7 +181,7 @@ export async function testAsaasSandboxConnection(apiKey: string): Promise<Connec
     if (res.status === 200) {
       return {
         success: true,
-        message: 'Conexão e credenciais do Asaas Sandbox validadas com sucesso.',
+        message: 'Conexão e credenciais do Asaas Sandbox validadas com sucesso no endpoint oficial.',
         latencyMs,
         details: { environment: 'SANDBOX', status: 'AUTHENTICATED' },
       };
@@ -188,7 +211,10 @@ export async function testAsaasSandboxConnection(apiKey: string): Promise<Connec
 /**
  * Teste não destrutivo com Meta WhatsApp Cloud API (GET /v19.0/me).
  */
-export async function testMetaWhatsAppConnection(accessToken: string): Promise<ConnectionTestResult> {
+export async function testMetaWhatsAppConnection(
+  accessToken: string,
+  options?: AdapterTestOptions
+): Promise<ConnectionTestResult> {
   const start = Date.now();
   if (!accessToken || accessToken.trim().length < 15) {
     return {
@@ -198,17 +224,27 @@ export async function testMetaWhatsAppConnection(accessToken: string): Promise<C
     };
   }
 
-  if (process.env.NODE_ENV === 'test' && accessToken.includes('test')) {
+  if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão Meta WhatsApp validada (Ambiente de Teste).',
-      latencyMs: 30,
-      details: { provider: 'META_WHATSAPP', status: 'READY' },
+      message: 'Conexão Meta WhatsApp validada (Ambiente de Teste Controlado).',
+      latencyMs: options.mockLatencyMs ?? 20,
+      details: { provider: 'META_WHATSAPP', status: 'READY', simulated: true },
     };
   }
 
+  const endpoint = 'https://graph.facebook.com/v19.0/me';
   try {
-    const res = await fetch('https://graph.facebook.com/v19.0/me', {
+    const urlValidation = await validateExternalUrl(endpoint);
+    if (!urlValidation.valid) {
+      return {
+        success: false,
+        message: `Bloqueado por política SSRF: ${urlValidation.error}`,
+        latencyMs: 0,
+      };
+    }
+
+    const res = await fetch(endpoint, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -243,7 +279,10 @@ export async function testMetaWhatsAppConnection(accessToken: string): Promise<C
 /**
  * Teste não destrutivo com Grok (xAI) API (GET /v1/models).
  */
-export async function testGrokConnection(apiKey: string): Promise<ConnectionTestResult> {
+export async function testGrokConnection(
+  apiKey: string,
+  options?: AdapterTestOptions
+): Promise<ConnectionTestResult> {
   const start = Date.now();
   if (!apiKey || apiKey.trim().length < 10) {
     return {
@@ -253,17 +292,27 @@ export async function testGrokConnection(apiKey: string): Promise<ConnectionTest
     };
   }
 
-  if (process.env.NODE_ENV === 'test' && apiKey.includes('test')) {
+  if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão com Grok/xAI validada (Ambiente de Teste).',
-      latencyMs: 40,
-      details: { provider: 'GROK', status: 'READY' },
+      message: 'Conexão com Grok/xAI validada (Ambiente de Teste Controlado).',
+      latencyMs: options.mockLatencyMs ?? 30,
+      details: { provider: 'GROK', status: 'READY', simulated: true },
     };
   }
 
+  const endpoint = 'https://api.x.ai/v1/models';
   try {
-    const res = await fetch('https://api.x.ai/v1/models', {
+    const urlValidation = await validateExternalUrl(endpoint);
+    if (!urlValidation.valid) {
+      return {
+        success: false,
+        message: `Bloqueado por política SSRF: ${urlValidation.error}`,
+        latencyMs: 0,
+      };
+    }
+
+    const res = await fetch(endpoint, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -290,5 +339,50 @@ export async function testGrokConnection(apiKey: string): Promise<ConnectionTest
       message: `Erro ao testar Grok: ${err.message}`,
       latencyMs: Date.now() - start,
     };
+  }
+}
+
+/**
+ * Adaptador funcional de consulta de IA para Grok (xAI) compatível com a API OpenAI Chat Completions.
+ * Garante que a chave do Grok NUNCA seja encaminhada ao GoogleGenAI.
+ */
+export async function executeGrokChatCompletion(params: {
+  apiKey: string;
+  prompt: string;
+  model?: string;
+}): Promise<{ success: boolean; text?: string; error?: string }> {
+  try {
+    const endpoint = 'https://api.x.ai/v1/chat/completions';
+    const urlValidation = await validateExternalUrl(endpoint);
+    if (!urlValidation.valid) {
+      return { success: false, error: urlValidation.error };
+    }
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model || 'grok-beta',
+        messages: [{ role: 'user', content: params.prompt }],
+        temperature: 0.2,
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return {
+        success: false,
+        error: `Grok API retornou erro HTTP ${res.status}: ${errText.slice(0, 200)}`,
+      };
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    return { success: true, text: content || '' };
+  } catch (err: any) {
+    return { success: false, error: `Falha na requisição ao Grok: ${err.message}` };
   }
 }

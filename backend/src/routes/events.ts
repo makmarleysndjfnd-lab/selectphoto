@@ -13,10 +13,8 @@ import {
 const router = Router();
 const prisma = new PrismaClient();
 
-// Fallback do cliente global Gemini (usado apenas se não houver resolução dinâmica por empresa)
-const globalAi = (!isExternalServicesDisabled() && process.env.GEMINI_API_KEY) 
-  ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  : null;
+// Instanciação direta por chamada com resolução dinâmica por empresa
+// Elimina fallback silencioso para a chave global quando a empresa não tem contratação ativa
 
 // Helper to robustly extract clean JSON from AI responses (even with conversational wrappers)
 export function extractCleanJson(text: string): string {
@@ -129,7 +127,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     // Resolução dinâmica de integração por empresa em tempo de execução
-    let activeAiClient = globalAi;
+    let activeAiClient: GoogleGenAI | null = null;
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
 
@@ -147,10 +145,27 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
       // 2. Resolve credencial dinâmica da empresa
       const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
-      if (resolved && resolved.status === 'ACTIVE' && resolved.secret) {
+      if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
+        if (!isExternalServicesDisabled()) {
+          res.status(403).json({
+            error: 'Pesquisa de eventos por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
+          });
+          return;
+        }
+      } else {
         providerName = resolved.provider;
         resolvedIntegrationId = resolved.integration?.id;
+        if (providerName === 'GROK') {
+          res.status(501).json({
+            error: 'Provedor Grok (xAI) configurado, mas o radar e pesquisa de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
+          });
+          return;
+        }
         activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+      }
+    } else if (req.user?.role === 'SUPER_ADMIN') {
+      if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
+        activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       }
     }
 
@@ -351,11 +366,38 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     if (!resultData) {
-      let activeAiClient = globalAi;
+      let activeAiClient: GoogleGenAI | null = null;
       if (companyId) {
+        const budgetCheck = await checkCompanyApiBudget(companyId, 'AI_RESEARCH');
+        if (!budgetCheck.withinBudget) {
+          res.status(429).json({
+            error: 'Limite de orçamento mensal interno de IA atingido para esta empresa.',
+            spentCents: budgetCheck.currentSpentCents,
+            limitCents: budgetCheck.limitCents,
+          });
+          return;
+        }
+
         const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
-        if (resolved && resolved.status === 'ACTIVE' && resolved.secret) {
+        if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
+          if (!isExternalServicesDisabled()) {
+            res.status(403).json({
+              error: 'Pesquisa de radar por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
+            });
+            return;
+          }
+        } else {
+          if (resolved.provider === 'GROK') {
+            res.status(501).json({
+              error: 'Provedor Grok (xAI) configurado, mas o radar de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
+            });
+            return;
+          }
           activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+        }
+      } else if (req.user?.role === 'SUPER_ADMIN') {
+        if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
+          activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
         }
       }
 

@@ -6,7 +6,13 @@ import {
   requireStepUpAuth,
   AuthRequest,
 } from '../middleware/authMiddleware';
-import { encryptSecret, maskSecret, decryptSecret } from '../services/vaultService';
+import {
+  encryptSecret,
+  maskSecret,
+  decryptSecret,
+  isAllowedEnvVarReference,
+  ALLOWED_ENV_VAR_REFERENCES,
+} from '../services/vaultService';
 import {
   testGeminiConnection,
   testViaCepConnection,
@@ -286,6 +292,14 @@ router.post(
         secretIv = encrypted.secretIv;
         secretTag = encrypted.secretTag;
         secretMasked = maskSecret(plainSecret);
+      } else if (credentialSource === 'ENV_REFERENCE') {
+        const trimmedVarName = envVarName ? String(envVarName).trim() : '';
+        if (!trimmedVarName || !isAllowedEnvVarReference(trimmedVarName)) {
+          res.status(400).json({
+            error: `Referência de variável de ambiente '${trimmedVarName}' inválida ou não autorizada no catálogo restrito de infraestrutura. Permitidas: ${ALLOWED_ENV_VAR_REFERENCES.join(', ')}`,
+          });
+          return;
+        }
       }
 
       const created = await prisma.companyIntegration.create({
@@ -524,15 +538,31 @@ router.post(
       };
 
       if (integration.provider === 'GEMINI') {
-        testResult = await testGeminiConnection(secret || process.env.GEMINI_API_KEY || '');
+        if (!secret) {
+          testResult = { success: false, message: 'Chave Gemini não cadastrada para esta empresa.', latencyMs: 0 };
+        } else {
+          testResult = await testGeminiConnection(secret);
+        }
       } else if (integration.provider === 'VIACEP') {
         testResult = await testViaCepConnection();
       } else if (integration.provider === 'ASAAS') {
-        testResult = await testAsaasSandboxConnection(secret || process.env.ASAAS_SANDBOX_API_KEY || '');
+        if (!secret) {
+          testResult = { success: false, message: 'Chave do Asaas Sandbox não cadastrada para esta empresa.', latencyMs: 0 };
+        } else {
+          testResult = await testAsaasSandboxConnection(secret);
+        }
       } else if (integration.provider === 'META_WHATSAPP') {
-        testResult = await testMetaWhatsAppConnection(secret || '');
+        if (!secret) {
+          testResult = { success: false, message: 'Token do Meta WhatsApp não cadastrado para esta empresa.', latencyMs: 0 };
+        } else {
+          testResult = await testMetaWhatsAppConnection(secret);
+        }
       } else if (integration.provider === 'GROK') {
-        testResult = await testGrokConnection(secret || '');
+        if (!secret) {
+          testResult = { success: false, message: 'Chave do Grok não cadastrada para esta empresa.', latencyMs: 0 };
+        } else {
+          testResult = await testGrokConnection(secret);
+        }
       }
 
       // Atualiza o estado da última validação
@@ -599,6 +629,7 @@ router.post(
   '/sandbox/run-homologation',
   authenticateToken,
   requireCapability('INTEGRATION_CONFIG'),
+  requireStepUpAuth,
   async (req: AuthRequest, res: Response) => {
     try {
       const { companyId, sandboxApiKey, webhookToken, forceSimulation } = req.body;

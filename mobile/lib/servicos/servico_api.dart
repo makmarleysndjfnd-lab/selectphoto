@@ -2315,20 +2315,27 @@ class ApiService {
     }
   }
 
-  /// Executar homologação oficial no Asaas Sandbox
+  /// Executar homologação oficial no Asaas Sandbox (exige Step-Up Auth)
   Future<Map<String, dynamic>> runAsaasSandboxHomologation({
     required String companyId,
     String? sandboxApiKey,
     String? webhookToken,
     bool? forceSimulation,
+    String? stepUpToken,
   }) async {
     try {
-      final resp = await _dio.post('/owner/integrations/sandbox/run-homologation', data: {
-        'companyId': companyId,
-        if (sandboxApiKey != null) 'sandboxApiKey': sandboxApiKey,
-        if (webhookToken != null) 'webhookToken': webhookToken,
-        if (forceSimulation != null) 'forceSimulation': forceSimulation,
-      });
+      final resp = await _dio.post(
+        '/owner/integrations/sandbox/run-homologation',
+        data: {
+          'companyId': companyId,
+          if (sandboxApiKey != null) 'sandboxApiKey': sandboxApiKey,
+          if (webhookToken != null) 'webhookToken': webhookToken,
+          if (forceSimulation != null) 'forceSimulation': forceSimulation,
+        },
+        options: stepUpToken != null
+            ? Options(headers: {'x-step-up-token': stepUpToken})
+            : null,
+      );
       return Map<String, dynamic>.from(resp.data['report'] ?? {});
     } on DioException catch (e) {
       throw Exception(_extractError(e));

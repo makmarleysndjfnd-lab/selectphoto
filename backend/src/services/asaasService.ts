@@ -6,6 +6,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { resolveCompanyIntegration } from './integrationResolver';
 
 const prisma = new PrismaClient();
 
@@ -42,19 +43,48 @@ export interface AsaasConfigData {
 }
 
 /**
- * Obtém a URL base de acordo com o modo configurado
+ * Obtém a URL base oficial de acordo com o modo configurado
  */
 export function getAsaasBaseUrl(mode: AsaasMode): string {
   if (mode === 'SANDBOX') {
-    return 'https://sandbox.asaas.com/api/v3';
+    return 'https://api-sandbox.asaas.com/v3';
   }
   return 'https://api.asaas.com/v3';
 }
 
 /**
- * Recupera as configurações do Asaas para uma empresa
+ * Recupera as configurações do Asaas para uma empresa.
+ * Prioriza a Central de Integrações (CompanyIntegration).
+ * Se ausente, recorre à tabela legada AsaasConfig preservando referências históricas.
+ * REMOVIDO qualquer fallback para chave global ASAAS_API_KEY no runtime multi-empresa.
  */
 export async function getCompanyAsaasConfig(companyId: string): Promise<AsaasConfigData> {
+  // 1. Prioridade: Central de Integrações (CompanyIntegration via Vault)
+  try {
+    const prodResolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'PRODUCTION');
+    if (prodResolved && prodResolved.status === 'ACTIVE' && prodResolved.secret) {
+      return {
+        mode: 'PRODUCTION',
+        apiKey: prodResolved.secret,
+        webhookToken: (prodResolved.integration?.configMetadata as any)?.webhookToken || null,
+        walletId: (prodResolved.integration?.configMetadata as any)?.walletId || null,
+      };
+    }
+
+    const sandboxResolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'SANDBOX');
+    if (sandboxResolved && sandboxResolved.status === 'ACTIVE' && sandboxResolved.secret) {
+      return {
+        mode: 'SANDBOX',
+        apiKey: sandboxResolved.secret,
+        webhookToken: (sandboxResolved.integration?.configMetadata as any)?.webhookToken || null,
+        walletId: (sandboxResolved.integration?.configMetadata as any)?.walletId || null,
+      };
+    }
+  } catch (err) {
+    console.error(`[AsaasService] Erro ao resolver CompanyIntegration para ${companyId}:`, err);
+  }
+
+  // 2. Compatibilidade legada com tabela AsaasConfig da empresa
   const config = await prisma.asaasConfig.findUnique({
     where: { companyId },
   });
@@ -62,15 +92,15 @@ export async function getCompanyAsaasConfig(companyId: string): Promise<AsaasCon
   if (!config) {
     return {
       mode: 'DISABLED',
-      apiKey: process.env.ASAAS_API_KEY || null,
-      webhookToken: process.env.ASAAS_WEBHOOK_TOKEN || null,
+      apiKey: null,
+      webhookToken: null,
     };
   }
 
   return {
     mode: (config.mode as AsaasMode) || 'DISABLED',
-    apiKey: config.apiKey || process.env.ASAAS_API_KEY || null,
-    webhookToken: config.webhookToken || process.env.ASAAS_WEBHOOK_TOKEN || null,
+    apiKey: config.apiKey || null,
+    webhookToken: config.webhookToken || null,
     walletId: config.walletId,
   };
 }

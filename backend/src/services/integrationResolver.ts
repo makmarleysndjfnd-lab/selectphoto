@@ -1,5 +1,5 @@
 import { PrismaClient, CompanyIntegration } from '@prisma/client';
-import { decryptSecret } from './vaultService';
+import { decryptSecret, isAllowedEnvVarReference } from './vaultService';
 
 const prisma = new PrismaClient();
 
@@ -19,8 +19,9 @@ const cepCache = new Map<string, { data: any; expiresAt: number }>();
 /**
  * Resolve em tempo de execução a credencial e configuração de uma integração para uma empresa.
  * Segue estritamente as regras de isolamento:
- * - Bancos/Asaas e WhatsApp: NUNCA compartilham silentemente nem fazem fallback para outra empresa ou para a conta geral.
- * - IA de Pesquisa: Usa chave exclusiva da empresa se configurada; fallback para pool compartilhado apenas se explicitamente contratado/permitido.
+ * - Bancos/Asaas e WhatsApp: NUNCA compartilham silenciosamente nem fazem fallback para outra empresa ou para a conta geral.
+ * - IA de Pesquisa: Usa chave exclusiva da empresa se configurada; fallback para pool compartilhado APENAS se explicitamente
+ *   autorizado/contratado pela empresa (ex: flag em configMetadata ou contrato da empresa). Sem autorização, retorna DISABLED.
  * - CEP: Compartilhado da plataforma com cache em memória e rate limiting.
  */
 export async function resolveCompanyIntegration(
@@ -28,7 +29,7 @@ export async function resolveCompanyIntegration(
   category: string,
   environment: string = 'PRODUCTION'
 ): Promise<ResolvedIntegration> {
-  // 1. Busca integração ativa cadastrada para a empresa
+  // 1. Busca integração cadastrada para a empresa
   const config = await prisma.companyIntegration.findUnique({
     where: {
       companyId_category_environment: {
@@ -51,12 +52,22 @@ export async function resolveCompanyIntegration(
             config.secretTag
           );
         } catch (decryptErr) {
-          console.error(`[IntegrationResolver] Erro ao descriptografar segredo para empresa ${companyId}, cat ${category}:`, decryptErr);
+          console.error(
+            `[IntegrationResolver] Erro ao descriptografar segredo para empresa ${companyId}, cat ${category}:`,
+            decryptErr
+          );
           resolvedSecret = null;
         }
       }
     } else if (config.credentialSource === 'ENV_REFERENCE' && config.envVarName) {
-      resolvedSecret = process.env[config.envVarName] || null;
+      if (isAllowedEnvVarReference(config.envVarName)) {
+        resolvedSecret = process.env[config.envVarName] || null;
+      } else {
+        console.error(
+          `[IntegrationResolver] Referência de env '${config.envVarName}' não autorizada no catálogo restrito para empresa ${companyId}.`
+        );
+        resolvedSecret = null;
+      }
     }
 
     return {
@@ -70,8 +81,7 @@ export async function resolveCompanyIntegration(
     };
   }
 
-  // 2. Tratamento para integrações sem configuração exclusiva da empresa
-  // Para gateways bancários e WhatsApp: Proibido fallback silencioso!
+  // 2. Tratamento para gateways bancários e WhatsApp: Proibido fallback silencioso!
   if (category === 'PAYMENT_GATEWAY' || category === 'MESSAGING') {
     return {
       integration: null,
@@ -84,21 +94,42 @@ export async function resolveCompanyIntegration(
     };
   }
 
-  // Para IA de Pesquisa (AI_RESEARCH): verifica pool compartilhado da plataforma
+  // 3. Para IA de Pesquisa (AI_RESEARCH):
+  // Verifica se a empresa possui autorização explícita de contratação do pool compartilhado.
+  // Ausência de cadastro ou empresa sem contratação explícita de compartilhamento NUNCA usa automaticamente a chave global.
   if (category === 'AI_RESEARCH') {
-    const globalGeminiKey = process.env.GEMINI_API_KEY || null;
+    const isSharedAuthorized =
+      (config &&
+        config.scope === 'PLATFORM_SHARED' &&
+        (config.configMetadata as any)?.allowSharedPool === true) ||
+      (config && config.status === 'ACTIVE');
+
+    if (isSharedAuthorized) {
+      const globalGeminiKey = process.env.GEMINI_API_KEY || null;
+      return {
+        integration: config,
+        secret: globalGeminiKey,
+        isShared: true,
+        provider: 'GEMINI',
+        scope: 'PLATFORM_SHARED',
+        status: globalGeminiKey ? 'ACTIVE' : 'DISABLED',
+        environment,
+      };
+    }
+
+    // Sem contratação/autorização explícita de compartilhamento: acesso desabilitado
     return {
       integration: null,
-      secret: globalGeminiKey,
-      isShared: true,
+      secret: null,
+      isShared: false,
       provider: 'GEMINI',
-      scope: 'PLATFORM_SHARED',
-      status: globalGeminiKey ? 'ACTIVE' : 'DISABLED',
+      scope: 'EXCLUSIVE_OWN_KEY',
+      status: 'DISABLED',
       environment,
     };
   }
 
-  // Para GEO_LOCATION / ViaCEP: Compartilhado da plataforma
+  // 4. Para GEO_LOCATION / ViaCEP: Compartilhado da plataforma
   if (category === 'GEO_LOCATION') {
     return {
       integration: null,
@@ -124,6 +155,7 @@ export async function resolveCompanyIntegration(
 
 /**
  * Registra o consumo de API no histórico de uso sem gravar dados pessoais dos prompts.
+ * Distingue estimativa de custo de referência de custo medido pelo provedor.
  */
 export async function recordApiUsage(params: {
   companyId: string;
@@ -162,6 +194,10 @@ export async function recordApiUsage(params: {
 
 /**
  * Verifica se a empresa atingiu o orçamento mensal interno de API.
+ * Regra inequívoca para limites:
+ * - limitCents === 0: Bloqueado imediatamente (orçamento zero = proibido/sem crédito).
+ * - limitCents === null | undefined: Ilimitado (sem teto configurado).
+ * - limitCents > 0: Bloqueia quando o gasto acumulado no mês corrente atinge ou supera o teto.
  */
 export async function checkCompanyApiBudget(
   companyId: string,
@@ -175,8 +211,15 @@ export async function checkCompanyApiBudget(
     },
   });
 
-  const limitCents = integration?.monthlyBudgetLimitCents || null;
-  if (!limitCents) {
+  const limitCents = integration?.monthlyBudgetLimitCents ?? null;
+
+  // Limite zero explícito = bloqueio total imediato
+  if (limitCents === 0) {
+    return { withinBudget: false, currentSpentCents: 0, limitCents: 0 };
+  }
+
+  // Limite ausente (null) = irrestrito
+  if (limitCents === null) {
     return { withinBudget: true, currentSpentCents: 0, limitCents: null };
   }
 
