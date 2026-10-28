@@ -2300,6 +2300,11 @@ class ApiService {
       final resp = await _dio.post('/owner/integrations/$id/test');
       return Map<String, dynamic>.from(resp.data['testResult'] ?? {});
     } on DioException catch (e) {
+      if (e.response?.statusCode == 422 &&
+          e.response?.data is Map &&
+          e.response?.data['testResult'] != null) {
+        return Map<String, dynamic>.from(e.response!.data['testResult']);
+      }
       throw Exception(_extractError(e));
     }
   }
@@ -2338,14 +2343,43 @@ class ApiService {
       );
       return Map<String, dynamic>.from(resp.data['report'] ?? {});
     } on DioException catch (e) {
+      if (e.response?.statusCode == 422 &&
+          e.response?.data is Map &&
+          e.response?.data['report'] != null) {
+        return Map<String, dynamic>.from(e.response!.data['report']);
+      }
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Atualizar parâmetros não-secretos e metadados de configuração (requer Step-Up Auth)
+  Future<Map<String, dynamic>> updateIntegrationMetadata(
+    String id,
+    Map<String, dynamic> data, {
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+
+      final resp = await _dio.put(
+        '/owner/integrations/$id',
+        data: data,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
   }
 
   /// Obter relatório de prontidão para entrada futura em modo LIVE
-  Future<Map<String, dynamic>> getAsaasLiveReadinessReport() async {
+  Future<Map<String, dynamic>> getAsaasLiveReadinessReport({String? companyId}) async {
     try {
-      final resp = await _dio.get('/owner/integrations/sandbox/readiness-report');
+      final resp = await _dio.get(
+        '/owner/integrations/sandbox/readiness-report',
+        queryParameters: companyId != null ? {'companyId': companyId} : null,
+      );
       return Map<String, dynamic>.from(resp.data['readinessReport'] ?? {});
     } on DioException catch (e) {
       throw Exception(_extractError(e));

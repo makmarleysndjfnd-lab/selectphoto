@@ -1,5 +1,9 @@
 import { PrismaClient, CompanyIntegration } from '@prisma/client';
-import { decryptSecret, isAllowedEnvVarReference } from './vaultService';
+import {
+  decryptSecret,
+  isAllowedEnvVarReference,
+  isAllowedEnvVarForIntegration,
+} from './vaultService';
 
 const prisma = new PrismaClient();
 
@@ -40,6 +44,20 @@ export async function resolveCompanyIntegration(
     },
   });
 
+  // Se a empresa possui cadastro e ele NÃO está ativo (ex: DISABLED, REVOKED, TESTING),
+  // INTERROMPE IMEDIATAMENTE. Proibido qualquer fallback ou compartilhamento!
+  if (config && config.status !== 'ACTIVE') {
+    return {
+      integration: config,
+      secret: null,
+      isShared: false,
+      provider: config.provider,
+      scope: config.scope,
+      status: config.status,
+      environment: config.environment,
+    };
+  }
+
   if (config && config.status === 'ACTIVE') {
     let resolvedSecret: string | null = null;
 
@@ -60,23 +78,70 @@ export async function resolveCompanyIntegration(
         }
       }
     } else if (config.credentialSource === 'ENV_REFERENCE' && config.envVarName) {
-      if (isAllowedEnvVarReference(config.envVarName)) {
+      const checkEnv = isAllowedEnvVarForIntegration({
+        varName: config.envVarName,
+        category,
+        provider: config.provider,
+        environment: config.environment,
+      });
+
+      const hasRequiredAccountBinding =
+        (config.scope !== 'COMPANY_EXCLUSIVE' && config.scope !== 'EXCLUSIVE_OWN_KEY') ||
+        Boolean(config.accountName && config.accountName.trim());
+
+      if (checkEnv.allowed && hasRequiredAccountBinding) {
         resolvedSecret = process.env[config.envVarName] || null;
       } else {
         console.error(
-          `[IntegrationResolver] Referência de env '${config.envVarName}' não autorizada no catálogo restrito para empresa ${companyId}.`
+          `[IntegrationResolver] Referência de env '${config.envVarName}' inválida/sem vínculo para empresa ${companyId} (${checkEnv.reason || 'accountName ausente'}).`
         );
         resolvedSecret = null;
       }
     }
 
+    // Se possui chave exclusiva válida, retorna
+    if (resolvedSecret) {
+      return {
+        integration: config,
+        secret: resolvedSecret,
+        isShared: false,
+        provider: config.provider,
+        scope: config.scope,
+        status: config.status,
+        environment: config.environment,
+      };
+    }
+
+    // Se é PLATFORM_SHARED ativo para AI_RESEARCH com contratação explícita gravada
+    if (
+      category === 'AI_RESEARCH' &&
+      config.scope === 'PLATFORM_SHARED' &&
+      (config.configMetadata as any)?.allowSharedPool === true
+    ) {
+      const globalKey =
+        config.provider === 'GROK'
+          ? process.env.GROK_API_KEY || null
+          : process.env.GEMINI_API_KEY || null;
+
+      return {
+        integration: config,
+        secret: globalKey,
+        isShared: true,
+        provider: config.provider,
+        scope: 'PLATFORM_SHARED',
+        status: globalKey ? 'ACTIVE' : 'DISABLED',
+        environment,
+      };
+    }
+
+    // Possui cadastro ACTIVE mas sem segredo decifrável ou sem compartilhamento contratado
     return {
       integration: config,
-      secret: resolvedSecret,
-      isShared: config.scope === 'PLATFORM_SHARED' || config.scope === 'SHARED_CONTROLLED',
+      secret: null,
+      isShared: false,
       provider: config.provider,
       scope: config.scope,
-      status: config.status,
+      status: 'DISABLED',
       environment: config.environment,
     };
   }
@@ -95,29 +160,8 @@ export async function resolveCompanyIntegration(
   }
 
   // 3. Para IA de Pesquisa (AI_RESEARCH):
-  // Verifica se a empresa possui autorização explícita de contratação do pool compartilhado.
-  // Ausência de cadastro ou empresa sem contratação explícita de compartilhamento NUNCA usa automaticamente a chave global.
+  // Sem cadastro ativo prévio com contratação explícita de compartilhamento, NUNCA usa chave global!
   if (category === 'AI_RESEARCH') {
-    const isSharedAuthorized =
-      (config &&
-        config.scope === 'PLATFORM_SHARED' &&
-        (config.configMetadata as any)?.allowSharedPool === true) ||
-      (config && config.status === 'ACTIVE');
-
-    if (isSharedAuthorized) {
-      const globalGeminiKey = process.env.GEMINI_API_KEY || null;
-      return {
-        integration: config,
-        secret: globalGeminiKey,
-        isShared: true,
-        provider: 'GEMINI',
-        scope: 'PLATFORM_SHARED',
-        status: globalGeminiKey ? 'ACTIVE' : 'DISABLED',
-        environment,
-      };
-    }
-
-    // Sem contratação/autorização explícita de compartilhamento: acesso desabilitado
     return {
       integration: null,
       secret: null,
@@ -201,17 +245,26 @@ export async function recordApiUsage(params: {
  */
 export async function checkCompanyApiBudget(
   companyId: string,
-  category: string
+  category: string,
+  environment?: string
 ): Promise<{ withinBudget: boolean; currentSpentCents: number; limitCents: number | null }> {
-  const integration = await prisma.companyIntegration.findFirst({
+  const candidates = await prisma.companyIntegration.findMany({
     where: {
       companyId,
       category,
-      status: 'ACTIVE',
+      ...(environment ? { environment } : {}),
     },
   });
 
-  const limitCents = integration?.monthlyBudgetLimitCents ?? null;
+  const integration =
+    candidates.find((c) => c.status === 'ACTIVE') ||
+    candidates.find((c) => c.status !== 'REVOKED') ||
+    null;
+
+  const limitCents =
+    integration && integration.monthlyBudgetLimitCents !== null && integration.monthlyBudgetLimitCents !== undefined
+      ? integration.monthlyBudgetLimitCents
+      : null;
 
   // Limite zero explícito = bloqueio total imediato
   if (limitCents === 0) {

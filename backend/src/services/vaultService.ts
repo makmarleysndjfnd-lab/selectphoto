@@ -16,22 +16,114 @@ export class VaultConfigurationError extends Error {
 }
 
 /**
- * Catálogo restrito de variáveis de ambiente autorizadas para referência externa (ENV_REFERENCE).
- * Impede que variáveis sensíveis do sistema (como DATABASE_URL ou JWT_SECRET) sejam expostas ou referenciadas.
+ * Catálogo restrito e tipado de variáveis de ambiente autorizadas para referência externa (ENV_REFERENCE).
+ * Impede que variáveis sensíveis do sistema (como DATABASE_URL ou JWT_SECRET) sejam expostas
+ * e impede associação indevida entre provedores e categorias diferentes.
  */
-export const ALLOWED_ENV_VAR_REFERENCES = [
-  'GEMINI_API_KEY',
-  'GROK_API_KEY',
-  'ASAAS_SANDBOX_API_KEY',
-  'ASAAS_SANDBOX_WEBHOOK_TOKEN',
-  'META_WHATSAPP_TOKEN',
+export interface ScopedEnvVarDescriptor {
+  varName: string;
+  category: string;
+  provider: string;
+  environment: 'SANDBOX' | 'PRODUCTION' | 'ALL';
+  purpose: string;
+}
+
+export const SCOPED_ALLOWED_ENV_VARS: readonly ScopedEnvVarDescriptor[] = [
+  {
+    varName: 'GEMINI_API_KEY',
+    category: 'AI_RESEARCH',
+    provider: 'GEMINI',
+    environment: 'ALL',
+    purpose: 'Chave da plataforma para pesquisa comercial com Google Gemini',
+  },
+  {
+    varName: 'GROK_API_KEY',
+    category: 'AI_RESEARCH',
+    provider: 'GROK',
+    environment: 'ALL',
+    purpose: 'Chave da plataforma para pesquisa comercial com xAI Grok',
+  },
+  {
+    varName: 'ASAAS_SANDBOX_API_KEY',
+    category: 'PAYMENT_GATEWAY',
+    provider: 'ASAAS',
+    environment: 'SANDBOX',
+    purpose: 'Chave para homologação bancária no Asaas Sandbox',
+  },
+  {
+    varName: 'ASAAS_SANDBOX_WEBHOOK_TOKEN',
+    category: 'PAYMENT_GATEWAY',
+    provider: 'ASAAS',
+    environment: 'SANDBOX',
+    purpose: 'Token de assinatura de webhook do Asaas Sandbox',
+  },
+  {
+    varName: 'META_WHATSAPP_TOKEN',
+    category: 'MESSAGING',
+    provider: 'META_WHATSAPP',
+    environment: 'ALL',
+    purpose: 'Token corporativo de mensageria WhatsApp Meta',
+  },
 ] as const;
+
+export const ALLOWED_ENV_VAR_REFERENCES = SCOPED_ALLOWED_ENV_VARS.map((s) => s.varName);
 
 export type AllowedEnvVar = typeof ALLOWED_ENV_VAR_REFERENCES[number];
 
 export function isAllowedEnvVarReference(varName: string): boolean {
   if (!varName) return false;
   return (ALLOWED_ENV_VAR_REFERENCES as readonly string[]).includes(varName.trim());
+}
+
+/**
+ * Validação contextual de variável de ambiente por categoria, provedor e ambiente.
+ * Garante que uma chave de Asaas não seja vinculada a Gemini, ou vice-versa.
+ */
+export function isAllowedEnvVarForIntegration(params: {
+  varName: string;
+  category: string;
+  provider: string;
+  environment?: string;
+}): { allowed: boolean; reason?: string } {
+  const cleanVar = params.varName?.trim();
+  if (!cleanVar) {
+    return { allowed: false, reason: 'Nome da variável de ambiente não informado.' };
+  }
+
+  const descriptor = SCOPED_ALLOWED_ENV_VARS.find((d) => d.varName === cleanVar);
+  if (!descriptor) {
+    return {
+      allowed: false,
+      reason: `Variável '${cleanVar}' não autorizada no catálogo restrito de infraestrutura.`,
+    };
+  }
+
+  if (descriptor.category !== params.category) {
+    return {
+      allowed: false,
+      reason: `Variável '${cleanVar}' pertence à categoria ${descriptor.category}, incompatível com ${params.category}.`,
+    };
+  }
+
+  if (descriptor.provider !== params.provider) {
+    return {
+      allowed: false,
+      reason: `Variável '${cleanVar}' pertence ao provedor ${descriptor.provider}, incompatível com ${params.provider}.`,
+    };
+  }
+
+  if (
+    descriptor.environment !== 'ALL' &&
+    params.environment &&
+    descriptor.environment !== params.environment
+  ) {
+    return {
+      allowed: false,
+      reason: `Variável '${cleanVar}' é restrita ao ambiente ${descriptor.environment}, incompatível com ${params.environment}.`,
+    };
+  }
+
+  return { allowed: true };
 }
 
 /**

@@ -40,6 +40,9 @@ export interface AsaasConfigData {
   apiKey?: string | null;
   webhookToken?: string | null;
   walletId?: string | null;
+  integrationId?: string | null;
+  accountName?: string | null;
+  environment?: 'SANDBOX' | 'PRODUCTION' | null;
 }
 
 /**
@@ -52,44 +55,211 @@ export function getAsaasBaseUrl(mode: AsaasMode): string {
   return 'https://api.asaas.com/v3';
 }
 
+import { decryptSecret } from './vaultService';
+
 /**
- * Recupera as configurações do Asaas para uma empresa.
- * Prioriza a Central de Integrações (CompanyIntegration).
- * Se ausente, recorre à tabela legada AsaasConfig preservando referências históricas.
- * REMOVIDO qualquer fallback para chave global ASAAS_API_KEY no runtime multi-empresa.
+ * Verifica se a trava global de operação LIVE está ativa no ambiente.
+ * Permanece ativa por padrão até habilitação explícita autorizada em etapa futura.
  */
-export async function getCompanyAsaasConfig(companyId: string): Promise<AsaasConfigData> {
-  // 1. Prioridade: Central de Integrações (CompanyIntegration via Vault)
-  try {
-    const prodResolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'PRODUCTION');
-    if (prodResolved && prodResolved.status === 'ACTIVE' && prodResolved.secret) {
-      return {
-        mode: 'PRODUCTION',
-        apiKey: prodResolved.secret,
-        webhookToken: (prodResolved.integration?.configMetadata as any)?.webhookToken || null,
-        walletId: (prodResolved.integration?.configMetadata as any)?.walletId || null,
-      };
+export function isGlobalLiveGateLocked(): boolean {
+  return process.env.ASAAS_ALLOW_LIVE_OPERATIONS !== 'true';
+}
+
+function extractWebhookTokenFromMetadata(configMetadata: any): string | null {
+  if (!configMetadata) return null;
+  if (configMetadata.encryptedWebhookToken && configMetadata.webhookIv && configMetadata.webhookTag) {
+    try {
+      return decryptSecret(
+        configMetadata.encryptedWebhookToken,
+        configMetadata.webhookIv,
+        configMetadata.webhookTag
+      );
+    } catch {
+      return null;
+    }
+  }
+  return configMetadata.webhookToken || null;
+}
+
+/**
+ * Verifica dinamicamente o status efetivo da guarda de segurança de produção (Asaas LIVE).
+ * Reflete a guarda e a configuração real em vigor; nunca retorna booleano fixo.
+ */
+export async function isProductionSafetyLocked(companyId?: string): Promise<{
+  locked: boolean;
+  reason: string;
+  globalLiveGateLocked: boolean;
+  financialLiveAuthorized: boolean;
+  activeLiveIntegrationFound: boolean;
+}> {
+  const globalGateLocked = isGlobalLiveGateLocked();
+
+  if (companyId) {
+    const prodIntegration = await prisma.companyIntegration.findFirst({
+      where: { companyId, category: 'PAYMENT_GATEWAY', environment: 'PRODUCTION' },
+    });
+    const isLiveAuth = Boolean((prodIntegration?.configMetadata as any)?.financialLiveAuthorized === true);
+    const isActive = prodIntegration?.status === 'ACTIVE';
+    const effectiveConfig = await getCompanyAsaasConfig(companyId, 'PRODUCTION');
+    const locked = effectiveConfig.mode !== 'PRODUCTION';
+
+    let reason = 'Operação LIVE habilitada sob autorização explícita.';
+    if (locked) {
+      if (globalGateLocked) {
+        reason = 'Guarda global ativa: Operações financeiras LIVE bloqueadas nesta etapa (ASAAS_ALLOW_LIVE_OPERATIONS inativo).';
+      } else if (!isActive) {
+        reason = 'Integração de produção inexistente ou desativada na Central.';
+      } else if (!isLiveAuth) {
+        reason = 'Credencial de produção cadastrada, mas sem autorização financeira explícita (financialLiveAuthorized=false).';
+      } else {
+        reason = 'Credencial de produção ausente ou inválida no Vault.';
+      }
     }
 
-    const sandboxResolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'SANDBOX');
-    if (sandboxResolved && sandboxResolved.status === 'ACTIVE' && sandboxResolved.secret) {
-      return {
-        mode: 'SANDBOX',
-        apiKey: sandboxResolved.secret,
-        webhookToken: (sandboxResolved.integration?.configMetadata as any)?.webhookToken || null,
-        walletId: (sandboxResolved.integration?.configMetadata as any)?.walletId || null,
-      };
+    return {
+      locked,
+      reason,
+      globalLiveGateLocked: globalGateLocked,
+      financialLiveAuthorized: isLiveAuth,
+      activeLiveIntegrationFound: isActive,
+    };
+  }
+
+  const activeProdIntegrations = await prisma.companyIntegration.findMany({
+    where: { category: 'PAYMENT_GATEWAY', environment: 'PRODUCTION', status: 'ACTIVE' },
+    select: { companyId: true, configMetadata: true },
+  });
+
+  let anyAuthorizedAndUnlocked = false;
+  let anyLiveAuthorized = false;
+
+  for (const integ of activeProdIntegrations) {
+    const authorized = Boolean((integ.configMetadata as any)?.financialLiveAuthorized === true);
+    if (authorized) {
+      anyLiveAuthorized = true;
+      const effective = await getCompanyAsaasConfig(integ.companyId, 'PRODUCTION');
+      if (effective.mode === 'PRODUCTION') {
+        anyAuthorizedAndUnlocked = true;
+      }
+    }
+  }
+
+  const locked = !anyAuthorizedAndUnlocked;
+  const reason = locked
+    ? globalGateLocked
+      ? 'Guarda global ativa: Faturamento LIVE bloqueado (ASAAS_ALLOW_LIVE_OPERATIONS inativo).'
+      : 'Nenhuma empresa possui integração LIVE simultaneamente ativa, validada e com autorização financeira explícita.'
+    : 'Atenção: Ao menos uma empresa possui operação LIVE efetivamente habilitada.';
+
+  return {
+    locked,
+    reason,
+    globalLiveGateLocked: globalGateLocked,
+    financialLiveAuthorized: anyLiveAuthorized,
+    activeLiveIntegrationFound: activeProdIntegrations.length > 0,
+  };
+}
+
+/**
+ * Recupera as configurações do Asaas para uma empresa com seleção explícita de ambiente.
+ * Prioridade absoluta: Central de Integrações (CompanyIntegration).
+ *
+ * Regras estritas:
+ * 1. NUNCA escolhe Sandbox automaticamente na operação real só porque a credencial de produção está ausente.
+ * 2. Desativação/revogação na Central NÃO pode ser anulada por fallback na tabela legada.
+ * 3. Produção exige status ACTIVE + autorização financeira explícita (financialLiveAuthorized: true) + liberação da trava global LIVE.
+ * 4. Tabela legada AsaasConfig só é consultada se a empresa NÃO tiver nenhum registro em CompanyIntegration.
+ */
+export async function getCompanyAsaasConfig(
+  companyId: string,
+  requestedEnv?: 'PRODUCTION' | 'SANDBOX'
+): Promise<AsaasConfigData> {
+  // 1. Central de Integrações (CompanyIntegration) como fonte única da verdade
+  try {
+    const centralIntegrations = await prisma.companyIntegration.findMany({
+      where: { companyId, category: 'PAYMENT_GATEWAY' },
+    });
+
+    if (centralIntegrations.length > 0) {
+      // Seleção explícita de ambiente: se não informada pela chamada, a operação real mira PRODUCTION,
+      // exceto se a governança da empresa declarar explicitamente operationalFinancialMode === 'SANDBOX'.
+      let targetEnv: 'PRODUCTION' | 'SANDBOX' = 'PRODUCTION';
+      if (requestedEnv) {
+        targetEnv = requestedEnv;
+      } else {
+        const explicitSandboxOp = centralIntegrations.find(
+          (i) =>
+            i.environment === 'SANDBOX' &&
+            i.status === 'ACTIVE' &&
+            (i.configMetadata as any)?.operationalFinancialMode === 'SANDBOX'
+        );
+        targetEnv = explicitSandboxOp ? 'SANDBOX' : 'PRODUCTION';
+      }
+
+      if (targetEnv === 'PRODUCTION') {
+        if (isGlobalLiveGateLocked()) {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        const prod = centralIntegrations.find((i) => i.environment === 'PRODUCTION');
+        if (!prod || prod.status !== 'ACTIVE') {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        const isLiveAuthorized = Boolean((prod.configMetadata as any)?.financialLiveAuthorized === true);
+        if (!isLiveAuthorized) {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        const resolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'PRODUCTION');
+        if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        return {
+          mode: 'PRODUCTION',
+          apiKey: resolved.secret,
+          webhookToken: extractWebhookTokenFromMetadata(resolved.integration?.configMetadata),
+          walletId: (resolved.integration?.configMetadata as any)?.walletId || null,
+          integrationId: resolved.integration?.id || prod.id,
+          accountName: resolved.integration?.accountName || prod.accountName || null,
+          environment: 'PRODUCTION',
+        };
+      }
+
+      if (targetEnv === 'SANDBOX') {
+        const sb = centralIntegrations.find((i) => i.environment === 'SANDBOX');
+        if (!sb || sb.status !== 'ACTIVE') {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        // Quando chamada sem requestedEnv explícito, exige habilitação operacional explícita
+        if (!requestedEnv && (sb.configMetadata as any)?.operationalFinancialMode !== 'SANDBOX') {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        const resolved = await resolveCompanyIntegration(companyId, 'PAYMENT_GATEWAY', 'SANDBOX');
+        if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
+          return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+        }
+        return {
+          mode: 'SANDBOX',
+          apiKey: resolved.secret,
+          webhookToken: extractWebhookTokenFromMetadata(resolved.integration?.configMetadata),
+          walletId: (resolved.integration?.configMetadata as any)?.walletId || null,
+          integrationId: resolved.integration?.id || sb.id,
+          accountName: resolved.integration?.accountName || sb.accountName || null,
+          environment: 'SANDBOX',
+        };
+      }
+
+      return { mode: 'DISABLED', apiKey: null, webhookToken: null };
     }
   } catch (err) {
     console.error(`[AsaasService] Erro ao resolver CompanyIntegration para ${companyId}:`, err);
+    return { mode: 'DISABLED', apiKey: null, webhookToken: null };
   }
 
-  // 2. Compatibilidade legada com tabela AsaasConfig da empresa
+  // 2. Compatibilidade legada com tabela AsaasConfig (SOMENTE se empresa não tiver registro em CompanyIntegration)
   const config = await prisma.asaasConfig.findUnique({
     where: { companyId },
   });
 
-  if (!config) {
+  if (!config || config.mode === 'DISABLED') {
     return {
       mode: 'DISABLED',
       apiKey: null,
@@ -97,12 +267,103 @@ export async function getCompanyAsaasConfig(companyId: string): Promise<AsaasCon
     };
   }
 
+  // Modo legado PRODUCTION jamais habilita LIVE sem governança e autorização explícita na Central
+  if (config.mode === 'PRODUCTION') {
+    return {
+      mode: 'DISABLED',
+      apiKey: null,
+      webhookToken: null,
+    };
+  }
+
+  if (config.mode === 'SANDBOX') {
+    if (requestedEnv && requestedEnv !== 'SANDBOX') {
+      return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+    }
+    return {
+      mode: 'SANDBOX',
+      apiKey: config.apiKey || null,
+      webhookToken: config.webhookToken || null,
+      walletId: config.walletId,
+      integrationId: `legacy_${config.id}`,
+      accountName: null,
+      environment: 'SANDBOX',
+    };
+  }
+
   return {
-    mode: (config.mode as AsaasMode) || 'DISABLED',
-    apiKey: config.apiKey || null,
-    webhookToken: config.webhookToken || null,
-    walletId: config.walletId,
+    mode: 'DISABLED',
+    apiKey: null,
+    webhookToken: null,
   };
+}
+
+/**
+ * Resolve a configuração preservando estritamente o ambiente e a conta emissora original de cobranças já emitidas.
+ * Evita que mudanças posteriores de credencial/ambiente enviem mutações de cobranças antigas para outra conta ou ambiente.
+ */
+export async function getCompanyAsaasConfigForExistingCharge(
+  companyId: string,
+  asaasPaymentId: string
+): Promise<AsaasConfigData> {
+  const existingCharge = await prisma.asaasCharge.findFirst({
+    where: { companyId, externalId: asaasPaymentId },
+  });
+
+  let originEnv: 'SANDBOX' | 'PRODUCTION' | undefined;
+  let originWalletId: string | null = null;
+  let originAccountName: string | null = null;
+
+  if (existingCharge) {
+    const urls = `${existingCharge.bankSlipUrl || ''} ${existingCharge.invoiceUrl || ''}`.toLowerCase();
+    if (urls.includes('sandbox.asaas.com')) {
+      originEnv = 'SANDBOX';
+    } else if (urls.includes('asaas.com')) {
+      originEnv = 'PRODUCTION';
+    }
+
+    const createSyncEntry = await prisma.asaasSyncQueue.findFirst({
+      where: {
+        companyId,
+        installmentId: existingCharge.installmentId,
+        action: 'CREATE_CHARGE',
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const syncMeta = (createSyncEntry?.payload as any)?.__originMeta;
+    if (syncMeta) {
+      if (syncMeta.environment === 'SANDBOX' || syncMeta.environment === 'PRODUCTION') {
+        originEnv = syncMeta.environment;
+      }
+      if (syncMeta.walletId) originWalletId = String(syncMeta.walletId);
+      if (syncMeta.accountName) originAccountName = String(syncMeta.accountName);
+    }
+  }
+
+  const config = originEnv
+    ? await getCompanyAsaasConfig(companyId, originEnv)
+    : await getCompanyAsaasConfig(companyId);
+
+  if (config.mode === 'DISABLED') {
+    return config;
+  }
+
+  // Se a cobrança antiga registrou conta/carteira emissora específica diferente da atual, bloqueia mutação cruzada
+  if (originWalletId && config.walletId && originWalletId !== config.walletId) {
+    console.warn(
+      `[AsaasService] Preservação de conta emissora: cobrança ${asaasPaymentId} emitida na carteira ${originWalletId}, distinta da carteira ativa ${config.walletId}. Mutação bloqueada.`
+    );
+    return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+  }
+  if (originAccountName && config.accountName && originAccountName !== config.accountName) {
+    console.warn(
+      `[AsaasService] Preservação de conta emissora: cobrança ${asaasPaymentId} emitida na conta '${originAccountName}', distinta da conta ativa '${config.accountName}'. Mutação bloqueada.`
+    );
+    return { mode: 'DISABLED', apiKey: null, webhookToken: null };
+  }
+
+  return config;
 }
 
 /**
@@ -388,7 +649,7 @@ export async function notifyAsaasReceiveInCash(
   paymentDate: string,
   value: number
 ): Promise<any> {
-  const config = await getCompanyAsaasConfig(companyId);
+  const config = await getCompanyAsaasConfigForExistingCharge(companyId, asaasPaymentId);
   if (config.mode === 'DISABLED') return { success: true };
 
   return asaasRequest(config, `/payments/${asaasPaymentId}/receiveInCash`, 'POST', {
@@ -406,7 +667,7 @@ export async function updateAsaasPayment(
   asaasPaymentId: string,
   data: { value?: number; dueDate?: string }
 ): Promise<any> {
-  const config = await getCompanyAsaasConfig(companyId);
+  const config = await getCompanyAsaasConfigForExistingCharge(companyId, asaasPaymentId);
   if (config.mode === 'DISABLED') return { success: true };
 
   return asaasRequest(config, `/payments/${asaasPaymentId}`, 'POST', data);
@@ -419,7 +680,7 @@ export async function cancelAsaasPayment(
   companyId: string,
   asaasPaymentId: string
 ): Promise<any> {
-  const config = await getCompanyAsaasConfig(companyId);
+  const config = await getCompanyAsaasConfigForExistingCharge(companyId, asaasPaymentId);
   if (config.mode === 'DISABLED') return { success: true };
 
   try {
@@ -439,7 +700,7 @@ export async function refundAsaasPayment(
   value?: number,
   description?: string
 ): Promise<any> {
-  const config = await getCompanyAsaasConfig(companyId);
+  const config = await getCompanyAsaasConfigForExistingCharge(companyId, asaasPaymentId);
   if (config.mode === 'DISABLED') {
     return { status: 'REFUND_PROCESSING', mode: 'DISABLED' };
   }
@@ -462,6 +723,22 @@ export async function enqueueAsaasSync(params: {
   idempotencyKey: string;
 }): Promise<void> {
   try {
+    let enrichedPayload = params.payload;
+    if (params.action === 'CREATE_CHARGE' && params.payload && typeof params.payload === 'object' && !params.payload.__originMeta) {
+      const activeConfig = await getCompanyAsaasConfig(params.companyId);
+      if (activeConfig.mode !== 'DISABLED') {
+        enrichedPayload = {
+          ...params.payload,
+          __originMeta: {
+            environment: activeConfig.environment || activeConfig.mode,
+            walletId: activeConfig.walletId || null,
+            accountName: activeConfig.accountName || null,
+            integrationId: activeConfig.integrationId || null,
+          },
+        };
+      }
+    }
+
     await prisma.asaasSyncQueue.upsert({
       where: { idempotencyKey: params.idempotencyKey },
       create: {
@@ -469,12 +746,12 @@ export async function enqueueAsaasSync(params: {
         agreementId: params.agreementId,
         installmentId: params.installmentId,
         action: params.action,
-        payload: params.payload,
+        payload: enrichedPayload,
         status: 'PENDING',
         idempotencyKey: params.idempotencyKey,
       },
       update: {
-        payload: params.payload,
+        payload: enrichedPayload,
         status: 'PENDING',
       },
     });
@@ -533,7 +810,14 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
 
   for (const item of pendingItems) {
     try {
-      const config = await getCompanyAsaasConfig(item.companyId);
+      const p: any = typeof item.payload === 'string' ? JSON.parse(item.payload) : (item.payload || {});
+      const isExistingChargeMutation =
+        (item.action === 'RECEIVE_IN_CASH' || item.action === 'UPDATE_CHARGE' || item.action === 'CANCEL_CHARGE') &&
+        Boolean(p.asaasPaymentId);
+
+      const config = isExistingChargeMutation
+        ? await getCompanyAsaasConfigForExistingCharge(item.companyId, p.asaasPaymentId)
+        : await getCompanyAsaasConfig(item.companyId);
 
       // Regra estrita: NÃO considerar tarefa bancária executada quando estiver desativada
       if (config.mode === 'DISABLED') {
@@ -541,13 +825,11 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
           where: { id: item.id },
           data: {
             status: 'PENDING_ACTIVATION',
-            lastError: 'Integração bancária Asaas está DESATIVADA. Tarefa mantida pendente de ativação.',
+            lastError: 'Integração bancária Asaas está DESATIVADA ou conta emissora divergente. Tarefa mantida pendente de ativação.',
           },
         });
         continue;
       }
-
-      const p: any = typeof item.payload === 'string' ? JSON.parse(item.payload) : (item.payload || {});
 
       switch (item.action) {
         case 'CREATE_CUSTOMER': {
@@ -634,7 +916,22 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
 
       await prisma.asaasSyncQueue.update({
         where: { id: item.id },
-        data: { status: 'SUCCESS' },
+        data: {
+          status: 'SUCCESS',
+          ...(item.action === 'CREATE_CHARGE' && !p.__originMeta
+            ? {
+                payload: {
+                  ...p,
+                  __originMeta: {
+                    environment: config.environment || config.mode,
+                    walletId: config.walletId || null,
+                    accountName: config.accountName || null,
+                    integrationId: config.integrationId || null,
+                  },
+                },
+              }
+            : {}),
+        },
       });
       processed++;
     } catch (err: any) {

@@ -131,18 +131,21 @@ export async function testViaCepConnection(): Promise<ConnectionTestResult> {
 }
 
 /**
- * Teste não destrutivo de conexão com o Asaas Sandbox (GET /customers?limit=1).
- * Utiliza o endpoint oficial centralizado: https://api-sandbox.asaas.com/v3
+ * Teste não destrutivo de conexão e validação de credencial com o Asaas (GET /customers?limit=1).
+ * Utiliza o endpoint oficial do ambiente selecionado (Sandbox ou Produção) apenas para leitura de autenticação,
+ * sem habilitar operações financeiras LIVE.
  */
 export async function testAsaasSandboxConnection(
   apiKey: string,
-  options?: AdapterTestOptions
+  options?: AdapterTestOptions & { environment?: 'SANDBOX' | 'PRODUCTION' }
 ): Promise<ConnectionTestResult> {
   const start = Date.now();
+  const targetEnv = options?.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
+  const envLabel = targetEnv === 'PRODUCTION' ? 'Asaas Produção (somente validação de credencial; LIVE permanece bloqueado)' : 'Asaas Sandbox';
   if (!apiKey || apiKey.trim().length < 10) {
     return {
       success: false,
-      message: 'Chave de API do Asaas Sandbox ausente ou inválida.',
+      message: `Chave de API do ${targetEnv === 'PRODUCTION' ? 'Asaas Produção' : 'Asaas Sandbox'} ausente ou inválida.`,
       latencyMs: 0,
     };
   }
@@ -151,13 +154,14 @@ export async function testAsaasSandboxConnection(
   if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão com Asaas Sandbox autenticada com sucesso (Ambiente de Teste Controlado).',
+      message: `Conexão com ${envLabel} autenticada com sucesso (Ambiente de Teste Controlado).`,
       latencyMs: options.mockLatencyMs ?? 25,
-      details: { environment: 'SANDBOX', authorized: true, simulated: true },
+      details: { environment: targetEnv, authorized: true, financialLiveEnabled: false, simulated: true },
     };
   }
 
-  const endpoint = `${ASAAS_SANDBOX_BASE_URL}/customers?limit=1`;
+  const baseUrl = targetEnv === 'PRODUCTION' ? ASAAS_PRODUCTION_BASE_URL : ASAAS_SANDBOX_BASE_URL;
+  const endpoint = `${baseUrl}/customers?limit=1`;
   try {
     const urlValidation = await validateExternalUrl(endpoint);
     if (!urlValidation.valid) {
@@ -173,7 +177,7 @@ export async function testAsaasSandboxConnection(
       headers: {
         'access_token': apiKey,
         'Content-Type': 'application/json',
-        'User-Agent': 'LumoraPlatform-SandboxTest/2.0',
+        'User-Agent': 'LumoraPlatform-CredentialCheck/2.0',
       },
     });
 
@@ -181,28 +185,31 @@ export async function testAsaasSandboxConnection(
     if (res.status === 200) {
       return {
         success: true,
-        message: 'Conexão e credenciais do Asaas Sandbox validadas com sucesso no endpoint oficial.',
+        message:
+          targetEnv === 'PRODUCTION'
+            ? 'Credencial Asaas Produção validada (somente leitura). Operações financeiras LIVE permanecem bloqueadas até autorização explícita.'
+            : 'Conexão e credenciais do Asaas Sandbox validadas com sucesso no endpoint oficial.',
         latencyMs,
-        details: { environment: 'SANDBOX', status: 'AUTHENTICATED' },
+        details: { environment: targetEnv, status: 'AUTHENTICATED', financialLiveEnabled: false },
       };
     } else if (res.status === 401 || res.status === 403) {
       return {
         success: false,
-        message: 'Chave do Asaas Sandbox recusada pelo provedor (401/403 Não Autorizado).',
+        message: `Chave do ${targetEnv === 'PRODUCTION' ? 'Asaas Produção' : 'Asaas Sandbox'} recusada pelo provedor (401/403 Não Autorizado).`,
         latencyMs,
       };
     } else {
       const body = await res.text().catch(() => '');
       return {
         success: false,
-        message: `Asaas Sandbox respondeu com erro (${res.status}): ${body.slice(0, 150)}`,
+        message: `Asaas (${targetEnv}) respondeu com erro (${res.status}): ${body.slice(0, 150)}`,
         latencyMs,
       };
     }
   } catch (err: any) {
     return {
       success: false,
-      message: `Falha de rede ao conectar com Asaas Sandbox: ${err.message}`,
+      message: `Falha de rede ao conectar com Asaas (${targetEnv}): ${err.message}`,
       latencyMs: Date.now() - start,
     };
   }
