@@ -384,7 +384,7 @@ class _TelaCarteiraCrediarioVendedorState
           children: [
             Expanded(
               child: _buildMetricCard(
-                'Comissão 10% (Pagas)',
+                'Comissão parcelas recebidas',
                 'R\$ ${comissaoMes.toStringAsFixed(2)}',
                 Icons.monetization_on_rounded,
                 const Color(0xFF00E676),
@@ -560,7 +560,7 @@ class _TelaCarteiraCrediarioVendedorState
                       style: const TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.w600),
                     ),
                     Text(
-                      '10% Pago: R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
+                      'Comissão parcelas recebidas: R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
                       style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.w600),
                     ),
                     Text(
@@ -767,7 +767,7 @@ class _TelaCarteiraCrediarioVendedorState
                               ? const Color(0xFFFFB74D)
                               : Colors.greenAccent),
                       _buildModalRow(
-                          'Comissão 10% (Parcelas Pagas)',
+                          'Comissão das parcelas recebidas',
                           'R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
                           color: const Color(0xFF00E5FF),
                           bold: true),

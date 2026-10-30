@@ -176,6 +176,30 @@ export function resolveRateForSaleDate<
   return null;
 }
 
+export function getPriorCompetence(competence: string): string {
+  const [yearStr, monthStr] = competence.split('-');
+  let year = parseInt(yearStr, 10);
+  let month = parseInt(monthStr, 10);
+  month -= 1;
+  if (month < 1) {
+    month = 12;
+    year -= 1;
+  }
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+export function getNextCompetence(competence: string): string {
+  const [yearStr, monthStr] = competence.split('-');
+  let year = parseInt(yearStr, 10);
+  let month = parseInt(monthStr, 10);
+  month += 1;
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
 /**
  * Encontra a próxima competência aberta (sem PlatformMonthlyStatement fechado)
  * a partir de uma competência mínima, avançando mês a mês no fuso America/Sao_Paulo.
@@ -325,13 +349,36 @@ async function computeFinancialBucketsAndPreviewData(
     where: {
       companyId,
       competence: { lt: competence },
+      status: { in: ['CLOSED', 'BILLED', 'PAID'] },
     },
-    select: { competence: true, carryForwardCreditCents: true },
+    select: { id: true, competence: true, carryForwardCreditCents: true },
     orderBy: { competence: 'desc' },
   });
   const priorClosedCompetences = new Set(priorClosedStatements.map((s) => s.competence));
   const latestPriorClosedStatement = priorClosedStatements[0] || null;
-  const incomingCreditCents = latestPriorClosedStatement?.carryForwardCreditCents || 0;
+
+  // Rastreabilidade e controle do saldo disponível:
+  // Se houver crédito transportado do demonstrativo anterior mais recente, deduz qualquer consumo
+  // que já tenha ocorrido em demonstrativos posteriores fechados (evita reaplicação fora de ordem).
+  let incomingCreditCents = latestPriorClosedStatement?.carryForwardCreditCents || 0;
+  if (incomingCreditCents > 0 && latestPriorClosedStatement) {
+    const consumedAdjustments = await db.platformStatementAdjustment.findMany({
+      where: {
+        companyId,
+        type: 'CARRY_FORWARD_CREDIT_APPLIED',
+        appliedCompetence: { gt: latestPriorClosedStatement.competence, not: competence },
+        appliedStatement: {
+          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+        },
+      },
+      select: { amountCents: true },
+    });
+    const alreadyConsumedAfterPrior = consumedAdjustments.reduce(
+      (sum, adj) => sum + Math.abs(adj.amountCents),
+      0
+    );
+    incomingCreditCents = Math.max(0, incomingCreditCents - alreadyConsumedAfterPrior);
+  }
 
   // Filtra unbilled past sales cuja competência original já tenha sido definitivamente fechada
   const lateUnbilledSales = unbilledPastSales.filter((s) =>
@@ -1057,6 +1104,56 @@ export async function closeCompanyMonthlyStatement(
         );
         err.status = 422;
         err.code = 'COMPETENCE_NOT_ENDED';
+        throw err;
+      }
+
+      // Guarda de ordem cronológica 1: Impede fechamento retroativo se já existir competência posterior fechada
+      const subsequentClosed = await tx.platformMonthlyStatement.findFirst({
+        where: {
+          companyId: params.companyId,
+          competence: { gt: params.competence },
+          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+        },
+        orderBy: { competence: 'asc' },
+        select: { competence: true },
+      });
+
+      if (subsequentClosed) {
+        const err: any = new Error(
+          `Competência posterior ${subsequentClosed.competence} já está fechada para esta empresa. Fechamentos retroativos de competências anteriores são bloqueados para preservar a integridade da cadeia de saldos.`
+        );
+        err.status = 422;
+        err.code = 'SUBSEQUENT_COMPETENCE_ALREADY_CLOSED';
+        throw err;
+      }
+
+      // Guarda de ordem cronológica 2: Impede pular competências abertas anteriores
+      const allPriorClosed = await tx.platformMonthlyStatement.findMany({
+        where: {
+          companyId: params.companyId,
+          competence: { lt: params.competence },
+          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+        },
+        select: { competence: true },
+        orderBy: { competence: 'asc' },
+      });
+
+      const priorClosedSet = new Set(allPriorClosed.map((s) => s.competence));
+      const immediatePriorMonth = getPriorCompetence(params.competence);
+
+      if (allPriorClosed.length > 0 && !priorClosedSet.has(immediatePriorMonth)) {
+        const oldestClosed = allPriorClosed[0].competence;
+        let checkComp = getNextCompetence(oldestClosed);
+        while (checkComp < params.competence && priorClosedSet.has(checkComp)) {
+          checkComp = getNextCompetence(checkComp);
+        }
+        const openComp = checkComp < params.competence ? checkComp : immediatePriorMonth;
+        const err: any = new Error(
+          `Competência anterior ${openComp} ainda está aberta para esta empresa. O fechamento mensal deve ocorrer na sequência cronológica estrita.`
+        );
+        err.status = 422;
+        err.code = 'PRIOR_COMPETENCE_STILL_OPEN';
+        err.unclosedCompetence = openComp;
         throw err;
       }
 

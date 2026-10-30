@@ -3,10 +3,10 @@ import 'package:mobile/config/app_config.dart';
 
 void main() {
   group('0. Verificação da Versão Efetivamente Compilada no AppConfig', () {
-    test('AppConfig reflete fielmente a release 1.0.22+33', () {
-      expect(AppConfig.appVersion, equals('1.0.22'));
-      expect(AppConfig.buildNumber, equals(33));
-      expect(AppConfig.fullVersion, equals('1.0.22+33'));
+    test('AppConfig reflete fielmente a release 1.0.23+34', () {
+      expect(AppConfig.appVersion, equals('1.0.23'));
+      expect(AppConfig.buildNumber, equals(34));
+      expect(AppConfig.fullVersion, equals('1.0.23+34'));
     });
   });
 

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: path.join(__dirname, '../.env') });
@@ -16,18 +17,20 @@ async function main() {
 
   const scratchDir =
     'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
-  const plainPath = path.join(scratchDir, 'pre_etapa3_operational_backup.json');
-  const encPath = path.join(scratchDir, 'pre_etapa3_operational_backup.enc.json');
 
-  let rawJson: string;
-  if (fs.existsSync(plainPath)) {
-    console.log('Utilizando backup existente em:', plainPath);
-    rawJson = fs.readFileSync(plainPath, 'utf8');
-  } else {
-    console.log('Gerando novo backup GLOBAL completo...');
-    rawJson = await generateBackupJson();
-    fs.writeFileSync(plainPath, rawJson, 'utf8');
+  // PRESERVAÇÃO: pre_etapa3_operational_backup.enc.json e .json permanecem intactos!
+  const preEtapa3Enc = path.join(scratchDir, 'pre_etapa3_operational_backup.enc.json');
+  if (fs.existsSync(preEtapa3Enc)) {
+    console.log('ℹ️ Backup pré-migração preservado intacto em:', preEtapa3Enc);
   }
+
+  // NOVO BACKUP PÓS-MIGRAÇÃO DA ETAPA 3
+  const plainPath = path.join(scratchDir, 'post_etapa3_delivery_backup.json');
+  const encPath = path.join(scratchDir, 'post_etapa3_delivery_backup.enc.json');
+
+  console.log('Capturando estado completo pós-migração com todas as tabelas (Etapas 1, 2 e 3)...');
+  const rawJson = await generateBackupJson();
+  fs.writeFileSync(plainPath, rawJson, 'utf8');
 
   const parsed = JSON.parse(rawJson);
   const tableCounts: Record<string, number> = {};
@@ -36,9 +39,26 @@ async function main() {
     if (Array.isArray(v)) tableCounts[k] = v.length;
   }
 
-  console.log('Criptografando payload de desastre com AES-256-GCM via chave mestra...');
+  // Verifica explicitamente a presença das tabelas novas da Etapa 3
+  const ETAPA3_TABLES = [
+    'PlatformMonthlyStatement',
+    'PlatformStatementItem',
+    'PlatformStatementAdjustment',
+    'PlatformStatementPayment',
+    'PlatformCostEntry',
+    'OperationalAuditEvent',
+    'OperationalReviewAlert',
+  ];
+  for (const t of ETAPA3_TABLES) {
+    if (!(t in tableCounts)) {
+      throw new Error(`Tabela nova obrigatória da Etapa 3 '${t}' não está presente no backup pós-migração.`);
+    }
+  }
+
+  console.log('Criptografando novo backup pós-migração com AES-256-GCM via chave mestra...');
   const encContainer = encryptBackupPayload(rawJson);
-  fs.writeFileSync(encPath, JSON.stringify(encContainer, null, 2), 'utf8');
+  const encJsonString = JSON.stringify(encContainer, null, 2);
+  fs.writeFileSync(encPath, encJsonString, 'utf8');
 
   console.log('Testando descriptografia de integridade imediata...');
   const decryptedCheck = decryptBackupPayload(encContainer);
@@ -48,10 +68,12 @@ async function main() {
     throw new Error('Falha na validação do escopo após descriptografia.');
   }
 
-  console.log('✅ BACKUP GLOBAL CIFRADO COM SUCESSO');
-  console.log('PLAIN_PATH=' + plainPath);
+  const sha256 = crypto.createHash('sha256').update(fs.readFileSync(encPath)).digest('hex').toUpperCase();
+
+  console.log('✅ BACKUP PÓS-MIGRAÇÃO DA ETAPA 3 CIFRADO COM SUCESSO');
   console.log('ENC_PATH=' + encPath);
   console.log('ENC_BYTES=' + fs.statSync(encPath).size);
+  console.log('SHA256=' + sha256);
   console.log('SCOPE=' + parsed._metadata?.scope);
   console.log('TIMESTAMP=' + parsed._metadata?.timestamp);
   console.log('ALGORITHM=' + encContainer.algorithm);
@@ -61,7 +83,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('❌ Falha na geração/cifragem do backup de desastre:', err);
+  console.error('❌ Falha na geração/cifragem do backup pós-migração:', err);
   process.exit(1);
 });
-

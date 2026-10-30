@@ -270,6 +270,7 @@ router.post(
       return res.status(status).json({
         error: error.message || 'Erro ao fechar demonstrativo mensal.',
         code: error?.code,
+        unclosedCompetence: error?.unclosedCompetence,
       });
     }
   }

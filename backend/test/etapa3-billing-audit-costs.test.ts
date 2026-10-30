@@ -2128,5 +2128,285 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.equal(inst3.commissionCents, 1_000);
     }
   );
+
+  await t.test(
+    '12. Complemento Etapa 3 — Bloqueio de fechamento fora de ordem (M1 -> M3 -> M2), bloqueio retroativo, retry, concorrência e rastreabilidade do saldo credor único',
+    async () => {
+      const suffix = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+      const compOrder = await prisma.company.create({
+        data: {
+          name: `Empresa Ordem Credito ${suffix}`,
+          tradeName: `Ordem Credito ${suffix}`,
+          cnpj: `12${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+          status: 'ACTIVE',
+        },
+      });
+
+      // Taxa contratual aprovada iniciando em 2026-08 (M1) a 2.5%
+      await prisma.companyPlatformRate.create({
+        data: {
+          companyId: compOrder.id,
+          version: 1,
+          ratePercentage: '2.50',
+          effectiveFrom: new Date('2026-08-01T03:00:00.000Z'),
+          effectiveTo: null,
+          reason: 'Taxa contratual inicial 2.5%',
+          createdByUserId: ownerFinanceId,
+          createdByName: 'Proprietário Financeiro Lumora',
+        },
+      });
+
+      const clientOrder = await prisma.client.create({
+        data: {
+          companyId: compOrder.id,
+          name: `Cliente Ordem ${suffix}`,
+          phone1: '31988880002',
+          city: 'Belo Horizonte',
+          sequenceNumber: `ORD-${suffix}`,
+        },
+      });
+
+      const sellerOrder = await prisma.user.create({
+        data: {
+          name: `Vendedor Ordem ${suffix}`,
+          email: `vendedor.ordem.${suffix}@test.com`,
+          password: 'hashed_password_123',
+          role: 'SELLER',
+          companyId: compOrder.id,
+          usesOwnCar: false,
+        },
+      });
+
+      // Venda em 2026-08 (M1): R$ 1.000,00 -> taxa bruta R$ 25,00
+      await prisma.sale.create({
+        data: {
+          companyId: compOrder.id,
+          clientId: clientOrder.id,
+          sellerId: sellerOrder.id,
+          value: 1000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-M1-${suffix}`,
+          date: new Date('2026-08-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Cria crédito de R$ 75,00 (7500 centavos) na competência 2026-08
+      // Taxa bruta R$ 25 - Crédito R$ 75 = R$ 0 netDue, R$ 50 de crédito excedente (5000 centavos)
+      await prisma.platformStatementAdjustment.create({
+        data: {
+          idempotencyKey: `adj-m1-${suffix}`,
+          companyId: compOrder.id,
+          appliedCompetence: '2026-08',
+          type: 'MANUAL_CREDIT',
+          returnedBaseCents: 0,
+          amountCents: -7500,
+          reason: 'Crédito teste de R$ 75 para gerar R$ 50 de saldo excedente',
+          createdByUserId: ownerFinanceId,
+          createdByName: 'Proprietário Financeiro Lumora',
+        },
+      });
+
+      // 1. FECHA M1 (2026-08)
+      const closeM1 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-08',
+            referenceDate: '2026-09-02T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM1.status, 201);
+      assert.equal(closeM1.data.statement.grossPlatformFeeCents, 2500);
+      assert.equal(closeM1.data.statement.netDueCents, 0);
+      assert.equal(closeM1.data.statement.carryForwardCreditCents, 5000); // R$ 50,00 excedente!
+
+      // 2. CASO OBRIGATÓRIO: TENTAR FECHAR M3 (2026-10) COM M2 (2026-09) ABERTA
+      const closeM3Blocked = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM3Blocked.status, 422);
+      assert.equal(closeM3Blocked.data.code, 'PRIOR_COMPETENCE_STILL_OPEN');
+      assert.equal(closeM3Blocked.data.unclosedCompetence, '2026-09');
+
+      // 3. FECHA M2 (2026-09) NA SEQUÊNCIA: Venda R$ 1.000 (taxa R$ 25,00)
+      // Consome R$ 25,00 do crédito de R$ 50,00, sobrando R$ 25,00
+      await prisma.sale.create({
+        data: {
+          companyId: compOrder.id,
+          clientId: clientOrder.id,
+          sellerId: sellerOrder.id,
+          value: 1000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-M2-${suffix}`,
+          date: new Date('2026-09-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      const closeM2 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-09',
+            referenceDate: '2026-10-02T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM2.status, 201);
+      assert.equal(closeM2.data.statement.grossPlatformFeeCents, 2500);
+      assert.equal(closeM2.data.statement.netDueCents, 0);
+      assert.equal(closeM2.data.statement.carryForwardCreditCents, 2500); // R$ 25,00 restantes!
+
+      // 4. FECHA M3 (2026-10): Venda R$ 1.400 (taxa R$ 35,00)
+      // Consome os R$ 25,00 restantes, gerando netDue R$ 10,00 (1000 centavos)
+      await prisma.sale.create({
+        data: {
+          companyId: compOrder.id,
+          clientId: clientOrder.id,
+          sellerId: sellerOrder.id,
+          value: 1400,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-M3-${suffix}`,
+          date: new Date('2026-10-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      const closeM3 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM3.status, 201);
+      assert.equal(closeM3.data.statement.grossPlatformFeeCents, 3500);
+      assert.equal(closeM3.data.statement.netDueCents, 1000);
+      assert.equal(closeM3.data.statement.carryForwardCreditCents, 0); // Esgotado
+
+      // 5. RETRY IDEMPOTENTE:
+      const closeM3Retry = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM3Retry.status, 200);
+      assert.equal(closeM3Retry.data.idempotentReplay, true);
+      assert.equal(closeM3Retry.data.statement.netDueCents, 1000);
+
+      // 6. BLOQUEIO RETROATIVO:
+      // Tentar fechar uma competência anterior a M3 (ex: 2026-07) após M3 estar fechada
+      // Retorna 422 SUBSEQUENT_COMPETENCE_ALREADY_CLOSED
+      const closeRetroBlocked = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compOrder.id,
+            competence: '2026-07',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeRetroBlocked.status, 422);
+      assert.equal(closeRetroBlocked.data.code, 'SUBSEQUENT_COMPETENCE_ALREADY_CLOSED');
+
+      // 7. CONCORRÊNCIA NA MESMA COMPETÊNCIA:
+      await prisma.sale.create({
+        data: {
+          companyId: compOrder.id,
+          clientId: clientOrder.id,
+          sellerId: sellerOrder.id,
+          value: 1000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-M4-${suffix}`,
+          date: new Date('2026-11-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      const [resConcurrentA, resConcurrentB] = await Promise.all([
+        apiJson(apiServer!.baseUrl, 'POST', '/api/owner/billing/statements/close', {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: { companyId: compOrder.id, competence: '2026-11', referenceDate: '2026-12-05T10:00:00.000Z' },
+        }),
+        apiJson(apiServer!.baseUrl, 'POST', '/api/owner/billing/statements/close', {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: { companyId: compOrder.id, competence: '2026-11', referenceDate: '2026-12-05T10:00:00.000Z' },
+        }),
+      ]);
+      assert.ok([200, 201].includes(resConcurrentA.status));
+      assert.ok([200, 201].includes(resConcurrentB.status));
+      const statementsM4Count = await prisma.platformMonthlyStatement.count({
+        where: { companyId: compOrder.id, competence: '2026-11' },
+      });
+      assert.equal(statementsM4Count, 1);
+
+      // 8. VALIDAÇÃO TOTAL DO CRÉDITO:
+      // Total de crédito criado: 5000 centavos
+      // Total de crédito consumido nas competências: M2 (2500) + M3 (2500) = 5000 centavos
+      const appliedCreditAdjustments = await prisma.platformStatementAdjustment.findMany({
+        where: {
+          companyId: compOrder.id,
+          type: 'CARRY_FORWARD_CREDIT_APPLIED',
+        },
+      });
+      const totalConsumed = appliedCreditAdjustments.reduce((sum, a) => sum + Math.abs(a.amountCents), 0);
+      assert.equal(totalConsumed, 5000);
+      assert.ok(totalConsumed <= 5000);
+    }
+  );
 });
 
