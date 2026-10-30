@@ -12,6 +12,7 @@ import {
   refundAsaasPayment,
 } from '../services/asaasService';
 import { processAsaasWebhookEvent } from '../services/asaasWebhookProcessor';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import {
   getCompetenceRange,
   getCompetenceForDate,
@@ -567,7 +568,7 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
  * Registrar recebimento / baixa parcial ou total do principal financiado
  * Com idempotência persistente, bloqueio pessimista e sincronização manual Asaas
  */
-router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
     const companyId = req.user?.companyId;
@@ -613,7 +614,7 @@ router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, 
       }
     }
 
-    const parsedAmount = Number(amount);
+    const parsedAmount = amount !== undefined ? Number(amount) : (req.body?.amountCents !== undefined ? Number(req.body.amountCents) / 100 : NaN);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       res.status(400).json({ error: 'Valor de pagamento inválido. Deve ser maior que zero' });
       return;
@@ -674,6 +675,7 @@ router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, 
           receivedByRole: destination === 'SELLER_HANDS' ? 'SELLER' : currentUserRole,
           receiverUserId: effectiveReceiverId,
           destination,
+          paidAt: req.body?.paidAt ? new Date(req.body.paidAt) : undefined,
           receiptUrl,
           notes,
           idempotencyKey: idempotencyKey ? String(idempotencyKey).trim() : undefined,
@@ -768,6 +770,32 @@ router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, 
         });
       }
 
+      await recordOperationalAuditEvent(
+        {
+          companyId,
+          category: 'PAYMENT',
+          action: 'CREDIT_INSTALLMENT_PAYMENT_RECEIVED',
+          entityType: 'CREDIT_PAYMENT',
+          entityReference: `CRD-${String(agreement.id).slice(0, 8).toUpperCase()}`,
+          entityId: payment.id,
+          previousValues: {
+            remainingPrincipalCents: agreement.remainingPrincipalCents,
+          },
+          newValues: {
+            amountCents: paymentAmountCents,
+            paymentMethod,
+            remainingPrincipalCents: newRemainingCents,
+            lumoraAdditionalFeeCents: 0,
+          },
+          reason: notes ? String(notes).trim() : `Amortização de parcela (${paymentMethod})`,
+          authorUserId: currentUserId,
+          authorName: req.user?.name || 'Operador',
+          authorRole: currentUserRole,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        },
+        tx
+      );
+
       // 7. Auditoria na timeline do cliente
       await tx.clientTimeline.create({
         data: {
@@ -838,6 +866,7 @@ router.post('/agreements/:id/payments', authenticateToken, requireCreditAccess, 
       allocations: result.allocations,
       allocationsCount: result.allocations.length,
       commissionGenerated: result.commission ? Number((result.commission.amountCents / 100).toFixed(2)) : 0,
+      commission: result.commission || null,
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
@@ -1004,6 +1033,42 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
         },
       });
 
+      await recordOperationalAuditEvent(
+        {
+          companyId,
+          category: 'REVERSAL',
+          action: 'CREDIT_PAYMENT_REVERSED',
+          entityType: 'CREDIT_PAYMENT',
+          entityReference: `CRD-${String(payment.agreementId).slice(0, 8).toUpperCase()}`,
+          entityId: payment.id,
+          previousValues: {
+            isReversed: false,
+            amountCents: payment.amountCents,
+            remainingPrincipalCents: payment.agreement.remainingPrincipalCents,
+          },
+          newValues: {
+            isReversed: true,
+            remainingPrincipalCents: newRemainingCents,
+          },
+          reason: String(reason).trim(),
+          authorUserId: authorId,
+          authorName: req.user?.name || 'Administrador',
+          authorRole: req.user?.role || null,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+          reviewAlert: {
+            alertType: 'PAYMENT_REVERSAL_REVIEW',
+            severity: 'ATTENTION',
+            summary:
+              'Estorno de recebimento de crediário registrado para conferência administrativa de saldos e comissões.',
+            details: {
+              paymentAmountCents: payment.amountCents,
+              newRemainingCents,
+            },
+          },
+        },
+        tx
+      );
+
       return { success: true, reversed: true, remainingPrincipal: (newRemainingCents / 100) };
     });
 
@@ -1147,6 +1212,33 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
           status: 'RENEGOTIATED',
         },
       });
+
+      await recordOperationalAuditEvent(
+        {
+          companyId,
+          category: 'CONDITIONS',
+          action: 'CREDIT_SCHEDULE_RENEGOTIATED',
+          entityType: 'CREDIT_AGREEMENT',
+          entityReference: `CRD-${String(agreement.id).slice(0, 8).toUpperCase()}`,
+          entityId: agreement.id,
+          previousValues: {
+            remainingPrincipalCents: agreement.remainingPrincipalCents,
+            openInstallmentsCount: previousSchedule.length,
+            periodicity: agreement.periodicity,
+          },
+          newValues: {
+            remainingPrincipalCents: agreement.remainingPrincipalCents,
+            newInstallmentsCount: createdInstallments.length,
+            periodicity,
+          },
+          reason: String(reason).trim(),
+          authorUserId: authorId,
+          authorName: req.user?.name || 'Administrador',
+          authorRole: userRole,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        },
+        tx
+      );
 
       // Registrar auditoria da renegociação
       await tx.creditAgreementRenegotiation.create({
@@ -2321,5 +2413,98 @@ router.post('/webhooks/asaas', async (req, res) => {
   });
   return res.status(result.status).json(result.body);
 });
+
+/**
+ * PATCH /api/credit/agreements/:id/contact-phone
+ * Atualiza telefone de contato da ficha vinculada a contrato de crediário (restrito a Admin/Supervisor),
+ * gravando trilha de auditoria mascarada e encaminhamento de revisão administrativa.
+ */
+router.patch(
+  '/agreements/:id/contact-phone',
+  authenticateToken,
+  requireAdminOrSupervisor,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const agreementId = String(req.params.id || '').trim();
+      const companyId = req.user?.companyId;
+      const authorId = req.user?.id;
+      if (!companyId || !authorId) {
+        return res.status(403).json({ error: 'Empresa ou usuário não identificado' });
+      }
+
+      const { phone1, phone2, reason } = req.body;
+      if (!phone1 && phone2 === undefined) {
+        return res.status(400).json({ error: 'Informe ao menos um telefone para atualização.' });
+      }
+      if (!reason || String(reason).trim().length < 5) {
+        return res
+          .status(400)
+          .json({ error: 'Justificativa da alteração de telefone é obrigatória (mínimo 5 caracteres).' });
+      }
+
+      const agreement = await prisma.creditAgreement.findFirst({
+        where: { id: agreementId, companyId },
+        include: { client: true },
+      });
+      if (!agreement) {
+        return res.status(404).json({ error: 'Contrato de crediário não encontrado.' });
+      }
+
+      const prevPhone1 = agreement.client.phone1;
+      const prevPhone2 = agreement.client.phone2;
+      const nextPhone1 = phone1 !== undefined ? String(phone1).trim() : prevPhone1;
+      const nextPhone2 = phone2 !== undefined ? (phone2 ? String(phone2).trim() : null) : prevPhone2;
+
+      const updatedClient = await prisma.client.update({
+        where: { id: agreement.clientId },
+        data: {
+          phone1: nextPhone1,
+          phone2: nextPhone2,
+        },
+      });
+
+      const ref =
+        agreement.client.visibleCode ||
+        agreement.client.sequenceNumber ||
+        `CRD-${agreement.id.slice(0, 8).toUpperCase()}`;
+
+      await recordOperationalAuditEvent({
+        companyId,
+        category: 'BUYER_PHONE',
+        action: 'CREDIT_BUYER_PHONE_UPDATED',
+        entityType: 'CREDIT_AGREEMENT',
+        entityReference: ref,
+        entityId: agreement.id,
+        previousValues: { phone1: prevPhone1, phone2: prevPhone2 },
+        newValues: { phone1: updatedClient.phone1, phone2: updatedClient.phone2 },
+        reason: String(reason).trim(),
+        authorUserId: authorId,
+        authorName: req.user?.name || 'Administrador',
+        authorRole: req.user?.role || null,
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        reviewAlert: {
+          alertType: 'BUYER_PHONE_POST_SALE_CHANGE',
+          severity: 'ATTENTION',
+          summary:
+            'Atualização de telefone do comprador em contrato ativo encaminhada para conferência administrativa.',
+          details: {
+            previousPhone1: prevPhone1,
+            newPhone1: updatedClient.phone1,
+          },
+        },
+      });
+
+      return res.json({
+        success: true,
+        clientId: updatedClient.id,
+        phone1: updatedClient.phone1,
+        phone2: updatedClient.phone2,
+      });
+    } catch (error) {
+      console.error('Erro ao atualizar telefone em contrato de crediário:', error);
+      return res.status(500).json({ error: 'Erro interno ao atualizar telefone.' });
+    }
+  }
+);
 
 export default router;

@@ -58,6 +58,13 @@ model Company {
   integrations                CompanyIntegration[]
   apiUsageRecords             ApiUsageRecord[]
   integrationAuditEvents      IntegrationAuditEvent[]
+  platformStatements           PlatformMonthlyStatement[]
+  platformStatementItems       PlatformStatementItem[]
+  platformStatementAdjustments PlatformStatementAdjustment[]
+  platformStatementPayments    PlatformStatementPayment[]
+  operationalAuditEvents       OperationalAuditEvent[]
+  operationalReviewAlerts      OperationalReviewAlert[]
+  platformCostEntries          PlatformCostEntry[]
 }
 
 model Team {
@@ -139,6 +146,12 @@ model User {
   integrationsCreated         CompanyIntegration[]          @relation("IntegrationsCreated")
   integrationsUpdated         CompanyIntegration[]          @relation("IntegrationsUpdated")
   integrationAuditEvents      IntegrationAuditEvent[]        @relation("IntegrationAuditAuthor")
+  platformStatementsClosed    PlatformMonthlyStatement[]     @relation("PlatformStatementCloser")
+  platformAdjustmentsCreated  PlatformStatementAdjustment[]  @relation("PlatformAdjustmentAuthor")
+  platformPaymentsRecorded    PlatformStatementPayment[]     @relation("PlatformPaymentAuthor")
+  operationalAuditAuthored    OperationalAuditEvent[]        @relation("OperationalAuditAuthor")
+  operationalAlertsReviewed   OperationalReviewAlert[]       @relation("OperationalAlertReviewer")
+  platformCostsCreated        PlatformCostEntry[]            @relation("PlatformCostAuthor")
 }
 
 model Client {
@@ -287,6 +300,8 @@ model Sale {
   supersededNonSales NonSale[]        @relation("SupersededNonSales")
   payments           SalePayment[]
   creditAgreement    CreditAgreement?
+  platformStatementItem        PlatformStatementItem?
+  platformStatementAdjustments PlatformStatementAdjustment[] @relation("OriginSaleAdjustments")
 }
 
 model SalePayment {
@@ -1127,5 +1142,234 @@ model IntegrationAuditEvent {
   @@index([companyId, createdAt])
   @@index([integrationId, createdAt])
 }
+
+model PlatformMonthlyStatement {
+  id                                  String                        @id @default(uuid())
+  companyId                           String
+  competence                          String                        // "YYYY-MM"
+  startDate                           DateTime
+  endDate                             DateTime
+  status                              String                        @default("CLOSED") // CLOSED | PARTIALLY_PAID | PAID
+  isGratuitousZero                    Boolean                       @default(false)
+  roundingPolicy                      String                        @default("ITEM_HALF_UP_SUM")
+
+  // Bucket 1: Lumora contracted platform revenue (variable rate per company)
+  eligibleSalesCount                  Int                           @default(0)
+  eligibleSalesBaseCents              Int                           @default(0)
+  grossPlatformFeeCents               Int                           @default(0)
+  adjustmentsCents                    Int                           @default(0)
+  netDueCents                         Int                           @default(0)
+  paidAmountCents                     Int                           @default(0)
+  remainingBalanceCents               Int                           @default(0)
+  carryForwardCreditCents             Int                           @default(0)
+
+  // Bucket 2: Company sale proceeds & credit principal received (strictly separated; installments never incur Lumora fee)
+  companyConfirmedSalesCents          Int                           @default(0)
+  companyCreditReceivedPrincipalCents Int                           @default(0)
+
+  // Bucket 3: Seller commissions (20%/25% cash/down-payment + 10% credit principal; strictly separated)
+  sellerInitialCommissionsCents       Int                           @default(0)
+  sellerInstallmentCommissionsCents   Int                           @default(0)
+
+  // Bucket 4: Payment provider / banking fees (Asaas / settlement fees; strictly separated)
+  providerFeesCents                   Int                           @default(0)
+
+  excludedPreContractCount            Int                           @default(0)
+  excludedPreContractBaseCents        Int                           @default(0)
+  excludedTestOrUnconfirmedCount      Int                           @default(0)
+  vigenciaBreakdown                   Json
+
+  closedAt                            DateTime                      @default(now())
+  closedByUserId                      String
+  closedByName                        String
+  notes                               String?
+  createdAt                           DateTime                      @default(now())
+  updatedAt                           DateTime                      @updatedAt
+
+  company                             Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  closedByUser                        User                          @relation("PlatformStatementCloser", fields: [closedByUserId], references: [id])
+  items                               PlatformStatementItem[]
+  appliedAdjustments                  PlatformStatementAdjustment[] @relation("AppliedStatementAdjustments")
+  originatedAdjustments               PlatformStatementAdjustment[] @relation("OriginStatementAdjustments")
+  payments                            PlatformStatementPayment[]
+
+  @@unique([companyId, competence])
+  @@index([competence, status])
+  @@index([companyId, status])
+}
+
+model PlatformStatementItem {
+  id                 String                        @id @default(uuid())
+  statementId        String
+  companyId          String
+  saleId             String                        @unique
+  competence         String
+  saleReference      String
+  saleDate           DateTime
+  city               String
+  product            String
+  paymentModality    String
+  saleBaseCents      Int
+  rateId             String
+  rateVersion        Int
+  ratePercentage     Decimal                       @db.Decimal(6, 3)
+  rateMilliPercent   Int
+  calculatedFeeCents Int
+  creditedBaseCents  Int                           @default(0)
+  creditedFeeCents   Int                           @default(0)
+  createdAt          DateTime                      @default(now())
+
+  statement          PlatformMonthlyStatement      @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  company            Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale               Sale                          @relation(fields: [saleId], references: [id])
+  adjustments        PlatformStatementAdjustment[] @relation("OriginItemAdjustments")
+
+  @@index([statementId])
+  @@index([companyId, competence])
+}
+
+model PlatformStatementAdjustment {
+  id                       String                    @id @default(uuid())
+  idempotencyKey           String                    @unique
+  companyId                String
+  appliedStatementId       String?
+  appliedCompetence        String
+  originStatementId        String?
+  originItemId             String?
+  originSaleId             String?
+  originSaleReference      String?
+  type                     String                    // SALE_CANCELLATION_CREDIT | PARTIAL_RETURN_CREDIT | MANUAL_CREDIT | MANUAL_DEBIT
+  returnedBaseCents        Int                       @default(0)
+  originalRateVersion      Int?
+  originalRatePercentage   Decimal?                  @db.Decimal(6, 3)
+  originalRateMilliPercent Int?
+  amountCents              Int                       // negative = credit reducing due, positive = debit increasing due
+  reason                   String
+  createdByUserId          String
+  createdByName            String
+  createdAt                DateTime                  @default(now())
+
+  company                  Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  appliedStatement         PlatformMonthlyStatement? @relation("AppliedStatementAdjustments", fields: [appliedStatementId], references: [id], onDelete: SetNull)
+  originStatement          PlatformMonthlyStatement? @relation("OriginStatementAdjustments", fields: [originStatementId], references: [id], onDelete: SetNull)
+  originItem               PlatformStatementItem?    @relation("OriginItemAdjustments", fields: [originItemId], references: [id], onDelete: SetNull)
+  originSale               Sale?                     @relation("OriginSaleAdjustments", fields: [originSaleId], references: [id], onDelete: SetNull)
+  createdByUser            User                      @relation("PlatformAdjustmentAuthor", fields: [createdByUserId], references: [id])
+
+  @@index([companyId, appliedCompetence])
+  @@index([originItemId])
+  @@index([originSaleId])
+}
+
+model PlatformStatementPayment {
+  id                String                   @id @default(uuid())
+  idempotencyKey    String                   @unique
+  statementId       String
+  companyId         String
+  amountCents       Int
+  paymentMethod     String                   // PIX_OUTSIDE_APP | TED_OUTSIDE_APP | BOLETO_OUTSIDE_APP | BANK_TRANSFER_OUTSIDE_APP | MANUAL_RECONCILIATION
+  paidAt            DateTime
+  externalReference String?
+  notes             String?
+  recordedByUserId  String
+  recordedByName    String
+  createdAt         DateTime                 @default(now())
+
+  statement         PlatformMonthlyStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recordedByUser    User                     @relation("PlatformPaymentAuthor", fields: [recordedByUserId], references: [id])
+
+  @@index([statementId])
+  @@index([companyId, paidAt])
+}
+
+model OperationalAuditEvent {
+  id                 String                   @id @default(uuid())
+  companyId          String?
+  category           String                   // PRICE | DISCOUNT | CONDITIONS | BUYER_PHONE | PAYMENT | REVERSAL | CONTRACT
+  action             String
+  entityType         String
+  entityReference    String
+  entityId           String?
+  previousValues     Json?
+  newValues          Json?
+  reason             String?
+  authorUserId       String?
+  authorName         String
+  authorRole         String?
+  isTestOrSimulation Boolean                  @default(false)
+  ipAddress          String?
+  createdAt          DateTime                 @default(now())
+
+  company            Company?                 @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  authorUser         User?                    @relation("OperationalAuditAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  reviewAlerts       OperationalReviewAlert[]
+
+  @@index([companyId, category, createdAt])
+  @@index([category, createdAt])
+  @@index([entityType, entityId])
+}
+
+model OperationalReviewAlert {
+  id                 String                 @id @default(uuid())
+  companyId          String
+  auditEventId       String?
+  alertType          String
+  severity           String                 @default("ATTENTION") // INFO | ATTENTION | HIGH
+  status             String                 @default("PENDING_REVIEW") // PENDING_REVIEW | REVIEWED_OK | ADJUSTMENT_OPENED
+  entityType         String
+  entityReference    String
+  entityId           String?
+  summary            String
+  details            Json?
+  reviewNotes        String?
+  reviewedByUserId   String?
+  reviewedByName     String?
+  reviewedAt         DateTime?
+  isTestOrSimulation Boolean                @default(false)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  company            Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  auditEvent         OperationalAuditEvent? @relation(fields: [auditEventId], references: [id], onDelete: SetNull)
+  reviewedByUser     User?                  @relation("OperationalAlertReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+model PlatformCostEntry {
+  id                     String    @id @default(uuid())
+  idempotencyKey         String    @unique
+  companyId              String?
+  competence             String    // "YYYY-MM"
+  periodStart            DateTime?
+  periodEnd              DateTime?
+  category               String    // INFRASTRUCTURE | TOOLS | APIS | MESSAGING
+  provider               String    // RENDER | BACKBLAZE_B2 | GEMINI | GROK | META_WHATSAPP | ASAAS | GOOGLE_PLAY | APPLE_DEVELOPER | OTHER
+  measurementType        String    // MEASURED | ESTIMATED | MANUAL
+  sourceDocument         String
+  currency               String    @default("BRL") // BRL | USD
+  originalAmountCents    Int
+  exchangeRateMilli      Int?      // e.g. 5750 = 5.750 BRL/USD
+  amountBrlCents         Int
+  costPayer              String    @default("PLATFORM") // PLATFORM | COMPANY
+  allocationRule         String    @default("UNALLOCATED_PLATFORM_OVERHEAD") // DIRECT_COMPANY | PROPORTIONAL_ELIGIBLE_SALES | EQUAL_ACTIVE_COMPANIES | USAGE_UNITS | UNALLOCATED_PLATFORM_OVERHEAD
+  replacesTelemetryUsage Boolean   @default(false)
+  isTestOrSimulation     Boolean   @default(false)
+  notes                  String?
+  createdByUserId        String
+  createdByName          String
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  company                Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  createdByUser          User      @relation("PlatformCostAuthor", fields: [createdByUserId], references: [id])
+
+  @@index([competence, costPayer])
+  @@index([companyId, competence])
+  @@index([provider, competence])
+}
+
 
 

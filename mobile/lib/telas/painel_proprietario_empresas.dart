@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 import 'painel_proprietario_integracoes.dart';
+import 'painel_proprietario_faturamento.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
   const PainelProprietarioEmpresas({super.key});
@@ -749,6 +750,18 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 );
               },
             ),
+          IconButton(
+            icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFF38BDF8)),
+            tooltip: 'Faturamento, Custos e Auditoria',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PainelProprietarioFaturamentoAuditoriaCustos(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.hub_rounded, color: Color(0xFF38BDF8)),
             tooltip: 'Central de Integrações e APIs',

@@ -8,6 +8,7 @@ import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
 import 'tela_config_impressora.dart';
 import 'tela_cadastro_custos.dart';
+import 'tela_demonstrativo_empresa_lumora.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
@@ -297,7 +298,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           textBaseline: TextBaseline.alphabetic,
                           children: [
                             Text(
-                              currentRate != null ? '${currentRate['percentage']}%' : 'Não configurada',
+                              currentRate != null ? '${currentRate['ratePercentage'] ?? currentRate['percentage']}%' : 'Não configurada',
                               style: TextStyle(
                                 color: currentRate != null ? const Color(0xFF4FC3F7) : Colors.orangeAccent,
                                 fontSize: 26,
@@ -307,7 +308,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             const SizedBox(width: 8),
                             if (currentRate != null)
                               Text(
-                                '(versão ${currentRate['contractVersion']})',
+                                '(versão ${currentRate['version'] ?? currentRate['contractVersion']})',
                                 style: const TextStyle(color: Colors.white54, fontSize: 13),
                               ),
                           ],
@@ -858,6 +859,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(color: Colors.white54, fontSize: 12)),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
                 onTap: () => _showMyContractDialog(context),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          if (widget.canManageRoi) ...[
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const Icon(Icons.receipt_long_rounded,
+                    color: Colors.amberAccent),
+                title: const Text('Demonstrativo Mensal Lumora (Consulta)',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                    'Competências, vigências, itens e saldo B2B sem dados pessoais',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded,
+                    color: Colors.white38, size: 16),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const TelaDemonstrativoEmpresaLumora(),
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 16),

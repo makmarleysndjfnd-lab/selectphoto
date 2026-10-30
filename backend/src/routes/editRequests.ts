@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 dotenv.config();
 
@@ -198,6 +199,17 @@ router.post('/:id/approve', authenticateToken, requireAdminOrSupervisor, async (
     }
 
     const sanitizedData = sanitizeProposedData(editRequest.proposedData);
+    const previousClient = await prisma.client.findUnique({
+      where: { id: editRequest.clientId },
+      select: {
+        phone1: true,
+        phone2: true,
+        visibleCode: true,
+        sequenceNumber: true,
+        outcomeStatus: true,
+        companyId: true,
+      },
+    });
 
     const [updatedClient, updatedRequest] = await prisma.$transaction([
       prisma.client.update({
@@ -209,6 +221,45 @@ router.post('/:id/approve', authenticateToken, requireAdminOrSupervisor, async (
         data: { status: 'APPROVED' },
       }),
     ]);
+
+    if (
+      previousClient &&
+      ((sanitizedData.phone1 !== undefined && sanitizedData.phone1 !== previousClient.phone1) ||
+        (sanitizedData.phone2 !== undefined && sanitizedData.phone2 !== previousClient.phone2))
+    ) {
+      await recordOperationalAuditEvent({
+        companyId: previousClient.companyId || userCompanyId || null,
+        category: 'BUYER_PHONE',
+        action: 'CLIENT_EDIT_REQUEST_PHONE_APPROVED',
+        entityType: 'CLIENT',
+        entityReference:
+          previousClient.visibleCode ||
+          previousClient.sequenceNumber ||
+          `CLI-${editRequest.clientId.slice(0, 8)}`,
+        entityId: editRequest.clientId,
+        previousValues: { phone1: previousClient.phone1, phone2: previousClient.phone2 },
+        newValues: { phone1: updatedClient.phone1, phone2: updatedClient.phone2 },
+        reason: editRequest.reason || 'Aprovação de solicitação cadastral de telefone',
+        authorUserId: req.user?.id || null,
+        authorName: req.user?.name || 'Supervisor/Admin',
+        authorRole: req.user?.role || null,
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        reviewAlert:
+          previousClient.outcomeStatus === 'SOLD'
+            ? {
+                alertType: 'BUYER_PHONE_POST_SALE_CHANGE',
+                severity: 'ATTENTION',
+                summary:
+                  'Atualização de telefone em ficha já vendida encaminhada para conferência administrativa.',
+                details: {
+                  outcomeStatus: previousClient.outcomeStatus,
+                },
+              }
+            : null,
+      }).catch((err) =>
+        console.warn('[OperationalAudit] Falha não-bloqueante em editRequest:', err)
+      );
+    }
 
     res.json(updatedRequest);
   } catch (error) {

@@ -8,6 +8,7 @@ import {
   requireStepUpAuth,
   AuthRequest,
 } from '../middleware/authMiddleware';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = Router();
 let _prisma: PrismaClient | null = null;
@@ -43,6 +44,24 @@ async function logContractAudit(data: {
         userAgent: (data.req.headers['user-agent'] || 'unknown').substring(0, 255),
       },
     });
+    await recordOperationalAuditEvent(
+      {
+        companyId: data.companyId || null,
+        category: 'CONTRACT',
+        action: data.action,
+        entityType: 'COMPANY_CONTRACT',
+        entityReference: data.companyId ? `CMP-${data.companyId.slice(0, 8)}` : 'PLATFORM',
+        entityId: data.companyId || null,
+        previousValues: data.details?.previous ? (data.details.previous as Record<string, unknown>) : null,
+        newValues: data.details,
+        reason: data.reason || null,
+        authorUserId: data.authorUserId,
+        authorName: data.authorName,
+        authorRole: data.req.user?.role || 'OWNER',
+        ipAddress: (data.req.ip || data.req.socket?.remoteAddress || null) as string | null,
+      },
+      prisma
+    );
   } catch (err) {
     console.error('Falha ao registrar log de auditoria contratual:', err);
   }

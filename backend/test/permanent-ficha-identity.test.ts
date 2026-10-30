@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const envPath = path.resolve(__dirname, '../.env.test.local');
 const envConfig = dotenv.parse(fs.readFileSync(envPath));
-process.env.DATABASE_URL = envConfig.DATABASE_URL;
+process.env.DATABASE_URL = process.env.DATABASE_URL || envConfig.DATABASE_URL;
 process.env.JWT_SECRET = envConfig.JWT_SECRET || 'test_jwt_secret_key_fixed_for_ci_123456';
 process.env.EXTERNAL_SERVICES_DISABLED = 'true';
 

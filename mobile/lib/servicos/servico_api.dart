@@ -2374,6 +2374,249 @@ class ApiService {
   }
 
   /// Obter relatório de prontidão para entrada futura em modo LIVE
+  // ── ETAPA 3: FATURAMENTO VARIÁVEL LUMORA, AUDITORIA OPERACIONAL E CUSTOS ─────
+
+  /// Consulta somente-leitura do demonstrativo da própria empresa (sem PII, sem links de checkout)
+  Future<Map<String, dynamic>> getMyCompanyStatements({String? competence}) async {
+    try {
+      final resp = await _dio.get(
+        '/owner/my-company-statements',
+        queryParameters: competence != null && competence.isNotEmpty
+            ? {'competence': competence}
+            : null,
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Detalhe por competência do demonstrativo da própria empresa
+  Future<Map<String, dynamic>> getMyCompanyStatementDetail(String competence) async {
+    try {
+      final resp = await _dio.get('/owner/my-company-statements/$competence');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Lista geral de demonstrativos e prévias na Central do Proprietário
+  Future<Map<String, dynamic>> getOwnerBillingStatements({
+    String? competence,
+    String? companyId,
+    String? status,
+  }) async {
+    try {
+      final query = <String, dynamic>{};
+      if (competence != null && competence.isNotEmpty) query['competence'] = competence;
+      if (companyId != null && companyId.isNotEmpty) query['companyId'] = companyId;
+      if (status != null && status.isNotEmpty && status != 'ALL') query['status'] = status;
+      final resp = await _dio.get('/owner/billing/statements', queryParameters: query);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Prévia detalhada ou demonstrativo fechado de uma empresa e competência
+  Future<Map<String, dynamic>> getOwnerStatementPreview({
+    required String companyId,
+    required String competence,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        '/owner/billing/statements/preview',
+        queryParameters: {'companyId': companyId, 'competence': competence},
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Fechamento único e idempotente do demonstrativo mensal (requer Step-Up Auth)
+  Future<Map<String, dynamic>> closeOwnerMonthlyStatement({
+    required String companyId,
+    required String competence,
+    String? notes,
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+      final resp = await _dio.post(
+        '/owner/billing/statements/close',
+        data: {
+          'companyId': companyId,
+          'competence': competence,
+          if (notes != null && notes.isNotEmpty) 'notes': notes,
+        },
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Registrar crédito proporcional de devolução/cancelamento ou ajuste manual (requer Step-Up Auth)
+  Future<Map<String, dynamic>> recordOwnerStatementAdjustment({
+    required Map<String, dynamic> payload,
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+      final resp = await _dio.post(
+        '/owner/billing/statements/adjustments',
+        data: payload,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Registrar conciliação manual externa B2B de demonstrativo (sem checkout in-app; requer Step-Up Auth)
+  Future<Map<String, dynamic>> recordOwnerStatementPayment({
+    required String statementId,
+    required Map<String, dynamic> payload,
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+      final resp = await _dio.post(
+        '/owner/billing/statements/$statementId/payments',
+        data: payload,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Trilha de auditoria operacional geral (7 domínios, PII mascarada por padrão)
+  Future<Map<String, dynamic>> getOwnerOperationalAudit({
+    String? companyId,
+    String? category,
+    String? entityReference,
+    bool includeSimulation = false,
+    int limit = 100,
+  }) async {
+    try {
+      final query = <String, dynamic>{
+        'limit': limit,
+        'includeSimulation': includeSimulation.toString(),
+      };
+      if (companyId != null && companyId.isNotEmpty) query['companyId'] = companyId;
+      if (category != null && category.isNotEmpty && category != 'ALL') query['category'] = category;
+      if (entityReference != null && entityReference.isNotEmpty) {
+        query['entityReference'] = entityReference;
+      }
+      final resp = await _dio.get('/owner/billing/operational-audit', queryParameters: query);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Fila de revisão administrativa de inconsistências (não-acusatória)
+  Future<Map<String, dynamic>> getOwnerReviewAlerts({
+    String? companyId,
+    String? status,
+    bool includeSimulation = false,
+    int limit = 100,
+  }) async {
+    try {
+      final query = <String, dynamic>{
+        'limit': limit,
+        'includeSimulation': includeSimulation.toString(),
+      };
+      if (companyId != null && companyId.isNotEmpty) query['companyId'] = companyId;
+      if (status != null && status.isNotEmpty && status != 'ALL') query['status'] = status;
+      final resp = await _dio.get('/owner/billing/review-alerts', queryParameters: query);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Resolver alerta de revisão administrativa (requer Step-Up Auth)
+  Future<Map<String, dynamic>> resolveOwnerReviewAlert({
+    required String alertId,
+    required String status,
+    required String reviewNotes,
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+      final resp = await _dio.post(
+        '/owner/billing/review-alerts/$alertId/resolve',
+        data: {
+          'status': status,
+          'reviewNotes': reviewNotes,
+        },
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Painel consolidado de custos verificados da plataforma, rateio e margem real/estimada
+  Future<Map<String, dynamic>> getOwnerCostsAndMargin({
+    required String competence,
+    bool includeSimulation = false,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        '/owner/billing/costs-and-margin',
+        queryParameters: {
+          'competence': competence,
+          'includeSimulation': includeSimulation.toString(),
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Lançar custo da plataforma com origem verificável (requer Step-Up Auth)
+  Future<Map<String, dynamic>> recordOwnerPlatformCost({
+    required Map<String, dynamic> payload,
+    String? stepUpToken,
+  }) async {
+    try {
+      final headers = <String, dynamic>{};
+      if (stepUpToken != null) headers['X-Step-Up-Token'] = stepUpToken;
+      final resp = await _dio.post(
+        '/owner/billing/costs',
+        data: payload,
+        options: Options(headers: headers),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Status das travas de políticas das lojas (Google Play & Apple App Store)
+  Future<Map<String, dynamic>> getOwnerStorePoliciesStatus() async {
+    try {
+      final resp = await _dio.get('/owner/billing/store-policies-status');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> getAsaasLiveReadinessReport({String? companyId}) async {
     try {
       final resp = await _dio.get(

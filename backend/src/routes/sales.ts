@@ -5,11 +5,113 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
 import { resolveSellerCommissionRate } from '../utils/commission';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = Router();
 const prisma = new PrismaClient();
 
 const SALE_MANAGER_ROLES = ['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'];
+
+async function emitSaleCreationOperationalAudit(req: AuthRequest, sale: any, rawBody: any) {
+  try {
+    const companyId = req.user?.companyId || sale.companyId;
+    const ref = sale.fichaNumber || `VND-${String(sale.id).slice(0, 8).toUpperCase()}`;
+    const authorName = req.user?.name || 'Operador';
+    const authorRole = req.user?.role || null;
+    const ipAddress = (req.ip || req.socket?.remoteAddress || null) as string | null;
+
+    if (sale.status === 'PRONTO') {
+      await recordOperationalAuditEvent({
+        companyId,
+        category: 'PAYMENT',
+        action: 'SALE_CONFIRMED_PAYMENT',
+        entityType: 'SALE',
+        entityReference: ref,
+        entityId: sale.id,
+        previousValues: null,
+        newValues: {
+          value: sale.value,
+          paymentMethod: sale.paymentMethod,
+          paymentStatus: sale.paymentStatus,
+          city: sale.city,
+        },
+        reason: 'Confirmação de venda comercial',
+        authorUserId: req.user?.id || sale.sellerId,
+        authorName,
+        authorRole,
+        ipAddress,
+      });
+    }
+
+    const discountAmount = Number(rawBody?.discountAmount || 0);
+    const discountPct = Number(rawBody?.discountPercentage || 0);
+    if (discountAmount > 0 || discountPct > 0) {
+      const listVal = Number(rawBody?.originalValue || Number(sale.value) + discountAmount);
+      const effectivePct =
+        discountPct > 0
+          ? discountPct
+          : listVal > 0
+          ? Number(((discountAmount / listVal) * 100).toFixed(2))
+          : 0;
+      await recordOperationalAuditEvent({
+        companyId,
+        category: 'DISCOUNT',
+        action: 'SALE_DISCOUNT_DECLARED',
+        entityType: 'SALE',
+        entityReference: ref,
+        entityId: sale.id,
+        previousValues: { listValue: listVal },
+        newValues: {
+          finalValue: sale.value,
+          discountAmount: discountAmount || null,
+          discountPercentage: effectivePct,
+        },
+        reason: rawBody?.discountReason || rawBody?.reason || 'Desconto comercial informado na venda',
+        authorUserId: req.user?.id || sale.sellerId,
+        authorName,
+        authorRole,
+        ipAddress,
+        reviewAlert:
+          effectivePct >= 15
+            ? {
+                alertType: 'DECLARED_DISCOUNT_REVIEW',
+                severity: 'ATTENTION',
+                summary:
+                  'Desconto comercial igual ou superior a 15% registrado para conferência administrativa.',
+                details: { finalValue: sale.value, discountPercentage: effectivePct },
+              }
+            : null,
+      });
+    }
+
+    const rawCred = rawBody?.credit || rawBody?.creditAgreement;
+    if (rawCred) {
+      const credObj = typeof rawCred === 'string' ? JSON.parse(rawCred) : rawCred;
+      await recordOperationalAuditEvent({
+        companyId,
+        category: 'CONTRACT',
+        action: 'CREDIT_AGREEMENT_OPENED',
+        entityType: 'CREDIT_AGREEMENT',
+        entityReference: ref,
+        entityId: sale.id,
+        previousValues: null,
+        newValues: {
+          totalValue: sale.value,
+          installmentsCount: credObj?.installmentsCount || credObj?.installments,
+          periodicity: credObj?.periodicity || 'MONTHLY',
+          buyerCpf: credObj?.buyerCpf || null,
+        },
+        reason: 'Abertura de contrato de crediário em venda confirmada',
+        authorUserId: req.user?.id || sale.sellerId,
+        authorName,
+        authorRole,
+        ipAddress,
+      });
+    }
+  } catch (auditErr) {
+    console.warn('[OperationalAudit] Falha não-bloqueante ao registrar auditoria de venda:', auditErr);
+  }
+}
 
 function parseSaleInput(body: any) {
   const {
@@ -824,6 +926,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       saleId: result.sale.id,
       created: result.created,
     });
+    if (result.created) {
+      await emitSaleCreationOperationalAudit(req, result.sale, req.body);
+    }
     res.status(result.created ? 201 : 200).json(result.sale);
   } catch (error: any) {
     if (error && error.status && error.message) {
@@ -892,6 +997,9 @@ router.post(
         saleId: result.sale.id,
         created: result.created,
       });
+      if (result.created) {
+        await emitSaleCreationOperationalAudit(req, result.sale, req.body);
+      }
       return res.status(result.created ? 201 : 200).json(result.sale);
     } catch (error: any) {
       if (receiptFile) await removeUploadedFile(req, receiptFile).catch(() => undefined);
@@ -968,6 +1076,153 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
         ...(paymentMethod !== undefined && { paymentMethod: paymentMethod as string }),
       }
     });
+
+    try {
+      const ref =
+        updated.fichaNumber ||
+        existing.fichaNumber ||
+        `VND-${String(updated.id).slice(0, 8).toUpperCase()}`;
+      const editReason =
+        req.body.reason || req.body.justification || 'Atualização administrativa de venda';
+      const authorName = req.user?.name || 'Operador';
+      const authorRole = req.user?.role || null;
+      const ipAddress = (req.ip || req.socket?.remoteAddress || null) as string | null;
+
+      if (parsedValue !== undefined && Math.abs(parsedValue - existing.value) >= 0.005) {
+        const isReductionAfterConfirm =
+          parsedValue < existing.value && existing.status !== 'PENDING_RECEIPT';
+        await recordOperationalAuditEvent({
+          companyId,
+          category: 'PRICE',
+          action: 'SALE_VALUE_UPDATED',
+          entityType: 'SALE',
+          entityReference: ref,
+          entityId: updated.id,
+          previousValues: { value: existing.value, status: existing.status },
+          newValues: { value: updated.value, status: updated.status },
+          reason: editReason,
+          authorUserId: req.user?.id || null,
+          authorName,
+          authorRole,
+          ipAddress,
+          reviewAlert: isReductionAfterConfirm
+            ? {
+                alertType: 'POST_SALE_VALUE_REDUCTION',
+                severity: 'ATTENTION',
+                summary:
+                  'Redução de valor comercial após registro encaminhada para conferência administrativa.',
+                details: {
+                  previousValue: existing.value,
+                  newValue: updated.value,
+                },
+              }
+            : null,
+        });
+      }
+
+      if (req.body.discountAmount !== undefined || req.body.discountPercentage !== undefined) {
+        const dAmt = Number(req.body.discountAmount || 0);
+        const dPct = Number(req.body.discountPercentage || 0);
+        await recordOperationalAuditEvent({
+          companyId,
+          category: 'DISCOUNT',
+          action: 'SALE_DISCOUNT_UPDATED',
+          entityType: 'SALE',
+          entityReference: ref,
+          entityId: updated.id,
+          previousValues: { value: existing.value },
+          newValues: {
+            value: updated.value,
+            discountAmount: dAmt,
+            discountPercentage: dPct,
+          },
+          reason: editReason,
+          authorUserId: req.user?.id || null,
+          authorName,
+          authorRole,
+          ipAddress,
+          reviewAlert:
+            dPct >= 15 || (existing.value > 0 && dAmt / existing.value >= 0.15)
+              ? {
+                  alertType: 'DECLARED_DISCOUNT_REVIEW',
+                  severity: 'ATTENTION',
+                  summary:
+                    'Desconto comercial pós-registro encaminhado para conferência administrativa.',
+                  details: { discountAmount: dAmt, discountPercentage: dPct },
+                }
+              : null,
+        });
+      }
+
+      if (paymentMethod !== undefined && paymentMethod !== existing.paymentMethod) {
+        await recordOperationalAuditEvent({
+          companyId,
+          category: 'CONDITIONS',
+          action: 'SALE_PAYMENT_CONDITION_UPDATED',
+          entityType: 'SALE',
+          entityReference: ref,
+          entityId: updated.id,
+          previousValues: { paymentMethod: existing.paymentMethod },
+          newValues: { paymentMethod: updated.paymentMethod },
+          reason: editReason,
+          authorUserId: req.user?.id || null,
+          authorName,
+          authorRole,
+          ipAddress,
+        });
+      }
+
+      const canceledStates = new Set([
+        'CANCELED',
+        'CANCELLED',
+        'RETURNED',
+        'VOIDED',
+        'ESTORNADA',
+        'CANCELADA',
+      ]);
+      const becameCanceled =
+        (status &&
+          canceledStates.has(String(status).toUpperCase()) &&
+          !canceledStates.has(String(existing.status).toUpperCase())) ||
+        (paymentStatus &&
+          canceledStates.has(String(paymentStatus).toUpperCase()) &&
+          !canceledStates.has(String(existing.paymentStatus).toUpperCase()));
+
+      if (becameCanceled) {
+        await recordOperationalAuditEvent({
+          companyId,
+          category: 'REVERSAL',
+          action: 'SALE_CANCELED_OR_RETURNED',
+          entityType: 'SALE',
+          entityReference: ref,
+          entityId: updated.id,
+          previousValues: {
+            status: existing.status,
+            paymentStatus: existing.paymentStatus,
+            value: existing.value,
+          },
+          newValues: {
+            status: updated.status,
+            paymentStatus: updated.paymentStatus,
+            value: updated.value,
+          },
+          reason: editReason,
+          authorUserId: req.user?.id || null,
+          authorName,
+          authorRole,
+          ipAddress,
+          reviewAlert: {
+            alertType: 'SALE_CANCELLATION_REVIEW',
+            severity: 'ATTENTION',
+            summary:
+              'Cancelamento ou devolução de venda registrado para conferência administrativa.',
+            details: { previousStatus: existing.status, newStatus: updated.status, value: existing.value },
+          },
+        });
+      }
+    } catch (auditErr) {
+      console.warn('[OperationalAudit] Falha não-bloqueante ao auditar atualização de venda:', auditErr);
+    }
 
     res.json(updated);
   } catch (error) {
