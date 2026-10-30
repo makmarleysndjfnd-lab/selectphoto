@@ -2,9 +2,11 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { recordDeviceTelemetry } from '../services/operationalMetricsService';
 
-export const CURRENT_APP_VERSION = '1.0.23';
-export const CURRENT_BUILD_NUMBER = 34;
+export const CURRENT_APP_VERSION = '1.0.24';
+export const CURRENT_BUILD_NUMBER = 35;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -20,9 +22,9 @@ export interface ApkReleaseDescriptor {
  * endpoint exclusivamente ao artefato que passou pela auditoria do manifesto.
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
-  version: '1.0.23',
-  buildNumber: 34,
-  sha256: '4D6E57BC394B70034E44ACA1777C2DE1E338F82FED79841DC35BC7DB2EC9FA2A',
+  version: '1.0.24',
+  buildNumber: 35,
+  sha256: '3B12CF88584889515CF6489A1FACFE72098BE296A2F5E6DBF12102BD608EEA54',
   packageName: 'com.example.mobile',
 });
 
@@ -198,6 +200,53 @@ export function createAppRouter(options: AppRouterOptions = {}): Router {
     }
 
     res.download(validation.apkPath, `Lumora-${CURRENT_APP_VERSION}+${CURRENT_BUILD_NUMBER}.apk`);
+  });
+
+  appRouter.post('/telemetry', authenticateToken, async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const user = req.user;
+      if (!user || !user.id) {
+        res.status(401).json({ error: 'Usuário não autenticado.' });
+        return;
+      }
+      if (!user.companyId) {
+        res.status(400).json({ error: 'Usuário sem empresa vinculada.' });
+        return;
+      }
+
+      const {
+        deviceId,
+        platform,
+        appVersion,
+        buildNumber,
+        pendingOfflineCount,
+        pendingSummary,
+        connectivityStatus,
+        lastSyncAttemptAt,
+      } = req.body;
+
+      const record = await recordDeviceTelemetry({
+        userId: user.id,
+        companyId: user.companyId,
+        deviceId,
+        platform,
+        appVersion: appVersion || CURRENT_APP_VERSION,
+        buildNumber: buildNumber ? Number(buildNumber) : CURRENT_BUILD_NUMBER,
+        pendingOfflineCount: pendingOfflineCount !== undefined ? Number(pendingOfflineCount) : 0,
+        pendingSummary,
+        connectivityStatus,
+        lastSyncAttemptAt: lastSyncAttemptAt ? new Date(lastSyncAttemptAt) : undefined,
+      });
+
+      res.status(201).json({
+        success: true,
+        telemetryId: record.id,
+        lastReportedAt: record.lastReportedAt,
+      });
+    } catch (err: any) {
+      console.error('Erro ao registrar telemetria do aparelho:', err);
+      res.status(500).json({ error: err.message || 'Erro ao registrar telemetria.' });
+    }
   });
 
   return appRouter;

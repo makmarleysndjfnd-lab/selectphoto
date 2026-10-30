@@ -65,6 +65,10 @@ model Company {
   operationalAuditEvents       OperationalAuditEvent[]
   operationalReviewAlerts      OperationalReviewAlert[]
   platformCostEntries          PlatformCostEntry[]
+  supportTickets               SupportTicket[]
+  supportAccessGrants          SupportAccessGrant[]
+  internalOperationalAlerts    InternalOperationalAlert[]
+  deviceTelemetries            DeviceTelemetry[]
 }
 
 model Team {
@@ -152,6 +156,13 @@ model User {
   operationalAuditAuthored    OperationalAuditEvent[]        @relation("OperationalAuditAuthor")
   operationalAlertsReviewed   OperationalReviewAlert[]       @relation("OperationalAlertReviewer")
   platformCostsCreated        PlatformCostEntry[]            @relation("PlatformCostAuthor")
+  supportTicketsCreated       SupportTicket[]                @relation("SupportTicketCreator")
+  supportTicketsAssigned      SupportTicket[]                @relation("SupportTicketAssignee")
+  supportMessagesAuthored     SupportTicketMessage[]         @relation("SupportMessageAuthor")
+  supportGrantsRequested      SupportAccessGrant[]           @relation("SupportAccessRequester")
+  supportGrantsApproved       SupportAccessGrant[]           @relation("SupportAccessApprover")
+  supportGrantsRevoked        SupportAccessGrant[]           @relation("SupportAccessRevoker")
+  deviceTelemetries           DeviceTelemetry[]
 }
 
 model Client {
@@ -1370,6 +1381,181 @@ model PlatformCostEntry {
   @@index([companyId, competence])
   @@index([provider, competence])
 }
+
+// =========================================================================
+// BLOCO 4 — SUPORTE AUTORIZADO, INDICADORES E CONTINUIDADE
+// =========================================================================
+
+model SupportTicket {
+  id                    String                    @id @default(uuid())
+  ticketNumber          Int                       @default(autoincrement())
+  companyId             String
+  creatorUserId         String
+  creatorName           String
+  assignedToUserId      String?
+  assignedToName        String?
+  title                 String
+  description           String
+  category              String                    @default("QUESTION") // BUG | QUESTION | INTEGRATION | BILLING | ACCESS | OTHER
+  priority              String                    @default("MEDIUM")   // LOW | MEDIUM | HIGH | URGENT
+  status                String                    @default("OPEN")     // OPEN | IN_PROGRESS | WAITING_COMPANY | RESOLVED | CLOSED
+
+  // Diagnóstico inicial mínimo sanitizado (SEM senha, chave, CPF, fotos ou comprovantes)
+  appVersion            String?
+  buildNumber           Int?
+  affectedService       String?                   // SALES | CREDIARIO | SYNC | LOGIN | REPORTS | INTEGRATION
+  devicePlatform        String?                   // ANDROID | IOS | WEB
+  connectivityStatus    String?                   // WIFI | CELLULAR | OFFLINE | UNKNOWN
+  sanitizedErrorDetails Json?
+
+  resolvedAt            DateTime?
+  closedAt              DateTime?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+
+  company               Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  creatorUser           User                      @relation("SupportTicketCreator", fields: [creatorUserId], references: [id])
+  assignedUser          User?                     @relation("SupportTicketAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  messages              SupportTicketMessage[]
+  attachments           SupportTicketAttachment[]
+  accessGrants          SupportAccessGrant[]
+
+  @@index([companyId, status])
+  @@index([status, priority])
+  @@index([creatorUserId])
+  @@index([assignedToUserId])
+}
+
+model SupportTicketMessage {
+  id             String                    @id @default(uuid())
+  ticketId       String
+  authorUserId   String
+  authorName     String
+  authorRole     String                    // OWNER | SUPPORT | ADMIN | SELLER | PHOTOGRAPHER
+  message        String
+  isInternalNote Boolean                   @default(false) // Visível apenas para o proprietário/equipe de suporte Lumora
+  createdAt      DateTime                  @default(now())
+
+  ticket         SupportTicket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorUser     User                      @relation("SupportMessageAuthor", fields: [authorUserId], references: [id])
+  attachments    SupportTicketAttachment[]
+
+  @@index([ticketId, createdAt])
+}
+
+model SupportTicketAttachment {
+  id          String                @id @default(uuid())
+  ticketId    String
+  messageId   String?
+  fileName    String
+  fileSize    Int
+  mimeType    String
+  storageUrl  String
+  isVoluntary Boolean               @default(true) // Envio voluntário pelo usuário
+  isSanitized Boolean               @default(true) // Passou pela guarda de sanitização (sem credenciais/chaves)
+  createdAt   DateTime              @default(now())
+
+  ticket      SupportTicket         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  message     SupportTicketMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId])
+}
+
+model SupportAccessGrant {
+  id                String         @id @default(uuid())
+  ticketId          String?
+  companyId         String
+  requestedByUserId String
+  requestedByName   String
+  approvedByUserId  String?
+  approvedByName    String?
+  scope             String         @default("READ_ONLY") // READ_ONLY | OPERATIONAL_SUPPORT | INTEGRATION_DEBUG (estritamente SEM ações financeiras gerais)
+  reason            String
+  durationMinutes   Int            @default(60)
+  status            String         @default("REQUESTED") // REQUESTED | ACTIVE | EXPIRED | REVOKED
+  grantedAt         DateTime?
+  expiresAt         DateTime?
+  revokedAt         DateTime?
+  revokedByUserId   String?
+  revokedByName     String?
+  revocationReason  String?
+  sessionTokenHash  String?        @unique
+  ipAddress         String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  company           Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ticket            SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  requestedByUser   User           @relation("SupportAccessRequester", fields: [requestedByUserId], references: [id])
+  approvedByUser    User?          @relation("SupportAccessApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  revokedByUser     User?          @relation("SupportAccessRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([requestedByUserId, status])
+  @@index([expiresAt])
+}
+
+model InternalOperationalAlert {
+  id                   String    @id @default(uuid())
+  companyId            String?
+  alertKey             String    @unique // Chave para idempotência / deduplicação
+  category             String    // INTEGRATION_FAILURE | QUOTA_LIMIT | UNCLOSED_STATEMENT_DUE | SYNC_STALLED | SYSTEM_HEALTH
+  severity             String    @default("WARNING") // INFO | WARNING | ERROR | CRITICAL
+  title                String
+  details              Json?
+  acknowledged         Boolean   @default(false)
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  company              Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, acknowledged, severity])
+  @@index([category, acknowledged])
+}
+
+model DisasterRecoveryAuditLog {
+  id                    String    @id @default(uuid())
+  backupTimestamp       DateTime
+  scope                 String    @default("GLOBAL")
+  sha256                String
+  sizeBytes             Int
+  sanitizedSource       String
+  verifiedRestoreAt     DateTime?
+  verifiedRestoreStatus String?   // SUCCESS | FAILED
+  verifiedRestoreNotes  String?
+  totalTables           Int
+  totalRows             Int
+  createdAt             DateTime  @default(now())
+
+  @@index([backupTimestamp])
+  @@index([verifiedRestoreStatus])
+}
+
+model DeviceTelemetry {
+  id                  String    @id @default(uuid())
+  userId              String
+  companyId           String
+  deviceId            String?   // Identificador sanitizado do aparelho
+  platform            String    @default("ANDROID") // ANDROID | IOS | WEB
+  appVersion          String
+  buildNumber         Int?
+  pendingOfflineCount Int       @default(0) // Quantidade de itens na fila offline do aparelho
+  pendingSummary      Json?     // Resumo sanitizado (ex: { sales: 2, nonSales: 1 })
+  lastSyncAttemptAt   DateTime?
+  connectivityStatus  String?   // WIFI | CELLULAR | NONE | UNKNOWN
+  lastReportedAt      DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  company             Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, lastReportedAt])
+  @@index([userId, lastReportedAt])
+}
+
 
 
 

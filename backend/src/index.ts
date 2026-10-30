@@ -102,6 +102,8 @@ import creditRoutes from './routes/credit';
 import ownerRoutes from './routes/owner';
 import ownerBillingRoutes from './routes/ownerBilling';
 import integrationsRoutes from './routes/integrations';
+import supportRoutes from './routes/support';
+import ownerSupportRoutes from './routes/ownerSupport';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 import { initAsaasQueueCron } from './jobs/asaasQueueCron';
@@ -135,6 +137,17 @@ app.use('/api/owner/integrations', integrationsRoutes);
 app.use('/api/integrations', integrationsRoutes);
 app.use('/api/owner', ownerBillingRoutes);
 app.use('/api/owner', ownerRoutes);
+app.use('/api/support', supportRoutes);
+app.use('/api/owner/support', ownerSupportRoutes);
+app.use('/api/owner', ownerSupportRoutes);
+
+// Redirecionamentos diretos de conformidade pública (Google Play Data Safety e Apple App Store)
+app.get('/account-deletion-info', (_req, res) => {
+  res.redirect('/legal/account-deletion.html');
+});
+app.get('/privacy-policy', (_req, res) => {
+  res.redirect('/legal/privacy.html');
+});
 
 // Servir páginas estáticas de conformidade jurídica para lojas (Google Play & App Store)
 app.use('/legal', express.static(path.join(__dirname, '../public/legal')));

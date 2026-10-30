@@ -57,5 +57,9 @@
 	<string>O SelectPhoto necessita de acesso ao calendário para registrar agendamentos de visitas e retornos aos clientes.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>O SelectPhoto utiliza autenticação biométrica local (Face ID / Touch ID) para login seguro do operador.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>O SelectPhoto utiliza conexão Bluetooth para parear e imprimir comprovantes e contratos em impressoras térmicas portáteis compatíveis.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>O SelectPhoto utiliza conexão Bluetooth para parear e imprimir comprovantes e contratos em impressoras térmicas portáteis compatíveis.</string>
 </dict>
 </plist>
