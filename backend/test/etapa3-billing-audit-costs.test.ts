@@ -2408,5 +2408,333 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.ok(totalConsumed <= 5000);
     }
   );
+
+  await t.test(
+    '13. Complemento Etapa 3 — Competência fechada parcialmente paga (PARTIALLY_PAID) continua fechada (guardas, sequência, crédito e idempotência)',
+    async () => {
+      const suffix = `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+      const compPartial = await prisma.company.create({
+        data: {
+          name: `Empresa Parcialmente Paga ${suffix}`,
+          tradeName: `Parcial ${suffix}`,
+          cnpj: `14${Math.floor(100000000000 + Math.random() * 899999999999)}`,
+          status: 'ACTIVE',
+        },
+      });
+
+      await prisma.companyPlatformRate.create({
+        data: {
+          companyId: compPartial.id,
+          version: 1,
+          ratePercentage: '2.50',
+          effectiveFrom: new Date('2026-07-01T03:00:00.000Z'),
+          effectiveTo: null,
+          reason: 'Taxa contratual 2.5% desde julho/2026',
+          createdByUserId: ownerFinanceId,
+          createdByName: 'Proprietário Financeiro Lumora',
+        },
+      });
+
+      const clientPartial = await prisma.client.create({
+        data: {
+          companyId: compPartial.id,
+          name: `Cliente Parcial ${suffix}`,
+          phone1: '31988880003',
+          city: 'Belo Horizonte',
+          sequenceNumber: `PAR-${suffix}`,
+        },
+      });
+
+      const sellerPartial = await prisma.user.create({
+        data: {
+          name: `Vendedor Parcial ${suffix}`,
+          email: `vendedor.parcial.${suffix}@test.com`,
+          password: 'hashed_password_123',
+          role: 'SELLER',
+          companyId: compPartial.id,
+          usesOwnCar: false,
+        },
+      });
+
+      // 1. M1 (2026-07): Venda R$ 2.000,00 -> taxa bruta R$ 50,00 (5000 centavos)
+      await prisma.sale.create({
+        data: {
+          companyId: compPartial.id,
+          clientId: clientPartial.id,
+          sellerId: sellerPartial.id,
+          value: 2000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-PAR-M1-${suffix}`,
+          date: new Date('2026-07-15T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Fechamento de M1
+      const closeM1 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-07',
+            referenceDate: '2026-08-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM1.status, 201);
+      assert.equal(closeM1.data.statement.status, 'CLOSED');
+      assert.equal(closeM1.data.statement.netDueCents, 5000);
+      assert.equal(closeM1.data.statement.remainingBalanceCents, 5000);
+      const m1Id = closeM1.data.statement.id;
+
+      // 2. Pagamento parcial de R$ 20,00 (2000 centavos)
+      const payRes = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        `/api/owner/billing/statements/${m1Id}/payments`,
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            idempotencyKey: `pay-m1-part-${suffix}`,
+            amountCents: 2000,
+            paymentMethod: 'PIX_OUTSIDE_APP',
+            paidAt: '2026-08-10T14:00:00.000Z',
+            notes: 'Pagamento parcial de R$ 20 de R$ 50 devidos',
+          },
+        }
+      );
+      assert.equal(payRes.status, 201);
+      assert.equal(payRes.data.statement.status, 'PARTIALLY_PAID');
+      assert.equal(payRes.data.statement.paidAmountCents, 2000);
+      assert.equal(payRes.data.statement.remainingBalanceCents, 3000);
+
+      // Consulta de preview ou status confirma que a competência M1 continua FECHADA
+      const checkM1 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/owner/billing/statements/preview?companyId=${compPartial.id}&competence=2026-07`,
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+        }
+      );
+      assert.equal(checkM1.status, 200);
+      assert.equal(checkM1.data.isClosed, true);
+      assert.equal(checkM1.data.statement.status, 'PARTIALLY_PAID');
+
+      // 3. CENÁRIO: Mês anterior (M0: 2026-06) NÃO pode ser inserido retroativamente (bloqueado por M1 PARTIALLY_PAID)
+      const retroM0 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-06',
+            referenceDate: '2026-08-15T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(retroM0.status, 422);
+      assert.equal(retroM0.data.code, 'SUBSEQUENT_COMPETENCE_ALREADY_CLOSED');
+
+      // 4. CENÁRIO: Mês subsequente M2 (2026-08) pode ser fechado normalmente após M1 PARTIALLY_PAID
+      await prisma.sale.create({
+        data: {
+          companyId: compPartial.id,
+          clientId: clientPartial.id,
+          sellerId: sellerPartial.id,
+          value: 1000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-PAR-M2-${suffix}`,
+          date: new Date('2026-08-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      const closeM2 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-08',
+            referenceDate: '2026-09-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM2.status, 201);
+      assert.equal(closeM2.data.statement.grossPlatformFeeCents, 2500);
+
+      // 5. CENÁRIO: Salto de mês com subsequente PARTIALLY_PAID
+      // Tentar fechar M4 (2026-10) pulando M3 (2026-09) com M2 fechada
+      const closeM4Gap = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM4Gap.status, 422);
+      assert.equal(closeM4Gap.data.code, 'PRIOR_COMPETENCE_STILL_OPEN');
+      assert.equal(closeM4Gap.data.unclosedCompetence, '2026-09');
+
+      // 6. CENÁRIO: Consumo de crédito em demonstrativo que depois recebe pagamento parcial
+      // Criar crédito excedente em M3 (2026-09): ajuste de R$ 60 vs taxa bruta R$ 25 = R$ 35 crédito (3500 cents)
+      await prisma.sale.create({
+        data: {
+          companyId: compPartial.id,
+          clientId: clientPartial.id,
+          sellerId: sellerPartial.id,
+          value: 1000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-PAR-M3-${suffix}`,
+          date: new Date('2026-09-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+      await prisma.platformStatementAdjustment.create({
+        data: {
+          idempotencyKey: `adj-par-m3-${suffix}`,
+          companyId: compPartial.id,
+          appliedCompetence: '2026-09',
+          type: 'MANUAL_CREDIT',
+          amountCents: -6000,
+          reason: 'Crédito de R$ 60 gerando R$ 35 de carryForwardCredit',
+          createdByUserId: ownerFinanceId,
+          createdByName: 'Proprietário Financeiro Lumora',
+        },
+      });
+      const closeM3 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-09',
+            referenceDate: '2026-10-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM3.status, 201);
+      assert.equal(closeM3.data.statement.carryForwardCreditCents, 3500);
+
+      // Fecha M4 (2026-10): Venda R$ 2.000 (taxa R$ 50,00 = 5000 centavos)
+      // Consome R$ 35,00 de crédito, sobrando netDue R$ 15,00 (1500 centavos)
+      await prisma.sale.create({
+        data: {
+          companyId: compPartial.id,
+          clientId: clientPartial.id,
+          sellerId: sellerPartial.id,
+          value: 2000,
+          status: 'COMPLETED',
+          paymentStatus: 'CONFIRMED',
+          paymentMethod: 'CASH',
+          fichaNumber: `FICHA-PAR-M4-${suffix}`,
+          date: new Date('2026-10-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+      const closeM4 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM4.status, 201);
+      assert.equal(closeM4.data.statement.netDueCents, 1500);
+      assert.equal(closeM4.data.statement.remainingBalanceCents, 1500);
+      const m4Id = closeM4.data.statement.id;
+
+      // M4 recebe pagamento parcial de R$ 5,00 (500 centavos) -> vira PARTIALLY_PAID com saldo 1000
+      const payM4 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        `/api/owner/billing/statements/${m4Id}/payments`,
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            idempotencyKey: `pay-m4-part-${suffix}`,
+            amountCents: 500,
+            paymentMethod: 'PIX_OUTSIDE_APP',
+            paidAt: '2026-11-10T10:00:00.000Z',
+            notes: 'Pagamento parcial M4',
+          },
+        }
+      );
+      assert.equal(payM4.status, 201);
+      assert.equal(payM4.data.statement.status, 'PARTIALLY_PAID');
+      assert.equal(payM4.data.statement.remainingBalanceCents, 1000);
+
+      // Agora, na prévia de M5 (2026-11), o crédito de R$ 35,00 de M3 NÃO pode ser reaplicado!
+      // incomingCreditCents deve ser rigorosamente 0 porque M4 (mesmo PARTIALLY_PAID) já consumiu
+      const previewM5 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/owner/billing/statements/preview?companyId=${compPartial.id}&competence=2026-11`,
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+        }
+      );
+      assert.equal(previewM5.status, 200);
+      assert.equal(previewM5.data.preview.incomingCreditCents, 0);
+
+      // 7. Retentativa de fechamento de M4 retorna replay idempotente HTTP 200 sem reabrir nem alterar saldo
+      const retryM4 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compPartial.id,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T10:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(retryM4.status, 200);
+      assert.equal(retryM4.data.idempotentReplay, true);
+      assert.equal(retryM4.data.statement.status, 'PARTIALLY_PAID');
+      assert.equal(retryM4.data.statement.remainingBalanceCents, 1000);
+    }
+  );
 });
 

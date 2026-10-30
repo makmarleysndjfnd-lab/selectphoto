@@ -6,6 +6,19 @@ import {
 } from './monthlyCreditClosingService';
 import { isTestOrSimulationMarker, recordOperationalAuditEvent } from './operationalAuditService';
 
+export const CLOSED_STATEMENT_STATUSES = [
+  'CLOSED',
+  'BILLED',
+  'PARTIALLY_PAID',
+  'PAID',
+] as const;
+export type ClosedStatementStatus = (typeof CLOSED_STATEMENT_STATUSES)[number];
+
+export function isStatementClosedStatus(status: string | null | undefined): boolean {
+  if (!status) return false;
+  return (CLOSED_STATEMENT_STATUSES as readonly string[]).includes(status);
+}
+
 const defaultPrisma = new PrismaClient();
 
 export const ROUNDING_POLICY_ITEM_HALF_UP_SUM = 'ITEM_HALF_UP_SUM';
@@ -349,7 +362,7 @@ async function computeFinancialBucketsAndPreviewData(
     where: {
       companyId,
       competence: { lt: competence },
-      status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+      status: { in: [...CLOSED_STATEMENT_STATUSES] },
     },
     select: { id: true, competence: true, carryForwardCreditCents: true },
     orderBy: { competence: 'desc' },
@@ -368,7 +381,7 @@ async function computeFinancialBucketsAndPreviewData(
         type: 'CARRY_FORWARD_CREDIT_APPLIED',
         appliedCompetence: { gt: latestPriorClosedStatement.competence, not: competence },
         appliedStatement: {
-          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+          status: { in: [...CLOSED_STATEMENT_STATUSES] },
         },
       },
       select: { amountCents: true },
@@ -1108,11 +1121,12 @@ export async function closeCompanyMonthlyStatement(
       }
 
       // Guarda de ordem cronológica 1: Impede fechamento retroativo se já existir competência posterior fechada
+      // Considera qualquer status de competência encerrada: CLOSED, BILLED, PARTIALLY_PAID, PAID
       const subsequentClosed = await tx.platformMonthlyStatement.findFirst({
         where: {
           companyId: params.companyId,
           competence: { gt: params.competence },
-          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+          status: { in: [...CLOSED_STATEMENT_STATUSES] },
         },
         orderBy: { competence: 'asc' },
         select: { competence: true },
@@ -1128,11 +1142,12 @@ export async function closeCompanyMonthlyStatement(
       }
 
       // Guarda de ordem cronológica 2: Impede pular competências abertas anteriores
+      // Considera qualquer status de competência encerrada: CLOSED, BILLED, PARTIALLY_PAID, PAID
       const allPriorClosed = await tx.platformMonthlyStatement.findMany({
         where: {
           companyId: params.companyId,
           competence: { lt: params.competence },
-          status: { in: ['CLOSED', 'BILLED', 'PAID'] },
+          status: { in: [...CLOSED_STATEMENT_STATUSES] },
         },
         select: { competence: true },
         orderBy: { competence: 'asc' },

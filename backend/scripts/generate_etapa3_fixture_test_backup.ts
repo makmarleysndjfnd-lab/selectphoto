@@ -7,10 +7,22 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 
 import { encryptBackupPayload } from '../src/services/backupService';
 
+/**
+ * FIXTURE SINTÉTICA PARA TESTE DO MECANISMO DE RESTAURAÇÃO
+ *
+ * NOTA DE SEGURANÇA E AUDITORIA:
+ * Este script gera um artefato de FIXTURE/TESTE estritamente destinado a comprovar
+ * que o motor de restauração (restoreBackupJson) e suas restrições de integridade
+ * referencial aceitam e validam registros nas tabelas novas da Etapa 3.
+ *
+ * ESTE ARTEFATO NÃO É UMA CÓPIA REAL DO BANCO OPERACIONAL.
+ * O backup real e autêntico da produção é capturado por `take_real_operational_backup.ts`.
+ */
+
 const scratchDir = 'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
 const preJsonPath = path.join(scratchDir, 'pre_etapa3_operational_backup.json');
-const postJsonPath = path.join(scratchDir, 'post_etapa3_delivery_backup.json');
-const postEncPath = path.join(scratchDir, 'post_etapa3_delivery_backup.enc.json');
+const fixtureJsonPath = path.join(scratchDir, 'etapa3_synthetic_fixture_test_backup.json');
+const fixtureEncPath = path.join(scratchDir, 'etapa3_synthetic_fixture_test_backup.enc.json');
 
 const data = JSON.parse(fs.readFileSync(preJsonPath, 'utf8'));
 
@@ -28,7 +40,7 @@ data.CompanyPlatformRate = [
     ratePercentage: '2.50',
     effectiveFrom: '2026-01-01T00:00:00.000Z',
     effectiveTo: null,
-    reason: 'Taxa contratual inicial 2.5%',
+    reason: 'Taxa contratual de teste (fixture)',
     createdByUserId: adminUser.id,
     createdByName: adminUser.name || 'Super Administrador',
     createdAt: now,
@@ -66,7 +78,7 @@ data.PlatformMonthlyStatement = [
     closedAt: now,
     closedByUserId: adminUser.id,
     closedByName: adminUser.name || 'Super Administrador',
-    notes: 'Post-migration Etapa 3 delivery backup fixture',
+    notes: 'Fixture sintética de teste para validação estrutural do mecanismo de restauração',
     createdAt: now,
     updatedAt: now,
   },
@@ -79,7 +91,7 @@ data.PlatformStatementItem = [
     companyId: comp.id,
     saleId: sale.id,
     competence: '2026-09',
-    saleReference: 'FICHA-TEST-DELIVERY',
+    saleReference: 'FICHA-TEST-FIXTURE',
     saleDate: '2026-09-15T12:00:00.000Z',
     city: 'Belo Horizonte',
     product: 'Books',
@@ -106,14 +118,14 @@ data.PlatformStatementAdjustment = [
     originStatementId: stmtId,
     originItemId: 'item-post-etapa3-001',
     originSaleId: sale.id,
-    originSaleReference: 'FICHA-TEST-DELIVERY',
+    originSaleReference: 'FICHA-TEST-FIXTURE',
     type: 'SALE_CANCELLATION_CREDIT',
     returnedBaseCents: 20000,
     originalRateVersion: 1,
     originalRatePercentage: '2.50',
     originalRateMilliPercent: 2500,
     amountCents: -500,
-    reason: 'Cancelamento parcial de teste para backup pós-migração',
+    reason: 'Cancelamento parcial de teste para fixture de validação',
     createdByUserId: adminUser.id,
     createdByName: adminUser.name || 'Super Administrador',
     createdAt: now,
@@ -129,8 +141,8 @@ data.PlatformStatementPayment = [
     amountCents: 2000,
     paymentMethod: 'PIX_OUTSIDE_APP',
     paidAt: '2026-10-05T10:00:00.000Z',
-    externalReference: 'PIX-E3-TEST-REF',
-    notes: 'Pagamento PIX verificado',
+    externalReference: 'PIX-TEST-FIXTURE-REF',
+    notes: 'Pagamento PIX de fixture',
     recordedByUserId: adminUser.id,
     recordedByName: adminUser.name || 'Super Administrador',
     createdAt: now,
@@ -148,7 +160,7 @@ data.PlatformCostEntry = [
     category: 'INFRASTRUCTURE',
     provider: 'RENDER',
     measurementType: 'MANUAL',
-    sourceDocument: 'Invoice Render PostgreSQL dedicado',
+    sourceDocument: 'Invoice Render PostgreSQL (Fixture de Teste)',
     currency: 'BRL',
     originalAmountCents: 15000,
     exchangeRateMilli: null,
@@ -156,8 +168,8 @@ data.PlatformCostEntry = [
     costPayer: 'PLATFORM',
     allocationRule: 'UNALLOCATED_PLATFORM_OVERHEAD',
     replacesTelemetryUsage: false,
-    isTestOrSimulation: false,
-    notes: 'Servidor Render PostgreSQL dedicado',
+    isTestOrSimulation: true,
+    notes: 'Servidor Render PostgreSQL (Fixture)',
     createdByUserId: adminUser.id,
     createdByName: adminUser.name || 'Super Administrador',
     createdAt: now,
@@ -176,11 +188,11 @@ data.OperationalAuditEvent = [
     entityId: stmtId,
     previousValues: null,
     newValues: { status: 'PAID', netDueCents: 2500 },
-    reason: 'Fechamento de competência de teste pós-migração',
+    reason: 'Fechamento de teste sintético (fixture)',
     authorUserId: adminUser.id,
     authorName: adminUser.name || 'Super Administrador',
     authorRole: adminUser.role || 'SUPER_ADMIN',
-    isTestOrSimulation: false,
+    isTestOrSimulation: true,
     ipAddress: '127.0.0.1',
     createdAt: now,
   },
@@ -191,20 +203,23 @@ data.OperationalReviewAlert = [];
 data._metadata = {
   timestamp: now,
   scope: 'GLOBAL',
+  backupType: 'SYNTHETIC_MECHANISM_TEST_FIXTURE',
+  isTestOrSimulation: true,
   secretsRedacted: false,
-  version: '1.2',
+  version: '1.2_fixture',
+  description: 'Fixture de teste para exercitar restauração das tabelas da Etapa 3. Não é cópia operacional.',
 };
 
 const rawJson = JSON.stringify(data, null, 2);
-fs.writeFileSync(postJsonPath, rawJson, 'utf8');
-console.log('Gravado:', postJsonPath, 'tamanho:', fs.statSync(postJsonPath).size);
+fs.writeFileSync(fixtureJsonPath, rawJson, 'utf8');
 
 const enc = encryptBackupPayload(rawJson);
 const encStr = JSON.stringify(enc, null, 2);
-fs.writeFileSync(postEncPath, encStr, 'utf8');
-const sha256 = crypto.createHash('sha256').update(fs.readFileSync(postEncPath)).digest('hex').toUpperCase();
+fs.writeFileSync(fixtureEncPath, encStr, 'utf8');
+const sha256 = crypto.createHash('sha256').update(fs.readFileSync(fixtureEncPath)).digest('hex').toUpperCase();
 
-console.log('✅ post_etapa3_delivery_backup.enc.json criado com sucesso!');
-console.log('ENC_PATH:', postEncPath);
-console.log('ENC_BYTES:', fs.statSync(postEncPath).size);
+console.log('✅ etapa3_synthetic_fixture_test_backup.enc.json criado com sucesso (CLASSIFICADO COMO FIXTURE)!');
+console.log('ENC_PATH:', fixtureEncPath);
+console.log('ENC_BYTES:', fs.statSync(fixtureEncPath).size);
 console.log('SHA256:', sha256);
+

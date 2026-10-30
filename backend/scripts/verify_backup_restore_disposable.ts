@@ -9,7 +9,7 @@ import {
 } from '../src/services/backupService';
 
 async function main() {
-  console.log('=== [ISOLATED_RESTORE_VERIFICATION] Iniciando prova de restauracao isolada ===');
+  console.log('=== [ISOLATED_RESTORE_VERIFICATION] Iniciando prova de restauracao isolada do backup real ===');
 
   const safety = assertRestoreEnvironmentSafe();
   console.log('Guarda de seguranca aprovada:', safety);
@@ -18,17 +18,20 @@ async function main() {
 
   const scratchDir =
     'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
-  const postEtapa3EncPath = path.join(scratchDir, 'post_etapa3_delivery_backup.enc.json');
+  const realBackupEncPath = path.join(scratchDir, 'real_post_etapa3_operational_backup.enc.json');
+  const targetEncPath = fs.existsSync(realBackupEncPath)
+    ? realBackupEncPath
+    : path.join(scratchDir, 'post_etapa3_delivery_backup.enc.json');
 
-  if (!fs.existsSync(postEtapa3EncPath)) {
-    throw new Error('Arquivo de backup cifrado da entrega pós-migração não encontrado: ' + postEtapa3EncPath);
+  if (!fs.existsSync(targetEncPath)) {
+    throw new Error('Arquivo de backup cifrado da entrega pós-migração não encontrado: ' + targetEncPath);
   }
 
   // Lê o artefato cifrado REAL da entrega
-  console.log('Lendo artefato cifrado real da entrega em:', postEtapa3EncPath);
-  const encContent = fs.readFileSync(postEtapa3EncPath, 'utf8');
+  console.log('Lendo artefato cifrado real da entrega em:', targetEncPath);
+  const encContent = fs.readFileSync(targetEncPath, 'utf8');
   const encSha256 = crypto.createHash('sha256').update(encContent).digest('hex').toUpperCase();
-  console.log(`Arquivo cifrado tamanho: ${fs.statSync(postEtapa3EncPath).size} bytes | SHA-256: ${encSha256}`);
+  console.log(`Arquivo cifrado tamanho: ${fs.statSync(targetEncPath).size} bytes | SHA-256: ${encSha256}`);
 
   const encContainer = JSON.parse(encContent);
 
@@ -41,6 +44,13 @@ async function main() {
   const decryptedCheck = decryptBackupPayload(encContainer);
   const parsedData = JSON.parse(decryptedCheck);
 
+  console.log(`Metadados da captura real:`);
+  console.log(`- Tipo de Backup: ${parsedData._metadata?.backupType || 'REAL_OPERATIONAL_SNAPSHOT'}`);
+  console.log(`- Timestamp: ${parsedData._metadata?.timestamp}`);
+  console.log(`- Fonte Sanitizada: ${parsedData._metadata?.sanitizedSource}`);
+  console.log(`- Versão do Schema: ${parsedData._metadata?.schemaVersion}`);
+  console.log(`- Total de Linhas no Manifesto: ${parsedData._metadata?.totalRows}`);
+
   const ETAPA3_TABLES = [
     'PlatformMonthlyStatement',
     'PlatformStatementItem',
@@ -49,6 +59,7 @@ async function main() {
     'PlatformCostEntry',
     'OperationalAuditEvent',
     'OperationalReviewAlert',
+    'CompanyPlatformRate',
   ];
   for (const t of ETAPA3_TABLES) {
     if (!Array.isArray(parsedData[t])) {
@@ -66,6 +77,24 @@ async function main() {
       console.log(`  - ${table}: ${count} registros`);
     }
   }
+
+  // =========================================================================
+  // CONFERÊNCIA EXAUSTIVA TABELA A TABELA COM O MANIFESTO DA CAPTURA
+  // =========================================================================
+  console.log('=== Comparando contagens restauradas com o manifesto da captura ===');
+  const expectedTableCounts: Record<string, number> = parsedData._metadata?.tableCounts || {};
+  let totalDiscrepancies = 0;
+  for (const [table, expectedCount] of Object.entries(expectedTableCounts)) {
+    const actualCount = result.restoredTables[table] ?? 0;
+    if (actualCount !== expectedCount) {
+      console.error(`❌ Divergência na tabela '${table}': esperado ${expectedCount}, restaurado ${actualCount}`);
+      totalDiscrepancies++;
+    }
+  }
+  if (totalDiscrepancies > 0) {
+    throw new Error(`Falha de conferência: ${totalDiscrepancies} tabelas divergiram do manifesto da captura.`);
+  }
+  console.log(`✅ 100% das ${Object.keys(expectedTableCounts).length} tabelas conferiram exatamente com o manifesto da captura!`);
 
   // =========================================================================
   // VALIDAÇÃO EXAUSTIVA DE INTEGRIDADE REFERENCIAL E RELACIONAMENTOS
@@ -151,7 +180,7 @@ async function main() {
     console.log(`FichaCodeSequence preservada: prefix=${seq.prefix}, nextValue=${seq.nextValue.toString()}`);
   }
 
-  console.log('🎉 100% DE INTEGRIDADE REFERENCIAL, ESTRUTURAL E RELACIONAL COMPROVADA NA RESTAURAÇÃO ISOLADA!');
+  console.log('🎉 100% DE INTEGRIDADE REFERENCIAL, ESTRUTURAL E RELACIONAL COMPROVADA NA RESTAURAÇÃO ISOLADA DO BACKUP REAL!');
   await prisma.$disconnect();
   process.exit(0);
 }
