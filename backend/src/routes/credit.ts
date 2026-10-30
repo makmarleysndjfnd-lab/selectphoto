@@ -1320,7 +1320,10 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
       return;
     }
 
-    const agreements = await prisma.creditAgreement.findMany({
+    const targetCompetence = (req.query.competence as string | undefined)?.trim() || getCompetenceForDate(new Date());
+    getCompetenceRange(targetCompetence);
+
+    const rawAgreements = await prisma.creditAgreement.findMany({
       where: { companyId, sellerId: targetSellerId },
       include: {
         client: {
@@ -1328,7 +1331,26 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
         },
         installments: {
           orderBy: { installmentNumber: 'asc' },
-          include: { asaasCharge: true },
+          include: {
+            asaasCharge: true,
+            allocations: {
+              include: {
+                payment: {
+                  include: {
+                    commissions: {
+                      select: {
+                        id: true,
+                        amountCents: true,
+                        status: true,
+                        monthlyClosingId: true,
+                        createdAt: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         payments: {
           where: { isReversed: false },
@@ -1341,19 +1363,100 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
     const now = new Date();
     let totalReceivableCents = 0;
     let overdueCents = 0;
+    let totalSalesValueCents = 0;
+    let totalDownPaymentValueCents = 0;
+    let totalFinancedAmountCents = 0;
+    let totalPaidPrincipalCents = 0;
+    let totalRemainingPrincipalCents = 0;
+    let futureEstimatedCommissionCents = 0;
 
-    for (const a of agreements) {
+    const agreements = rawAgreements.map((a) => {
+      const financedAmountCents = (a as any).financedAmountCents || (a.totalSaleCents - a.downPaymentCents);
+      const agreementFutureCommCents = Math.round(a.remainingPrincipalCents * a.installmentCommissionRate);
+      const agreementReleasedCommCents = Math.round(a.paidPrincipalCents * a.installmentCommissionRate);
+      const downPaymentCommCents = Math.round(a.downPaymentCents * a.initialCommissionRate);
+
+      totalSalesValueCents += a.totalSaleCents;
+      totalDownPaymentValueCents += a.downPaymentCents;
+      totalFinancedAmountCents += financedAmountCents;
+      totalPaidPrincipalCents += a.paidPrincipalCents;
+      totalRemainingPrincipalCents += a.remainingPrincipalCents;
+      futureEstimatedCommissionCents += agreementFutureCommCents;
+
       if (a.status === 'ACTIVE' || a.status === 'RENEGOTIATED') {
         totalReceivableCents += a.remainingPrincipalCents;
-        for (const inst of a.installments) {
-          if ((inst.status === 'PENDING' || inst.status === 'PARTIALLY_PAID' || inst.status === 'OVERDUE') && new Date(inst.dueDate) < now) {
-            overdueCents += (inst.amountCents - inst.paidCents);
-          }
-        }
       }
-    }
 
-    // Comissões
+      const installments = a.installments.map((inst) => {
+        const isOverdue =
+          (inst.status === 'PENDING' || inst.status === 'PARTIALLY_PAID' || inst.status === 'OVERDUE') &&
+          new Date(inst.dueDate) < now;
+        const unpaidCents = inst.amountCents - inst.paidCents;
+        if (isOverdue && (a.status === 'ACTIVE' || a.status === 'RENEGOTIATED')) {
+          overdueCents += unpaidCents;
+        }
+
+        const effectivePaidAt =
+          inst.paidAt ||
+          (inst.allocations && inst.allocations.length > 0
+            ? inst.allocations[inst.allocations.length - 1].payment.paidAt
+            : null);
+
+        const installmentCommissionCents = Math.round(inst.paidCents * a.installmentCommissionRate);
+        const installmentFutureCommCents = Math.round(unpaidCents * a.installmentCommissionRate);
+        const instCompetence = effectivePaidAt ? getCompetenceForDate(new Date(effectivePaidAt)) : null;
+
+        const linkedClosingId =
+          inst.allocations
+            ?.flatMap((al: any) => al.payment?.commissions || [])
+            .find((c: any) => c.monthlyClosingId)?.monthlyClosingId || null;
+
+        return {
+          id: inst.id,
+          installmentNumber: inst.installmentNumber,
+          dueDate: inst.dueDate,
+          amountCents: inst.amountCents,
+          amountBrl: Number((inst.amountCents / 100).toFixed(2)),
+          paidCents: inst.paidCents,
+          paidPrincipalCents: inst.paidCents,
+          paidPrincipalBrl: Number((inst.paidCents / 100).toFixed(2)),
+          unpaidPrincipalCents: unpaidCents,
+          unpaidPrincipalBrl: Number((unpaidCents / 100).toFixed(2)),
+          status: inst.status,
+          paidAt: effectivePaidAt,
+          commissionCents: installmentCommissionCents,
+          commissionBrl: Number((installmentCommissionCents / 100).toFixed(2)),
+          futureEstimatedCommissionCents: installmentFutureCommCents,
+          futureEstimatedCommissionBrl: Number((installmentFutureCommCents / 100).toFixed(2)),
+          competence: instCompetence,
+          monthlyClosingId: linkedClosingId,
+          asaasCharge: inst.asaasCharge,
+        };
+      });
+
+      return {
+        ...a,
+        totalSaleBrl: Number((a.totalSaleCents / 100).toFixed(2)),
+        downPaymentBrl: Number((a.downPaymentCents / 100).toFixed(2)),
+        financedAmountCents,
+        financedAmountBrl: Number((financedAmountCents / 100).toFixed(2)),
+        paidPrincipalBrl: Number((a.paidPrincipalCents / 100).toFixed(2)),
+        remainingPrincipalBrl: Number((a.remainingPrincipalCents / 100).toFixed(2)),
+        downPaymentCommissionRate: a.initialCommissionRate,
+        downPaymentCommissionCents: downPaymentCommCents,
+        downPaymentCommissionBrl: Number((downPaymentCommCents / 100).toFixed(2)),
+        installmentCommissionRate: a.installmentCommissionRate,
+        installmentCommissionRateFormatted: '10%',
+        futureEstimatedCommissionCents: agreementFutureCommCents,
+        futureEstimatedCommissionBrl: Number((agreementFutureCommCents / 100).toFixed(2)),
+        futureEstimatedCommissionLabel: 'Previsão futura (condicional ao pagamento do principal pelo cliente)',
+        releasedInstallmentCommissionCents: agreementReleasedCommCents,
+        releasedInstallmentCommissionBrl: Number((agreementReleasedCommCents / 100).toFixed(2)),
+        installments,
+      };
+    });
+
+    // Comissões do vendedor
     const commissions = await prisma.creditCommission.findMany({
       where: { companyId, sellerId: targetSellerId },
       orderBy: { createdAt: 'desc' },
@@ -1372,12 +1475,47 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
     const pendingAdjustmentsCents = adjustments.filter((a) => a.status === 'PENDING').reduce((sum, a) => sum + a.amountCents, 0);
     const netCommissionPayableCents = Math.max(0, releasedCents - pendingAdjustmentsCents);
 
+    // Comissão de 10% gerada por parcelas efetivamente recebidas na competência selecionada
+    const { startDate, endDate } = getCompetenceRange(targetCompetence);
+    const monthPayments = await prisma.creditPayment.findMany({
+      where: {
+        companyId,
+        agreement: { sellerId: targetSellerId },
+        isReversed: false,
+        paidAt: { gte: startDate, lt: endDate },
+      },
+      select: {
+        amountCents: true,
+        agreement: { select: { installmentCommissionRate: true } },
+      },
+    });
+    const monthPaidInstallmentCommissionCents = monthPayments.reduce(
+      (acc, p) => acc + Math.round(p.amountCents * (p.agreement?.installmentCommissionRate || 0.10)),
+      0
+    );
+
     res.json({
       seller,
+      selectedCompetence: targetCompetence,
       totalReceivableCents,
       totalReceivable: Number((totalReceivableCents / 100).toFixed(2)),
       overdueCents,
       overdueAmount: Number((overdueCents / 100).toFixed(2)),
+      totalSalesValueCents,
+      totalSalesValue: Number((totalSalesValueCents / 100).toFixed(2)),
+      totalDownPaymentValueCents,
+      totalDownPaymentValue: Number((totalDownPaymentValueCents / 100).toFixed(2)),
+      totalFinancedAmountCents,
+      totalFinancedAmount: Number((totalFinancedAmountCents / 100).toFixed(2)),
+      totalRemainingPrincipalCents,
+      totalRemainingPrincipal: Number((totalRemainingPrincipalCents / 100).toFixed(2)),
+      totalPaidPrincipalCents,
+      totalPaidPrincipal: Number((totalPaidPrincipalCents / 100).toFixed(2)),
+      futureEstimatedCommissionCents,
+      futureEstimatedCommission: Number((futureEstimatedCommissionCents / 100).toFixed(2)),
+      futureEstimatedCommissionLabel: 'Previsão futura (condicional ao pagamento do principal pelo cliente)',
+      monthPaidInstallmentCommissionCents,
+      monthPaidInstallmentCommission: Number((monthPaidInstallmentCommissionCents / 100).toFixed(2)),
       releasedCommissionsCents: releasedCents,
       releasedCommissions: Number((releasedCents / 100).toFixed(2)),
       paidCommissionsCents: paidCents,

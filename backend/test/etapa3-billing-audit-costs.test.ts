@@ -35,6 +35,7 @@ process.env.INTEGRATION_MASTER_KEY =
   process.env.INTEGRATION_MASTER_KEY ||
   'lumora_disposable_master_key_64hex_0123456789abcdef0123456789abcd';
 process.env.EXTERNAL_SERVICES_DISABLED = 'true';
+process.env.BILLING_CLOCK_OVERRIDE = '2026-11-05T12:00:00.000Z';
 delete process.env.ASAAS_ALLOW_LIVE_OPERATIONS;
 
 const prisma = new PrismaClient();
@@ -970,8 +971,31 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
   );
 
   await t.test(
-    '5. Devolução/cancelamento proporcional usa taxa ORIGINAL (2,5% e não 4,0% nova), bloqueia excesso >100% e concilia pagamento manual fora do app',
+    '5. Devolução/cancelamento proporcional usa taxa ORIGINAL (2,5% e não 4,0% nova), bloqueia alteração de competência fechada (422 COMPETENCE_ALREADY_CLOSED), destina à próxima aberta e concilia liquidação imutável',
     async () => {
+      // 1. Tentar aplicar devolução na competência 2026-10 que já foi fechada deve ser REJEITADO com 422 COMPETENCE_ALREADY_CLOSED
+      const adjClosedComp = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/adjustments',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compAlphaId,
+            idempotencyKey: `adj-alpha-closed-${suffix}`,
+            type: 'PARTIAL_RETURN_CREDIT',
+            originSaleId: alphaSaleId,
+            returnedBaseCents: 5_000_000,
+            appliedCompetence: '2026-10',
+            reason: 'Tentativa indevida de alterar mês já fechado',
+          },
+        }
+      );
+      assert.equal(adjClosedComp.status, 422);
+      assert.equal(adjClosedComp.data.code, 'COMPETENCE_ALREADY_CLOSED');
+
+      // 2. Sem appliedCompetence explícita, destina automaticamente para a próxima competência aberta (2026-11)
       const adjRes = await apiJson(
         apiServer!.baseUrl,
         'POST',
@@ -985,7 +1009,6 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
             type: 'PARTIAL_RETURN_CREDIT',
             originSaleId: alphaSaleId,
             returnedBaseCents: 5_000_000,
-            appliedCompetence: '2026-10',
             reason: 'Devolução comercial parcial de 50% do lote acordada com a empresa',
           },
         }
@@ -994,7 +1017,10 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.equal(Number(adjRes.data.adjustment.originalRatePercentage), 2.5);
       assert.equal(adjRes.data.adjustment.originalRateVersion, 1);
       assert.equal(adjRes.data.adjustment.amountCents, -125_000);
+      assert.equal(adjRes.data.adjustment.appliedCompetence, '2026-11');
+      assert.equal(adjRes.data.adjustment.appliedStatementId, null);
 
+      // 3. O demonstrativo já fechado (2026-10) permanece 100% INALTERADO e IMUTÁVEL
       const stAfterAdj = await apiJson(
         apiServer!.baseUrl,
         'GET',
@@ -1003,10 +1029,11 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       );
       assert.equal(stAfterAdj.status, 200);
       assert.equal(stAfterAdj.data.statement.grossPlatformFeeCents, 250_000);
-      assert.equal(stAfterAdj.data.statement.adjustmentsCents, -125_000);
-      assert.equal(stAfterAdj.data.statement.netDueCents, 125_000);
-      assert.equal(stAfterAdj.data.statement.remainingBalanceCents, 125_000);
+      assert.equal(stAfterAdj.data.statement.adjustmentsCents, 0);
+      assert.equal(stAfterAdj.data.statement.netDueCents, 250_000);
+      assert.equal(stAfterAdj.data.statement.remainingBalanceCents, 250_000);
 
+      // 4. Replay idempotente
       const adjReplay = await apiJson(
         apiServer!.baseUrl,
         'POST',
@@ -1020,7 +1047,6 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
             type: 'PARTIAL_RETURN_CREDIT',
             originSaleId: alphaSaleId,
             returnedBaseCents: 5_000_000,
-            appliedCompetence: '2026-10',
             reason: 'Devolução comercial parcial de 50% do lote acordada com a empresa',
           },
         }
@@ -1028,6 +1054,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.equal(adjReplay.status, 200);
       assert.equal(adjReplay.data.created, false);
 
+      // 5. Bloqueio de excesso > 100%
       const adjExcess = await apiJson(
         apiServer!.baseUrl,
         'POST',
@@ -1041,7 +1068,6 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
             type: 'PARTIAL_RETURN_CREDIT',
             originSaleId: alphaSaleId,
             returnedBaseCents: 6_000_000,
-            appliedCompetence: '2026-10',
             reason: 'Tentativa inválida acima de 100% da venda original',
           },
         }
@@ -1049,6 +1075,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.equal(adjExcess.status, 422);
       assert.equal(adjExcess.data.code, 'RETURN_EXCEEDS_ORIGINAL_SALE_BASE');
 
+      // 6. Quitação de pagamentos sobre o mês fechado (saldo de 250.000)
       const payPart = await apiJson(
         apiServer!.baseUrl,
         'POST',
@@ -1058,7 +1085,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
           stepUpToken: validStepUpToken,
           body: {
             idempotencyKey: `pay-alpha-1-${suffix}`,
-            amountCents: 50_000,
+            amountCents: 100_000,
             paymentMethod: 'PIX_OUTSIDE_APP',
             externalReference: 'TED-COMP-ALPHA-001',
             notes: 'Liquidação parcial contratual B2B fora do app',
@@ -1067,8 +1094,8 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       );
       assert.equal(payPart.status, 201);
       assert.equal(payPart.data.statement.status, 'PARTIALLY_PAID');
-      assert.equal(payPart.data.statement.paidAmountCents, 50_000);
-      assert.equal(payPart.data.statement.remainingBalanceCents, 75_000);
+      assert.equal(payPart.data.statement.paidAmountCents, 100_000);
+      assert.equal(payPart.data.statement.remainingBalanceCents, 150_000);
 
       const payOver = await apiJson(
         apiServer!.baseUrl,
@@ -1079,7 +1106,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
           stepUpToken: validStepUpToken,
           body: {
             idempotencyKey: `pay-alpha-over-${suffix}`,
-            amountCents: 80_000,
+            amountCents: 200_000,
             paymentMethod: 'BANK_TRANSFER_OUTSIDE_APP',
           },
         }
@@ -1096,7 +1123,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
           stepUpToken: validStepUpToken,
           body: {
             idempotencyKey: `pay-alpha-2-${suffix}`,
-            amountCents: 75_000,
+            amountCents: 150_000,
             paymentMethod: 'BANK_TRANSFER_OUTSIDE_APP',
             externalReference: 'TED-COMP-ALPHA-002',
           },
@@ -1104,7 +1131,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       );
       assert.equal(payRest.status, 201);
       assert.equal(payRest.data.statement.status, 'PAID');
-      assert.equal(payRest.data.statement.paidAmountCents, 125_000);
+      assert.equal(payRest.data.statement.paidAmountCents, 250_000);
       assert.equal(payRest.data.statement.remainingBalanceCents, 0);
     }
   );
@@ -1575,13 +1602,13 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       );
       assert.equal(sumAllocatedShares, 16_000);
 
-      // Receitas 2026-10: Alpha (125_000, pago 125_000) + Beta (300_000) + Delta (0) + Épsilon (9_000) = 434_000
-      assert.equal(p.revenues.closedContractedRevenueCents, 434_000);
-      assert.equal(p.revenues.statementReceivedRevenueCents, 125_000);
+      // Receitas 2026-10: Alpha (250_000, pago 250_000) + Beta (300_000) + Delta (0) + Épsilon (9_000) = 559_000
+      assert.equal(p.revenues.closedContractedRevenueCents, 559_000);
+      assert.equal(p.revenues.statementReceivedRevenueCents, 250_000);
 
-      // Margem Real = 125_000 - 16_000 = 109_000 | Margem Estimada = 434_000 - 18_500 = 415_500
-      assert.equal(p.margins.realMarginCents, 109_000);
-      assert.equal(p.margins.estimatedMarginCents, 415_500);
+      // Margem Real = 250_000 - 16_000 = 234_000 | Margem Estimada = 559_000 - 18_500 = 540_500
+      assert.equal(p.margins.realMarginCents, 234_000);
+      assert.equal(p.margins.estimatedMarginCents, 540_500);
 
       const storePolicyRes = await apiJson(
         apiServer!.baseUrl,
@@ -1620,6 +1647,485 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         (run.stderr || '').includes('BLOQUEIO DE SEGURANÇA'),
         `Stderr inesperado: ${run.stderr}`
       );
+    }
+  );
+
+  await t.test(
+    '10. Complemento Etapa 3 — Bloqueio de fechamento antecipado (COMPETENCE_NOT_ENDED), transporte e consumo de crédito excedente (R$ 150 -> R$ 100 -> R$ 80) e absorção de vendas tardias extemporâneas',
+    async () => {
+      // Cria empresa Gamma com taxa de 2,5% a partir de 2026-10-01
+      const companyGamma = await prisma.company.create({
+        data: {
+          name: `Empresa Gamma Ltda ${suffix}`,
+          tradeName: 'Foto Gamma',
+          cnpj: `66.777.888/0001-${suffix.slice(0, 2)}`,
+          status: 'ACTIVE',
+        },
+      });
+      const compGammaId = companyGamma.id;
+
+      await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        `/api/owner/companies/${compGammaId}/rates`,
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            ratePercentage: 2.5,
+            effectiveFrom: '2026-10-01T03:00:00.000Z',
+            reason: 'Taxa inicial Gamma 2,5%',
+          },
+        }
+      );
+
+      // 1. Bloqueio de fechamento antecipado: tentar fechar 2026-10 em data anterior ao fim do mês
+      const earlyCloseRes = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compGammaId,
+            competence: '2026-10',
+            referenceDate: '2026-10-25T15:00:00.000Z', // antes de 2026-11-01T03:00:00.000Z
+          },
+        }
+      );
+      assert.equal(earlyCloseRes.status, 422);
+      assert.equal(earlyCloseRes.data.code, 'COMPETENCE_NOT_ENDED');
+
+      // 2. Mês 1 (2026-10): Venda de R$ 4.000,00 (taxa R$ 100,00) e crédito manual de R$ 250,00
+      // Saldo líquido = 100 - 250 = -150 -> netDue = 0, carryForwardCredit = R$ 150,00 (15.000 centavos)
+      const sellerGamma = await prisma.user.create({
+        data: {
+          name: `Vendedor Gamma ${suffix}`,
+          email: `seller.gamma.${suffix}@test.com`,
+          password: 'hashed_password_123',
+          role: 'SELLER',
+          companyId: compGammaId,
+        },
+      });
+
+      const clientGamma = await prisma.client.create({
+        data: {
+          companyId: compGammaId,
+          name: 'Cliente Gamma 1',
+          phone1: '31999990001',
+          city: 'Belo Horizonte',
+          sequenceNumber: `GMA-01-${suffix}`,
+        },
+      });
+
+      await prisma.sale.create({
+        data: {
+          companyId: compGammaId,
+          clientId: clientGamma.id,
+          value: 4000,
+          status: 'COMPLETED',
+          paymentStatus: 'PAID',
+          paymentMethod: 'CASH',
+          sellerId: sellerGamma.id,
+          fichaNumber: `FICHA-GMA-01-${suffix}`,
+          date: new Date('2026-10-15T14:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Registra ajuste manual de crédito de R$ 250,00 (25.000 centavos) na competência aberta 2026-10
+      const adjGammaCredit = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/adjustments',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compGammaId,
+            idempotencyKey: `adj-gamma-cred-1-${suffix}`,
+            type: 'MANUAL_CREDIT',
+            manualAmountCents: 25_000,
+            appliedCompetence: '2026-10',
+            reason: 'Crédito promocional de abertura acordado com proprietário',
+          },
+        }
+      );
+      assert.equal(adjGammaCredit.status, 201);
+      assert.equal(adjGammaCredit.data.adjustment.amountCents, -25_000);
+
+      // Fecha Mês 1 (2026-10) com referenceDate após o fim do mês
+      const closeM1 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compGammaId,
+            competence: '2026-10',
+            referenceDate: '2026-11-05T12:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM1.status, 201);
+      assert.equal(closeM1.data.statement.grossPlatformFeeCents, 10_000); // R$ 100,00
+      assert.equal(closeM1.data.statement.adjustmentsCents, -25_000); // R$ -250,00
+      assert.equal(closeM1.data.statement.netDueCents, 0); // R$ 0,00 a pagar
+      assert.equal(closeM1.data.statement.carryForwardCreditCents, 15_000); // R$ 150,00 transportado
+      assert.equal(closeM1.data.statement.status, 'PAID');
+
+      // 3. Mês 2 (2026-11): Venda de R$ 4.000,00 (taxa R$ 100,00). Sem novos créditos.
+      // O crédito acumulado de R$ 150,00 abate R$ 100,00 -> saldo a pagar R$ 0,00, transporta R$ 50,00
+      await prisma.sale.create({
+        data: {
+          companyId: compGammaId,
+          clientId: clientGamma.id,
+          value: 4000,
+          status: 'COMPLETED',
+          paymentStatus: 'PAID',
+          paymentMethod: 'CASH',
+          sellerId: sellerGamma.id,
+          fichaNumber: `FICHA-GMA-02-${suffix}`,
+          date: new Date('2026-11-15T14:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Prévia de 2026-11
+      const pvM2 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/owner/billing/statements/preview?companyId=${compGammaId}&competence=2026-11`,
+        { token: ownerFinanceJwt }
+      );
+      assert.equal(pvM2.status, 200);
+      assert.equal(pvM2.data.preview.grossPlatformFeeCents, 10_000); // R$ 100,00
+      assert.equal(pvM2.data.preview.incomingCreditCents, 15_000); // R$ 150,00 disponível
+      assert.equal(pvM2.data.preview.consumedCarryForwardCreditCents, 10_000); // consome R$ 100,00
+      assert.equal(pvM2.data.preview.netDueCents, 0); // R$ 0,00 a pagar
+      assert.equal(pvM2.data.preview.carryForwardCreditCents, 5_000); // R$ 50,00 restante
+
+      // Fecha Mês 2 (2026-11)
+      const closeM2 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compGammaId,
+            competence: '2026-11',
+            referenceDate: '2026-12-05T12:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM2.status, 201);
+      assert.equal(closeM2.data.statement.grossPlatformFeeCents, 10_000);
+      assert.equal(closeM2.data.statement.adjustmentsCents, -10_000);
+      assert.equal(closeM2.data.statement.netDueCents, 0);
+      assert.equal(closeM2.data.statement.carryForwardCreditCents, 5_000); // R$ 50,00 transportado
+      assert.equal(closeM2.data.statement.status, 'PAID');
+      assert.equal(closeM2.data.statement.consumedCarryForwardCreditCents, 10_000);
+
+      // 4. Mês 3 (2026-12): Venda de R$ 3.200,00 (taxa R$ 80,00 = 8.000 centavos)
+      // Consome os R$ 50,00 restantes -> saldo a pagar R$ 30,00 (3.000 centavos), crédito a transportar R$ 0,00!
+      await prisma.sale.create({
+        data: {
+          companyId: compGammaId,
+          clientId: clientGamma.id,
+          value: 3200,
+          status: 'COMPLETED',
+          paymentStatus: 'PAID',
+          paymentMethod: 'CASH',
+          sellerId: sellerGamma.id,
+          fichaNumber: `FICHA-GMA-03-${suffix}`,
+          date: new Date('2026-12-10T14:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      const pvM3 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/owner/billing/statements/preview?companyId=${compGammaId}&competence=2026-12`,
+        { token: ownerFinanceJwt }
+      );
+      assert.equal(pvM3.status, 200);
+      assert.equal(pvM3.data.preview.grossPlatformFeeCents, 8_000); // R$ 80,00
+      assert.equal(pvM3.data.preview.incomingCreditCents, 5_000); // R$ 50,00 disponível
+      assert.equal(pvM3.data.preview.consumedCarryForwardCreditCents, 5_000); // consome R$ 50,00
+      assert.equal(pvM3.data.preview.netDueCents, 3_000); // R$ 30,00 a pagar!
+      assert.equal(pvM3.data.preview.carryForwardCreditCents, 0); // R$ 0,00 restante
+
+      const closeM3 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        '/api/owner/billing/statements/close',
+        {
+          token: ownerFinanceJwt,
+          stepUpToken: validStepUpToken,
+          body: {
+            companyId: compGammaId,
+            competence: '2026-12',
+            referenceDate: '2027-01-05T12:00:00.000Z',
+          },
+        }
+      );
+      assert.equal(closeM3.status, 201);
+      assert.equal(closeM3.data.statement.grossPlatformFeeCents, 8_000);
+      assert.equal(closeM3.data.statement.adjustmentsCents, -5_000);
+      assert.equal(closeM3.data.statement.netDueCents, 3_000);
+      assert.equal(closeM3.data.statement.remainingBalanceCents, 3_000);
+      assert.equal(closeM3.data.statement.carryForwardCreditCents, 0);
+      assert.equal(closeM3.data.statement.status, 'CLOSED');
+      assert.equal(closeM3.data.statement.consumedCarryForwardCreditCents, 5_000);
+
+      // 5. Absorção de vendas tardias extemporâneas:
+      // Cria uma venda com data comercial em 2026-10 (mês já fechado) que sincronizou offline apenas agora
+      await prisma.sale.create({
+        data: {
+          companyId: compGammaId,
+          clientId: clientGamma.id,
+          value: 2000,
+          status: 'COMPLETED',
+          paymentStatus: 'PAID',
+          paymentMethod: 'CASH',
+          sellerId: sellerGamma.id,
+          fichaNumber: `FICHA-GMA-LATE-${suffix}`,
+          date: new Date('2026-10-20T10:00:00.000Z'), // Venda ocorrida em outubro
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Na prévia da próxima competência aberta (2027-01), essa venda é absorvida como complemento extemporâneo
+      const pvM4 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/owner/billing/statements/preview?companyId=${compGammaId}&competence=2027-01`,
+        { token: ownerFinanceJwt }
+      );
+      assert.equal(pvM4.status, 200);
+      assert.equal(pvM4.data.preview.eligibleSalesCount, 1);
+      assert.equal(pvM4.data.preview.eligibleSalesBaseCents, 200_000);
+      assert.equal(pvM4.data.preview.grossPlatformFeeCents, 5_000); // 2,5% de 2.000 = 50,00 (5.000 centavos)
+      const lateItem = pvM4.data.preview.items.find((i: any) => i.saleReference.includes(`FICHA-GMA-LATE-${suffix}`));
+      assert.ok(lateItem, 'Item complementar tardio deve estar presente na prévia');
+      assert.equal(lateItem.isLateComplement, true);
+      assert.equal(lateItem.originalSaleCompetence, '2026-10');
+      assert.equal(Number(lateItem.ratePercentage), 2.5);
+    }
+  );
+
+  await t.test(
+    '11. Complemento Etapa 3 — Comissão de 10% do crediário gerada estritamente sobre parcelas pagas, separação dos 3 baldes e contrato de dados da carteira do vendedor',
+    async () => {
+      // Cria vendedor
+      const sellerOmega = await prisma.user.create({
+        data: {
+          name: `Vendedor Omega ${suffix}`,
+          email: `vendedor.omega.${suffix}@test.com`,
+          password: 'hashed_password_123',
+          role: 'SELLER',
+          companyId: compMidMonthId,
+          usesOwnCar: false, // carro da empresa -> 20% sobre entrada
+        },
+      });
+
+      const adminOmega = await prisma.user.create({
+        data: {
+          name: `Admin Omega ${suffix}`,
+          email: `admin.omega.${suffix}@test.com`,
+          password: 'hashed_password_123',
+          role: 'ADMIN',
+          companyId: compMidMonthId,
+        },
+      });
+
+      const clientOmega = await prisma.client.create({
+        data: {
+          companyId: compMidMonthId,
+          name: `Cliente Crediário Omega ${suffix}`,
+          phone1: '31988880001',
+          city: 'Belo Horizonte',
+          sequenceNumber: `OMG-CRD-${suffix}`,
+        },
+      });
+
+      const saleOmega = await prisma.sale.create({
+        data: {
+          companyId: compMidMonthId,
+          clientId: clientOmega.id,
+          sellerId: sellerOmega.id,
+          value: 1150,
+          status: 'COMPLETED',
+          paymentStatus: 'PENDING',
+          paymentMethod: 'CREDIARIO',
+          fichaNumber: `FICHA-OMG-${suffix}`,
+          date: new Date('2026-10-10T12:00:00.000Z'),
+          city: 'Belo Horizonte',
+        },
+      });
+
+      // Cria contrato: Total R$ 1.150,00, Entrada R$ 150,00, Financiado R$ 1.000,00 em 10 parcelas de R$ 100,00
+      const agreementOmega = await prisma.creditAgreement.create({
+        data: {
+          companyId: compMidMonthId,
+          saleId: saleOmega.id,
+          clientId: clientOmega.id,
+          sellerId: sellerOmega.id,
+          buyerName: clientOmega.name,
+          buyerCpf: '52998224725',
+          street: 'Av. Afonso Pena',
+          number: '1500',
+          neighborhood: 'Centro',
+          city: 'Belo Horizonte',
+          state: 'MG',
+          totalSaleCents: 115_000,
+          downPaymentCents: 15_000,
+          financedPrincipalCents: 100_000,
+          installmentsCount: 10,
+          firstDueDate: new Date('2026-11-10T12:00:00.000Z'),
+          remainingPrincipalCents: 100_000,
+          paidPrincipalCents: 0,
+          initialCommissionRate: 0.20,
+          installmentCommissionRate: 0.10,
+          status: 'ACTIVE',
+        },
+      });
+
+      // Cria as 10 parcelas de R$ 100,00
+      for (let i = 1; i <= 10; i++) {
+        const dueDate = new Date('2026-10-10T12:00:00.000Z');
+        dueDate.setUTCMonth(dueDate.getUTCMonth() + i);
+        await prisma.creditInstallment.create({
+          data: {
+            agreementId: agreementOmega.id,
+            installmentNumber: i,
+            dueDate,
+            amountCents: 10_000,
+            paidCents: 0,
+            status: 'PENDING',
+          },
+        });
+      }
+
+      // 1. ANTES DE QUALQUER PAGAMENTO:
+      // Comissão gerada de parcelas = R$ 0,00. Previsão futura condicional = R$ 100,00 (10.000 centavos)
+      const sellerOmegaJwt = jwt.sign(
+        { id: sellerOmega.id, role: 'SELLER', companyId: compMidMonthId, name: sellerOmega.name },
+        process.env.JWT_SECRET!
+      );
+
+      const portBefore = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/credit/seller/portfolio?competence=2026-10`,
+        { token: sellerOmegaJwt }
+      );
+      assert.equal(portBefore.status, 200);
+      assert.equal(portBefore.data.totalSalesValueCents, 115_000);
+      assert.equal(portBefore.data.totalDownPaymentValueCents, 15_000);
+      assert.equal(portBefore.data.totalFinancedAmountCents, 100_000);
+      assert.equal(portBefore.data.totalPaidPrincipalCents, 0);
+      assert.equal(portBefore.data.totalRemainingPrincipalCents, 100_000);
+      assert.equal(portBefore.data.futureEstimatedCommissionCents, 10_000); // R$ 100,00 condicional
+      assert.equal(portBefore.data.monthPaidInstallmentCommissionCents, 0);
+
+      const ag0 = portBefore.data.agreements.find((a: any) => a.id === agreementOmega.id);
+      assert.ok(ag0);
+      assert.equal(ag0.downPaymentCommissionCents, 3_000); // 20% de R$ 150 = R$ 30,00
+      assert.equal(ag0.futureEstimatedCommissionCents, 10_000); // 10% de R$ 1.000 = R$ 100,00
+      assert.equal(ag0.releasedInstallmentCommissionCents, 0);
+      assert.equal(ag0.installments.length, 10);
+      assert.equal(ag0.installments[0].commissionCents, 0);
+      assert.equal(ag0.installments[0].futureEstimatedCommissionCents, 1_000); // R$ 10,00
+
+      // 2. AO PAGAR 1 PARCELA DE R$ 100,00:
+      // Comissão gerada = R$ 10,00 (1.000 centavos) vinculada à competência do pagamento
+      const adminOmegaJwt = jwt.sign(
+        { id: adminOmega.id, role: 'ADMIN', companyId: compMidMonthId, name: adminOmega.name },
+        process.env.JWT_SECRET!
+      );
+
+      const payInst1 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        `/api/credit/agreements/${agreementOmega.id}/payments`,
+        {
+          token: adminOmegaJwt,
+          body: {
+            amountCents: 10_000,
+            paymentMethod: 'PIX',
+            paidAt: '2026-10-15T10:00:00.000Z',
+          },
+        }
+      );
+      assert.ok([200, 201].includes(payInst1.status));
+
+      const portAfter1 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/credit/seller/portfolio?competence=2026-10`,
+        { token: sellerOmegaJwt }
+      );
+      assert.equal(portAfter1.status, 200);
+      assert.equal(portAfter1.data.totalPaidPrincipalCents, 10_000);
+      assert.equal(portAfter1.data.totalRemainingPrincipalCents, 90_000);
+      assert.equal(portAfter1.data.futureEstimatedCommissionCents, 9_000); // R$ 90,00 condicional restante
+      assert.equal(portAfter1.data.monthPaidInstallmentCommissionCents, 1_000); // R$ 10,00 gerado no mês!
+
+      const ag1 = portAfter1.data.agreements.find((a: any) => a.id === agreementOmega.id);
+      assert.equal(ag1.releasedInstallmentCommissionCents, 1_000);
+      assert.equal(ag1.futureEstimatedCommissionCents, 9_000);
+      const inst1 = ag1.installments.find((i: any) => i.installmentNumber === 1);
+      assert.equal(inst1.status, 'PAID');
+      assert.equal(inst1.paidPrincipalCents, 10_000);
+      assert.equal(inst1.commissionCents, 1_000); // R$ 10,00
+      assert.equal(inst1.futureEstimatedCommissionCents, 0);
+      assert.equal(inst1.competence, '2026-10');
+
+      // 3. AO PAGAR MAIS 2 PARCELAS NO MESMO MÊS (totalizando 3 parcelas de R$ 100,00 = R$ 300,00 amortizados):
+      // Comissão gerada acumulada naquele mês = R$ 30,00 (3.000 centavos)
+      const payInst2And3 = await apiJson(
+        apiServer!.baseUrl,
+        'POST',
+        `/api/credit/agreements/${agreementOmega.id}/payments`,
+        {
+          token: adminOmegaJwt,
+          body: {
+            amountCents: 20_000, // paga parcelas 2 e 3
+            paymentMethod: 'PIX',
+            paidAt: '2026-10-20T10:00:00.000Z',
+          },
+        }
+      );
+      assert.ok([200, 201].includes(payInst2And3.status));
+
+      const portAfter3 = await apiJson(
+        apiServer!.baseUrl,
+        'GET',
+        `/api/credit/seller/portfolio?competence=2026-10`,
+        { token: sellerOmegaJwt }
+      );
+      assert.equal(portAfter3.status, 200);
+      assert.equal(portAfter3.data.totalPaidPrincipalCents, 30_000);
+      assert.equal(portAfter3.data.totalRemainingPrincipalCents, 70_000);
+      assert.equal(portAfter3.data.futureEstimatedCommissionCents, 7_000); // R$ 70,00 condicional restante
+      assert.equal(portAfter3.data.monthPaidInstallmentCommissionCents, 3_000); // Exatamente R$ 30,00 gerados naquele mês!
+
+      const ag3 = portAfter3.data.agreements.find((a: any) => a.id === agreementOmega.id);
+      assert.equal(ag3.releasedInstallmentCommissionCents, 3_000);
+      assert.equal(ag3.futureEstimatedCommissionCents, 7_000);
+      const inst2 = ag3.installments.find((i: any) => i.installmentNumber === 2);
+      const inst3 = ag3.installments.find((i: any) => i.installmentNumber === 3);
+      assert.equal(inst2.status, 'PAID');
+      assert.equal(inst2.commissionCents, 1_000);
+      assert.equal(inst3.status, 'PAID');
+      assert.equal(inst3.commissionCents, 1_000);
     }
   );
 });

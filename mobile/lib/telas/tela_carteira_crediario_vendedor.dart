@@ -321,37 +321,85 @@ class _TelaCarteiraCrediarioVendedorState
     final totalEntrada = (_portfolioData?['totalDownPaymentValue'] is num)
         ? (_portfolioData?['totalDownPaymentValue'] as num).toDouble()
         : 0.0;
+    final financiado = (_portfolioData?['totalFinancedAmount'] is num)
+        ? (_portfolioData?['totalFinancedAmount'] as num).toDouble()
+        : (totalVend - totalEntrada > 0 ? totalVend - totalEntrada : 0.0);
     final saldoDevedor = (_portfolioData?['totalRemainingPrincipal'] is num)
         ? (_portfolioData?['totalRemainingPrincipal'] as num).toDouble()
         : 0.0;
+    final comissaoMes = (_portfolioData?['monthPaidInstallmentCommission'] is num)
+        ? (_portfolioData?['monthPaidInstallmentCommission'] as num).toDouble()
+        : 0.0;
+    final previsaoFutura = (_portfolioData?['futureEstimatedCommission'] is num)
+        ? (_portfolioData?['futureEstimatedCommission'] as num).toDouble()
+        : 0.0;
 
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: _buildMetricCard(
-            'Total Vendido',
-            'R\$ ${totalVend.toStringAsFixed(2)}',
-            Icons.sell_rounded,
-            const Color(0xFF00E5FF),
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                'Total Vendido',
+                'R\$ ${totalVend.toStringAsFixed(2)}',
+                Icons.sell_rounded,
+                const Color(0xFF00E5FF),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildMetricCard(
+                'Entrada Total',
+                'R\$ ${totalEntrada.toStringAsFixed(2)}',
+                Icons.payments_rounded,
+                const Color(0xFF00E676),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildMetricCard(
-            'Entrada Total',
-            'R\$ ${totalEntrada.toStringAsFixed(2)}',
-            Icons.payments_rounded,
-            const Color(0xFF00E676),
-          ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                'Principal Financiado',
+                'R\$ ${financiado.toStringAsFixed(2)}',
+                Icons.receipt_long_rounded,
+                const Color(0xFF90CAF9),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildMetricCard(
+                'Saldo a Receber',
+                'R\$ ${saldoDevedor.toStringAsFixed(2)}',
+                Icons.account_balance_rounded,
+                saldoDevedor > 0 ? const Color(0xFFFFB74D) : const Color(0xFF00E676),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildMetricCard(
-            'Saldo a Receber',
-            'R\$ ${saldoDevedor.toStringAsFixed(2)}',
-            Icons.account_balance_rounded,
-            saldoDevedor > 0 ? const Color(0xFFFFB74D) : const Color(0xFF00E676),
-          ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                'Comissão 10% (Pagas)',
+                'R\$ ${comissaoMes.toStringAsFixed(2)}',
+                Icons.monetization_on_rounded,
+                const Color(0xFF00E676),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildMetricCard(
+                'Previsão Futura (Cond.)',
+                'R\$ ${previsaoFutura.toStringAsFixed(2)}',
+                Icons.schedule_rounded,
+                const Color(0xFFFFD54F),
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -400,8 +448,12 @@ class _TelaCarteiraCrediarioVendedorState
         'Cliente sem nome';
     final totalCents = agreement['totalSaleCents'] ?? 0;
     final downCents = agreement['downPaymentCents'] ?? 0;
+    final financedCents = agreement['financedAmountCents'] ?? (totalCents - downCents > 0 ? totalCents - downCents : 0);
     final remainingCents = agreement['remainingPrincipalCents'] ?? 0;
-    final initialRate = (agreement['initialCommissionRate'] ?? 0.20) * 100;
+    final initialRate = ((agreement['downPaymentCommissionRate'] ?? agreement['initialCommissionRate'] ?? 0.20) as num).toDouble() * 100;
+    final downCommCents = agreement['downPaymentCommissionCents'] ?? (downCents * (initialRate / 100)).round();
+    final paidCommCents = agreement['releasedInstallmentCommissionCents'] ?? 0;
+    final futureCommCents = agreement['futureEstimatedCommissionCents'] ?? 0;
 
     // Próximo vencimento
     final installments = (agreement['installments'] as List<dynamic>?) ?? [];
@@ -410,7 +462,7 @@ class _TelaCarteiraCrediarioVendedorState
     final now = DateTime.now();
 
     for (final inst in installments) {
-      final unpaid = (inst['amountCents'] ?? 0) - (inst['paidCents'] ?? 0);
+      final unpaid = (inst['amountCents'] ?? 0) - (inst['paidCents'] ?? inst['paidPrincipalCents'] ?? 0);
       if (unpaid > 0) {
         final d = DateTime.tryParse(inst['dueDate'] ?? '');
         if (d != null) {
@@ -475,19 +527,48 @@ class _TelaCarteiraCrediarioVendedorState
                 ],
               ),
               const Divider(color: Colors.white10, height: 16),
+              // Linha 1: Contrato (Valores de Venda e Financiamento)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   _buildMiniInfo(
                       'Total da Venda', 'R\$ ${(totalCents / 100).toStringAsFixed(2)}'),
-                  _buildMiniInfo('Entrada (${initialRate.toInt()}%)',
+                  _buildMiniInfo('Entrada',
                       'R\$ ${(downCents / 100).toStringAsFixed(2)}'),
+                  _buildMiniInfo('Financiado',
+                      'R\$ ${(financedCents / 100).toStringAsFixed(2)}'),
                   _buildMiniInfo('Saldo Devedor',
                       'R\$ ${(remainingCents / 100).toStringAsFixed(2)}',
                       color: remainingCents > 0
                           ? (isOverdue ? Colors.redAccent : const Color(0xFFFFB74D))
                           : Colors.greenAccent),
                 ],
+              ),
+              const SizedBox(height: 10),
+              // Linha 2: Comissões do Vendedor (Entrada + Parcelas Pagas + Previsão Futura)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Entrada (${initialRate.toInt()}%): R\$ ${(downCommCents / 100).toStringAsFixed(2)}',
+                      style: const TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      '10% Pago: R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
+                      style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      'Prev. Futura: R\$ ${(futureCommCents / 100).toStringAsFixed(2)}',
+                      style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 8),
               Row(
@@ -541,12 +622,15 @@ class _TelaCarteiraCrediarioVendedorState
   Widget _buildStatusBadge(String status) {
     Color bg;
     Color fg;
-    if (status == 'QUITADO') {
+    if (status == 'QUITADO' || status == 'PAGA') {
       bg = Colors.green.withOpacity(0.2);
       fg = Colors.greenAccent;
-    } else if (status == 'EM ATRASO') {
+    } else if (status == 'EM ATRASO' || status == 'ATRASADA') {
       bg = Colors.red.withOpacity(0.2);
       fg = Colors.redAccent;
+    } else if (status == 'PARCIAL') {
+      bg = Colors.orange.withOpacity(0.2);
+      fg = const Color(0xFFFFB74D);
     } else {
       bg = Colors.blue.withOpacity(0.2);
       fg = const Color(0xFF90CAF9);
@@ -573,8 +657,12 @@ class _TelaCarteiraCrediarioVendedorState
     final payments = (agreement['payments'] as List<dynamic>?) ?? [];
     final totalCents = agreement['totalSaleCents'] ?? 0;
     final downCents = agreement['downPaymentCents'] ?? 0;
+    final financedCents = agreement['financedAmountCents'] ?? (totalCents - downCents > 0 ? totalCents - downCents : 0);
     final remainingCents = agreement['remainingPrincipalCents'] ?? 0;
-    final initialRate = (agreement['initialCommissionRate'] ?? 0.20) * 100;
+    final initialRate = ((agreement['downPaymentCommissionRate'] ?? agreement['initialCommissionRate'] ?? 0.20) as num).toDouble() * 100;
+    final downCommCents = agreement['downPaymentCommissionCents'] ?? (downCents * (initialRate / 100)).round();
+    final paidCommCents = agreement['releasedInstallmentCommissionCents'] ?? 0;
+    final futureCommCents = agreement['futureEstimatedCommissionCents'] ?? 0;
     final now = DateTime.now();
 
     showModalBottomSheet(
@@ -613,14 +701,44 @@ class _TelaCarteiraCrediarioVendedorState
                       fontSize: 18,
                       fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Taxas Gravadas: Entrada ${initialRate.toInt()}% | Parcelas 10%',
-                  style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                if (agreement['buyerCpf'] != null && agreement['buyerCpf'].toString().isNotEmpty)
+                  Text(
+                    'CPF: ${agreement['buyerCpf']}',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                const SizedBox(height: 12),
+
+                // Separador Didático dos 3 Pilares
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF142436),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Separação das Regras Financeiras',
+                        style: TextStyle(
+                            color: Color(0xFF00E5FF),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      SizedBox(height: 6),
+                      Text(
+                        '1. Entrada: 20% (carro empresa) ou 25% (carro próprio) gerada na venda.\n'
+                        '2. Parcelas: 10% sobre o principal recebido a cada pagamento efetivo.\n'
+                        '3. Taxa Lumora: apurada com a empresa, sem qualquer desconto do vendedor.',
+                        style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.35),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 16),
 
-                // Resumo do contrato
+                // Resumo Financeiro do Contrato
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -630,42 +748,71 @@ class _TelaCarteiraCrediarioVendedorState
                   child: Column(
                     children: [
                       _buildModalRow(
-                          'Valor Total', 'R\$ ${(totalCents / 100).toStringAsFixed(2)}'),
+                          'Valor Total da Venda', 'R\$ ${(totalCents / 100).toStringAsFixed(2)}'),
                       _buildModalRow(
-                          'Entrada', 'R\$ ${(downCents / 100).toStringAsFixed(2)}'),
-                      _buildModalRow('Saldo Devedor',
+                          'Entrada Recebida', 'R\$ ${(downCents / 100).toStringAsFixed(2)}'),
+                      _buildModalRow(
+                          'Comissão da Entrada (${initialRate.toInt()}%)',
+                          'R\$ ${(downCommCents / 100).toStringAsFixed(2)}',
+                          color: const Color(0xFF00E676),
+                          bold: true),
+                      const Divider(color: Colors.white12, height: 12),
+                      _buildModalRow(
+                          'Principal Financiado', 'R\$ ${(financedCents / 100).toStringAsFixed(2)}'),
+                      _buildModalRow(
+                          'Saldo Devedor Restante',
                           'R\$ ${(remainingCents / 100).toStringAsFixed(2)}',
                           bold: true,
                           color: remainingCents > 0
                               ? const Color(0xFFFFB74D)
                               : Colors.greenAccent),
+                      _buildModalRow(
+                          'Comissão 10% (Parcelas Pagas)',
+                          'R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
+                          color: const Color(0xFF00E5FF),
+                          bold: true),
+                      _buildModalRow(
+                          'Previsão Futura (Condicional)',
+                          'R\$ ${(futureCommCents / 100).toStringAsFixed(2)}',
+                          color: const Color(0xFFFFD54F),
+                          bold: true),
                     ],
                   ),
                 ),
                 const SizedBox(height: 20),
 
-                // Cronograma de Parcelas
+                // Cronograma Detalhado de Parcelas
                 const Text(
-                  'Cronograma de Parcelas',
+                  'Cronograma de Parcelas e Comissão por Baixa',
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 15,
                       fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'A comissão de 10% incide exclusivamente sobre o principal efetivamente quitado.',
+                  style: TextStyle(color: Colors.white54, fontSize: 11),
                 ),
                 const SizedBox(height: 10),
 
                 ...installments.map((inst) {
                   final instNum = inst['installmentNumber'];
                   final amountCents = inst['amountCents'] ?? 0;
-                  final paidCents = inst['paidCents'] ?? 0;
-                  final unpaidCents = amountCents - paidCents;
+                  final paidPrincipalCents = inst['paidPrincipalCents'] ?? inst['paidCents'] ?? 0;
+                  final unpaidPrincipalCents = inst['unpaidPrincipalCents'] ?? (amountCents - paidPrincipalCents);
                   final due = DateTime.tryParse(inst['dueDate'] ?? '');
-                  final isInstOverdue = due != null && due.isBefore(now) && unpaidCents > 0;
+                  final paidDate = DateTime.tryParse(inst['paidAt'] ?? '');
+                  final isInstOverdue = due != null && due.isBefore(now) && unpaidPrincipalCents > 0;
+                  final commCents = inst['commissionCents'] ?? ((paidPrincipalCents * 0.10).round());
+                  final futureInstCommCents = inst['futureEstimatedCommissionCents'] ?? ((unpaidPrincipalCents * 0.10).round());
+                  final competence = inst['competence'] ?? '';
+                  final closingId = inst['monthlyClosingId'];
 
                   String instStatus = inst['status'] ?? 'PENDING';
-                  if (instStatus == 'PAID' || unpaidCents == 0) {
+                  if (instStatus == 'PAID' || unpaidPrincipalCents <= 0) {
                     instStatus = 'PAGA';
-                  } else if (paidCents > 0) {
+                  } else if (paidPrincipalCents > 0) {
                     instStatus = isInstOverdue ? 'PARCIAL (ATRASADA)' : 'PARCIAL';
                   } else if (isInstOverdue) {
                     instStatus = 'ATRASADA';
@@ -674,7 +821,7 @@ class _TelaCarteiraCrediarioVendedorState
                   }
 
                   return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
+                    margin: const EdgeInsets.only(bottom: 10),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: const Color(0xFF141E28),
@@ -682,54 +829,96 @@ class _TelaCarteiraCrediarioVendedorState
                       border: Border.all(
                         color: isInstOverdue
                             ? Colors.redAccent.withOpacity(0.4)
-                            : Colors.white10,
+                            : (instStatus == 'PAGA' ? Colors.greenAccent.withOpacity(0.3) : Colors.white10),
                       ),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text('Parcela $instNum',
                                 style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 13,
                                     fontWeight: FontWeight.bold)),
+                            _buildStatusBadge(instStatus),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Valor: R\$ ${(amountCents / 100).toStringAsFixed(2)}',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
                             if (due != null)
                               Text(
                                 'Venc: ${due.day.toString().padLeft(2, '0')}/${due.month.toString().padLeft(2, '0')}/${due.year}',
                                 style: TextStyle(
-                                    color: isInstOverdue
-                                        ? Colors.redAccent
-                                        : Colors.white54,
+                                    color: isInstOverdue ? Colors.redAccent : Colors.white54,
                                     fontSize: 11),
                               ),
                           ],
                         ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(
-                              'R\$ ${(amountCents / 100).toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                            Text(
-                              instStatus,
+                              'Principal Pago: R\$ ${(paidPrincipalCents / 100).toStringAsFixed(2)}',
                               style: TextStyle(
-                                  color: (instStatus == 'PAGA')
-                                      ? Colors.greenAccent
-                                      : (isInstOverdue
-                                          ? Colors.redAccent
-                                          : Colors.orangeAccent),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold),
+                                  color: paidPrincipalCents > 0 ? Colors.greenAccent : Colors.white38,
+                                  fontSize: 11),
                             ),
+                            if (paidDate != null)
+                              Text(
+                                'Pago em: ${paidDate.day.toString().padLeft(2, '0')}/${paidDate.month.toString().padLeft(2, '0')}/${paidDate.year}',
+                                style: const TextStyle(color: Colors.greenAccent, fontSize: 11),
+                              ),
                           ],
                         ),
+                        const Divider(color: Colors.white10, height: 12),
+                        // Evidência de comissão: apurada vs previsão futura condicional
+                        if (paidPrincipalCents > 0)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Comissão Gerada (10%): R\$ ${(commCents / 100).toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                    color: Color(0xFF00E676),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                closingId != null ? 'Fechamento Vinculado' : (competence.isNotEmpty ? 'Comp. $competence' : 'Mês Aberto'),
+                                style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        if (unpaidPrincipalCents > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Previsão Futura: R\$ ${(futureInstCommCents / 100).toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                      color: Color(0xFFFFD54F),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                                const Text(
+                                  '(condicional ao pagamento)',
+                                  style: TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   );
@@ -815,6 +1004,8 @@ class _TelaCarteiraCrediarioVendedorState
       },
     );
   }
+
+
 
   Widget _buildModalRow(String label, String value,
       {bool bold = false, Color? color}) {

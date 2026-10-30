@@ -258,6 +258,7 @@ router.post(
           closedByUserId: req.user!.id,
           closedByName: req.user!.name || 'Proprietário',
           notes,
+          referenceDate: req.body?.referenceDate,
           ipAddress: req.ip || req.socket.remoteAddress || undefined,
         },
         prisma

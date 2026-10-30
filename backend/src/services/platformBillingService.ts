@@ -1,5 +1,9 @@
 import { PrismaClient, Prisma } from '@prisma/client';
-import { getCompetenceRange, getCompetenceForDate } from './monthlyCreditClosingService';
+import {
+  getCompetenceRange,
+  getCompetenceForDate,
+  isCompetenceEnded,
+} from './monthlyCreditClosingService';
 import { isTestOrSimulationMarker, recordOperationalAuditEvent } from './operationalAuditService';
 
 const defaultPrisma = new PrismaClient();
@@ -172,6 +176,39 @@ export function resolveRateForSaleDate<
   return null;
 }
 
+/**
+ * Encontra a próxima competência aberta (sem PlatformMonthlyStatement fechado)
+ * a partir de uma competência mínima, avançando mês a mês no fuso America/Sao_Paulo.
+ */
+export async function findNextOpenCompetence(
+  companyId: string,
+  minCompetence: string,
+  dbClient: PrismaClient | Prisma.TransactionClient = defaultPrisma
+): Promise<string> {
+  const { startDate } = getCompetenceRange(minCompetence);
+  const curDate = new Date(startDate.getTime());
+  // Avança para o primeiro dia do mês subsequente
+  curDate.setUTCMonth(curDate.getUTCMonth() + 1);
+
+  for (let i = 0; i < 60; i++) {
+    const candComp = getCompetenceForDate(curDate);
+    const existing = await dbClient.platformMonthlyStatement.findUnique({
+      where: {
+        companyId_competence: {
+          companyId,
+          competence: candComp,
+        },
+      },
+      select: { id: true },
+    });
+    if (!existing) {
+      return candComp;
+    }
+    curDate.setUTCMonth(curDate.getUTCMonth() + 1);
+  }
+  throw new Error(`Não foi possível encontrar uma competência aberta para a empresa ${companyId}.`);
+}
+
 async function computeFinancialBucketsAndPreviewData(
   companyId: string,
   competence: string,
@@ -241,6 +278,65 @@ async function computeFinancialBucketsAndPreviewData(
     },
     orderBy: [{ date: 'asc' }, { id: 'asc' }],
   });
+
+  // Vendas anteriores ainda não faturadas (ex: sincronização offline tardia)
+  const unbilledPastSales = await db.sale.findMany({
+    where: {
+      companyId,
+      date: {
+        lt: startDate,
+      },
+      platformStatementItem: null,
+    },
+    include: {
+      client: {
+        select: {
+          sequenceNumber: true,
+          visibleCode: true,
+          name: true,
+        },
+      },
+      seller: {
+        select: {
+          usesOwnCar: true,
+        },
+      },
+      creditAgreement: {
+        select: {
+          id: true,
+          totalSaleCents: true,
+          downPaymentCents: true,
+          initialCommissionRate: true,
+        },
+      },
+      platformStatementItem: {
+        select: {
+          id: true,
+          statementId: true,
+          competence: true,
+        },
+      },
+    },
+    orderBy: [{ date: 'asc' }, { id: 'asc' }],
+  });
+
+  // Demonstrativos fechados anteriores da empresa para verificar competências já encerradas e saldo de crédito acumulado
+  const priorClosedStatements = await db.platformMonthlyStatement.findMany({
+    where: {
+      companyId,
+      competence: { lt: competence },
+    },
+    select: { competence: true, carryForwardCreditCents: true },
+    orderBy: { competence: 'desc' },
+  });
+  const priorClosedCompetences = new Set(priorClosedStatements.map((s) => s.competence));
+  const latestPriorClosedStatement = priorClosedStatements[0] || null;
+  const incomingCreditCents = latestPriorClosedStatement?.carryForwardCreditCents || 0;
+
+  // Filtra unbilled past sales cuja competência original já tenha sido definitivamente fechada
+  const lateUnbilledSales = unbilledPastSales.filter((s) =>
+    priorClosedCompetences.has(getCompetenceForDate(new Date(s.date)))
+  );
 
   // Recebimentos de parcelas de crediário no período (Bucket 2 & 4 — NUNCA geram nova taxa Lumora!)
   const creditPaymentsInPeriod = await db.creditPayment.findMany({
@@ -350,6 +446,8 @@ async function computeFinancialBucketsAndPreviewData(
       }
     }
 
+    const pendingAdjustmentsCents = pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
+
     return {
       company,
       competence,
@@ -363,7 +461,12 @@ async function computeFinancialBucketsAndPreviewData(
       eligibleSalesBaseCents: 0,
       grossPlatformFeeCents: 0,
       pendingAdjustments,
-      adjustmentsCents: pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0),
+      adjustmentsCents: pendingAdjustmentsCents,
+      incomingCreditCents,
+      consumedCarryForwardCreditCents: 0,
+      netDueCents: 0,
+      carryForwardCreditCents:
+        incomingCreditCents + (pendingAdjustmentsCents < 0 ? Math.abs(pendingAdjustmentsCents) : 0),
       companyConfirmedSalesCents: confirmedSalesBaseWithoutContractCents,
       confirmedSalesCountWithoutContract,
       companyCreditReceivedPrincipalCents,
@@ -395,11 +498,16 @@ async function computeFinancialBucketsAndPreviewData(
     ratePercentage: Prisma.Decimal;
     rateMilliPercent: number;
     calculatedFeeCents: number;
+    isLateComplement: boolean;
+    originalSaleCompetence?: string;
   }> = [];
 
   const vigenciaMap = new Map<string, VigenciaBucketSummary>();
 
-  for (const s of rawSales) {
+  // Processa vendas da competência corrente e vendas tardias extemporâneas de competências já fechadas
+  const allSalesToConsider = [...rawSales, ...lateUnbilledSales];
+
+  for (const s of allSalesToConsider) {
     const check = isSaleConfirmedAndReal(s);
     if (!check.eligible) {
       excludedTestOrUnconfirmedCount += 1;
@@ -426,6 +534,7 @@ async function computeFinancialBucketsAndPreviewData(
       sellerInitialCommissionsCents += Math.round((saleBaseCents * sellerPct) / 100);
     }
 
+    // Taxa correspondente à DATA COMERCIAL ORIGINAL da venda (preserva versão mesmo em venda extemporânea)
     const matchingRate = resolveRateForSaleDate(rates, new Date(s.date));
     if (!matchingRate) {
       // Venda ocorrida antes do início contratado (effectiveFrom): nunca aplicar taxa retroativamente
@@ -440,6 +549,9 @@ async function computeFinancialBucketsAndPreviewData(
       ? 'CREDIARIO'
       : String(s.paymentMethod || 'CASH').toUpperCase();
 
+    const isLate = new Date(s.date).getTime() < startDate.getTime();
+    const origSaleComp = isLate ? getCompetenceForDate(new Date(s.date)) : undefined;
+
     eligibleItems.push({
       saleId: s.id,
       saleReference: buildSafeSaleReference(s),
@@ -453,6 +565,8 @@ async function computeFinancialBucketsAndPreviewData(
       ratePercentage: matchingRate.ratePercentage,
       rateMilliPercent,
       calculatedFeeCents,
+      isLateComplement: isLate,
+      originalSaleCompetence: origSaleComp,
     });
 
     const existingBucket = vigenciaMap.get(matchingRate.id);
@@ -494,6 +608,7 @@ async function computeFinancialBucketsAndPreviewData(
   });
 
   if (activeRatesInMonth.length === 0) {
+    const pendingAdjustmentsCents = pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
     return {
       company,
       competence,
@@ -507,7 +622,12 @@ async function computeFinancialBucketsAndPreviewData(
       eligibleSalesBaseCents: 0,
       grossPlatformFeeCents: 0,
       pendingAdjustments,
-      adjustmentsCents: pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0),
+      adjustmentsCents: pendingAdjustmentsCents,
+      incomingCreditCents,
+      consumedCarryForwardCreditCents: 0,
+      netDueCents: 0,
+      carryForwardCreditCents:
+        incomingCreditCents + (pendingAdjustmentsCents < 0 ? Math.abs(pendingAdjustmentsCents) : 0),
       companyConfirmedSalesCents,
       confirmedSalesCountWithoutContract: 0,
       companyCreditReceivedPrincipalCents,
@@ -546,7 +666,25 @@ async function computeFinancialBucketsAndPreviewData(
   const eligibleSalesCount = eligibleItems.length;
   const eligibleSalesBaseCents = eligibleItems.reduce((acc, i) => acc + i.saleBaseCents, 0);
   const grossPlatformFeeCents = eligibleItems.reduce((acc, i) => acc + i.calculatedFeeCents, 0);
-  const adjustmentsCents = pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
+
+  const pendingAdjustmentsCents = pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
+  const subtotalBeforePoolCents = grossPlatformFeeCents + pendingAdjustmentsCents;
+
+  let consumedCarryForwardCreditCents = 0;
+  let netDueCents = 0;
+  let carryForwardCreditCents = 0;
+
+  if (subtotalBeforePoolCents > 0) {
+    consumedCarryForwardCreditCents = Math.min(subtotalBeforePoolCents, incomingCreditCents);
+    netDueCents = subtotalBeforePoolCents - consumedCarryForwardCreditCents;
+    carryForwardCreditCents = incomingCreditCents - consumedCarryForwardCreditCents;
+  } else {
+    consumedCarryForwardCreditCents = 0;
+    netDueCents = 0;
+    carryForwardCreditCents = incomingCreditCents + Math.abs(subtotalBeforePoolCents);
+  }
+
+  const adjustmentsCents = pendingAdjustmentsCents - consumedCarryForwardCreditCents;
 
   return {
     company,
@@ -562,6 +700,10 @@ async function computeFinancialBucketsAndPreviewData(
     grossPlatformFeeCents,
     pendingAdjustments,
     adjustmentsCents,
+    incomingCreditCents,
+    consumedCarryForwardCreditCents,
+    netDueCents,
+    carryForwardCreditCents,
     companyConfirmedSalesCents,
     confirmedSalesCountWithoutContract: 0,
     companyCreditReceivedPrincipalCents,
@@ -580,23 +722,28 @@ export function formatStatementResponse(
 ) {
   const isSelfService = Boolean(options?.forCompanySelfService);
   const items = Array.isArray(statement.items)
-    ? statement.items.map((item: any) => ({
-        id: item.id,
-        saleReference: item.saleReference,
-        saleDate: item.saleDate,
-        city: item.city,
-        product: item.product,
-        paymentModality: item.paymentModality,
-        saleBaseCents: item.saleBaseCents,
-        saleBaseBrl: centsToBrlNumber(item.saleBaseCents),
-        rateVersion: item.rateVersion,
-        ratePercentage: Number(item.ratePercentage),
-        ratePercentageFormatted: `${Number(item.ratePercentage).toFixed(3)}%`,
-        calculatedFeeCents: item.calculatedFeeCents,
-        calculatedFeeBrl: centsToBrlNumber(item.calculatedFeeCents),
-        creditedBaseCents: item.creditedBaseCents,
-        creditedFeeCents: item.creditedFeeCents,
-      }))
+    ? statement.items.map((item: any) => {
+        const isLate = getCompetenceForDate(new Date(item.saleDate)) < statement.competence;
+        return {
+          id: item.id,
+          saleReference: item.saleReference,
+          saleDate: item.saleDate,
+          city: item.city,
+          product: item.product,
+          paymentModality: item.paymentModality,
+          saleBaseCents: item.saleBaseCents,
+          saleBaseBrl: centsToBrlNumber(item.saleBaseCents),
+          rateVersion: item.rateVersion,
+          ratePercentage: Number(item.ratePercentage),
+          ratePercentageFormatted: `${Number(item.ratePercentage).toFixed(3)}%`,
+          calculatedFeeCents: item.calculatedFeeCents,
+          calculatedFeeBrl: centsToBrlNumber(item.calculatedFeeCents),
+          creditedBaseCents: item.creditedBaseCents,
+          creditedFeeCents: item.creditedFeeCents,
+          isLateComplement: isLate,
+          originalSaleCompetence: isLate ? getCompetenceForDate(new Date(item.saleDate)) : undefined,
+        };
+      })
     : undefined;
 
   const appliedAdjustments = Array.isArray(statement.appliedAdjustments)
@@ -665,6 +812,18 @@ export function formatStatementResponse(
     paidAmountBrl: centsToBrlNumber(statement.paidAmountCents),
     remainingBalanceCents: statement.remainingBalanceCents,
     remainingBalanceBrl: centsToBrlNumber(statement.remainingBalanceCents),
+    consumedCarryForwardCreditCents: (() => {
+      const cf = statement.appliedAdjustments?.find(
+        (a: any) => a.type === 'CARRY_FORWARD_CREDIT_APPLIED'
+      );
+      return cf ? Math.abs(cf.amountCents) : 0;
+    })(),
+    consumedCarryForwardCreditBrl: (() => {
+      const cf = statement.appliedAdjustments?.find(
+        (a: any) => a.type === 'CARRY_FORWARD_CREDIT_APPLIED'
+      );
+      return centsToBrlNumber(cf ? Math.abs(cf.amountCents) : 0);
+    })(),
     carryForwardCreditCents: statement.carryForwardCreditCents,
     carryForwardCreditBrl: centsToBrlNumber(statement.carryForwardCreditCents),
     excludedPreContractCount: statement.excludedPreContractCount,
@@ -734,9 +893,8 @@ export async function previewOrGetCompanyStatement(
     dbClient
   );
 
-  const rawNet = preview.grossPlatformFeeCents + preview.adjustmentsCents;
-  const netDueCents = Math.max(0, rawNet);
-  const carryForwardCreditCents = rawNet < 0 ? Math.abs(rawNet) : 0;
+  const netDueCents = preview.netDueCents;
+  const carryForwardCreditCents = preview.carryForwardCreditCents;
 
   return {
     isClosed: false,
@@ -770,6 +928,10 @@ export async function previewOrGetCompanyStatement(
       grossPlatformFeeBrl: centsToBrlNumber(preview.grossPlatformFeeCents),
       adjustmentsCents: preview.adjustmentsCents,
       adjustmentsBrl: centsToBrlNumber(preview.adjustmentsCents),
+      incomingCreditCents: preview.incomingCreditCents,
+      incomingCreditBrl: centsToBrlNumber(preview.incomingCreditCents),
+      consumedCarryForwardCreditCents: preview.consumedCarryForwardCreditCents,
+      consumedCarryForwardCreditBrl: centsToBrlNumber(preview.consumedCarryForwardCreditCents),
       netDueCents,
       netDueBrl: centsToBrlNumber(netDueCents),
       paidAmountCents: 0,
@@ -805,6 +967,8 @@ export async function previewOrGetCompanyStatement(
         ratePercentageFormatted: `${Number(item.ratePercentage).toFixed(3)}%`,
         calculatedFeeCents: item.calculatedFeeCents,
         calculatedFeeBrl: centsToBrlNumber(item.calculatedFeeCents),
+        isLateComplement: Boolean(item.isLateComplement),
+        originalSaleCompetence: item.originalSaleCompetence,
       })),
       pendingAdjustments: preview.pendingAdjustments.map((adj) => ({
         id: adj.id,
@@ -835,6 +999,7 @@ export async function closeCompanyMonthlyStatement(
     closedByName: string;
     notes?: string;
     ipAddress?: string;
+    referenceDate?: string | Date;
   },
   dbClient: PrismaClient = defaultPrisma
 ) {
@@ -881,6 +1046,20 @@ export async function closeCompanyMonthlyStatement(
         tx
       );
 
+      // Guarda de fechamento antecipado: proíbe fechamento definitivo antes do fim da competência
+      const effectiveNow = params.referenceDate
+        ? new Date(params.referenceDate)
+        : (process.env.BILLING_CLOCK_OVERRIDE ? new Date(process.env.BILLING_CLOCK_OVERRIDE) : new Date());
+
+      if (!isCompetenceEnded(params.competence, effectiveNow)) {
+        const err: any = new Error(
+          `Não é permitido fechar a competência ${params.competence} antes do término do período comercial em horário de Brasília (${calc.endDate.toISOString()}).`
+        );
+        err.status = 422;
+        err.code = 'COMPETENCE_NOT_ENDED';
+        throw err;
+      }
+
       if (
         calc.contractStatus === 'NOT_CONFIGURED' ||
         calc.contractStatus === 'NOT_EFFECTIVE_IN_PERIOD'
@@ -895,9 +1074,8 @@ export async function closeCompanyMonthlyStatement(
         throw err;
       }
 
-      const rawNet = calc.grossPlatformFeeCents + calc.adjustmentsCents;
-      const netDueCents = Math.max(0, rawNet);
-      const carryForwardCreditCents = rawNet < 0 ? Math.abs(rawNet) : 0;
+      const netDueCents = calc.netDueCents;
+      const carryForwardCreditCents = calc.carryForwardCreditCents;
       const initialStatus = netDueCents === 0 ? 'PAID' : 'CLOSED';
 
       const createdStatement = await tx.platformMonthlyStatement.create({
@@ -931,6 +1109,23 @@ export async function closeCompanyMonthlyStatement(
           notes: params.notes ? String(params.notes).trim() : null,
         },
       });
+
+      if (calc.consumedCarryForwardCreditCents > 0) {
+        await tx.platformStatementAdjustment.create({
+          data: {
+            idempotencyKey: `credit-cf-${params.companyId}-${params.competence}`,
+            companyId: params.companyId,
+            appliedStatementId: createdStatement.id,
+            appliedCompetence: params.competence,
+            type: 'CARRY_FORWARD_CREDIT_APPLIED',
+            returnedBaseCents: 0,
+            amountCents: -calc.consumedCarryForwardCreditCents,
+            reason: `Aplicação de crédito transportado de competências anteriores (R$ ${(calc.consumedCarryForwardCreditCents / 100).toFixed(2)})`,
+            createdByUserId: params.closedByUserId,
+            createdByName: params.closedByName,
+          },
+        });
+      }
 
       if (calc.eligibleItems.length > 0) {
         await tx.platformStatementItem.createMany({
@@ -1013,8 +1208,10 @@ export async function closeCompanyMonthlyStatement(
 }
 
 /**
- * Recalcula somente os totalizadores de liquidação/ajustes de um demonstrativo existente,
- * preservando 100% imutáveis: grossPlatformFeeCents, eligibleSalesBaseCents, vigenciaBreakdown e itens.
+ * Recalcula somente os totalizadores de liquidação de um demonstrativo existente,
+ * preservando 100% imutáveis o snapshot histórico de competência:
+ * grossPlatformFeeCents, adjustmentsCents, netDueCents, carryForwardCreditCents,
+ * eligibleSalesBaseCents, vigenciaBreakdown e itens faturados.
  */
 async function syncStatementBalanceTotals(
   statementId: string,
@@ -1025,25 +1222,15 @@ async function syncStatementBalanceTotals(
   const st = await tx.platformMonthlyStatement.findUniqueOrThrow({
     where: { id: statementId },
     include: {
-      appliedAdjustments: true,
       payments: true,
     },
   });
 
-  const adjustmentsCents = st.appliedAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
   const paidAmountCents = st.payments.reduce((acc, p) => acc + p.amountCents, 0);
-  const rawNet = st.grossPlatformFeeCents + adjustmentsCents;
-  const netDueCents = Math.max(0, rawNet);
-  const remainingBalanceCents = Math.max(0, netDueCents - paidAmountCents);
-  const carryForwardCreditCents =
-    paidAmountCents > netDueCents
-      ? paidAmountCents - netDueCents + (rawNet < 0 ? Math.abs(rawNet) : 0)
-      : rawNet < 0
-      ? Math.abs(rawNet)
-      : 0;
+  const remainingBalanceCents = Math.max(0, st.netDueCents - paidAmountCents);
 
   let status = 'CLOSED';
-  if (netDueCents === 0 || remainingBalanceCents === 0) {
+  if (st.netDueCents === 0 || remainingBalanceCents === 0) {
     status = 'PAID';
   } else if (paidAmountCents > 0) {
     status = 'PARTIALLY_PAID';
@@ -1052,11 +1239,8 @@ async function syncStatementBalanceTotals(
   return tx.platformMonthlyStatement.update({
     where: { id: statementId },
     data: {
-      adjustmentsCents,
-      netDueCents,
       paidAmountCents,
       remainingBalanceCents,
-      carryForwardCreditCents,
       status,
     },
   });
@@ -1190,26 +1374,32 @@ export async function recordStatementAdjustmentOrReturnCredit(
         }
 
         // Definir competência de aplicação:
-        // Se informada explicitamente, usa ela; senão, se o demonstrativo de origem ainda tiver saldo em aberto, abate nele;
-        // se o demonstrativo de origem já estiver PAID, aplica na competência atual para não reabrir demonstrativo quitado.
+        // Créditos posteriores devem entrar no fechamento seguinte, preservando a competência fechada e a taxa original.
+        // Impedir que appliedCompetence force alteração de uma competência já fechada.
         let targetCompetence: string;
         if (params.appliedCompetence) {
           getCompetenceRange(params.appliedCompetence);
-          targetCompetence = params.appliedCompetence;
-        } else if (originItem.statement.status !== 'PAID') {
-          targetCompetence = originItem.competence;
-        } else {
-          targetCompetence = getCompetenceForDate(new Date());
-        }
-
-        const targetStatement = await tx.platformMonthlyStatement.findUnique({
-          where: {
-            companyId_competence: {
-              companyId: params.companyId,
-              competence: targetCompetence,
+          const closedTarget = await tx.platformMonthlyStatement.findUnique({
+            where: {
+              companyId_competence: {
+                companyId: params.companyId,
+                competence: params.appliedCompetence,
+              },
             },
-          },
-        });
+            select: { id: true },
+          });
+          if (closedTarget) {
+            const err: any = new Error(
+              `A competência ${params.appliedCompetence} já está fechada e seu snapshot histórico é imutável. Ajustes posteriores devem ser destinados à próxima competência aberta aplicável.`
+            );
+            err.status = 422;
+            err.code = 'COMPETENCE_ALREADY_CLOSED';
+            throw err;
+          }
+          targetCompetence = params.appliedCompetence;
+        } else {
+          targetCompetence = await findNextOpenCompetence(params.companyId, originItem.competence, tx);
+        }
 
         await tx.platformStatementItem.update({
           where: { id: originItem.id },
@@ -1223,7 +1413,7 @@ export async function recordStatementAdjustmentOrReturnCredit(
           data: {
             idempotencyKey: cleanKey,
             companyId: params.companyId,
-            appliedStatementId: targetStatement ? targetStatement.id : null,
+            appliedStatementId: null,
             appliedCompetence: targetCompetence,
             originStatementId: originItem.statementId,
             originItemId: originItem.id,
@@ -1240,10 +1430,6 @@ export async function recordStatementAdjustmentOrReturnCredit(
             createdByName: params.authorName,
           },
         });
-
-        if (targetStatement) {
-          await syncStatementBalanceTotals(targetStatement.id, tx);
-        }
 
         await recordOperationalAuditEvent(
           {
@@ -1304,20 +1490,29 @@ export async function recordStatementAdjustmentOrReturnCredit(
       const signedAmountCents =
         params.type === 'MANUAL_CREDIT' ? -rawManualCents : rawManualCents;
 
-      const targetStatement = await tx.platformMonthlyStatement.findUnique({
+      const closedTarget = await tx.platformMonthlyStatement.findUnique({
         where: {
           companyId_competence: {
             companyId: params.companyId,
             competence: params.appliedCompetence,
           },
         },
+        select: { id: true },
       });
+      if (closedTarget) {
+        const err: any = new Error(
+          `A competência ${params.appliedCompetence} já está fechada e seu snapshot histórico é imutável. Ajustes manuais devem ser destinados a competências abertas.`
+        );
+        err.status = 422;
+        err.code = 'COMPETENCE_ALREADY_CLOSED';
+        throw err;
+      }
 
       const createdManualAdj = await tx.platformStatementAdjustment.create({
         data: {
           idempotencyKey: cleanKey,
           companyId: params.companyId,
-          appliedStatementId: targetStatement ? targetStatement.id : null,
+          appliedStatementId: null,
           appliedCompetence: params.appliedCompetence,
           type: params.type,
           returnedBaseCents: 0,
@@ -1327,10 +1522,6 @@ export async function recordStatementAdjustmentOrReturnCredit(
           createdByName: params.authorName,
         },
       });
-
-      if (targetStatement) {
-        await syncStatementBalanceTotals(targetStatement.id, tx);
-      }
 
       await recordOperationalAuditEvent(
         {

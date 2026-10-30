@@ -1842,15 +1842,19 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getSellerCreditPortfolio({String? sellerId}) async {
+  Future<Map<String, dynamic>> getSellerCreditPortfolio({String? sellerId, String? competence}) async {
     try {
-      final query = sellerId != null ? '?sellerId=$sellerId' : '';
+      final params = <String>[];
+      if (sellerId != null && sellerId.isNotEmpty) params.add('sellerId=$sellerId');
+      if (competence != null && competence.isNotEmpty) params.add('competence=$competence');
+      final query = params.isNotEmpty ? '?${params.join('&')}' : '';
       final resp = await _dio.get('/credit/seller/portfolio$query');
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
   }
+
 
   Future<Map<String, dynamic>> getAsaasConfig() async {
     try {

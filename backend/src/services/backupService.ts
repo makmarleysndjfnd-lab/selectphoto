@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client';
+import { encryptSecret, decryptSecret } from './vaultService';
 
 const prisma = new PrismaClient();
 
@@ -148,7 +149,124 @@ export const generateBackupJson = async (
   );
 };
 
-export const restoreBackupJson = async (backupData: Record<string, any>) => {
+export function assertRestoreEnvironmentSafe(
+  rawDbUrl?: string,
+  rawNodeEnv?: string
+): { safe: boolean; reason?: string } {
+  const nodeEnv = (rawNodeEnv ?? process.env.NODE_ENV ?? '').trim().toLowerCase();
+  const dbUrl = (rawDbUrl ?? process.env.DATABASE_URL ?? '').trim().toLowerCase();
+
+  if (nodeEnv === 'production') {
+    throw new Error(
+      'Guarda de Banco Operacional Ativa: Restauração de backup (restoreBackupJson) é estritamente proibida em ambiente de produção (NODE_ENV=production).'
+    );
+  }
+
+  if (!dbUrl) {
+    throw new Error(
+      'Guarda de Banco Operacional Ativa: DATABASE_URL ausente: impossível comprovar que o destino não é operacional.'
+    );
+  }
+
+  const forbiddenOperationalPatterns = [
+    'render.com',
+    'dpg-',
+    'virginia-postgres',
+    'oregon-postgres',
+    'frankfurt-postgres',
+    'singapore-postgres',
+    'ohio-postgres',
+    'banco_app_',
+    'neon.tech',
+    'supabase.co',
+    'amazonaws.com',
+    'railway.app',
+  ];
+
+  for (const pattern of forbiddenOperationalPatterns) {
+    if (dbUrl.includes(pattern)) {
+      throw new Error(
+        `Guarda de Banco Operacional Ativa: Destino do banco contém indicador operacional ('${pattern}'). Restauração rejeitada para proteger o livro financeiro e histórico real.`
+      );
+    }
+  }
+
+  const isLocalHost = dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
+  const hasTestOrStagingMarker =
+    dbUrl.includes('test') ||
+    dbUrl.includes('staging') ||
+    dbUrl.includes('homolog') ||
+    dbUrl.includes('sandbox') ||
+    dbUrl.includes('disposable');
+
+  if (!isLocalHost || !hasTestOrStagingMarker) {
+    throw new Error(
+      'Destino de banco não autorizado para restauração: exige host local (localhost/127.0.0.1) e banco explicitamente identificado como test/staging/homolog/sandbox/disposable.'
+    );
+  }
+
+  return { safe: true };
+}
+
+/**
+ * Criptografa o JSON de backup usando AES-256-GCM com a chave mestra dedicada.
+ */
+export function encryptBackupPayload(
+  plainJson: string,
+  key?: Buffer
+): {
+  encrypted: string;
+  iv: string;
+  tag: string;
+  algorithm: 'aes-256-gcm';
+  encryptedAt: string;
+} {
+  const enc = encryptSecret(plainJson, key);
+  return {
+    encrypted: enc.encryptedSecret,
+    iv: enc.secretIv,
+    tag: enc.secretTag,
+    algorithm: 'aes-256-gcm',
+    encryptedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Descriptografa um container de backup criptografado com AES-256-GCM.
+ */
+export function decryptBackupPayload(
+  payload: { encrypted: string; iv: string; tag: string },
+  key?: Buffer
+): string {
+  return decryptSecret(payload.encrypted, payload.iv, payload.tag, key);
+}
+
+export const restoreBackupJson = async (
+  rawBackup: Record<string, any> | string,
+  dbClient: PrismaClient = prisma
+): Promise<{
+  restoredTables: Record<string, number>;
+  totalRowsRestored: number;
+}> => {
+  assertRestoreEnvironmentSafe();
+
+  let backupData: Record<string, any>;
+  if (typeof rawBackup === 'string') {
+    try {
+      backupData = JSON.parse(rawBackup);
+    } catch {
+      throw new Error('Arquivo de backup inválido (JSON corrompido).');
+    }
+  } else {
+    backupData = rawBackup;
+  }
+
+  // Se o payload estiver cifrado com AES-256-GCM, descriptografa antes de restaurar
+  if (backupData.encrypted && backupData.iv && backupData.tag) {
+    const decryptedJson = decryptBackupPayload(backupData as any);
+    backupData = JSON.parse(decryptedJson);
+  }
+
   if (!backupData || typeof backupData !== 'object' || !backupData._metadata) {
     throw new Error('Formato de arquivo de backup inválido.');
   }
@@ -168,7 +286,10 @@ export const restoreBackupJson = async (backupData: Record<string, any>) => {
     }
   }
 
-  await prisma.$transaction(
+  const restoredTables: Record<string, number> = {};
+  let totalRowsRestored = 0;
+
+  await dbClient.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(`SET session_replication_role = replica;`);
 
@@ -196,6 +317,10 @@ export const restoreBackupJson = async (backupData: Record<string, any>) => {
                   : rows;
               // @ts-ignore
               await tx[prismaProp].createMany({ data: normalizedRows });
+              restoredTables[model] = rows.length;
+              totalRowsRestored += rows.length;
+            } else {
+              restoredTables[model] = 0;
             }
           }
         }
@@ -204,7 +329,9 @@ export const restoreBackupJson = async (backupData: Record<string, any>) => {
       }
     },
     {
-      timeout: 60000,
+      timeout: 120000,
     }
   );
+
+  return { restoredTables, totalRowsRestored };
 };
