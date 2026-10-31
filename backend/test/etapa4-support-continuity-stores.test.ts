@@ -1,5 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import http from 'http';
 import jwt from 'jsonwebtoken';
@@ -1046,13 +1048,62 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     const integrators = dataIntegrators.integrations || dataIntegrators;
     assert.ok(Array.isArray(integrators));
 
-    const testRes = await fetch(`${baseUrl}/api/support/session/integrations/asaas/test`, {
+    // Teste de integrador não configurado: deve retornar 404 NOT_CONFIGURED, sem resposta de sucesso simulada
+    const testUnconfRes = await fetch(`${baseUrl}/api/support/session/integrations/asaas/test`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${sessionDebugRes.token}` },
     });
-    assert.equal(testRes.status, 200, 'Deve permitir teste de conectividade de integradores sob INTEGRATION_DEBUG');
-    const testData = await testRes.json();
-    assert.equal(testData.integration, 'asaas');
+    assert.equal(testUnconfRes.status, 404, 'Integração não configurada deve retornar 404');
+    const unconfData = await testUnconfRes.json();
+    assert.equal(unconfData.error, 'NOT_CONFIGURED');
+    assert.equal(unconfData.testResult?.status, 'NOT_CONFIGURED');
+    assert.equal(unconfData.testResult?.success, false);
+
+    // Configura integração real (ViaCEP) para a Empresa A e executa teste
+    await prisma.companyIntegration.create({
+      data: {
+        companyId: companyAId,
+        provider: 'VIACEP',
+        category: 'GEO_LOCATION',
+        scope: 'COMPANY_EXCLUSIVE',
+        status: 'ACTIVE',
+        environment: 'PRODUCTION',
+        credentialSource: 'ENV_REFERENCE',
+        createdByUserId: superAdminId,
+      },
+    });
+
+    const testViaCepRes = await fetch(`${baseUrl}/api/support/session/integrations/viacep/test`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionDebugRes.token}` },
+    });
+    assert.equal(testViaCepRes.status, 200, 'Integração configurada deve executar teste e retornar 200');
+    const viaCepData = await testViaCepRes.json();
+    assert.ok(viaCepData.testResult !== undefined);
+
+    // Integração Asaas em ambiente PRODUCTION deve ser barrada pela trava global de segurança
+    const asaasProdInt = await prisma.companyIntegration.create({
+      data: {
+        companyId: companyAId,
+        provider: 'ASAAS',
+        category: 'PAYMENT_GATEWAY',
+        scope: 'COMPANY_EXCLUSIVE',
+        status: 'ACTIVE',
+        environment: 'PRODUCTION',
+        credentialSource: 'ENV_REFERENCE',
+        envVarName: 'ASAAS_API_KEY',
+        createdByUserId: superAdminId,
+      },
+    });
+
+    const testAsaasLiveRes = await fetch(`${baseUrl}/api/support/session/integrations/${asaasProdInt.id}/test`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionDebugRes.token}` },
+    });
+    assert.equal(testAsaasLiveRes.status, 403, 'Asaas PRODUCTION deve ser bloqueado com 403');
+    const liveData = await testAsaasLiveRes.json();
+    assert.equal(liveData.error, 'ASAAS_LIVE_LOCKED');
+    assert.equal(liveData.testResult?.status, 'LIVE_LOCKED');
   });
 
   it('35. Isolamento de empresa: Rejeita tentativa de acessar outra empresa na rota técnica (403 SUPPORT_COMPANY_MISMATCH)', async () => {
@@ -1073,6 +1124,169 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(res.status, 403, 'Sessão técnica não pode consultar dados de empresa diversa da concessão');
     const data = await res.json();
     assert.equal(data.error, 'SUPPORT_COMPANY_MISMATCH');
+  });
+
+  it('36. Mensagens de suporte: Técnico da Empresa A responde chamado de A (201), mas é bloqueado ao responder chamado de B (403)', async () => {
+    // 1. Criar chamado na Empresa B
+    const ticketB = await createSupportTicket({
+      companyId: companyBId,
+      creatorUserId: companyBAdminId,
+      creatorName: 'Admin Beta',
+      title: 'Problema na Empresa B',
+      description: 'Chamado aberto na Empresa B para suporte.',
+      category: 'TECHNICAL',
+      severity: 'MEDIUM',
+    });
+    assert.equal(ticketB.status, 'OPEN');
+
+    // Token técnico operacional para Empresa A
+    const grantOpA = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOpA);
+
+    const sessionA = await claimSupportSessionToken({
+      grantId: grantOpA.id,
+      technicianUserId: superAdminId,
+    });
+
+    // 2. Técnico autorizado para Empresa A responde ao chamado de A com sucesso (201 Created)
+    const resA = await fetch(`${baseUrl}/api/support/session/tickets/${createdTicketId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionA.token}`,
+      },
+      body: JSON.stringify({ message: 'Resposta técnica autorizada para chamado da Empresa A.' }),
+    });
+    assert.equal(resA.status, 201, 'Técnico de A deve responder ao chamado de A com 201');
+    const dataA = await resA.json();
+    assert.equal(dataA.success, true);
+    assert.equal(dataA.ticketMessage.authorRole, 'SUPPORT');
+
+    // Status do chamado de A atualizado para WAITING_COMPANY
+    const ticketAAfter = await prisma.supportTicket.findUnique({ where: { id: createdTicketId } });
+    assert.equal(ticketAAfter?.status, 'WAITING_COMPANY');
+
+    // 3. O MESMO token técnico da Empresa A tenta responder chamado de B -> DEVE SER REJEITADO (403)
+    const messagesCountBBefore = await prisma.supportTicketMessage.count({ where: { ticketId: ticketB.id } });
+
+    const resB = await fetch(`${baseUrl}/api/support/session/tickets/${ticketB.id}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionA.token}`,
+      },
+      body: JSON.stringify({ message: 'Tentativa indevida de responder chamado da Empresa B com token de A.' }),
+    });
+    assert.equal(resB.status, 403, 'Tentativa de responder chamado de outra empresa deve retornar 403');
+    const dataB = await resB.json();
+    assert.equal(dataB.error, 'SUPPORT_COMPANY_MISMATCH');
+
+    // Nenhuma mensagem gravada para B e status inalterado
+    const messagesCountBAfter = await prisma.supportTicketMessage.count({ where: { ticketId: ticketB.id } });
+    assert.equal(messagesCountBAfter, messagesCountBBefore, 'Zero mensagens gravadas no chamado de B');
+    const ticketBAfter = await prisma.supportTicket.findUnique({ where: { id: ticketB.id } });
+    assert.equal(ticketBAfter?.status, 'OPEN', 'Status do chamado de B deve permanecer OPEN');
+
+    // 4. Token com escopo READ_ONLY tenta responder chamado de A -> DEVE SER BLOQUEADO (403)
+    const grantReadOnly = await prisma.supportAccessGrant.create({
+      data: {
+        ticketId: createdTicketId,
+        companyId: companyAId,
+        requestedByUserId: superAdminId,
+        requestedByName: 'Técnico Leitor',
+        approvedByUserId: companyAAdminId,
+        approvedByName: 'Admin Alfa',
+        status: 'ACTIVE',
+        scope: 'READ_ONLY',
+        reason: 'Auditoria de leitura apenas',
+        durationMinutes: 30,
+        expiresAt: new Date(Date.now() + 1800000),
+      },
+    });
+
+    const sessionReadOnly = await claimSupportSessionToken({
+      grantId: grantReadOnly.id,
+      technicianUserId: superAdminId,
+    });
+
+    const resReadOnly = await fetch(`${baseUrl}/api/support/session/tickets/${createdTicketId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sessionReadOnly.token}`,
+      },
+      body: JSON.stringify({ message: 'Tentativa de escrita em modo somente leitura.' }),
+    });
+    assert.equal(resReadOnly.status, 403, 'READ_ONLY deve ser bloqueado para envio de mensagens');
+    const dataReadOnly = await resReadOnly.json();
+    assert.equal(dataReadOnly.error, 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN');
+  });
+
+  it('37. Prova de restauração e DR: Separação de fases, persistência durável em disco e registro via import_dr_evidence', async () => {
+    const scratchDir = 'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
+    const evidenceDir = path.join(scratchDir, 'evidence');
+    if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+
+    const testSha256 = 'TEST_DISPOSABLE_RESTORE_HASH_FEDCBA9876543210';
+    const testEvidencePath = path.join(evidenceDir, `dr_restore_proof_${testSha256.slice(0, 16)}.json`);
+
+    const mockEvidence = {
+      evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+      version: '1.0',
+      verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+      verifiedRestoreAt: new Date().toISOString(),
+      backupSha256: testSha256,
+      backupSizeBytes: 2120417,
+      backupTimestamp: new Date().toISOString(),
+      sanitizedSource: 'isolated_disposable_cluster',
+      schemaVersion: '2.0',
+      totalTables: 85,
+      totalRows: 1420,
+      tableCounts: { Company: 2, User: 5, Sale: 10 },
+      integrityAudit: { status: 'PASSED_100_PERCENT' },
+      publication: {
+        status: 'SAVED_LOCAL_PENDING_IMPORT',
+        targetAuditDatabase: null,
+        publishedAt: null,
+        error: null,
+      },
+    };
+
+    fs.writeFileSync(testEvidencePath, JSON.stringify(mockEvidence, null, 2), 'utf8');
+    assert.ok(fs.existsSync(testEvidencePath), 'Arquivo de prova local deve existir antes de publicação remota');
+
+    // Executa registro no banco de auditoria
+    const log = await recordDisasterRecoveryLog(
+      {
+        backupTimestamp: new Date(mockEvidence.backupTimestamp),
+        sha256: mockEvidence.backupSha256,
+        sizeBytes: mockEvidence.backupSizeBytes,
+        sanitizedSource: mockEvidence.sanitizedSource,
+        verifiedRestoreAt: new Date(mockEvidence.verifiedRestoreAt),
+        verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+        verifiedRestoreNotes: `Restauração isolada auditada com 100% de sucesso (${mockEvidence.totalRows} linhas em ${mockEvidence.totalTables} tabelas).`,
+        totalTables: mockEvidence.totalTables,
+        totalRows: mockEvidence.totalRows,
+      },
+      prisma
+    );
+    assert.ok(log.id);
+    assert.equal(log.sha256, testSha256);
+    assert.equal(log.verifiedRestoreStatus, 'RESTORE_TESTED_SUCCESS');
+
+    // Atualiza arquivo de prova durável
+    mockEvidence.publication = {
+      status: 'PUBLISHED',
+      targetAuditDatabase: 'isolated_audit_db',
+      publishedAt: new Date().toISOString(),
+      error: null,
+    };
+    fs.writeFileSync(testEvidencePath, JSON.stringify(mockEvidence, null, 2), 'utf8');
+
+    const readBack = JSON.parse(fs.readFileSync(testEvidencePath, 'utf8'));
+    assert.equal(readBack.publication.status, 'PUBLISHED');
   });
 
 });

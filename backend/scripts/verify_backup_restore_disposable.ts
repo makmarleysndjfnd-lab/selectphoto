@@ -182,17 +182,99 @@ async function main() {
   }
 
   console.log('🎉 100% DE INTEGRIDADE REFERENCIAL, ESTRUTURAL E RELACIONAL COMPROVADA NA RESTAURAÇÃO ISOLADA DO BACKUP REAL!');
-  try {
-    const targetAuditUrl = process.env.AUDIT_DATABASE_URL || process.env.OPERATIONAL_DATABASE_URL;
-    let auditDb = prisma;
-    let isSeparateAuditDb = false;
+  console.log('=== FASE 1 CONCLUÍDA: Integridade e relacionamentos 100% auditados no banco descartável ===');
+  await prisma.$disconnect();
 
-    if (targetAuditUrl && targetAuditUrl !== process.env.DATABASE_URL) {
-      console.log('Gravando log de auditoria comprovada no repositório de auditoria autorizado:', targetAuditUrl.replace(/:[^:@]+@/, ':***@'));
-      auditDb = new PrismaClient({ datasources: { db: { url: targetAuditUrl } } });
-      isSeparateAuditDb = true;
+  // =========================================================================
+  // FASE 2: GERAR E SALVAR LOCALMENTE O ARQUIVO DE PROVA DURÁVEL COM HASH E CONTAGENS
+  // (A prova durável é gravada no disco ANTES de qualquer tentativa remota)
+  // =========================================================================
+  const evidenceDir = fs.existsSync(scratchDir)
+    ? path.join(scratchDir, 'evidence')
+    : path.join(process.cwd(), 'scratch', 'evidence');
+  if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+  const evidenceFilePath = path.join(evidenceDir, `dr_restore_proof_${encSha256.slice(0, 16)}.json`);
+
+  const evidenceData = {
+    evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+    version: '1.0',
+    verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+    verifiedRestoreAt: new Date().toISOString(),
+    backupSha256: encSha256,
+    backupSizeBytes: fs.statSync(targetEncPath).size,
+    backupTimestamp: parsedData._metadata?.timestamp,
+    sanitizedSource: parsedData._metadata?.sanitizedSource,
+    schemaVersion: parsedData._metadata?.schemaVersion,
+    totalTables: Object.keys(result.restoredTables).length,
+    totalRows: result.totalRowsRestored,
+    tableCounts: result.restoredTables,
+    integrityAudit: {
+      companies: companiesCount,
+      users: usersCount,
+      clients: clientsCount,
+      sales: salesCount,
+      creditAgreements: agreementsCount,
+      creditInstallments: installmentsCount,
+      creditPayments: paymentsCount,
+      creditPaymentAllocations: allocationsCount,
+      creditCommissions: commissionsCount,
+      platformStatements: statementsCount,
+      platformStatementItems: statementItemsCount,
+      platformStatementAdjustments: statementAdjustmentsCount,
+      platformStatementPayments: statementPaymentsCount,
+      platformCostEntries: costEntriesCount,
+    },
+    publication: {
+      status: 'SAVED_LOCAL_PENDING_IMPORT',
+      targetAuditDatabase: null as string | null,
+      publishedAt: null as string | null,
+      error: null as string | null,
+    },
+  };
+
+  fs.writeFileSync(evidenceFilePath, JSON.stringify(evidenceData, null, 2), 'utf8');
+  console.log('=== FASE 2 CONCLUÍDA: Prova durável gerada e salva localmente em:', evidenceFilePath);
+
+  // =========================================================================
+  // FASE 3: PUBLICAÇÃO EM REPOSITÓRIO DE AUDITORIA AUTORIZADO (SE CONFIGURADO)
+  // Se houver destino de auditoria configurado e falhar, encerra com erro (exit != 0).
+  // O banco descartável NUNCA é usado como repositório de auditoria.
+  // =========================================================================
+  const targetAuditUrl =
+    process.env.AUDIT_DATABASE_URL ||
+    (process.env.OPERATIONAL_DATABASE_URL && process.env.OPERATIONAL_DATABASE_URL !== process.env.DATABASE_URL
+      ? process.env.OPERATIONAL_DATABASE_URL
+      : null);
+
+  const requirePublication =
+    process.env.REQUIRE_AUDIT_PUBLICATION === 'true' || process.argv.includes('--require-publication');
+
+  if (!targetAuditUrl) {
+    if (requirePublication) {
+      console.error('❌ ERRO [FASE 3]: Publicação obrigatória (--require-publication), mas nenhum AUDIT_DATABASE_URL configurado.');
+      process.exit(2);
     }
+    console.log('ℹ️ [FASE 3]: Nenhum AUDIT_DATABASE_URL configurado separadamente do cluster descartável.');
+    console.log('ℹ️ Prova durável preservada em disco:', evidenceFilePath);
+    console.log('ℹ️ Para importar esta prova posteriormente no repositório de auditoria:');
+    console.log(`   npx ts-node backend/scripts/import_dr_evidence.ts "${evidenceFilePath}"`);
+    process.exit(0);
+  }
 
+  if (targetAuditUrl === process.env.DATABASE_URL) {
+    console.error('❌ ERRO [FASE 3]: O repositório de auditoria não pode ser o cluster descartável temporário.');
+    if (requirePublication) {
+      process.exit(2);
+    }
+    process.exit(0);
+  }
+
+  console.log('=== FASE 3: Publicando prova no repositório de auditoria autorizado ===');
+  console.log('Destino explícito:', targetAuditUrl.replace(/:[^:@]+@/, ':***@'));
+
+  let auditDb: PrismaClient | null = null;
+  try {
+    auditDb = new PrismaClient({ datasources: { db: { url: targetAuditUrl } } });
     await recordDisasterRecoveryLog(
       {
         backupTimestamp: new Date(parsedData._metadata?.timestamp || Date.now()),
@@ -208,42 +290,30 @@ async function main() {
       auditDb
     );
 
-    if (isSeparateAuditDb) {
-      await auditDb.$disconnect();
-    }
-
-    // Gera arquivo de evidência verificável permanente vinculado ao hash
-    const evidenceDir = path.join(scratchDir, 'evidence');
-    if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
-    const evidenceFilePath = path.join(evidenceDir, `dr_restore_proof_${encSha256.slice(0, 16)}.json`);
-    const evidenceData = {
-      evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
-      verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
-      verifiedRestoreAt: new Date().toISOString(),
-      backupSha256: encSha256,
-      backupSizeBytes: fs.statSync(targetEncPath).size,
-      backupTimestamp: parsedData._metadata?.timestamp,
-      sanitizedSource: parsedData._metadata?.sanitizedSource,
-      totalTables: Object.keys(result.restoredTables).length,
-      totalRows: result.totalRowsRestored,
-      tableCounts: result.restoredTables,
-      integrityAudit: {
-        companies: companiesCount,
-        users: usersCount,
-        clients: clientsCount,
-        sales: salesCount,
-        creditAgreements: agreementsCount,
-        platformStatements: statementsCount,
-      },
+    evidenceData.publication = {
+      status: 'PUBLISHED',
+      targetAuditDatabase: targetAuditUrl.replace(/:[^:@]+@/, ':***@'),
+      publishedAt: new Date().toISOString(),
+      error: null,
     };
     fs.writeFileSync(evidenceFilePath, JSON.stringify(evidenceData, null, 2), 'utf8');
-    console.log('✅ Evidência auditável gerada e salva em:', evidenceFilePath);
-    console.log('✅ Registro de continuidade operacional (RESTORE_TESTED_SUCCESS) gravado com sucesso.');
-  } catch (auditErr: any) {
-    console.warn('[WARN] Falha ao registrar log de continuidade:', auditErr?.message);
+    console.log('✅ FASE 3 CONCLUÍDA: Prova de continuidade registrada com sucesso no repositório de auditoria.');
+    await auditDb.$disconnect();
+    process.exit(0);
+  } catch (publishErr: any) {
+    console.error('❌ ERRO FATAL [FASE 3]: Falha ao publicar prova no repositório de auditoria:', publishErr?.message);
+    evidenceData.publication = {
+      status: 'FAILED',
+      targetAuditDatabase: targetAuditUrl.replace(/:[^:@]+@/, ':***@'),
+      publishedAt: null,
+      error: publishErr?.message || String(publishErr),
+    };
+    fs.writeFileSync(evidenceFilePath, JSON.stringify(evidenceData, null, 2), 'utf8');
+    if (auditDb) {
+      await auditDb.$disconnect().catch(() => {});
+    }
+    process.exit(3);
   }
-  await prisma.$disconnect();
-  process.exit(0);
 }
 
 main().catch((err) => {

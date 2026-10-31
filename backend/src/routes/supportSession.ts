@@ -19,6 +19,7 @@ import {
   testMetaWhatsAppConnection,
   testGrokConnection,
 } from '../services/integrationAdapters';
+import { isGlobalLiveGateLocked } from '../services/asaasService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -99,8 +100,36 @@ router.post('/tickets/:id/messages', async (req: AuthRequest, res: Response) => 
     const ticketId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const { message } = req.body;
 
+    // Escopo READ_ONLY não pode postar mensagens ou mutar dados
+    if (user.supportScope === 'READ_ONLY') {
+      res.status(403).json({
+        error: 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN',
+        message: 'Sessão técnica em modo somente-leitura não tem permissão para responder a chamados.',
+      });
+      return;
+    }
+
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       res.status(400).json({ error: 'Mensagem não pode ser vazia.' });
+      return;
+    }
+
+    // O chamado deve existir e pertencer estritamente à empresa da concessão
+    const ticket = await prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { id: true, companyId: true, status: true },
+    });
+
+    if (!ticket) {
+      res.status(404).json({ error: 'Chamado não encontrado.' });
+      return;
+    }
+
+    if (ticket.companyId !== companyId) {
+      res.status(403).json({
+        error: 'SUPPORT_COMPANY_MISMATCH',
+        message: 'Chamado pertence a outra empresa. Operação negada para esta sessão técnica.',
+      });
       return;
     }
 
@@ -112,7 +141,7 @@ router.post('/tickets/:id/messages', async (req: AuthRequest, res: Response) => 
       message: message.trim(),
       isInternalNote: false, // Mensagem técnica pública no chamado
       companyId,
-      isOwnerSupport: true,
+      isOwnerSupport: false, // Suporte delegado: não é superadmin global
     });
 
     res.status(201).json({
@@ -318,27 +347,16 @@ router.post('/integrations/:id/test', async (req: AuthRequest, res: Response) =>
     }
 
     if (!integration) {
-      const upperProvider = integrationId.toUpperCase();
-      if (['ASAAS', 'GEMINI', 'VIACEP', 'META_WHATSAPP', 'GROK'].includes(upperProvider)) {
-        let testResult: { success: boolean; message: string; latencyMs: number } = {
-          success: true,
-          message: `Conexão simulada com ${upperProvider} bem sucedida (sandbox).`,
-          latencyMs: 15,
-        };
-        if (upperProvider === 'ASAAS') {
-          testResult = await testAsaasSandboxConnection('dummy_sandbox_key_for_test');
-        } else if (upperProvider === 'VIACEP') {
-          testResult = await testViaCepConnection();
-        }
-        res.json({
-          success: true,
-          integration: integrationId.toLowerCase(),
-          testResult,
-        });
-        return;
-      }
-
-      res.status(404).json({ error: 'Integração não encontrada.' });
+      res.status(404).json({
+        error: 'NOT_CONFIGURED',
+        message: `Integração '${integrationId}' não cadastrada para esta empresa.`,
+        testResult: {
+          success: false,
+          status: 'NOT_CONFIGURED',
+          message: `Nenhuma configuração cadastrada para '${integrationId}'.`,
+          latencyMs: 0,
+        },
+      });
       return;
     }
 
@@ -350,31 +368,68 @@ router.post('/integrations/:id/test', async (req: AuthRequest, res: Response) =>
       return;
     }
 
-    // Obtenção da credencial
-    let secret: string | null = null;
-    if (integration.credentialSource === 'VAULT_ENCRYPTED') {
-      if (integration.encryptedSecret && integration.secretIv && integration.secretTag) {
-        secret = decryptSecret(integration.encryptedSecret, integration.secretIv, integration.secretTag);
-      }
-    } else if (integration.credentialSource === 'ENV_REFERENCE') {
-      const envCheck = isAllowedEnvVarForIntegration({
-        varName: integration.envVarName || '',
-        category: integration.category,
-        provider: integration.provider,
-        environment: integration.environment,
-      });
-      if (!envCheck.allowed) {
-        res.status(422).json({
-          success: false,
+    // Trava de segurança para Asaas LIVE: bloqueia antes de qualquer extração de credencial ou chamada externa
+    if (integration.provider === 'ASAAS') {
+      const asaasEnv = integration.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
+      if (asaasEnv === 'PRODUCTION' && isGlobalLiveGateLocked()) {
+        res.status(403).json({
+          error: 'ASAAS_LIVE_LOCKED',
+          message: 'Ambiente LIVE do Asaas bloqueado pela trava de segurança global.',
           testResult: {
             success: false,
-            message: envCheck.reason || 'Referência de variável de ambiente bloqueada.',
+            status: 'LIVE_LOCKED',
+            message: 'Ambiente LIVE bloqueado pela trava de segurança global (ASAAS_ALLOW_LIVE_OPERATIONS=false).',
             latencyMs: 0,
           },
         });
         return;
       }
-      secret = integration.envVarName ? process.env[integration.envVarName] || null : null;
+    }
+
+    // Obtenção da credencial (provedores que utilizam chave de autenticação)
+    let secret: string | null = null;
+    if (integration.provider !== 'VIACEP') {
+      if (integration.credentialSource === 'VAULT_ENCRYPTED') {
+        if (integration.encryptedSecret && integration.secretIv && integration.secretTag) {
+          secret = decryptSecret(integration.encryptedSecret, integration.secretIv, integration.secretTag);
+        }
+      } else if (integration.credentialSource === 'ENV_REFERENCE') {
+        const envCheck = isAllowedEnvVarForIntegration({
+          varName: integration.envVarName || '',
+          category: integration.category,
+          provider: integration.provider,
+          environment: integration.environment,
+        });
+        if (!envCheck.allowed) {
+          res.status(422).json({
+            error: 'ENV_VAR_FORBIDDEN',
+            message: envCheck.reason || 'Referência de variável de ambiente bloqueada.',
+            testResult: {
+              success: false,
+              status: 'ENV_VAR_FORBIDDEN',
+              message: envCheck.reason || 'Referência de variável de ambiente bloqueada.',
+              latencyMs: 0,
+            },
+          });
+          return;
+        }
+        secret = integration.envVarName ? process.env[integration.envVarName] || null : null;
+      }
+
+      // Se o provedor exigir credencial e ela não estiver presente, rejeita com NOT_CONFIGURED
+      if (!secret) {
+        res.status(422).json({
+          error: 'NOT_CONFIGURED',
+          message: `Credencial ou chave secreta não cadastrada para o provedor ${integration.provider}.`,
+          testResult: {
+            success: false,
+            status: 'NOT_CONFIGURED',
+            message: `Credencial não cadastrada para ${integration.provider}.`,
+            latencyMs: 0,
+          },
+        });
+        return;
+      }
     }
 
     let testResult: { success: boolean; message: string; latencyMs: number; details?: any } = {
@@ -384,32 +439,29 @@ router.post('/integrations/:id/test', async (req: AuthRequest, res: Response) =>
     };
 
     if (integration.provider === 'GEMINI') {
-      if (!secret) {
-        testResult = { success: false, message: 'Chave Gemini não cadastrada para esta empresa.', latencyMs: 0 };
-      } else {
-        testResult = await testGeminiConnection(secret);
-      }
+      testResult = await testGeminiConnection(secret!);
     } else if (integration.provider === 'VIACEP') {
       testResult = await testViaCepConnection();
     } else if (integration.provider === 'ASAAS') {
       const asaasEnv = integration.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
-      if (!secret) {
-        testResult = { success: false, message: `Chave do Asaas (${asaasEnv}) não cadastrada.`, latencyMs: 0 };
-      } else {
-        testResult = await testAsaasSandboxConnection(secret, { environment: asaasEnv });
+      if (asaasEnv === 'PRODUCTION' && isGlobalLiveGateLocked()) {
+        res.status(403).json({
+          error: 'ASAAS_LIVE_LOCKED',
+          message: 'Ambiente LIVE do Asaas bloqueado pela trava de segurança global.',
+          testResult: {
+            success: false,
+            status: 'LIVE_LOCKED',
+            message: 'Ambiente LIVE bloqueado pela trava de segurança global (ASAAS_ALLOW_LIVE_OPERATIONS=false).',
+            latencyMs: 0,
+          },
+        });
+        return;
       }
+      testResult = await testAsaasSandboxConnection(secret!, { environment: asaasEnv });
     } else if (integration.provider === 'META_WHATSAPP') {
-      if (!secret) {
-        testResult = { success: false, message: 'Token do Meta WhatsApp não cadastrado.', latencyMs: 0 };
-      } else {
-        testResult = await testMetaWhatsAppConnection(secret);
-      }
+      testResult = await testMetaWhatsAppConnection(secret!);
     } else if (integration.provider === 'GROK') {
-      if (!secret) {
-        testResult = { success: false, message: 'Chave do Grok não cadastrada.', latencyMs: 0 };
-      } else {
-        testResult = await testGrokConnection(secret);
-      }
+      testResult = await testGrokConnection(secret!);
     }
 
     await prisma.companyIntegration.update({

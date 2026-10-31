@@ -205,9 +205,17 @@ export async function addTicketMessage(
     throw err;
   }
 
-  if (!params.isOwnerSupport && params.companyId && ticket.companyId !== params.companyId) {
+  if (params.companyId && ticket.companyId !== params.companyId) {
+    const err: any = new Error('Acesso não autorizado a este chamado: empresa divergente.');
+    err.status = 403;
+    err.code = 'SUPPORT_COMPANY_MISMATCH';
+    throw err;
+  }
+
+  if (!params.isOwnerSupport && (!params.companyId || ticket.companyId !== params.companyId)) {
     const err: any = new Error('Acesso não autorizado a este chamado.');
     err.status = 403;
+    err.code = 'SUPPORT_COMPANY_MISMATCH';
     throw err;
   }
 
@@ -231,12 +239,13 @@ export async function addTicketMessage(
     },
   });
 
-  // Atualização automática de status de acordo com o autor
+  // Atualização automática de status de acordo com o autor (desacoplado de permissão global)
   let newStatus: string | undefined = undefined;
   if (!isInternal) {
-    if (params.isOwnerSupport && ticket.status === 'OPEN') {
+    const isSupport = params.authorRole === 'SUPPORT' || params.isOwnerSupport;
+    if (isSupport && ticket.status === 'OPEN') {
       newStatus = 'WAITING_COMPANY';
-    } else if (!params.isOwnerSupport && ticket.status === 'WAITING_COMPANY') {
+    } else if (!isSupport && ticket.status === 'WAITING_COMPANY') {
       newStatus = 'IN_PROGRESS';
     }
   }
