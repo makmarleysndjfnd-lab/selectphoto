@@ -24,10 +24,10 @@ void main() {
   }
 
   group('Escopo 5 e 6: Ciclo de Vida das Fichas e Agenda Mobile (1.0.9+17)', () {
-    test('1. Versão compilada e build number do AppConfig estão alinhados com a release atual (1.0.25+36)', () {
-      expect(AppConfig.appVersion, equals('1.0.25'));
-      expect(AppConfig.buildNumber, equals(36));
-      expect(AppConfig.fullVersion, equals('1.0.25+36'));
+    test('1. Versão compilada e build number do AppConfig estão alinhados com a release atual (1.0.26+37)', () {
+      expect(AppConfig.appVersion, equals('1.0.26'));
+      expect(AppConfig.buildNumber, equals(37));
+      expect(AppConfig.fullVersion, equals('1.0.26+37'));
     });
 
     testWidgets('2. SellerDashboard renderiza cabeçalhos de grupos de fichas (Pendentes e Atendidas)', (tester) async {

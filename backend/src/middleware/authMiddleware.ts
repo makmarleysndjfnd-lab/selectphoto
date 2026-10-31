@@ -209,7 +209,7 @@ export function enforceSupportSessionRestrictions(
     }
 
     const isAllowedSupportMutation =
-      (normalizedPath.includes('/support/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments'))) ||
+      (normalizedPath.includes('/support') && normalizedPath.includes('/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments'))) ||
       (normalizedPath.includes('/alerts') && normalizedPath.endsWith('/ack')) ||
       normalizedPath.includes('/app/telemetry');
 
@@ -234,7 +234,7 @@ export function enforceSupportSessionRestrictions(
 
     const isAllowedDebugMutation =
       (normalizedPath.includes('/integrations') && (normalizedPath.endsWith('/test') || normalizedPath.endsWith('/ping'))) ||
-      (normalizedPath.includes('/support/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments')));
+      (normalizedPath.includes('/support') && normalizedPath.includes('/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments')));
 
     if (!isAllowedDebugMutation) {
       res.status(403).json({
@@ -346,7 +346,8 @@ export const authenticateToken = async (
         return;
       }
 
-      if (grant.requestedByUserId !== decoded.id) {
+      const technicianId = decoded.actorId || decoded.id;
+      if (grant.requestedByUserId !== technicianId) {
         res.status(403).json({
           error: 'SUPPORT_USER_MISMATCH',
           message: 'Token de suporte não pertence ao técnico solicitante.',
@@ -355,7 +356,7 @@ export const authenticateToken = async (
       }
 
       const technicianUser = await getPrisma().user.findUnique({
-        where: { id: decoded.id },
+        where: { id: technicianId },
       });
 
       if (!technicianUser || !technicianUser.active) {
@@ -396,6 +397,52 @@ export const authenticateToken = async (
     // 2. IMPERSONAÇÃO LEGADA (VINCULADA À CONCESSÃO E SUJEITA À MESMA POLÍTICA)
     // =========================================================================
     if (decoded.actorId && decoded.actorRole === 'SUPER_ADMIN') {
+      // Rejeita tokens legados sem vínculo inequívoco com a concessão autorizada
+      if (!decoded.supportGrantId) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_UNLINKED',
+          message: 'Token legado sem vínculo inequívoco com concessão formal de suporte. Rejeitado por política de segurança.',
+        });
+        return;
+      }
+
+      const activeGrant = await getPrisma().supportAccessGrant.findUnique({
+        where: { id: decoded.supportGrantId },
+        include: { company: true },
+      });
+
+      if (!activeGrant) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_INVALID',
+          message: 'Concessão formal de suporte vinculada ao token não foi encontrada.',
+        });
+        return;
+      }
+
+      if (activeGrant.status === 'REVOKED' || activeGrant.revokedAt !== null) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_REVOKED',
+          message: 'Sessão de suporte revogada imediatamente pela empresa.',
+        });
+        return;
+      }
+
+      if (activeGrant.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_INACTIVE',
+          message: `Sessão de suporte inativa (status atual: ${activeGrant.status}).`,
+        });
+        return;
+      }
+
+      if (activeGrant.expiresAt && activeGrant.expiresAt < new Date()) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_EXPIRED',
+          message: 'Sessão de suporte expirada.',
+        });
+        return;
+      }
+
       const actor = await getPrisma().user.findUnique({
         where: { id: decoded.actorId },
       });
@@ -405,45 +452,33 @@ export const authenticateToken = async (
         return;
       }
 
-      const targetCompanyId = decoded.effectiveCompanyId || decoded.companyId;
-      if (!targetCompanyId) {
-        res.status(403).json({ error: 'Impersonation companyId is missing' });
+      if (activeGrant.requestedByUserId !== actor.id) {
+        res.status(403).json({
+          error: 'SUPPORT_USER_MISMATCH',
+          message: 'Token legado não pertence ao técnico solicitante da concessão.',
+        });
         return;
       }
 
-      const targetCompany = await getPrisma().company.findUnique({
-        where: { id: targetCompanyId },
-      });
+      const targetCompanyId = decoded.effectiveCompanyId || decoded.companyId;
+      if (!targetCompanyId || targetCompanyId !== activeGrant.companyId) {
+        res.status(403).json({
+          error: 'SUPPORT_COMPANY_MISMATCH',
+          message: 'Token legado não corresponde à empresa autorizada na concessão.',
+        });
+        return;
+      }
 
+      const targetCompany = activeGrant.company;
       if (!targetCompany || targetCompany.isActive === false) {
         res.status(403).json({ error: 'Impersonated company is invalid or inactive' });
-        return;
-      }
-
-      // Validação de concessão ativa para impedir que impersonação contorne autorização
-      const activeGrant = await getPrisma().supportAccessGrant.findFirst({
-        where: {
-          companyId: targetCompany.id,
-          requestedByUserId: actor.id,
-          status: 'ACTIVE',
-          revokedAt: null,
-          expiresAt: { gt: new Date() },
-        },
-        orderBy: { grantedAt: 'desc' },
-      });
-
-      if (!activeGrant) {
-        res.status(403).json({
-          error: 'SUPPORT_GRANT_REQUIRED',
-          message: 'Acesso à empresa exige solicitação prévia e aprovação formal através da Central de Suporte.',
-        });
         return;
       }
 
       req.user = {
         id: actor.id,
         cpf: actor.cpf,
-        role: 'SUPPORT_AUTHORIZED', // Converte para o perfil estrito de suporte
+        role: 'SUPPORT_AUTHORIZED', // Converte estritamente para o perfil restrito de suporte
         companyId: targetCompany.id,
         teamId: null,
         name: actor.name,

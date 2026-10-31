@@ -12,8 +12,13 @@ import {
   sanitizeDiagnosticInfo,
 } from '../services/supportCentralService';
 
+import supportSessionRoutes from './supportSession';
+
 const router = Router();
 const prisma = new PrismaClient();
+
+// Rotas específicas da sessão técnica de atendimento autorizado
+router.use('/session', supportSessionRoutes);
 
 // Todas as rotas de suporte exigem usuário autenticado
 router.use(authenticateToken);

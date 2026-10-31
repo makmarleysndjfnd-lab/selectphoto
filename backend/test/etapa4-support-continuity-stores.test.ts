@@ -713,7 +713,7 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
       },
     });
 
-    // 24.2 Cria token legado de impersonação (com actorId)
+    // 24.2 Cria token legado de impersonação (com actorId e vínculo inequívoco à concessão)
     const legacyToken = jwt.sign(
       {
         id: companyAAdminId,
@@ -722,6 +722,7 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
         actorId: superAdminId,
         actorRole: 'SUPER_ADMIN',
         effectiveCompanyId: companyAId,
+        supportGrantId: grantReadOnly.id,
       },
       jwtSecret,
       { expiresIn: '1h' }
@@ -891,4 +892,187 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(alerts[0].category, 'SYNC_STALLED');
     assert.ok(alerts[0].title.includes('15 pendências'));
   });
+
+  it('30. Token de impersonação legada sem vínculo inequívoco de concessão é rejeitado (403 SUPPORT_GRANT_UNLINKED)', async () => {
+    const unlinkedLegacyToken = jwt.sign(
+      {
+        id: companyAAdminId,
+        role: 'COMPANY_ADMIN',
+        companyId: companyAId,
+        actorId: superAdminId,
+        actorRole: 'SUPER_ADMIN',
+      },
+      jwtSecret,
+      { expiresIn: '1h' }
+    );
+
+    const res = await fetch(`${baseUrl}/api/clients`, {
+      headers: { Authorization: `Bearer ${unlinkedLegacyToken}` },
+    });
+
+    assert.equal(res.status, 403, 'Token legado sem supportGrantId deve ser rejeitado com 403');
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_GRANT_UNLINKED');
+  });
+
+  it('31. Rotas de sessão técnica: GET /api/support/session/tickets lista os tickets da empresa da concessão (200 OK)', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    const res = await fetch(`${baseUrl}/api/support/session/tickets`, {
+      headers: { Authorization: `Bearer ${opToken}` },
+    });
+
+    assert.equal(res.status, 200, 'Técnico autorizado deve conseguir listar tickets da empresa');
+    const data = await res.json();
+    const tickets = data.tickets || data;
+    assert.ok(Array.isArray(tickets), 'Deve retornar array de tickets');
+    assert.ok(tickets.some((t: any) => t.id === createdTicketId));
+  });
+
+  it('32. Rotas de sessão técnica: GET /api/support/session/metrics alinha contrato com totalCadastradas e telemetriaDispositivos', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    const res = await fetch(`${baseUrl}/api/support/session/metrics`, {
+      headers: { Authorization: `Bearer ${opToken}` },
+    });
+
+    assert.equal(res.status, 200, 'Métricas da sessão técnica devem retornar 200 OK');
+    const data = await res.json();
+    const metrics = data.metrics || data;
+    assert.ok(metrics.fichas, 'Deve conter objeto fichas');
+    assert.ok('total' in metrics.fichas && 'totalCadastradas' in metrics.fichas, 'Deve expor total e totalCadastradas');
+    assert.equal(metrics.fichas.total, metrics.fichas.totalCadastradas);
+
+    assert.ok(metrics.vendas, 'Deve conter objeto vendas');
+    assert.ok('totalQuantidade' in metrics.vendas && 'totalRealizadas' in metrics.vendas, 'Deve expor totalQuantidade e totalRealizadas');
+    assert.equal(metrics.vendas.totalQuantidade, metrics.vendas.totalRealizadas);
+
+    assert.ok(Array.isArray(metrics.telemetriaDispositivos), 'Deve expor array plano telemetriaDispositivos para o mobile');
+  });
+
+  it('33. Rotas de sessão técnica: GET /api/support/session/alerts e POST /api/support/session/alerts/:id/ack', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    const resAlerts = await fetch(`${baseUrl}/api/support/session/alerts`, {
+      headers: { Authorization: `Bearer ${opToken}` },
+    });
+
+    assert.equal(resAlerts.status, 200, 'Deve listar alertas da empresa');
+    const dataAlerts = await resAlerts.json();
+    const alerts = dataAlerts.alerts || dataAlerts;
+    assert.ok(Array.isArray(alerts));
+    assert.ok(alerts.length >= 1, 'Deve conter pelo menos o alerta SYNC_STALLED gerado anteriormente');
+
+    const alertToAck = alerts[0];
+    const resAck = await fetch(`${baseUrl}/api/support/session/alerts/${alertToAck.id}/ack`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${opToken}` },
+    });
+
+    assert.equal(resAck.status, 200, 'Deve permitir acknowledge do alerta pelo suporte técnico');
+    const ackData = await resAck.json();
+    assert.equal(ackData.success, true);
+  });
+
+  it('34. Rotas de sessão técnica: Integrações respeitam escopo (OPERATIONAL_SUPPORT barrado, INTEGRATION_DEBUG permitido)', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionOpRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+
+    const resForbidden = await fetch(`${baseUrl}/api/support/session/integrations`, {
+      headers: { Authorization: `Bearer ${sessionOpRes.token}` },
+    });
+    assert.equal(resForbidden.status, 403, 'OPERATIONAL_SUPPORT não deve acessar configurações de integração');
+
+    const grantDebug = await prisma.supportAccessGrant.create({
+      data: {
+        ticketId: createdTicketId,
+        companyId: companyAId,
+        requestedByUserId: superAdminId,
+        requestedByName: 'Técnico Lumora',
+        approvedByUserId: companyAAdminId,
+        approvedByName: 'Admin Alfa',
+        status: 'ACTIVE',
+        scope: 'INTEGRATION_DEBUG',
+        reason: 'Depuração técnica de conectividade Asaas e gateways',
+        durationMinutes: 60,
+        expiresAt: new Date(Date.now() + 3600000),
+      },
+    });
+
+    const sessionDebugRes = await claimSupportSessionToken({
+      grantId: grantDebug.id,
+      technicianUserId: superAdminId,
+    });
+
+    const resIntegrations = await fetch(`${baseUrl}/api/support/session/integrations`, {
+      headers: { Authorization: `Bearer ${sessionDebugRes.token}` },
+    });
+    assert.equal(resIntegrations.status, 200, 'INTEGRATION_DEBUG deve conseguir listar status de integradores');
+    const dataIntegrators = await resIntegrations.json();
+    const integrators = dataIntegrators.integrations || dataIntegrators;
+    assert.ok(Array.isArray(integrators));
+
+    const testRes = await fetch(`${baseUrl}/api/support/session/integrations/asaas/test`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionDebugRes.token}` },
+    });
+    assert.equal(testRes.status, 200, 'Deve permitir teste de conectividade de integradores sob INTEGRATION_DEBUG');
+    const testData = await testRes.json();
+    assert.equal(testData.integration, 'asaas');
+  });
+
+  it('35. Isolamento de empresa: Rejeita tentativa de acessar outra empresa na rota técnica (403 SUPPORT_COMPANY_MISMATCH)', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+
+    const res = await fetch(`${baseUrl}/api/support/session/tickets?companyId=${companyBId}`, {
+      headers: { Authorization: `Bearer ${sessionRes.token}` },
+    });
+
+    assert.equal(res.status, 403, 'Sessão técnica não pode consultar dados de empresa diversa da concessão');
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_COMPANY_MISMATCH');
+  });
+
 });

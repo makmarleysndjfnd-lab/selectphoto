@@ -3,28 +3,28 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 
-/// Área de Atendimento Técnico com sessão isolada autorizada.
-///
-/// REGRAS ESTRITAS DE SEGURANÇA:
-/// 1. O [supportToken] é mantido estritamente em memória volátil dentro do [ApiService.isolated].
-/// 2. Nunca grava o token em logs, clipboard ou SharedPreferences.
-/// 3. O fechamento ou revogação encerra imediatamente o contexto técnico.
-/// 4. A sessão principal do proprietário é completamente preservada sem uso de privilégios globais.
 class AreaAtendimentoTecnicoScreen extends StatefulWidget {
   final String supportToken;
-  final String empresaNome;
+  final String companyName;
   final String companyId;
   final String escopo;
-  final String? expiresAtStr;
+  final DateTime expiresAt;
 
-  const AreaAtendimentoTecnicoScreen({
-    super.key,
+  AreaAtendimentoTecnicoScreen({
+    Key? key,
     required this.supportToken,
-    required this.empresaNome,
+    String? companyName,
+    String? empresaNome,
     required this.companyId,
     required this.escopo,
-    this.expiresAtStr,
-  });
+    DateTime? expiresAt,
+    String? expiresAtStr,
+  })  : companyName = companyName ?? empresaNome ?? 'Empresa Atendida',
+        expiresAt = expiresAt ??
+            (expiresAtStr != null
+                ? DateTime.tryParse(expiresAtStr) ?? DateTime.now().add(const Duration(hours: 1))
+                : DateTime.now().add(const Duration(hours: 1))),
+        super(key: key);
 
   @override
   State<AreaAtendimentoTecnicoScreen> createState() => _AreaAtendimentoTecnicoScreenState();
@@ -39,9 +39,16 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
   String? _errorMessage;
 
   List<dynamic> _chamados = [];
+  String? _chamadosError;
+
   Map<String, dynamic>? _metricas;
+  String? _metricasError;
+
   List<dynamic> _alertas = [];
+  String? _alertasError;
+
   List<dynamic> _integracoes = [];
+  String? _integracoesError;
 
   Timer? _countdownTimer;
   Duration _tempoRestante = Duration.zero;
@@ -49,16 +56,14 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
   @override
   void initState() {
     super.initState();
-    // Instancia API isolada com o token efêmero de suporte
+    // Instância isolada exclusiva com token efêmero em RAM
     _api = ApiService.isolated(token: widget.supportToken);
 
-    final numTabs = widget.escopo == 'INTEGRATION_DEBUG' ? 4 : 3;
-    _tabController = TabController(length: numTabs, vsync: this);
+    final tabCount = widget.escopo == 'INTEGRATION_DEBUG' ? 4 : 3;
+    _tabController = TabController(length: tabCount, vsync: this);
 
-    _calcularTempoRestante();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) _calcularTempoRestante();
-    });
+    _atualizarTempoRestante();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _atualizarTempoRestante());
 
     _carregarDadosIniciais();
   }
@@ -70,32 +75,33 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
     super.dispose();
   }
 
-  void _calcularTempoRestante() {
-    if (widget.expiresAtStr == null) return;
-    try {
-      final exp = DateTime.parse(widget.expiresAtStr!);
-      final diff = exp.difference(DateTime.now());
-      if (diff.isNegative) {
-        _tempoRestante = Duration.zero;
-        _encerrarPorExpiracao();
-      } else {
+  void _atualizarTempoRestante() {
+    final now = DateTime.now();
+    if (now.isAfter(widget.expiresAt)) {
+      _countdownTimer?.cancel();
+      if (mounted) {
         setState(() {
-          _tempoRestante = diff;
+          _tempoRestante = Duration.zero;
+        });
+        _exibirDialogoExpirado();
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _tempoRestante = widget.expiresAt.difference(now);
         });
       }
-    } catch (_) {}
+    }
   }
 
-  void _encerrarPorExpiracao() {
-    _countdownTimer?.cancel();
-    if (!mounted) return;
+  void _exibirDialogoExpirado() {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E293B),
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Icon(Icons.timer_off_rounded, color: Colors.orangeAccent),
             SizedBox(width: 8),
             Text('Sessão Expirada', style: TextStyle(color: Colors.white)),
@@ -123,45 +129,53 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _chamadosError = null;
+      _metricasError = null;
+      _alertasError = null;
+      _integracoesError = null;
     });
 
     try {
       // 1. Chamados da empresa
       try {
-        final tickets = await _api.getOwnerSupportTickets(companyId: widget.companyId);
+        final tickets = await _api.getTechnicalSessionTickets();
         _chamados = tickets;
       } catch (e) {
         if (_isSecurityRevocation(e)) return;
+        _chamadosError = _formatUserFriendlyError(e);
       }
 
       // 2. Telemetria e filas do aparelho
       try {
-        final metrics = await _api.getOwnerOperationalMetrics(companyId: widget.companyId);
+        final metrics = await _api.getTechnicalSessionMetrics();
         _metricas = metrics;
       } catch (e) {
         if (_isSecurityRevocation(e)) return;
+        _metricasError = _formatUserFriendlyError(e);
       }
 
       // 3. Alertas operacionais internos
       try {
-        final alerts = await _api.getOwnerInternalAlerts(companyId: widget.companyId);
+        final alerts = await _api.getTechnicalSessionAlerts();
         _alertas = alerts;
       } catch (e) {
         if (_isSecurityRevocation(e)) return;
+        _alertasError = _formatUserFriendlyError(e);
       }
 
       // 4. Se escopo for INTEGRATION_DEBUG, carrega integrações
       if (widget.escopo == 'INTEGRATION_DEBUG') {
         try {
-          final integrations = await _api.getCompanyIntegrations(widget.companyId);
+          final integrations = await _api.getTechnicalSessionIntegrations();
           _integracoes = integrations;
         } catch (e) {
           if (_isSecurityRevocation(e)) return;
+          _integracoesError = _formatUserFriendlyError(e);
         }
       }
     } catch (e) {
       if (_isSecurityRevocation(e)) return;
-      _errorMessage = e.toString();
+      _errorMessage = _formatUserFriendlyError(e);
     } finally {
       if (mounted) {
         setState(() {
@@ -171,12 +185,34 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
     }
   }
 
+  String _formatUserFriendlyError(dynamic error) {
+    if (error is ApiException) {
+      if (error.isScopeForbidden) {
+        return 'Ação restrita: o escopo desta sessão (${widget.escopo}) não permite acessar este recurso.';
+      }
+      return error.message;
+    }
+    return error.toString();
+  }
+
   bool _isSecurityRevocation(dynamic error) {
+    if (error is ApiException && error.isRevocationOrExpiration) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sessão técnica encerrada ou revogada: ${error.message}'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        Navigator.of(context).pop();
+      }
+      return true;
+    }
     final str = error.toString().toUpperCase();
     if (str.contains('SUPPORT_GRANT_REVOKED') ||
         str.contains('SUPPORT_GRANT_EXPIRED') ||
-        str.contains('401') ||
-        str.contains('403')) {
+        str.contains('SUPPORT_SESSION_EXPIRED') ||
+        str.contains('401')) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -198,7 +234,7 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
         backgroundColor: const Color(0xFF1E293B),
         title: const Text('Encerrar Sessão Técnica?', style: TextStyle(color: Colors.white)),
         content: Text(
-          'Deseja fechar o atendimento técnico de ${widget.empresaNome}? O token de suporte será descartado da memória.',
+          'Deseja sair da sessão técnica da empresa "${widget.companyName}"?\nO token efêmero será descartado da memória.',
           style: const TextStyle(color: Color(0xFF94A3B8)),
         ),
         actions: [
@@ -207,12 +243,13 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
             child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
             onPressed: () {
+              _api.clearToken();
               Navigator.of(ctx).pop();
               Navigator.of(context).pop();
             },
-            child: const Text('Encerrar', style: TextStyle(color: Colors.white)),
+            child: const Text('Encerrar'),
           ),
         ],
       ),
@@ -221,24 +258,26 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
 
   @override
   Widget build(BuildContext context) {
-    final isReadOnly = widget.escopo == 'READ_ONLY';
+    final minutes = _tempoRestante.inMinutes;
+    final seconds = _tempoRestante.inSeconds % 60;
+    final timerFormatted = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1E293B),
-        elevation: 2,
+        elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.shield_rounded, color: Color(0xFF38BDF8), size: 16),
-                const SizedBox(width: 6),
+                const Icon(Icons.shield_rounded, color: Color(0xFF38BDF8), size: 18),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Atendimento: ${widget.empresaNome}',
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    widget.companyName,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -247,37 +286,28 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
             const SizedBox(height: 2),
             Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: isReadOnly ? Colors.amber.withOpacity(0.2) : Colors.cyan.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: isReadOnly ? Colors.amberAccent : Colors.cyanAccent, width: 0.5),
-                  ),
-                  child: Text(
-                    widget.escopo,
-                    style: TextStyle(
-                      color: isReadOnly ? Colors.amberAccent : Colors.cyanAccent,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
+                _buildEscopoBadge(widget.escopo),
+                const SizedBox(width: 8),
+                Text(
+                  'Expira em: $timerFormatted',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _tempoRestante.inMinutes < 5 ? Colors.redAccent : const Color(0xFF38BDF8),
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(width: 8),
-                if (_tempoRestante > Duration.zero)
-                  Text(
-                    'Restam ${_tempoRestante.inHours}h ${_tempoRestante.inMinutes % 60}m',
-                    style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
-                  )
-                else
-                  const Text('Prazo esgotado', style: TextStyle(color: Colors.redAccent, fontSize: 11)),
               ],
             ),
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+            tooltip: 'Atualizar Dados',
+            onPressed: _carregarDadosIniciais,
+          ),
           TextButton.icon(
-            icon: const Icon(Icons.exit_to_app_rounded, color: Colors.redAccent, size: 18),
+            icon: const Icon(Icons.exit_to_app_rounded, color: Colors.redAccent, size: 16),
             label: const Text('Encerrar', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
             onPressed: _confirmarEncerramento,
           ),
@@ -288,11 +318,11 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
           labelColor: const Color(0xFF38BDF8),
           unselectedLabelColor: const Color(0xFF94A3B8),
           tabs: [
-            const Tab(icon: Icon(Icons.confirmation_number_outlined, size: 18), text: 'Chamados'),
-            const Tab(icon: Icon(Icons.cloud_sync_outlined, size: 18), text: 'Filas/Sync'),
-            const Tab(icon: Icon(Icons.notifications_active_outlined, size: 18), text: 'Alertas'),
+            const Tab(icon: Icon(Icons.confirmation_number_rounded), text: 'Chamados'),
+            const Tab(icon: Icon(Icons.sync_problem_rounded), text: 'Filas / Sync'),
+            const Tab(icon: Icon(Icons.warning_amber_rounded), text: 'Alertas'),
             if (widget.escopo == 'INTEGRATION_DEBUG')
-              const Tab(icon: Icon(Icons.hub_outlined, size: 18), text: 'Integrações'),
+              const Tab(icon: Icon(Icons.hub_rounded), text: 'Integrações'),
           ],
         ),
       ),
@@ -301,28 +331,43 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
           : TabBarView(
               controller: _tabController,
               children: [
-                _buildTabChamados(isReadOnly),
+                _buildTabChamados(),
                 _buildTabTelemetria(),
-                _buildTabAlertas(isReadOnly),
+                _buildTabAlertas(),
                 if (widget.escopo == 'INTEGRATION_DEBUG') _buildTabIntegracoes(),
               ],
             ),
     );
   }
 
-  Widget _buildTabChamados(bool isReadOnly) {
-    if (_chamados.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.inbox_rounded, color: Color(0xFF64748B), size: 48),
-            const SizedBox(height: 12),
-            Text('Nenhum chamado aberto para ${widget.empresaNome}', style: const TextStyle(color: Color(0xFF94A3B8))),
-          ],
-        ),
-      );
+  Widget _buildEscopoBadge(String escopo) {
+    Color bg = Colors.blue.withOpacity(0.2);
+    Color txt = Colors.blueAccent;
+    if (escopo == 'READ_ONLY') {
+      bg = Colors.amber.withOpacity(0.2);
+      txt = Colors.amberAccent;
+    } else if (escopo == 'INTEGRATION_DEBUG') {
+      bg = Colors.purple.withOpacity(0.2);
+      txt = Colors.purpleAccent;
     }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+      child: Text(escopo, style: TextStyle(color: txt, fontSize: 10, fontWeight: FontWeight.bold)),
+    );
+  }
+
+  Widget _buildTabChamados() {
+    if (_chamadosError != null) {
+      return _buildErrorStateCard('Falha ao carregar chamados', _chamadosError!);
+    }
+
+    if (_chamados.isEmpty) {
+      return const Center(child: Text('Nenhum chamado aberto para esta empresa.', style: TextStyle(color: Color(0xFF94A3B8))));
+    }
+
+    final isReadOnly = widget.escopo == 'READ_ONLY';
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
@@ -331,7 +376,6 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
         final t = _chamados[idx];
         return Card(
           color: const Color(0xFF1E293B),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.only(bottom: 12),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -339,14 +383,14 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      t['ticketNumber'] ?? 'TICKET',
-                      style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold),
+                      t['ticketNumber'] ?? '#---',
+                      style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 12),
                     ),
-                    const Spacer(),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: t['status'] == 'OPEN' ? Colors.blue.withOpacity(0.2) : Colors.green.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(4),
@@ -392,72 +436,66 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
 
   Future<void> _abrirDialogoResposta(String ticketId) async {
     final textCtrl = TextEditingController();
-    bool isInternal = false;
 
     await showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlgState) => AlertDialog(
-          backgroundColor: const Color(0xFF1E293B),
-          title: const Text('Responder Chamado', style: TextStyle(color: Colors.white)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: textCtrl,
-                maxLines: 3,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  hintText: 'Escreva a resposta técnica...',
-                  hintStyle: TextStyle(color: Colors.white54),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SwitchListTile(
-                title: const Text('Nota Técnica Interna (Oculta da empresa)', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
-                value: isInternal,
-                onChanged: (val) => setDlgState(() => isInternal = val),
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: const Text('Responder Chamado', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: textCtrl,
+          maxLines: 3,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Escreva a resposta técnica...',
+            hintStyle: TextStyle(color: Colors.white54),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF0F172A)),
-              onPressed: () async {
-                final txt = textCtrl.text.trim();
-                if (txt.isEmpty) return;
-                try {
-                  await _api.addOwnerSupportTicketMessage(ticketId, txt, isInternalNote: isInternal);
-                  Navigator.of(ctx).pop();
-                  _carregarDadosIniciais();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Mensagem enviada com sucesso!'), backgroundColor: Colors.green),
-                  );
-                } catch (err) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Erro ao enviar mensagem: $err'), backgroundColor: Colors.redAccent),
-                  );
-                }
-              },
-              child: const Text('Enviar'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF0F172A)),
+            onPressed: () async {
+              final txt = textCtrl.text.trim();
+              if (txt.isEmpty) return;
+              try {
+                await _api.addTechnicalSessionTicketMessage(ticketId, txt);
+                Navigator.of(ctx).pop();
+                _carregarDadosIniciais();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Mensagem técnica enviada com sucesso!'), backgroundColor: Colors.green),
+                );
+              } catch (err) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erro ao enviar mensagem: $err'), backgroundColor: Colors.redAccent),
+                );
+              }
+            },
+            child: const Text('Enviar'),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildTabTelemetria() {
+    if (_metricasError != null) {
+      return _buildErrorStateCard('Falha ao carregar telemetria', _metricasError!);
+    }
+
     final m = _metricas;
     if (m == null) {
       return const Center(child: Text('Nenhuma telemetria disponível.', style: TextStyle(color: Color(0xFF94A3B8))));
     }
 
-    final telemetria = m['telemetriaDispositivos'] as List<dynamic>? ?? [];
+    final telemetria = (m['telemetriaDispositivos'] as List<dynamic>?) ??
+        (m['pendenciasOfflineAparelhos']?['amostraAparelhos'] as List<dynamic>? ?? []);
+
+    final totalFichas = m['fichas']?['totalCadastradas'] ?? m['fichas']?['total'] ?? 0;
+    final totalVendas = m['vendas']?['totalRealizadas'] ?? m['vendas']?['totalQuantidade'] ?? 0;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -474,8 +512,8 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
             children: [
               const Text('Resumo da Operação em Campo:', style: TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Text('Fichas Cadastradas: ${m['fichas']?['totalCadastradas'] ?? 0}', style: const TextStyle(color: Colors.white)),
-              Text('Vendas Realizadas: ${m['vendas']?['totalRealizadas'] ?? 0}', style: const TextStyle(color: Colors.white)),
+              Text('Fichas Cadastradas: $totalFichas', style: const TextStyle(color: Colors.white)),
+              Text('Vendas Realizadas: $totalVendas', style: const TextStyle(color: Colors.white)),
               Text('Dispositivos Reportados: ${telemetria.length}', style: const TextStyle(color: Colors.white)),
             ],
           ),
@@ -490,7 +528,13 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
           )
         else
           ...telemetria.map((d) {
-            final pending = d['pendingOfflineCount'] ?? 0;
+            final pending = d['pendingOfflineCount'] ?? d['pendencias'] ?? 0;
+            final platform = d['platform'] ?? d['plataforma'] ?? 'ANDROID';
+            final appVersion = d['appVersion'] ?? d['versaoApp'] ?? '1.0';
+            final buildNum = d['buildNumber'] != null ? '+${d['buildNumber']}' : '';
+            final conn = d['connectivityStatus'] ?? d['conectividade'] ?? 'OFFLINE';
+            final dateRaw = d['lastReportedAt'] ?? d['ultimaComunicacao'];
+
             return Card(
               color: const Color(0xFF1E293B),
               margin: const EdgeInsets.only(bottom: 8),
@@ -500,16 +544,16 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
                   color: pending > 0 ? Colors.orangeAccent : Colors.greenAccent,
                 ),
                 title: Text(
-                  '${d['platform'] ?? 'ANDROID'} • App v${d['appVersion'] ?? '1.0'}+${d['buildNumber'] ?? ''}',
+                  '$platform • App v$appVersion$buildNum',
                   style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                 ),
                 subtitle: Text(
-                  'Pendências Offline: $pending | Conexão: ${d['connectivityStatus'] ?? 'UNKNOWN'}',
+                  'Pendências Offline: $pending | Conexão: $conn',
                   style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
                 ),
                 trailing: Text(
-                  d['lastReportedAt'] != null
-                      ? DateFormat('HH:mm dd/MM').format(DateTime.parse(d['lastReportedAt']))
+                  dateRaw != null
+                      ? DateFormat('HH:mm dd/MM').format(DateTime.tryParse(dateRaw) ?? DateTime.now())
                       : '',
                   style: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
                 ),
@@ -520,49 +564,38 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
     );
   }
 
-  Widget _buildTabAlertas(bool isReadOnly) {
-    if (_alertas.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.check_circle_outline_rounded, color: Colors.greenAccent, size: 48),
-            SizedBox(height: 12),
-            Text('Nenhum alerta operacional pendente.', style: TextStyle(color: Color(0xFF94A3B8))),
-          ],
-        ),
-      );
+  Widget _buildTabAlertas() {
+    if (_alertasError != null) {
+      return _buildErrorStateCard('Falha ao carregar alertas', _alertasError!);
     }
+
+    if (_alertas.isEmpty) {
+      return const Center(child: Text('Nenhum alerta operacional pendente.', style: TextStyle(color: Color(0xFF94A3B8))));
+    }
+
+    final isReadOnly = widget.escopo == 'READ_ONLY';
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: _alertas.length,
       itemBuilder: (ctx, idx) {
         final a = _alertas[idx];
-        final ack = a['acknowledged'] == true;
-
+        final isAck = a['acknowledged'] == true;
         return Card(
           color: const Color(0xFF1E293B),
-          margin: const EdgeInsets.only(bottom: 8),
+          margin: const EdgeInsets.only(bottom: 12),
           child: ListTile(
             leading: Icon(
-              Icons.warning_amber_rounded,
-              color: ack ? Colors.white30 : Colors.orangeAccent,
+              a['severity'] == 'CRITICAL' ? Icons.error_rounded : Icons.warning_amber_rounded,
+              color: a['severity'] == 'CRITICAL' ? Colors.redAccent : Colors.amberAccent,
             ),
-            title: Text(
-              a['title'] ?? '',
-              style: TextStyle(
-                color: ack ? Colors.white54 : Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
-            ),
+            title: Text(a['title'] ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
             subtitle: Text(
-              'Categoria: ${a['category']} • Severidade: ${a['severity']}',
+              'Categoria: ${a['category']} • Status: ${isAck ? 'Reconhecido' : 'Pendente'}',
               style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
             ),
-            trailing: ack
-                ? const Text('Reconhecido', style: TextStyle(color: Colors.greenAccent, fontSize: 11))
+            trailing: isAck
+                ? const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 18)
                 : (isReadOnly
                     ? null
                     : OutlinedButton(
@@ -582,7 +615,7 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
 
   Future<void> _reconhecerAlerta(String alertId) async {
     try {
-      await _api.acknowledgeOwnerInternalAlert(alertId);
+      await _api.acknowledgeTechnicalSessionAlert(alertId);
       _carregarDadosIniciais();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -599,8 +632,12 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
   }
 
   Widget _buildTabIntegracoes() {
+    if (_integracoesError != null) {
+      return _buildErrorStateCard('Falha ao carregar integrações', _integracoesError!);
+    }
+
     if (_integracoes.isEmpty) {
-      return const Center(child: Text('Nenhuma integração cadastrada.', style: TextStyle(color: Color(0xFF94A3B8))));
+      return const Center(child: Text('Nenhuma integração cadastrada para esta empresa.', style: TextStyle(color: Color(0xFF94A3B8))));
     }
 
     return ListView.builder(
@@ -652,9 +689,11 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
 
   Future<void> _testarConexaoIntegracao(String integrationId) async {
     try {
-      final res = await _api.testIntegrationConnection(integrationId);
-      final r = res['testResult'] ?? {};
+      final res = await _api.testTechnicalSessionIntegration(integrationId);
+      final r = (res['testResult'] is Map) ? res['testResult'] : res;
       final ok = r['success'] == true;
+      final msg = r['message'] ?? 'Teste finalizado.';
+
       if (mounted) {
         showDialog(
           context: context,
@@ -668,7 +707,7 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
               ],
             ),
             content: Text(
-              r['message'] ?? 'Teste finalizado.',
+              msg,
               style: const TextStyle(color: Color(0xFF94A3B8)),
             ),
             actions: [
@@ -688,5 +727,40 @@ class _AreaAtendimentoTecnicoScreenState extends State<AreaAtendimentoTecnicoScr
       }
     }
   }
-}
 
+  Widget _buildErrorStateCard(String title, String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 36),
+              const SizedBox(height: 12),
+              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              const SizedBox(height: 8),
+              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Tentar Novamente'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF38BDF8),
+                  foregroundColor: const Color(0xFF0F172A),
+                ),
+                onPressed: _carregarDadosIniciais,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

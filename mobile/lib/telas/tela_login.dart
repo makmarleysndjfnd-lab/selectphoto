@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
@@ -102,6 +103,10 @@ class _LoginScreenState extends State<LoginScreen>
           apiService.setToken(token);
           final isValid = await apiService.revalidateSession();
           if (isValid && mounted) {
+            try {
+              final syncService = Provider.of<SyncService>(context, listen: false);
+              unawaited(syncService.sendDeviceTelemetry(force: true));
+            } catch (_) {}
             Navigator.of(context).pushReplacement(
               PageRouteBuilder(
                 pageBuilder: (_, __, ___) => HomeScreen(role: role),
@@ -230,6 +235,11 @@ class _LoginScreenState extends State<LoginScreen>
         if (fcmToken != null) {
           await apiService.updateFcmToken(fcmToken);
         }
+      } catch (_) {}
+
+      try {
+        final syncService = Provider.of<SyncService>(context, listen: false);
+        unawaited(syncService.sendDeviceTelemetry(force: true));
       } catch (_) {}
       
     } catch (e) {

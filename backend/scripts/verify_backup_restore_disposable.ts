@@ -183,6 +183,16 @@ async function main() {
 
   console.log('🎉 100% DE INTEGRIDADE REFERENCIAL, ESTRUTURAL E RELACIONAL COMPROVADA NA RESTAURAÇÃO ISOLADA DO BACKUP REAL!');
   try {
+    const targetAuditUrl = process.env.AUDIT_DATABASE_URL || process.env.OPERATIONAL_DATABASE_URL;
+    let auditDb = prisma;
+    let isSeparateAuditDb = false;
+
+    if (targetAuditUrl && targetAuditUrl !== process.env.DATABASE_URL) {
+      console.log('Gravando log de auditoria comprovada no repositório de auditoria autorizado:', targetAuditUrl.replace(/:[^:@]+@/, ':***@'));
+      auditDb = new PrismaClient({ datasources: { db: { url: targetAuditUrl } } });
+      isSeparateAuditDb = true;
+    }
+
     await recordDisasterRecoveryLog(
       {
         backupTimestamp: new Date(parsedData._metadata?.timestamp || Date.now()),
@@ -190,14 +200,45 @@ async function main() {
         sizeBytes: fs.statSync(targetEncPath).size,
         sanitizedSource: parsedData._metadata?.sanitizedSource || 'disposable_cluster',
         verifiedRestoreAt: new Date(),
-        verifiedRestoreStatus: 'RESTORE_TESTED_ISOLATED',
-        verifiedRestoreNotes: `Restauração isolada auditada com sucesso no ambiente descartável (${result.totalRowsRestored} linhas restauradas em ${Object.keys(result.restoredTables).length} tabelas).`,
+        verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+        verifiedRestoreNotes: `Restauração isolada auditada com 100% de sucesso no ambiente descartável (${result.totalRowsRestored} linhas restauradas em ${Object.keys(result.restoredTables).length} tabelas). Integridade referencial comprovada.`,
         totalTables: Object.keys(result.restoredTables).length,
         totalRows: result.totalRowsRestored,
       },
-      prisma
+      auditDb
     );
-    console.log('✅ Registro de continuidade operacional (RESTORE_TESTED_ISOLATED) gravado com sucesso.');
+
+    if (isSeparateAuditDb) {
+      await auditDb.$disconnect();
+    }
+
+    // Gera arquivo de evidência verificável permanente vinculado ao hash
+    const evidenceDir = path.join(scratchDir, 'evidence');
+    if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+    const evidenceFilePath = path.join(evidenceDir, `dr_restore_proof_${encSha256.slice(0, 16)}.json`);
+    const evidenceData = {
+      evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+      verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+      verifiedRestoreAt: new Date().toISOString(),
+      backupSha256: encSha256,
+      backupSizeBytes: fs.statSync(targetEncPath).size,
+      backupTimestamp: parsedData._metadata?.timestamp,
+      sanitizedSource: parsedData._metadata?.sanitizedSource,
+      totalTables: Object.keys(result.restoredTables).length,
+      totalRows: result.totalRowsRestored,
+      tableCounts: result.restoredTables,
+      integrityAudit: {
+        companies: companiesCount,
+        users: usersCount,
+        clients: clientsCount,
+        sales: salesCount,
+        creditAgreements: agreementsCount,
+        platformStatements: statementsCount,
+      },
+    };
+    fs.writeFileSync(evidenceFilePath, JSON.stringify(evidenceData, null, 2), 'utf8');
+    console.log('✅ Evidência auditável gerada e salva em:', evidenceFilePath);
+    console.log('✅ Registro de continuidade operacional (RESTORE_TESTED_SUCCESS) gravado com sucesso.');
   } catch (auditErr: any) {
     console.warn('[WARN] Falha ao registrar log de continuidade:', auditErr?.message);
   }

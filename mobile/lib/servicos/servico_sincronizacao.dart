@@ -270,6 +270,9 @@ class SyncService extends ChangeNotifier {
     if (_pendingRequests.isNotEmpty && _isOnline && !_isDisposed) {
       syncAllPending();
     }
+    if (!WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+      unawaited(sendDeviceTelemetry());
+    }
   }
 
   void _initConnectivityListener() {
@@ -673,6 +676,9 @@ class SyncService extends ChangeNotifier {
         }
       } finally {
         _isSyncing = false;
+        if (!WidgetsBinding.instance.runtimeType.toString().contains('Test')) {
+          unawaited(sendDeviceTelemetry());
+        }
       }
     });
   }

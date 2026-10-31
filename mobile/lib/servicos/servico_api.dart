@@ -4,6 +4,35 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
+/// Exceção estruturada que preserva o status HTTP, código de erro da API e detalhes do payload
+class ApiException implements Exception {
+  final String message;
+  final int? statusCode;
+  final String? errorCode;
+  final dynamic details;
+
+  const ApiException({
+    required this.message,
+    this.statusCode,
+    this.errorCode,
+    this.details,
+  });
+
+  bool get isRevocationOrExpiration =>
+      statusCode == 401 ||
+      errorCode == 'SUPPORT_GRANT_REVOKED' ||
+      errorCode == 'SUPPORT_GRANT_EXPIRED' ||
+      errorCode == 'SUPPORT_SESSION_EXPIRED';
+
+  bool get isScopeForbidden =>
+      statusCode == 403 &&
+      (errorCode == 'SUPPORT_ACTION_FORBIDDEN' ||
+          errorCode == 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN');
+
+  @override
+  String toString() => message;
+}
+
 class ApiRequestException implements Exception {
   final String message;
   final bool retryable;
@@ -95,6 +124,12 @@ class ApiService {
 
   /// Retorna os cabeçalhos de autenticação para NetworkImage e requisições HTTP seguras
   Future<Map<String, String>> get authHeaders async {
+    if (_isIsolatedSession) {
+      if (_token != null && _token!.isNotEmpty) {
+        return {'Authorization': 'Bearer $_token'};
+      }
+      return {};
+    }
     final token = _token ??
         (await SharedPreferences.getInstance()).getString('jwt_token');
     if (token != null && token.isNotEmpty) {
@@ -152,7 +187,29 @@ class ApiService {
           }
         }
 
-        if (_token != null) {
+        if (_isIsolatedSession) {
+          if (_token != null && _token!.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $_token';
+          } else {
+            return handler.reject(
+              DioException(
+                requestOptions: options,
+                error: StateError(
+                  '🛑 SESSÃO TÉCNICA EXPIRADA OU REVOGADA: token efêmero indisponível.',
+                ),
+                type: DioExceptionType.cancel,
+                response: Response(
+                  requestOptions: options,
+                  statusCode: 401,
+                  data: {
+                    'error': 'SUPPORT_SESSION_EXPIRED',
+                    'message': 'Sessão técnica expirada ou revogada.',
+                  },
+                ),
+              ),
+            );
+          }
+        } else if (_token != null) {
           options.headers['Authorization'] = 'Bearer $_token';
         } else {
           final prefs = await SharedPreferences.getInstance();
@@ -195,9 +252,11 @@ class ApiService {
 
   void clearToken() {
     _token = null;
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.remove('jwt_token');
-    }).catchError((_) {});
+    if (!_isIsolatedSession) {
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.remove('jwt_token');
+      }).catchError((_) {});
+    }
   }
 
   /// Revalida a sessão atual com o servidor backend
@@ -2929,6 +2988,100 @@ class ApiService {
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
+    }
+  }
+
+  ApiException _extractApiException(DioException e) {
+    final status = e.response?.statusCode;
+    String? errCode;
+    String message = _extractError(e);
+
+    if (e.response?.data is Map) {
+      final map = e.response!.data as Map;
+      if (map['error'] is String) errCode = map['error'];
+      if (map['message'] is String && (map['message'] as String).trim().isNotEmpty) {
+        message = map['message'];
+      }
+    }
+
+    return ApiException(
+      message: message,
+      statusCode: status,
+      errorCode: errCode,
+      details: e.response?.data,
+    );
+  }
+
+  /// Listar chamados na sessão técnica autorizada
+  Future<List<Map<String, dynamic>>> getTechnicalSessionTickets() async {
+    try {
+      final resp = await _dio.get('/support/session/tickets');
+      final list = (resp.data['tickets'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Obter métricas operacionais e telemetria na sessão técnica autorizada
+  Future<Map<String, dynamic>> getTechnicalSessionMetrics() async {
+    try {
+      final resp = await _dio.get('/support/session/metrics');
+      return Map<String, dynamic>.from(resp.data['metrics'] ?? {});
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Listar alertas operacionais na sessão técnica autorizada
+  Future<List<Map<String, dynamic>>> getTechnicalSessionAlerts() async {
+    try {
+      final resp = await _dio.get('/support/session/alerts');
+      final list = (resp.data['alerts'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Reconhecer alerta operacional na sessão técnica autorizada
+  Future<Map<String, dynamic>> acknowledgeTechnicalSessionAlert(String alertId) async {
+    try {
+      final resp = await _dio.post('/support/session/alerts/' + alertId + '/ack');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Listar integrações na sessão técnica autorizada (requer INTEGRATION_DEBUG)
+  Future<List<Map<String, dynamic>>> getTechnicalSessionIntegrations() async {
+    try {
+      final resp = await _dio.get('/support/session/integrations');
+      final list = (resp.data['integrations'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Testar conexão de integração na sessão técnica autorizada (requer INTEGRATION_DEBUG)
+  Future<Map<String, dynamic>> testTechnicalSessionIntegration(String integrationId) async {
+    try {
+      final resp = await _dio.post('/support/session/integrations/' + integrationId + '/test');
+      return Map<String, dynamic>.from(resp.data['testResult'] ?? resp.data);
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Responder chamado na sessão técnica autorizada
+  Future<Map<String, dynamic>> addTechnicalSessionTicketMessage(String ticketId, String message) async {
+    try {
+      final resp = await _dio.post('/support/session/tickets/' + ticketId + '/messages', data: {'message': message});
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw _extractApiException(e);
     }
   }
 }
