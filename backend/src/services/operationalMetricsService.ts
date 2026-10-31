@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { sanitizeDiagnosticInfo } from './supportCentralService';
+import { createOrUpdateInternalAlert } from './internalAlertService';
 
 const prisma = new PrismaClient();
 
@@ -36,7 +37,7 @@ export async function recordDeviceTelemetry(
 
   const count = Math.max(0, Number(payload.pendingOfflineCount) || 0);
 
-  return db.deviceTelemetry.create({
+  const created = await db.deviceTelemetry.create({
     data: {
       userId: payload.userId,
       companyId: payload.companyId,
@@ -53,6 +54,34 @@ export async function recordDeviceTelemetry(
       lastReportedAt: new Date(),
     },
   });
+
+  // Se o dispositivo estiver acumulando fila offline elevada (>= 10),
+  // dispara ou atualiza um alerta operacional interno de retenção de dados
+  if (count >= 10 && payload.companyId) {
+    try {
+      const devKey = payload.deviceId ? payload.deviceId.slice(0, 16) : payload.userId.slice(0, 8);
+      await createOrUpdateInternalAlert(
+        {
+          alertKey: `sync_stalled_${payload.companyId}_${devKey}`,
+          companyId: payload.companyId,
+          category: 'SYNC_STALLED',
+          severity: count >= 50 ? 'CRITICAL' : 'WARNING',
+          title: `Fila offline elevada no aparelho (${count} pendências retidas)`,
+          details: {
+            deviceId: payload.deviceId,
+            platform: payload.platform,
+            pendingOfflineCount: count,
+            pendingSummary: sanitizedSummary,
+          },
+        },
+        db
+      );
+    } catch (err) {
+      console.error('[Telemetry] Falha ao registrar alerta de fila offline:', err);
+    }
+  }
+
+  return created;
 }
 
 /**

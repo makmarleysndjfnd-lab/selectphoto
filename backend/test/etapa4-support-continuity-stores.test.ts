@@ -11,6 +11,9 @@ import superadminRoutes from '../src/routes/superadmin';
 import backupRoutes from '../src/routes/backup';
 import appRoutes from '../src/routes/app';
 import appointmentsRoutes from '../src/routes/appointments';
+import salesRoutes from '../src/routes/sales';
+import clientRoutes from '../src/routes/clients';
+import financeRoutes from '../src/routes/finance';
 import { centralErrorHandler } from '../src/middleware/securityMiddleware';
 import {
   sanitizeDiagnosticInfo,
@@ -187,6 +190,9 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     app.use('/api/backup', backupRoutes);
     app.use('/api/app', appRoutes);
     app.use('/api/appointments', appointmentsRoutes);
+    app.use('/api/sales', salesRoutes);
+    app.use('/api/clients', clientRoutes);
+    app.use('/api/finance', financeRoutes);
     app.use(centralErrorHandler);
 
     await new Promise<void>((resolve) => {
@@ -683,5 +689,206 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(resAck.status, 200);
     const ackData = await resAck.json();
     assert.equal(ackData.alert.acknowledged, true);
+  });
+
+  // =========================================================================
+  // BLOCO 7: COMPLEMENTO FINAL — POLÍTICA UNIFICADA E BLOQUEIO DE MUTAÇÕES
+  // =========================================================================
+
+  it('24. Token legado com concessão READ_ONLY tentando mutação é bloqueado por política compartilhada (403)', async () => {
+    // 24.1 Cria uma concessão READ_ONLY ativa para a Empresa A
+    const grantReadOnly = await prisma.supportAccessGrant.create({
+      data: {
+        ticketId: createdTicketId,
+        companyId: companyAId,
+        requestedByUserId: superAdminId,
+        requestedByName: 'Técnico Lumora',
+        approvedByUserId: companyAAdminId,
+        approvedByName: 'Admin Alfa',
+        status: 'ACTIVE',
+        scope: 'READ_ONLY',
+        reason: 'Inspeção técnica somente leitura',
+        durationMinutes: 60,
+        expiresAt: new Date(Date.now() + 3600000),
+      },
+    });
+
+    // 24.2 Cria token legado de impersonação (com actorId)
+    const legacyToken = jwt.sign(
+      {
+        id: companyAAdminId,
+        role: 'COMPANY_ADMIN',
+        companyId: companyAId,
+        actorId: superAdminId,
+        actorRole: 'SUPER_ADMIN',
+        effectiveCompanyId: companyAId,
+      },
+      jwtSecret,
+      { expiresIn: '1h' }
+    );
+
+    // 24.3 Tenta mutação (POST) usando o token legado -> DEVE ser barrado com 403 SUPPORT_READ_ONLY_MUTATION_FORBIDDEN!
+    const resMutation = await fetch(`${baseUrl}/api/support/tickets/${createdTicketId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${legacyToken}`,
+      },
+      body: JSON.stringify({ message: 'Tentativa de mutação com token legado em READ_ONLY' }),
+    });
+
+    assert.equal(resMutation.status, 403, 'Token legado em READ_ONLY não pode escapar das restrições de mutação');
+    const dataMutation = await resMutation.json();
+    assert.equal(dataMutation.error, 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN');
+  });
+
+  it('25. Sessão de suporte operacional tentando POST /api/sales é BLOQUEADA categoricamente (403)', async () => {
+    // 25.1 Cria concessão OPERATIONAL_SUPPORT ativa para Empresa A
+    const grantOp = await prisma.supportAccessGrant.create({
+      data: {
+        ticketId: createdTicketId,
+        companyId: companyAId,
+        requestedByUserId: superAdminId,
+        requestedByName: 'Técnico Lumora',
+        approvedByUserId: companyAAdminId,
+        approvedByName: 'Admin Alfa',
+        status: 'ACTIVE',
+        scope: 'OPERATIONAL_SUPPORT',
+        reason: 'Apoio operacional para teste de vendas',
+        durationMinutes: 60,
+        expiresAt: new Date(Date.now() + 3600000),
+      },
+    });
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    // 25.2 Tenta registrar venda via POST /api/sales usando o token de suporte -> DEVE ser barrado com 403!
+    const resSale = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opToken}`,
+      },
+      body: JSON.stringify({
+        value: 1200,
+        paymentMethod: 'CREDIARIO',
+        totalPhotos: 20,
+      }),
+    });
+
+    assert.equal(resSale.status, 403, 'Sessão de suporte não pode criar ou alterar vendas comerciais');
+    const dataSale = await resSale.json();
+    assert.equal(dataSale.error, 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN');
+  });
+
+  it('26. Sessão de suporte tentando mutação financeira em /api/finance é BLOQUEADA (403)', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    const resFinance = await fetch(`${baseUrl}/api/finance/costs/dummy-cost-id`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opToken}`,
+      },
+      body: JSON.stringify({ amount: 150 }),
+    });
+
+    assert.equal(resFinance.status, 403, 'Sessão de suporte não pode realizar mutação financeira');
+    const dataFinance = await resFinance.json();
+    assert.equal(dataFinance.error, 'SUPPORT_FINANCIAL_MUTATION_FORBIDDEN');
+  });
+
+  it('27. Consulta técnica permitida (GET /api/clients) funciona com o papel SUPPORT_AUTHORIZED sem virar super admin (200 OK)', async () => {
+    const grantOp = await prisma.supportAccessGrant.findFirst({
+      where: { companyId: companyAId, status: 'ACTIVE', revokedAt: null, scope: 'OPERATIONAL_SUPPORT' },
+    });
+    assert.ok(grantOp);
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantOp.id,
+      technicianUserId: superAdminId,
+    });
+    const opToken = sessionRes.token;
+
+    const resClients = await fetch(`${baseUrl}/api/clients`, {
+      headers: { Authorization: `Bearer ${opToken}` },
+    });
+
+    // Deve retornar 200 OK (acesso à empresa atendida)
+    assert.equal(resClients.status, 200, 'Técnico autorizado deve conseguir consultar dados operacionais da empresa atendida');
+  });
+
+  it('28. Concessão expirada é barrada a cada requisição subsequente (403)', async () => {
+    const grantExp = await prisma.supportAccessGrant.create({
+      data: {
+        ticketId: createdTicketId,
+        companyId: companyAId,
+        requestedByUserId: superAdminId,
+        requestedByName: 'Técnico Lumora',
+        approvedByUserId: companyAAdminId,
+        approvedByName: 'Admin Alfa',
+        status: 'ACTIVE',
+        scope: 'READ_ONLY',
+        reason: 'Teste de expiração',
+        durationMinutes: 1,
+        expiresAt: new Date(Date.now() + 1000), // expira em 1s
+      },
+    });
+
+    const sessionRes = await claimSupportSessionToken({
+      grantId: grantExp.id,
+      technicianUserId: superAdminId,
+    });
+    const expToken = sessionRes.token;
+
+    // Força expiração imediata no banco
+    await prisma.supportAccessGrant.update({
+      where: { id: grantExp.id },
+      data: { expiresAt: new Date(Date.now() - 5000) },
+    });
+
+    const resCall = await fetch(`${baseUrl}/api/clients`, {
+      headers: { Authorization: `Bearer ${expToken}` },
+    });
+
+    assert.equal(resCall.status, 403, 'Concessão expirada deve ser imediatamente rejeitada');
+    const dataCall = await resCall.json();
+    assert.equal(dataCall.error, 'SUPPORT_GRANT_EXPIRED');
+  });
+
+  it('29. Telemetria com fila offline >= 10 dispara alerta operacional interno SYNC_STALLED automaticamente', async () => {
+    const record = await recordDeviceTelemetry(
+      {
+        userId: sellerAId,
+        companyId: companyAId,
+        deviceId: 'device_high_pending_99',
+        platform: 'ANDROID',
+        appVersion: '1.0.25',
+        buildNumber: 36,
+        pendingOfflineCount: 15,
+        pendingSummary: { sales: 10, nonSales: 5 },
+        connectivityStatus: 'OFFLINE',
+      },
+      prisma
+    );
+    assert.ok(record.id);
+
+    const alerts = await listInternalAlerts({ companyId: companyAId, category: 'SYNC_STALLED' }, prisma);
+    assert.ok(alerts.length >= 1, 'Deveria ter gerado alerta SYNC_STALLED para fila offline >= 10');
+    assert.equal(alerts[0].category, 'SYNC_STALLED');
+    assert.ok(alerts[0].title.includes('15 pendências'));
   });
 });

@@ -57,6 +57,205 @@ export const ROLE_RANK: Record<string, number> = {
   SUPPORT_AUTHORIZED: 10,
 };
 
+/**
+ * Aplica a política unificada de autorização para qualquer sessão de suporte técnico
+ * (seja por token dedicado de suporte ou por token de impersonação legada).
+ *
+ * REGRAS CRÍTICAS:
+ * 1. Negação por padrão: métodos e ações devem ser explicitamente autorizados.
+ * 2. Bloqueio absoluto de vendas (/sales, /vendas), finanças, taxas, faturamento, backups e senhas.
+ * 3. Diferenciação estrita de escopo (READ_ONLY vs OPERATIONAL_SUPPORT vs INTEGRATION_DEBUG).
+ * 4. Isolamento estrito de empresa dona dos dados.
+ */
+export function enforceSupportSessionRestrictions(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+  grant: {
+    id: string;
+    companyId: string;
+    scope: string;
+    status: string;
+    expiresAt: Date | null;
+    revokedAt: Date | null;
+  }
+): boolean {
+  const method = req.method.toUpperCase();
+  const isSafeRead = ['GET', 'HEAD', 'OPTIONS'].includes(method);
+  const normalizedPath = ((req.baseUrl || '') + (req.path || '')).toLowerCase();
+
+  // 1. Verificação contínua de integridade da concessão
+  if (grant.status !== 'ACTIVE' || grant.revokedAt !== null) {
+    res.status(403).json({
+      error: 'SUPPORT_GRANT_REVOKED',
+      message: 'Sessão de suporte inativa ou revogada pela empresa.',
+    });
+    return false;
+  }
+
+  if (grant.expiresAt && grant.expiresAt < new Date()) {
+    res.status(403).json({
+      error: 'SUPPORT_GRANT_EXPIRED',
+      message: 'Sessão de suporte expirada.',
+    });
+    return false;
+  }
+
+  // 2. Isolamento de empresa: impede acesso cruzado a outra empresa
+  const targetCompanyId = req.params.companyId || req.query.companyId || req.body?.companyId;
+  if (targetCompanyId && typeof targetCompanyId === 'string' && targetCompanyId !== grant.companyId) {
+    res.status(403).json({
+      error: 'SUPPORT_COMPANY_MISMATCH',
+      message: 'Sessão de suporte autorizada restrita exclusivamente à empresa da concessão.',
+    });
+    return false;
+  }
+
+  // 3. BLOQUEIOS CATEGÓRICOS PARA QUALQUER SESSÃO DE SUPORTE (INDEPENDENTE DE ESCOPO)
+
+  // 3.1. Backups e Dumps (nunca acessíveis por suporte)
+  if (normalizedPath.includes('/backup')) {
+    res.status(403).json({
+      error: 'SUPPORT_BACKUP_FORBIDDEN',
+      message: 'Sessões de suporte não têm autorização para download ou restauração de backups.',
+    });
+    return false;
+  }
+
+  // 3.2. Faturamento da plataforma, taxas contratuais e rotas de governança global
+  if (
+    normalizedPath.includes('/owner/billing') ||
+    normalizedPath.includes('/closing') ||
+    normalizedPath.includes('/owner/rates') ||
+    normalizedPath.includes('/company-platform-rates') ||
+    normalizedPath.includes('/superadmin') ||
+    (normalizedPath.includes('/owner') &&
+      !normalizedPath.includes('/owner/support') &&
+      !normalizedPath.includes('/owner/alerts') &&
+      !normalizedPath.includes('/owner/integrations'))
+  ) {
+    res.status(403).json({
+      error: 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN',
+      message: 'Ações financeiras, fechamento de faturamento e configuração de taxas são proibidas para sessões de suporte.',
+    });
+    return false;
+  }
+
+  // 3.3. Vendas e Contratos Comerciais (/sales, /vendas):
+  // Proíbe expressamente CRIAÇÃO, EDIÇÃO ou EXCLUSÃO de vendas comerciais em qualquer sessão técnica!
+  if (
+    (normalizedPath.includes('/sales') || normalizedPath.includes('/vendas')) &&
+    !isSafeRead
+  ) {
+    res.status(403).json({
+      error: 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN',
+      message: 'Sessões de suporte não podem criar, alterar ou excluir vendas comerciais ou contratos.',
+    });
+    return false;
+  }
+
+  // 3.4. Mutações Financeiras, Pagamentos, Estornos e Tarifas
+  if (
+    (normalizedPath.includes('/finance') ||
+      normalizedPath.includes('/payment') ||
+      normalizedPath.includes('/refund') ||
+      normalizedPath.includes('/charges') ||
+      normalizedPath.includes('/boleto') ||
+      normalizedPath.includes('/pix') ||
+      normalizedPath.includes('/costs')) &&
+    !isSafeRead
+  ) {
+    res.status(403).json({
+      error: 'SUPPORT_FINANCIAL_MUTATION_FORBIDDEN',
+      message: 'Sessões de suporte não podem registrar pagamentos, estornos ou baixas financeiras.',
+    });
+    return false;
+  }
+
+  // 3.5. Alteração de credenciais e senhas
+  if (
+    (normalizedPath.includes('/password') ||
+      normalizedPath.includes('/reset-password') ||
+      normalizedPath.includes('/change-password')) &&
+    !isSafeRead
+  ) {
+    res.status(403).json({
+      error: 'SUPPORT_CREDENTIAL_CHANGE_FORBIDDEN',
+      message: 'Sessões de suporte não podem alterar senhas ou credenciais de usuários.',
+    });
+    return false;
+  }
+
+  // 4. MATRIZ DE ESCOPO E NEGAÇÃO POR PADRÃO (DEFAULT DENY)
+
+  // 4.1. Escopo READ_ONLY: Veta CATEGORICAMENTE qualquer mutação HTTP
+  if (grant.scope === 'READ_ONLY') {
+    if (!isSafeRead) {
+      res.status(403).json({
+        error: 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN',
+        message: 'Sessão de suporte em modo READ_ONLY não pode realizar mutações (POST/PUT/PATCH/DELETE).',
+      });
+      return false;
+    }
+    next();
+    return true;
+  }
+
+  // 4.2. Escopo OPERATIONAL_SUPPORT: Permite leitura + mutações específicas de apoio operacional
+  if (grant.scope === 'OPERATIONAL_SUPPORT') {
+    if (isSafeRead) {
+      next();
+      return true;
+    }
+
+    const isAllowedSupportMutation =
+      (normalizedPath.includes('/support/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments'))) ||
+      (normalizedPath.includes('/alerts') && normalizedPath.endsWith('/ack')) ||
+      normalizedPath.includes('/app/telemetry');
+
+    if (!isAllowedSupportMutation) {
+      res.status(403).json({
+        error: 'SUPPORT_ACTION_FORBIDDEN',
+        message: 'Ação não autorizada para o escopo de suporte operacional.',
+      });
+      return false;
+    }
+
+    next();
+    return true;
+  }
+
+  // 4.3. Escopo INTEGRATION_DEBUG: Permite leitura + diagnósticos de conectividade de integração
+  if (grant.scope === 'INTEGRATION_DEBUG') {
+    if (isSafeRead) {
+      next();
+      return true;
+    }
+
+    const isAllowedDebugMutation =
+      (normalizedPath.includes('/integrations') && (normalizedPath.endsWith('/test') || normalizedPath.endsWith('/ping'))) ||
+      (normalizedPath.includes('/support/tickets') && (normalizedPath.includes('/messages') || normalizedPath.includes('/attachments')));
+
+    if (!isAllowedDebugMutation) {
+      res.status(403).json({
+        error: 'SUPPORT_ACTION_FORBIDDEN',
+        message: 'Ação não autorizada para o escopo de depuração de integrações.',
+      });
+      return false;
+    }
+
+    next();
+    return true;
+  }
+
+  // 4.4. Escopo desconhecido: Negação por padrão
+  res.status(403).json({
+    error: 'SUPPORT_SCOPE_INVALID',
+    message: `Escopo de suporte desconhecido ou inválido: ${grant.scope}`,
+  });
+  return false;
+}
+
 export const authenticateToken = async (
   req: AuthRequest,
   res: Response,
@@ -188,87 +387,13 @@ export const authenticateToken = async (
         isTemporarySupportSession: true,
       };
 
-      // ── Guarda de Escopo e Limites da Sessão de Suporte ─────────────────
-      const targetCompanyId = req.params.companyId || req.query.companyId || req.body?.companyId;
-      if (targetCompanyId && typeof targetCompanyId === 'string' && targetCompanyId !== grant.companyId) {
-        res.status(403).json({
-          error: 'SUPPORT_COMPANY_MISMATCH',
-          message: 'Sessão de suporte autorizada restrita exclusivamente à empresa da concessão.',
-        });
-        return;
-      }
-
-      const normalizedPath = ((req.baseUrl || '') + (req.path || '')).toLowerCase();
-
-      // Bloqueio de backups
-      if (normalizedPath.includes('/backup')) {
-        res.status(403).json({
-          error: 'SUPPORT_BACKUP_FORBIDDEN',
-          message: 'Sessões de suporte não têm autorização para download ou restauração de backups.',
-        });
-        return;
-      }
-
-      // Bloqueio de faturamento da plataforma, taxas e painel superadmin
-      if (
-        normalizedPath.includes('/owner/billing') ||
-        normalizedPath.includes('/closing') ||
-        normalizedPath.includes('/owner/rates') ||
-        normalizedPath.includes('/company-platform-rates') ||
-        normalizedPath.includes('/superadmin') ||
-        normalizedPath.includes('/owner')
-      ) {
-        res.status(403).json({
-          error: 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN',
-          message: 'Ações financeiras, fechamento de faturamento e configuração de taxas são proibidas para sessões de suporte.',
-        });
-        return;
-      }
-
-      // Bloqueio de mutações financeiras (pagamentos, baixas, estornos)
-      if (
-        (normalizedPath.includes('/finance') ||
-          normalizedPath.includes('/payment') ||
-          normalizedPath.includes('/refund')) &&
-        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
-      ) {
-        res.status(403).json({
-          error: 'SUPPORT_FINANCIAL_MUTATION_FORBIDDEN',
-          message: 'Sessões de suporte não podem registrar pagamentos, estornos ou baixas financeiras.',
-        });
-        return;
-      }
-
-      // Bloqueio de alteração de credenciais/senhas
-      if (
-        normalizedPath.includes('/password') &&
-        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
-      ) {
-        res.status(403).json({
-          error: 'SUPPORT_CREDENTIAL_CHANGE_FORBIDDEN',
-          message: 'Sessões de suporte não podem alterar senhas ou credenciais de usuários.',
-        });
-        return;
-      }
-
-      // Escopo READ_ONLY bloqueia qualquer mutação
-      if (
-        grant.scope === 'READ_ONLY' &&
-        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
-      ) {
-        res.status(403).json({
-          error: 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN',
-          message: 'Sessão de suporte em modo READ_ONLY não pode realizar mutações (POST/PUT/PATCH/DELETE).',
-        });
-        return;
-      }
-
-      next();
+      // Aplica a política compartilhada e unificada de autorização de suporte
+      enforceSupportSessionRestrictions(req, res, next, grant);
       return;
     }
 
     // =========================================================================
-    // 2. IMPERSONAÇÃO LEGADA (AGORA EXIGE CONCESSÃO DE SUPORTE ATIVA)
+    // 2. IMPERSONAÇÃO LEGADA (VINCULADA À CONCESSÃO E SUJEITA À MESMA POLÍTICA)
     // =========================================================================
     if (decoded.actorId && decoded.actorRole === 'SUPER_ADMIN') {
       const actor = await getPrisma().user.findUnique({
@@ -304,6 +429,7 @@ export const authenticateToken = async (
           revokedAt: null,
           expiresAt: { gt: new Date() },
         },
+        orderBy: { grantedAt: 'desc' },
       });
 
       if (!activeGrant) {
@@ -317,7 +443,7 @@ export const authenticateToken = async (
       req.user = {
         id: actor.id,
         cpf: actor.cpf,
-        role: 'SUPPORT_AUTHORIZED', // Converte para o perfil controlado de suporte
+        role: 'SUPPORT_AUTHORIZED', // Converte para o perfil estrito de suporte
         companyId: targetCompany.id,
         teamId: null,
         name: actor.name,
@@ -331,7 +457,8 @@ export const authenticateToken = async (
         isTemporarySupportSession: true,
       };
 
-      next();
+      // APLICA AS MESMÍSSIMAS RESTRIÇÕES DA POLÍTICA COMPARTILHADA
+      enforceSupportSessionRestrictions(req, res, next, activeGrant);
       return;
     }
 
@@ -400,17 +527,29 @@ export const requireRoles = (allowedRoles: string[], customErrorMessage?: string
     // Jamais concede acesso a rotas que exigem estritamente SUPER_ADMIN
     if (
       req.user.role === 'SUPPORT_AUTHORIZED' &&
-      req.user.isTemporarySupportSession &&
-      !allowedRoles.includes('SUPER_ADMIN') &&
-      (allowedRoles.includes('COMPANY_ADMIN') ||
-        allowedRoles.includes('ADMIN') ||
-        allowedRoles.includes('SUPERVISOR') ||
-        allowedRoles.includes('SELLER_MANAGER') ||
-        allowedRoles.includes('OPERATOR') ||
-        allowedRoles.includes('SELLER'))
+      req.user.isTemporarySupportSession
     ) {
-      next();
-      return;
+      const isStrictlySuperAdminOnly =
+        allowedRoles.length === 1 && allowedRoles[0] === 'SUPER_ADMIN';
+
+      if (!isStrictlySuperAdminOnly) {
+        const hasCompanyOperationalRole = allowedRoles.some((r) =>
+          [
+            'COMPANY_ADMIN',
+            'ADMIN',
+            'SUPERVISOR',
+            'SELLER_MANAGER',
+            'OPERATOR',
+            'SELLER',
+            'SUPPORT_AUTHORIZED',
+          ].includes(r)
+        );
+
+        if (hasCompanyOperationalRole) {
+          next();
+          return;
+        }
+      }
     }
 
     res.status(403).json({

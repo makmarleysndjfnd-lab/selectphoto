@@ -25,6 +25,7 @@ import {
 } from '../services/asaasSandboxHarness';
 import { lookupViaCep } from '../services/integrationResolver';
 import { isProductionSafetyLocked } from '../services/asaasService';
+import { createOrUpdateInternalAlert } from '../services/internalAlertService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -1062,6 +1063,26 @@ router.post(
           lastValidationError: testResult.success ? null : testResult.message.slice(0, 300),
         },
       });
+
+      if (!testResult.success) {
+        try {
+          await createOrUpdateInternalAlert({
+            alertKey: `integration_err_${integration.companyId}_${integration.provider}`,
+            companyId: integration.companyId,
+            category: 'INTEGRATION_FAILURE',
+            severity: 'WARNING',
+            title: `Falha na integração com ${integration.provider}: ${testResult.message.slice(0, 100)}`,
+            details: {
+              integrationId: integration.id,
+              provider: integration.provider,
+              environment: integration.environment,
+              message: testResult.message,
+            },
+          });
+        } catch (alertErr) {
+          console.error('[Integrations] Falha ao registrar alerta interno:', alertErr);
+        }
+      }
 
       await logIntegrationAudit({
         companyId: integration.companyId,

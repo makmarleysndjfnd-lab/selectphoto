@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'servico_api.dart';
+import '../config/app_config.dart';
 import 'ajudante_bd.dart';
 
 class SyncRequest {
@@ -733,8 +734,8 @@ class SyncService extends ChangeNotifier {
       await apiService.reportDeviceTelemetry({
         'deviceId': deviceId,
         'platform': platformName,
-        'appVersion': '1.0.24',
-        'buildNumber': 35,
+        'appVersion': AppConfig.appVersion,
+        'buildNumber': AppConfig.buildNumber,
         'pendingOfflineCount': _pendingRequests.length,
         'pendingSummary': {
           'sales': salesPending,

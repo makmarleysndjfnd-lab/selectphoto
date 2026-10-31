@@ -7,6 +7,7 @@ import {
   assertRestoreEnvironmentSafe,
   decryptBackupPayload,
 } from '../src/services/backupService';
+import { recordDisasterRecoveryLog } from '../src/services/continuityAuditService';
 
 async function main() {
   console.log('=== [ISOLATED_RESTORE_VERIFICATION] Iniciando prova de restauracao isolada do backup real ===');
@@ -181,6 +182,25 @@ async function main() {
   }
 
   console.log('🎉 100% DE INTEGRIDADE REFERENCIAL, ESTRUTURAL E RELACIONAL COMPROVADA NA RESTAURAÇÃO ISOLADA DO BACKUP REAL!');
+  try {
+    await recordDisasterRecoveryLog(
+      {
+        backupTimestamp: new Date(parsedData._metadata?.timestamp || Date.now()),
+        sha256: encSha256,
+        sizeBytes: fs.statSync(targetEncPath).size,
+        sanitizedSource: parsedData._metadata?.sanitizedSource || 'disposable_cluster',
+        verifiedRestoreAt: new Date(),
+        verifiedRestoreStatus: 'RESTORE_TESTED_ISOLATED',
+        verifiedRestoreNotes: `Restauração isolada auditada com sucesso no ambiente descartável (${result.totalRowsRestored} linhas restauradas em ${Object.keys(result.restoredTables).length} tabelas).`,
+        totalTables: Object.keys(result.restoredTables).length,
+        totalRows: result.totalRowsRestored,
+      },
+      prisma
+    );
+    console.log('✅ Registro de continuidade operacional (RESTORE_TESTED_ISOLATED) gravado com sucesso.');
+  } catch (auditErr: any) {
+    console.warn('[WARN] Falha ao registrar log de continuidade:', auditErr?.message);
+  }
   await prisma.$disconnect();
   process.exit(0);
 }

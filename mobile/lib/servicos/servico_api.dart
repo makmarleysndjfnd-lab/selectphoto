@@ -18,6 +18,7 @@ class ApiService {
   late Dio _dio;
   String _baseUrl = AppConfig.serverUrl;
   String? _token;
+  bool _isIsolatedSession = false;
 
   static ApiService? _mockInstance;
   @visibleForTesting
@@ -46,6 +47,17 @@ class ApiService {
   }
 
   Dio get dio => _dio;
+
+  /// Construtor de sessão isolada (utilizado exclusivamente pelo suporte técnico temporário).
+  /// Mantém o token efêmero estritamente na memória volátil (RAM), sem gravar em SharedPreferences.
+  ApiService.isolated({required String token, String? customBaseUrl}) {
+    _token = token;
+    _isIsolatedSession = true;
+    if (customBaseUrl != null && customBaseUrl.isNotEmpty) {
+      _baseUrl = customBaseUrl;
+    }
+    _initDio();
+  }
   String get baseUrl => _baseUrl;
 
   /// Resolve URL de mídia (comprovantes, fotos de perfil, assinaturas) dinamicamente a partir do servidor configurado
@@ -157,7 +169,9 @@ class ApiService {
           _token = null;
           try {
             final prefs = await SharedPreferences.getInstance();
-            await prefs.remove('jwt_token');
+            if (!_isIsolatedSession) {
+              await prefs.remove('jwt_token');
+            }
           } catch (_) {}
         }
         return handler.next(error);

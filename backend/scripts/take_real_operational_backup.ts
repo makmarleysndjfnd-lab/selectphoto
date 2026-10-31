@@ -7,6 +7,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 import { encryptBackupPayload, decryptBackupPayload } from '../src/services/backupService';
+import { recordDisasterRecoveryLog } from '../src/services/continuityAuditService';
 
 const scratchDir = 'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
 
@@ -128,6 +129,25 @@ async function main() {
     ];
     for (const t of etapa3Tables) {
       console.log(`  - ${t}: ${tableCounts[t] ?? 0} registros`);
+    }
+
+    try {
+      await recordDisasterRecoveryLog(
+        {
+          backupTimestamp: new Date(now),
+          sha256,
+          sizeBytes: fs.statSync(realEncPath).size,
+          sanitizedSource,
+          verifiedRestoreStatus: 'BACKUP_CREATED',
+          verifiedRestoreNotes: 'Snapshot operacional capturado e cifrado via AES-256-GCM.',
+          totalTables: Object.keys(tableCounts).length,
+          totalRows,
+        },
+        prisma
+      );
+      console.log('✅ Registro de continuidade operacional (BACKUP_CREATED) gravado no banco.');
+    } catch (auditErr: any) {
+      console.warn('[WARN] Falha ao registrar log de continuidade no banco:', auditErr?.message);
     }
 
     return {

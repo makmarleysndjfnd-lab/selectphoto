@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
+import 'area_atendimento_tecnico.dart';
 
 class PainelProprietarioSuporteContinuidade extends StatefulWidget {
   const PainelProprietarioSuporteContinuidade({super.key});
@@ -430,37 +431,35 @@ class _PainelProprietarioSuporteContinuidadeState
 
   // ── Reivindicar & Iniciar Sessão de Suporte ────────────────────────────────
 
-  Future<void> _iniciarSessaoSuporte(String grantId, String empresaNome, String escopo) async {
+  Future<void> _iniciarSessaoSuporte(
+    String grantId,
+    String empresaNome,
+    String escopo, {
+    String? companyId,
+    String? expiresAtStr,
+  }) async {
     try {
       final res = await _api.claimOwnerSupportSessionToken(grantId);
-      final token = res['token'];
-      if (token != null) {
+      final token = res['token']?.toString();
+      final grant = res['grant'] as Map<String, dynamic>? ?? {};
+      final targetCompanyId = companyId ?? grant['companyId']?.toString() ?? '';
+      final expStr = expiresAtStr ?? grant['expiresAt']?.toString();
+
+      if (token != null && token.isNotEmpty) {
         if (mounted) {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1E293B),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: Row(
-                children: const [
-                  Icon(Icons.check_circle_rounded, color: Colors.green),
-                  SizedBox(width: 8),
-                  Text('Sessão Autorizada', style: TextStyle(color: Colors.white)),
-                ],
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (ctx) => AreaAtendimentoTecnicoScreen(
+                supportToken: token,
+                empresaNome: empresaNome,
+                companyId: targetCompanyId,
+                escopo: escopo,
+                expiresAtStr: expStr,
               ),
-              content: Text(
-                'Sessão de suporte ativa para $empresaNome.\nEscopo: $escopo.\n\nO token efêmero foi emitido e vinculado estritamente à empresa e escopo aprovados.',
-                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
-              ),
-              actions: [
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF0F172A)),
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('OK'),
-                ),
-              ],
             ),
-          );
+          ).then((_) {
+            if (mounted) _carregarDados();
+          });
         }
       }
     } catch (e) {
@@ -613,7 +612,13 @@ class _PainelProprietarioSuporteContinuidadeState
                             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF0F172A)),
                             icon: const Icon(Icons.login_rounded, size: 16),
                             label: const Text('Reivindicar & Iniciar Sessão', style: TextStyle(fontWeight: FontWeight.bold)),
-                            onPressed: () => _iniciarSessaoSuporte(g['id'], g['company']?['name'] ?? '', g['scope'] ?? 'READ_ONLY'),
+                            onPressed: () => _iniciarSessaoSuporte(
+                              g['id'],
+                              g['company']?['name'] ?? '',
+                              g['scope'] ?? 'READ_ONLY',
+                              companyId: g['companyId'] ?? g['company']?['id'],
+                              expiresAtStr: g['expiresAt'],
+                            ),
                           ),
                         ),
                       ],

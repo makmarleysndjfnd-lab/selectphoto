@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 import '../config/app_config.dart';
 import '../servicos/servico_api.dart';
+import '../servicos/servico_sincronizacao.dart';
 import 'tela_inicial.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
