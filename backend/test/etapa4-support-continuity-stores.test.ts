@@ -2,6 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import express from 'express';
 import http from 'http';
 import jwt from 'jsonwebtoken';
@@ -45,6 +46,7 @@ import {
   listInternalAlerts,
   acknowledgeInternalAlert,
 } from '../src/services/internalAlertService';
+import { importDrEvidence, validateEvidenceData } from '../scripts/import_dr_evidence';
 
 describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇÃO PARA LOJAS', { concurrency: 1 }, () => {
   const prisma = new PrismaClient();
@@ -1224,69 +1226,258 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(dataReadOnly.error, 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN');
   });
 
-  it('37. Prova de restauração e DR: Separação de fases, persistência durável em disco e registro via import_dr_evidence', async () => {
-    const scratchDir = 'C:/Users/mau_m/.gemini/antigravity/brain/737a352e-e887-4563-8bde-25c90099cf82/scratch';
-    const evidenceDir = path.join(scratchDir, 'evidence');
-    if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+  it('37. Prova de restauração e DR: Validação estrutural, rejeição de artefatos inválidos e importação confiável via import_dr_evidence', async () => {
+    // 1. Diretório temporário exclusivo para os testes com limpeza garantida
+    const testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dr_test_evidence_'));
 
-    const testSha256 = 'TEST_DISPOSABLE_RESTORE_HASH_FEDCBA9876543210';
-    const testEvidencePath = path.join(evidenceDir, `dr_restore_proof_${testSha256.slice(0, 16)}.json`);
+    try {
+      const initialLogsCount = await prisma.disasterRecoveryAuditLog.count();
 
-    const mockEvidence = {
-      evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
-      version: '1.0',
-      verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
-      verifiedRestoreAt: new Date().toISOString(),
-      backupSha256: testSha256,
-      backupSizeBytes: 2120417,
-      backupTimestamp: new Date().toISOString(),
-      sanitizedSource: 'isolated_disposable_cluster',
-      schemaVersion: '2.0',
-      totalTables: 85,
-      totalRows: 1420,
-      tableCounts: { Company: 2, User: 5, Sale: 10 },
-      integrityAudit: { status: 'PASSED_100_PERCENT' },
-      publication: {
-        status: 'SAVED_LOCAL_PENDING_IMPORT',
-        targetAuditDatabase: null,
-        publishedAt: null,
-        error: null,
-      },
-    };
+      // Caso A: Ausência de argumento -> Deve lançar erro e confirmar ZERO gravações
+      await assert.rejects(
+        async () => {
+          await importDrEvidence('');
+        },
+        (err: any) => {
+          assert.match(err.message, /Caminho do arquivo de evidência não informado/i);
+          return true;
+        },
+        'Ausência de caminho deve ser rejeitada'
+      );
+      const countAfterNoArg = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterNoArg, initialLogsCount, 'Ausência de argumento: zero gravações');
 
-    fs.writeFileSync(testEvidencePath, JSON.stringify(mockEvidence, null, 2), 'utf8');
-    assert.ok(fs.existsSync(testEvidencePath), 'Arquivo de prova local deve existir antes de publicação remota');
+      // Caso B: Arquivo fictício legado (dr_restore_proof_TEST_DISPOSABLE_.json)
+      // Hash não-hexadecimal e contagens divergentes (85 tabelas vs 3, 1420 linhas vs 17)
+      const legacyFictionalFile = path.join(testTempDir, 'dr_restore_proof_TEST_DISPOSABLE_.json');
+      fs.writeFileSync(
+        legacyFictionalFile,
+        JSON.stringify(
+          {
+            evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+            version: '1.0',
+            verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+            verifiedRestoreAt: new Date().toISOString(),
+            backupSha256: 'TEST_DISPOSABLE_RESTORE_HASH_FEDCBA9876543210',
+            backupSizeBytes: 2120417,
+            backupTimestamp: new Date().toISOString(),
+            sanitizedSource: 'isolated_disposable_cluster',
+            schemaVersion: '2.0',
+            totalTables: 85,
+            totalRows: 1420,
+            tableCounts: { Company: 2, User: 5, Sale: 10 },
+            integrityAudit: { status: 'PASSED_100_PERCENT' },
+            publication: { status: 'SAVED_LOCAL_PENDING_IMPORT' },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
 
-    // Executa registro no banco de auditoria
-    const log = await recordDisasterRecoveryLog(
-      {
-        backupTimestamp: new Date(mockEvidence.backupTimestamp),
-        sha256: mockEvidence.backupSha256,
-        sizeBytes: mockEvidence.backupSizeBytes,
-        sanitizedSource: mockEvidence.sanitizedSource,
-        verifiedRestoreAt: new Date(mockEvidence.verifiedRestoreAt),
+      await assert.rejects(
+        async () => {
+          await importDrEvidence(legacyFictionalFile);
+        },
+        (err: any) => {
+          assert.match(err.message, /backupSha256 inválido/i);
+          return true;
+        },
+        'Arquivo fictício com hash não-hexadecimal deve ser rejeitado'
+      );
+      const countAfterFictional = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterFictional, initialLogsCount, 'Arquivo fictício legado: zero gravações');
+
+      // Caso C: Hash inválido (formato incorreto, ex: tamanho diferente de 64 caracteres)
+      const invalidHashFile = path.join(testTempDir, 'invalid_hash_proof.json');
+      fs.writeFileSync(
+        invalidHashFile,
+        JSON.stringify(
+          {
+            evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+            version: '1.0',
+            verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+            verifiedRestoreAt: new Date().toISOString(),
+            backupSha256: '0123456789ABCDEF', // Apenas 16 caracteres
+            backupSizeBytes: 1000,
+            backupTimestamp: new Date().toISOString(),
+            sanitizedSource: 'test_cluster',
+            totalTables: 1,
+            totalRows: 10,
+            tableCounts: { Company: 10 },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      await assert.rejects(
+        async () => {
+          await importDrEvidence(invalidHashFile);
+        },
+        (err: any) => {
+          assert.match(err.message, /backupSha256 inválido/i);
+          return true;
+        },
+        'Hash com menos de 64 caracteres hexadecimais deve ser rejeitado'
+      );
+      const countAfterInvalidHash = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterInvalidHash, initialLogsCount, 'Hash inválido: zero gravações');
+
+      // Caso D: Contagens divergentes
+      // D1: totalTables != quantidade de tabelas em tableCounts
+      const divergentTablesFile = path.join(testTempDir, 'divergent_tables_proof.json');
+      const validHex64_A = 'A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2';
+      fs.writeFileSync(
+        divergentTablesFile,
+        JSON.stringify(
+          {
+            evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+            version: '1.0',
+            verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+            verifiedRestoreAt: new Date().toISOString(),
+            backupSha256: validHex64_A,
+            backupSizeBytes: 1000,
+            backupTimestamp: new Date().toISOString(),
+            sanitizedSource: 'test_cluster',
+            totalTables: 5, // Divergente: apenas 2 tabelas em tableCounts
+            totalRows: 30,
+            tableCounts: { Company: 10, User: 20 },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      await assert.rejects(
+        async () => {
+          await importDrEvidence(divergentTablesFile);
+        },
+        (err: any) => {
+          assert.match(err.message, /Divergência em totalTables/i);
+          return true;
+        },
+        'Divergência de totalTables deve ser rejeitada'
+      );
+      const countAfterDivergentTables = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterDivergentTables, initialLogsCount, 'totalTables divergente: zero gravações');
+
+      // D2: totalRows != soma de tableCounts
+      const divergentRowsFile = path.join(testTempDir, 'divergent_rows_proof.json');
+      const validHex64_B = 'B1C2D3E4F5A6B1C2D3E4F5A6B1C2D3E4F5A6B1C2D3E4F5A6B1C2D3E4F5A6B1C2';
+      fs.writeFileSync(
+        divergentRowsFile,
+        JSON.stringify(
+          {
+            evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+            version: '1.0',
+            verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
+            verifiedRestoreAt: new Date().toISOString(),
+            backupSha256: validHex64_B,
+            backupSizeBytes: 1000,
+            backupTimestamp: new Date().toISOString(),
+            sanitizedSource: 'test_cluster',
+            totalTables: 2,
+            totalRows: 50, // Divergente: 10 + 20 = 30
+            tableCounts: { Company: 10, User: 20 },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+
+      await assert.rejects(
+        async () => {
+          await importDrEvidence(divergentRowsFile);
+        },
+        (err: any) => {
+          assert.match(err.message, /Divergência em totalRows/i);
+          return true;
+        },
+        'Divergência de totalRows deve ser rejeitada'
+      );
+      const countAfterDivergentRows = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterDivergentRows, initialLogsCount, 'totalRows divergente: zero gravações');
+
+      // Caso E: Prova válida explicitamente selecionada -> Deve importar com sucesso
+      const validProofFile = path.join(testTempDir, 'valid_explicit_proof.json');
+      const validHex64_C = 'C1D2E3F4A5B6C1D2E3F4A5B6C1D2E3F4A5B6C1D2E3F4A5B6C1D2E3F4A5B6C1D2';
+      const validEvidenceData = {
+        evidenceType: 'DISASTER_RECOVERY_ISOLATED_RESTORE_VERIFICATION',
+        version: '1.0',
         verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
-        verifiedRestoreNotes: `Restauração isolada auditada com 100% de sucesso (${mockEvidence.totalRows} linhas em ${mockEvidence.totalTables} tabelas).`,
-        totalTables: mockEvidence.totalTables,
-        totalRows: mockEvidence.totalRows,
-      },
-      prisma
-    );
-    assert.ok(log.id);
-    assert.equal(log.sha256, testSha256);
-    assert.equal(log.verifiedRestoreStatus, 'RESTORE_TESTED_SUCCESS');
+        verifiedRestoreAt: new Date().toISOString(),
+        backupSha256: validHex64_C,
+        backupSizeBytes: 204800,
+        backupTimestamp: new Date().toISOString(),
+        sanitizedSource: 'isolated_disposable_cluster',
+        schemaVersion: '1.2_etapa3_ddl',
+        totalTables: 3,
+        totalRows: 60,
+        tableCounts: {
+          Company: 10,
+          User: 30,
+          Sale: 20,
+        },
+        integrityAudit: { status: 'PASSED_100_PERCENT' },
+        publication: {
+          status: 'SAVED_LOCAL_PENDING_IMPORT',
+          targetAuditDatabase: null,
+          publishedAt: null,
+          error: null,
+        },
+      };
+      fs.writeFileSync(validProofFile, JSON.stringify(validEvidenceData, null, 2), 'utf8');
 
-    // Atualiza arquivo de prova durável
-    mockEvidence.publication = {
-      status: 'PUBLISHED',
-      targetAuditDatabase: 'isolated_audit_db',
-      publishedAt: new Date().toISOString(),
-      error: null,
-    };
-    fs.writeFileSync(testEvidencePath, JSON.stringify(mockEvidence, null, 2), 'utf8');
+      const importResult = await importDrEvidence(validProofFile);
+      assert.equal(importResult.success, true);
+      assert.equal(importResult.sha256, validHex64_C);
 
-    const readBack = JSON.parse(fs.readFileSync(testEvidencePath, 'utf8'));
-    assert.equal(readBack.publication.status, 'PUBLISHED');
+      // Confirma que exatamente 1 registro foi criado no banco
+      const countAfterValid = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterValid, initialLogsCount + 1, 'Prova válida deve inserir exatamente 1 registro');
+
+      const createdLog = await prisma.disasterRecoveryAuditLog.findFirst({
+        where: { sha256: validHex64_C },
+      });
+      assert.ok(createdLog);
+      assert.equal(createdLog?.totalTables, 3);
+      assert.equal(createdLog?.totalRows, 60);
+      assert.equal(createdLog?.verifiedRestoreStatus, 'RESTORE_TESTED_SUCCESS');
+
+      // Verifica arquivo atualizado com PUBLISHED
+      const updatedProofContent = JSON.parse(fs.readFileSync(validProofFile, 'utf8'));
+      assert.equal(updatedProofContent.publication?.status, 'PUBLISHED');
+      assert.ok(updatedProofContent.publication?.publishedAt);
+      assert.equal(updatedProofContent.publication?.error, null);
+
+      // Caso F: Re-execução com a mesma prova válida -> Importação idempotente (atualiza sem duplicar)
+      const reimportResult = await importDrEvidence(validProofFile);
+      assert.equal(reimportResult.success, true);
+      assert.equal(reimportResult.auditLogId, createdLog!.id, 'Idempotência: mesmo ID atualizado');
+      const countAfterReimport = await prisma.disasterRecoveryAuditLog.count();
+      assert.equal(countAfterReimport, initialLogsCount + 1, 'Idempotência: nenhuma linha duplicada');
+
+      // Caso G: Indicação de falha de publicação se o banco de auditoria for inacessível
+      const invalidAuditUrl = 'postgresql://postgres:bad_pwd@127.0.0.1:59999/nonexistent_audit_db?connect_timeout=1';
+      await assert.rejects(
+        async () => {
+          await importDrEvidence(validProofFile, { auditDatabaseUrl: invalidAuditUrl });
+        },
+        'Deve falhar ao tentar conectar a banco de auditoria inválido'
+      );
+
+      // Confirma que a falha de publicação foi marcada no arquivo de evidência
+      const failedProofContent = JSON.parse(fs.readFileSync(validProofFile, 'utf8'));
+      assert.equal(failedProofContent.publication?.status, 'FAILED');
+      assert.ok(failedProofContent.publication?.error, 'Mensagem de erro deve ser registrada no arquivo');
+    } finally {
+      // Limpeza garantida do diretório temporário exclusivo de testes
+      fs.rmSync(testTempDir, { recursive: true, force: true });
+    }
   });
 
 });
