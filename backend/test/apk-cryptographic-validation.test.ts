@@ -241,7 +241,7 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+11)
     assert.deepEqual(RELEASE_APK, {
       version: '1.0.24',
       buildNumber: 35,
-      sha256: '3B12CF88584889515CF6489A1FACFE72098BE296A2F5E6DBF12102BD608EEA54',
+      sha256: 'F1AA45D530E52E435E361E7617C4FDD1C39BFA1F41505CC23C5BCBAE421D018D',
       packageName: 'com.example.mobile',
     });
   });

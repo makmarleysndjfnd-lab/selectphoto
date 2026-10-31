@@ -3,78 +3,88 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minuta de Procedimento de Exclusão de Conta — SelectPhoto / Lumora</title>
+  <title>Procedimento e Política de Exclusão de Conta e Dados — SelectPhoto / Lumora</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1f2937; margin: 0; padding: 24px; background: #f9fafb; }
     .container { max-width: 900px; margin: 0 auto; background: #ffffff; padding: 36px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
     h1 { color: #111827; font-size: 1.8rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }
     h2 { color: #1f2937; font-size: 1.3rem; margin-top: 28px; }
+    h3 { color: #374151; font-size: 1.05rem; margin-top: 18px; }
     p, li { color: #4b5563; font-size: 0.95rem; }
-    .badge-draft { display: inline-block; padding: 4px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 9999px; background: #fee2e2; color: #991b1b; margin-bottom: 16px; border: 1px solid #f87171; }
+    .badge-status { display: inline-block; padding: 4px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 9999px; background: #dbeafe; color: #1e40af; margin-bottom: 16px; border: 1px solid #93c5fd; }
     .card { background: #f3f4f6; border-left: 4px solid #3b82f6; padding: 16px 20px; border-radius: 6px; margin: 20px 0; }
     .warning-box { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 16px 20px; border-radius: 6px; margin: 20px 0; }
-    .placeholder { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.9em; }
+    .pending-box { background: #fef2f2; border-left: 4px solid #ef4444; padding: 16px 20px; border-radius: 6px; margin: 20px 0; }
+    .field-tag { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.9em; }
     ol, ul { padding-left: 20px; }
     footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 0.85rem; color: #9ca3af; text-align: center; }
   </style>
 </head>
 <body>
   <div class="container">
-    <span class="badge-draft">MINUTA TÉCNICA PROVISÓRIA — SUJEITA À CONFIRMAÇÃO DA CONTROLADORA</span>
-    <h1>Procedimento e Política de Exclusão de Conta — SelectPhoto / Lumora</h1>
-    <p><strong>Status:</strong> Procedimento operacional mapeado no backend. Documento em elaboração técnica.</p>
-    <p><strong>Última revisão técnica:</strong> 22 de outubro de 2026</p>
+    <span class="badge-status">DOCUMENTO TÉCNICO DE CONFORMIDADE — PLATAFORMA LUMORA / SELECTPHOTO</span>
+    <h1>Procedimento e Política de Exclusão de Conta e Dados</h1>
+    <p><strong>Escopo:</strong> Diretriz operacional e técnica para solicitação, processamento e ciclo de eliminação de contas de operadores no aplicativo e backend SelectPhoto / Lumora.</p>
+    <p><strong>Referência de Conformidade:</strong> Google Play Developer Policy (Data Deletion Requirement) e Apple App Store Review Guideline 5.1.1(v).</p>
 
     <div class="warning-box">
-      <strong>Aviso sobre o Modelo Operacional Corporativo (B2B):</strong><br>
-      As contas de operador no SelectPhoto são provisionadas pela administração da empresa contratante. Este canal garante o exercício dos direitos dos titulares e o atendimento às diretrizes do Google Play e da Apple (App Store Review Guideline 5.1.1(v)), sem comprometer a integridade de registros fiscais e contratos de prestação de serviços pertencentes à pessoa jurídica empregadora.
+      <strong>Modelo Operacional Corporativo (B2B):</strong><br>
+      O SelectPhoto / Lumora é um sistema corporativo multi-tenant em que os acessos de operadores de campo (vendedores e fotógrafos) são cadastrados por suas respectivas empresas contratantes. Este procedimento assegura aos operadores o direito de requerer o encerramento e anonimização de sua conta pessoal de acesso, respeitando os prazos legais de escrituração contábil e trabalhista das empresas titulares dos contratos comerciais.
     </div>
 
-    <h2>1. Fluxo de Solicitação pelo Operador</h2>
+    <h2>1. Canais de Solicitação Disponíveis</h2>
     <div class="card">
-      <h3>Canal A: Diretamente no Aplicativo Mobile</h3>
-      <p>O operador autenticado pode acessar as Configurações do App e acionar o botão de solicitação formal de exclusão. A requisição aciona o endpoint <code>POST /api/users/me/request-deletion</code> com confirmação explícita.</p>
+      <h3>Canal 1: Diretamente no Aplicativo Mobile (Implementado)</h3>
+      <p>O operador autenticado no aplicativo pode acessar <em>Configurações &rarr; Solicitar Exclusão de Conta</em>. O fluxo realiza a chamada autenticada ao endpoint <code>POST /api/users/me/request-deletion</code> com confirmação explícita de desativação.</p>
       
-      <h3>Canal B: Canal Externo de Suporte</h3>
-      <p>Envio de comunicação por e-mail para <span class="placeholder">[E-MAIL DE SUPORTE A CONFIRMAR]</span>, informando:</p>
-      <ul>
-        <li>Nome completo do operador;</li>
-        <li>CPF cadastrado;</li>
-        <li>Empresa contratante a que esteve vinculado.</li>
-      </ul>
+      <h3>Canal 2: Canal Externo de Suporte por E-mail (Aguardando Dado Corporativo)</h3>
+      <p>O titular pode enviar solicitação formal pelo canal de atendimento corporativo informando nome completo, CPF e empresa à qual esteve vinculado.</p>
+      <p><em>Endereço de e-mail corporativo:</em> <span class="field-tag">[E-MAIL CORPORATIVO DE ATENDIMENTO A DEFINIR PELO PROPRIETÁRIO]</span></p>
     </div>
 
-    <h2>2. Etapas e Prazos do Processamento</h2>
+    <h2>2. Etapas Técnicas de Processamento no Backend</h2>
     <ol>
-      <li><strong>Registro Durável e Protocolo:</strong> O sistema grava um registro auditável em banco de dados (tabela <code>AccountDeletionRequest</code>) contendo identificador único, data/hora, IP de origem e justificativa informada. Pedidos duplicados são rejeitados de forma idempotente, mantendo o protocolo ativo original.</li>
-      <li><strong>Efeito Imediato (Inativação de Acesso):</strong> A conta tem seu status alterado para inativo (<code>active = false</code>), as sessões ativas são invalidadas e os tokens de notificações push (FCM) são revogados.</li>
-      <li><strong>Alerta à Administração:</strong> Notificação interna emitida à diretoria/gestores da empresa contratante para acompanhamento contábil e trabalhista.</li>
-      <li><strong>Prazo de Carência e Apuração:</strong> Prazo de até 30 dias para fechamento de acertos financeiros pendentes (comissões a pagar ou débitos a compensar).</li>
-      <li><strong>Anonimização Efetiva dos Dados Elegíveis:</strong> Ao término da apuração ou mediante processamento administrativo pelo gestor:
+      <li><strong>Registro Auditável do Pedido:</strong> O backend grava o protocolo na tabela <code>AccountDeletionRequest</code> com identificador único, data/hora da requisição, IP de origem e justificativa informada. Pedidos subsequentes durante o processamento ativo são tratados de forma idempotente.</li>
+      <li><strong>Desativação Imediata da Sessão:</strong> O status do usuário é alterado imediatamente para inativo (<code>active = false</code>), revogando tokens de autenticação JWT e desregistrando tokens de notificações push (FCM). O usuário é imediatamente desconectado de todos os aparelhos.</li>
+      <li><strong>Comunicação à Empresa Contratante:</strong> Notificação interna à diretoria da empresa vinculada para apuração de acertos financeiros pendentes.</li>
+      <li><strong>Janela de Apuração Operacional e Financeira (até 30 dias):</strong> Período destinado à conciliação de eventuais comissões devidas ou valores a compensar das vendas de bens físicos realizadas pelo operador.</li>
+      <li><strong>Anonimização e Expurgo Efetivo:</strong> Finalizada a apuração ou mediante homologação administrativa pelo gestor:
         <ul>
-          <li>O nome do operador é substituído por identificador mock (ex: <em>"Operador Anonimizado"</em>);</li>
-          <li>CPF, e-mail, telefone, foto de perfil, dados de RG, endereço e atestado são eliminados;</li>
-          <li>A senha é sobrescrita com hash aleatório inutilizável;</li>
-          <li>A chave PIX cadastrada para repasse é desvinculada.</li>
+          <li>O nome do operador é substituído por identificador técnico irreversível (ex.: <em>"Operador Anonimizado"</em>);</li>
+          <li>CPF, e-mail, telefone, fotografia de perfil, RG, endereço e dados de contato são permanentemente excluídos;</li>
+          <li>A credencial de acesso (hash da senha) é sobrescrita com valor aleatório inutilizável;</li>
+          <li>Chaves de repasse financeiro (PIX) vinculadas ao perfil são removidas.</li>
         </ul>
       </li>
     </ol>
 
-    <h2>3. Proteção de Pendências Locais no Dispositivo</h2>
+    <h2>3. Preservação de Dados Locais do Dispositivo em Campo</h2>
     <div class="warning-box">
-      <strong>Atenção antes de solicitar a inativação:</strong><br>
-      Caso existam vendas ou fotos armazenadas localmente no aparelho (fila offline ainda não sincronizada), o operador deve concluir a transmissão ou acionar o suporte técnico da empresa antes de desinstalar o aplicativo, garantindo que o trabalho realizado em campo não seja extraviado.
+      <strong>Atenção Obrigatória para Operadores de Campo:</strong><br>
+      Caso existam vendas, recibos ou fotos armazenadas localmente no aparelho ainda não transmitidas (fila offline do <code>SyncService</code>), o operador deve obrigatoriamente abrir a tela de sincronização e confirmar o envio completo antes de desinstalar o aplicativo ou concluir a exclusão, evitando o extravio de atendimentos já realizados.
     </div>
 
-    <h2>4. Retenções Legais Aplicáveis (Registros Não Excluíveis Imediatamente)</h2>
-    <p>Em estrita consonância com o ordenamento jurídico brasileiro:</p>
+    <h2>4. Bases Legais e Prazos de Retenção Obrigatória</h2>
+    <p>Determinados registros são mantidos estritamente pelo período exigido pela legislação brasileira vigente:</p>
     <ul>
-      <li><strong>Registros de Acesso a Aplicações:</strong> Mantidos sob sigilo pelo prazo legal de <strong>6 meses</strong>, conforme determina expressamente o <strong>Artigo 15 da Lei Federal nº 12.965/2014 (Marco Civil da Internet)</strong>.</li>
-      <li><strong>Contratos, Vendas, Fichas de Clientes e Recibos:</strong> Não são apagados arbitrariamente porque constituem negócios jurídicos firmados pela pessoa jurídica empregadora com terceiros compradores, sujeitos a prazos prescricionais de 5 anos (Arts. 173/174 do Código Tributário Nacional, Art. 206 § 5º do Código Civil e Art. 27 do Código de Defesa do Consumidor).</li>
+      <li><strong>Registros de Acesso a Aplicações (Logs IP):</strong> Mantidos sob sigilo por <strong>6 meses</strong>, conforme exigência expressa do <strong>Artigo 15 da Lei Federal nº 12.965/2014 (Marco Civil da Internet)</strong>.</li>
+      <li><strong>Contratos Comerciais e Fichas de Venda de Bens Físicos:</strong> As vendas de álbuns físicos constituem atos jurídicos celebrados entre a empresa contratante e as famílias compradoras, devendo ser conservadas pelo prazo prescricional de <strong>5 anos</strong> para fins fiscais, tributários e de defesa do consumidor (Arts. 173 e 174 do Código Tributário Nacional, Art. 206 § 5º do Código Civil e Art. 27 do Código de Defesa do Consumidor).</li>
     </ul>
 
+    <h2>5. Dados Corporativos Sob Responsabilidade do Proprietário</h2>
+    <div class="pending-box">
+      <strong>Pendências Externas de Cadastro:</strong><br>
+      As informações formais da entidade controladora dependem de definição do proprietário da plataforma para exibição definitiva:
+      <ul>
+        <li><strong>Razão Social da Sociedade Proprietária:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>CNPJ:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>Endereço Comercial da Sede:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>Canal Oficial do Encarregado de Proteção de Dados (DPO):</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+      </ul>
+    </div>
+
     <footer>
-      &copy; 2026 SelectPhoto / Lumora — Minuta técnica para validação jurídica.
+      &copy; 2026 Plataforma Lumora / SelectPhoto — Procedimento técnico implementado no aplicativo e backend.
     </footer>
   </div>
 </body>

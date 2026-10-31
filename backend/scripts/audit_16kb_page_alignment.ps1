@@ -85,3 +85,4 @@ $needUpstream = ($report | Where-Object { $_.MinAlignBytes -lt 16384 }).Count
 Write-Host "Total de binários .so auditados: $total"
 Write-Host "Binários compatíveis (16 KB / 64 KB): $compat" -ForegroundColor Green
 Write-Host "Binários com 4 KB (requer atualização upstream de plugin): $needUpstream" -ForegroundColor Yellow
+

@@ -2632,5 +2632,289 @@ class ApiService {
       throw Exception(_extractError(e));
     }
   }
-}
 
+  // =========================================================================
+  // ETAPA 4: CENTRAL DE SUPORTE, INDICADORES E CONTINUIDADE (EMPRESA & PROPRIETÁRIO)
+  // =========================================================================
+
+  /// Listar chamados da empresa
+  Future<List<Map<String, dynamic>>> getSupportTickets({
+    String? status,
+    String? priority,
+    String? category,
+    String? search,
+  }) async {
+    try {
+      final q = <String, dynamic>{};
+      if (status != null && status != 'ALL') q['status'] = status;
+      if (priority != null && priority != 'ALL') q['priority'] = priority;
+      if (category != null && category != 'ALL') q['category'] = category;
+      if (search != null && search.trim().isNotEmpty) q['search'] = search.trim();
+      final resp = await _dio.get('/support/tickets', queryParameters: q);
+      final list = (resp.data['tickets'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Obter detalhes do chamado da empresa
+  Future<Map<String, dynamic>> getSupportTicketDetails(String ticketId) async {
+    try {
+      final resp = await _dio.get('/support/tickets/' + ticketId);
+      return Map<String, dynamic>.from(resp.data['ticket'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Criar chamado de suporte pela empresa/operador
+  Future<Map<String, dynamic>> createSupportTicket(Map<String, dynamic> data) async {
+    try {
+      final resp = await _dio.post('/support/tickets', data: data);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Adicionar mensagem ao chamado pela empresa
+  Future<Map<String, dynamic>> addSupportTicketMessage(
+    String ticketId,
+    String message,
+  ) async {
+    try {
+      final resp = await _dio.post(
+        '/support/tickets/' + ticketId + '/messages',
+        data: {'message': message},
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Listar solicitações de suporte pendentes de autorização da empresa
+  Future<List<Map<String, dynamic>>> getPendingSupportGrants() async {
+    try {
+      final resp = await _dio.get('/support/grants/pending');
+      final list = (resp.data['grants'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Empresa autoriza formalmente acesso de suporte técnico
+  Future<Map<String, dynamic>> approveSupportGrant(String grantId) async {
+    try {
+      final resp = await _dio.post('/support/grants/' + grantId + '/approve');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Empresa revoga imediatamente acesso de suporte técnico
+  Future<Map<String, dynamic>> revokeSupportGrant(
+    String grantId, {
+    String? reason,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/support/grants/' + grantId + '/revoke',
+        data: {'reason': reason ?? 'Revogado pelo usuário'},
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  // ── Proprietário / Técnico Lumora ─────────────────────────────────────────
+
+  /// Proprietário lista chamados de todas as empresas
+  Future<List<Map<String, dynamic>>> getOwnerSupportTickets({
+    String? companyId,
+    String? status,
+    String? priority,
+    String? search,
+  }) async {
+    try {
+      final q = <String, dynamic>{};
+      if (companyId != null && companyId != 'ALL') q['companyId'] = companyId;
+      if (status != null && status != 'ALL') q['status'] = status;
+      if (priority != null && priority != 'ALL') q['priority'] = priority;
+      if (search != null && search.trim().isNotEmpty) q['search'] = search.trim();
+      final resp = await _dio.get('/owner/support/tickets', queryParameters: q);
+      final list = (resp.data['tickets'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Detalhes do chamado para a equipe do proprietário (com notas internas)
+  Future<Map<String, dynamic>> getOwnerSupportTicketDetails(String ticketId) async {
+    try {
+      final resp = await _dio.get('/owner/support/tickets/' + ticketId);
+      return Map<String, dynamic>.from(resp.data['ticket'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Adicionar mensagem ou nota técnica interna ao chamado
+  Future<Map<String, dynamic>> addOwnerSupportTicketMessage(
+    String ticketId,
+    String message, {
+    bool isInternalNote = false,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/owner/support/tickets/' + ticketId + '/messages',
+        data: {
+          'message': message,
+          'isInternalNote': isInternalNote,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Atualizar status do chamado e atribuir técnico responsável
+  Future<Map<String, dynamic>> updateOwnerSupportTicketStatus(
+    String ticketId, {
+    required String status,
+    String? assignedToUserId,
+    String? assignedToName,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/owner/support/tickets/' + ticketId + '/status',
+        data: {
+          'status': status,
+          'assignedToUserId': assignedToUserId,
+          'assignedToName': assignedToName,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Técnico solicita concessão de acesso de suporte a uma empresa
+  Future<Map<String, dynamic>> requestOwnerSupportGrant({
+    required String companyId,
+    String? ticketId,
+    required String scope,
+    required String reason,
+    int durationMinutes = 60,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/owner/support/grants/request',
+        data: {
+          'companyId': companyId,
+          'ticketId': ticketId,
+          'scope': scope,
+          'reason': reason,
+          'durationMinutes': durationMinutes,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Listar concessões de acesso de suporte
+  Future<List<Map<String, dynamic>>> getOwnerSupportGrants({
+    String? companyId,
+    String? status,
+  }) async {
+    try {
+      final q = <String, dynamic>{};
+      if (companyId != null && companyId != 'ALL') q['companyId'] = companyId;
+      if (status != null && status != 'ALL') q['status'] = status;
+      final resp = await _dio.get('/owner/support/grants', queryParameters: q);
+      final list = (resp.data['grants'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Técnico reivindica token de sessão de suporte autorizada pela empresa
+  Future<Map<String, dynamic>> claimOwnerSupportSessionToken(String grantId) async {
+    try {
+      final resp = await _dio.post('/owner/support/grants/' + grantId + '/claim-session');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Métricas operacionais agregadas (fichas, vendas, contratos, falhas Asaas)
+  Future<Map<String, dynamic>> getOwnerOperationalMetrics({String? companyId}) async {
+    try {
+      final q = <String, dynamic>{};
+      if (companyId != null && companyId != 'ALL') q['companyId'] = companyId;
+      final resp = await _dio.get('/owner/support/operational-metrics', queryParameters: q);
+      return Map<String, dynamic>.from(resp.data['metrics'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Status de continuidade de negócio e recuperação de desastres (DR)
+  Future<Map<String, dynamic>> getOwnerContinuityStatus() async {
+    try {
+      final resp = await _dio.get('/owner/support/continuity/status');
+      return Map<String, dynamic>.from(resp.data['continuity'] ?? {});
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Listar alertas internos operacionais
+  Future<List<Map<String, dynamic>>> getOwnerInternalAlerts({
+    String? companyId,
+    bool acknowledged = false,
+  }) async {
+    try {
+      final q = <String, dynamic>{
+        'acknowledged': acknowledged.toString(),
+      };
+      if (companyId != null && companyId != 'ALL') q['companyId'] = companyId;
+      final resp = await _dio.get('/owner/support/internal-alerts', queryParameters: q);
+      final list = (resp.data['alerts'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Reconhecer alerta interno operacional
+  Future<Map<String, dynamic>> acknowledgeOwnerInternalAlert(String alertId) async {
+    try {
+      final resp = await _dio.post('/owner/support/internal-alerts/' + alertId + '/ack');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Enviar telemetria operacional mínima do aparelho para o servidor
+  Future<Map<String, dynamic>> reportDeviceTelemetry(Map<String, dynamic> payload) async {
+    try {
+      final resp = await _dio.post('/app/telemetry', data: payload);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+}

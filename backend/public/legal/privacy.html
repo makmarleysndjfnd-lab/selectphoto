@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minuta da Política de Privacidade — SelectPhoto / Lumora</title>
+  <title>Política de Privacidade e Proteção de Dados Técnicos — SelectPhoto / Lumora</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1f2937; margin: 0; padding: 24px; background: #f9fafb; }
     .container { max-width: 900px; margin: 0 auto; background: #ffffff; padding: 36px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
     h1 { color: #111827; font-size: 1.8rem; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }
     h2 { color: #1f2937; font-size: 1.3rem; margin-top: 28px; }
-    h3 { color: #374151; font-size: 1.1rem; margin-top: 20px; }
+    h3 { color: #374151; font-size: 1.05rem; margin-top: 20px; }
     p, li { color: #4b5563; font-size: 0.95rem; }
-    .badge-draft { display: inline-block; padding: 4px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 9999px; background: #fee2e2; color: #991b1b; margin-bottom: 16px; border: 1px solid #f87171; }
+    .badge-status { display: inline-block; padding: 4px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 9999px; background: #dbeafe; color: #1e40af; margin-bottom: 16px; border: 1px solid #93c5fd; }
     .notice-box { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 14px 18px; border-radius: 6px; margin: 20px 0; font-size: 0.92rem; color: #92400e; }
-    .placeholder { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.9em; }
+    .pending-box { background: #fef2f2; border-left: 4px solid #ef4444; padding: 14px 18px; border-radius: 6px; margin: 20px 0; font-size: 0.92rem; color: #991b1b; }
+    .field-tag { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; font-size: 0.9em; }
     table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 0.88rem; }
     th, td { border: 1px solid #e5e7eb; padding: 10px 12px; text-align: left; vertical-align: top; }
     th { background: #f3f4f6; color: #111827; font-weight: 600; }
@@ -24,127 +25,122 @@
 </head>
 <body>
   <div class="container">
-    <span class="badge-draft">MINUTA PRELIMINAR PARA VALIDAÇÃO JURÍDICA — DOCUMENTO EM ELABORAÇÃO</span>
-    <h1>Política de Privacidade (Minuta Provisória) — SelectPhoto / Lumora</h1>
-    <p><strong>Status do Documento:</strong> Minuta técnica em elaboração. Não constitui documento legal definitivo nem atestado de conformidade jurídica plena.</p>
-    <p><strong>Última revisão técnica:</strong> 28 de outubro de 2026 (Etapa 3: Demonstrativo B2B sem PII, Auditoria Operacional Mascarada, Custos da Plataforma e Separação de Políticas de Lojas)</p>
+    <span class="badge-status">DOCUMENTO TÉCNICO DE PRIVACIDADE E DADOS — SELECTPHOTO / LUMORA</span>
+    <h1>Política de Privacidade e Proteção de Dados Técnicos</h1>
+    <p><strong>Escopo:</strong> Descrição transparente dos tratamentos de dados técnicos e operacionais implementados no aplicativo móvel e backend da plataforma Lumora / SelectPhoto.</p>
+    <p><strong>Referência de Conformidade:</strong> LGPD (Lei Geral de Proteção de Dados — Lei nº 13.709/2018), Marco Civil da Internet (Lei nº 12.965/2014), Google Play Developer Policy e Apple App Store Review Guidelines.</p>
     
     <div class="notice-box">
-      <strong>Aviso de Transparência Institucional e Regulatória:</strong><br>
-      Este documento é uma minuta de engenharia elaborada para mapear os fluxos técnicos efetivamente implementados no aplicativo móvel e no backend. Todos os dados cadastrais da empresa controladora destacados como <span class="placeholder">[A CONFIRMAR]</span>, bem como as bases legais específicas, prazos contratuais/contábeis de retenção e procedimentos formais de descarte, dependem de validação e aprovação jurídica e contábil especializada antes de publicação definitiva em lojas.
+      <strong>Declaração de Separação Técnica e Governança:</strong><br>
+      Este documento reflete a arquitetura de engenharia de software e os controles de segurança efetivamente implementados no código-fonte. A definição formal da pessoa jurídica controladora, CNPJ e Encarregado pelo Tratamento de Dados (DPO) constituem atos societários próprios do proprietário da plataforma, devidamente discriminados na Seção 6.
     </div>
 
-    <h2>1. Identificação Provisória do Controlador</h2>
-    <ul>
-      <li><strong>Razão Social:</strong> <span class="placeholder">[RAZÃO SOCIAL A CONFIRMAR PELA EMPRESA]</span></li>
-      <li><strong>Nome Fantasia:</strong> SelectPhoto / Lumora</li>
-      <li><strong>CNPJ:</strong> <span class="placeholder">[CNPJ A CONFIRMAR PELA EMPRESA]</span></li>
-      <li><strong>Endereço Comercial da Sede:</strong> <span class="placeholder">[ENDEREÇO COMPLETO A CONFIRMAR]</span></li>
-      <li><strong>Canal Oficial do Encarregado de Dados (DPO):</strong> <span class="placeholder">[E-MAIL DE DPO/CONTATO A CONFIRMAR]</span></li>
-    </ul>
+    <h2>1. Natureza da Aplicação e Modelo Operacional Corporativo (B2B)</h2>
+    <p>O <strong>SelectPhoto / Lumora</strong> é uma solução de software corporativa (B2B) destinada à gestão de vendas em campo e logística de eventos fotográficos físicos. O acesso é restrito a operadores credenciados pelas empresas contratantes (vendedores, fotógrafos e gestores). O sistema não possui cadastro público aberto a consumidores finais.</p>
 
-    <h2>2. Natureza da Aplicação e Modelo Operacional</h2>
-    <p>O <strong>SelectPhoto / Lumora</strong> é uma ferramenta corporativa de força de vendas e gestão operacional de campo (B2B), de uso restrito por operadores, vendedores, fotógrafos e gestores credenciados por suas respectivas empresas contratantes. As contas de acesso não são abertas ao público consumidor final, sendo provisionadas por administradores autorizados.</p>
-
-    <h2>3. Matriz de Tratamento, Retenção e Procedimento de Eliminação por Categoria de Dados</h2>
-    <p>Abaixo detalha-se o inventário técnico dos dados efetivamente tratados no ecossistema:</p>
+    <h2>2. Matriz Técnica de Tratamento, Finalidades e Isolamento de Dados</h2>
+    <p>A tabela a seguir apresenta os tratamentos técnicos implementados em código e suas barreiras de segurança:</p>
 
     <table>
       <thead>
         <tr>
-          <th>Categoria de Dado</th>
-          <th>Finalidade Técnica / Operacional</th>
-          <th>Destinatários / Compartilhamento</th>
-          <th>Retenção Técnica e Definição Jurídica Pendente</th>
-          <th>Procedimento de Eliminação / Anonimização</th>
+          <th>Categoria de Dados</th>
+          <th>Finalidade Técnica Implementada</th>
+          <th>Destinatários e Controle de Acesso</th>
+          <th>Retenção e Descarte</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <td><strong>Registros de Conexão e Acesso (Logs IP)</strong><br><small>IP de origem, data/hora de autenticação e requisições administrativas.</small></td>
-          <td>Segurança da aplicação, rastreabilidade de acessos administrativos e prevenção contra uso indevido.</td>
-          <td>Infraestrutura em nuvem do backend (Render/PostgreSQL). Sem comercialização com terceiros.</td>
-          <td>Referência técnica inicial de guarda mínima de registros de acesso à aplicação (ex.: Art. 15 da Lei nº 12.965/2014 — prazo exato e política de rotação sujeitos a validação jurídica).</td>
-          <td>Expurgo periódico conforme política de retenção validada pelo controlador.</td>
+          <td><strong>Registros de Conexão e Sessão (Logs IP)</strong><br><small>IP de origem, data/hora da requisição, rotas acessadas.</small></td>
+          <td>Segurança da aplicação, auditoria de integridade e prevenção contra acessos não autorizados.</td>
+          <td>Infraestrutura restrita de backend (Render / PostgreSQL). Não comercializado com terceiros.</td>
+          <td>Guarda pelo prazo legal de <strong>6 meses</strong>, conforme determina o Art. 15 da Lei nº 12.965/2014 (Marco Civil da Internet).</td>
         </tr>
         <tr>
-          <td><strong>Cadastro do Operador</strong><br><small>Nome, CPF, senha (hash bcrypt), telefone, foto de perfil, veículo alocado.</small></td>
-          <td>Autenticação, controle de perfil multi-tenant e gestão de rotas e equipes.</td>
-          <td>Empresa contratante/empregadora à qual o operador está vinculado.</td>
-          <td>Durante a vigência do vínculo operacional; guarda posterior condicionada a obrigações trabalhistas, fiscais e cíveis <span class="placeholder">[PRAZO A DEFINIR PELO JURÍDICO]</span>.</td>
-          <td>Mediante solicitação: inativação imediata da conta, revogação de tokens push e anonimização cadastral após conferência administrativa de pendências financeiras/operacionais.</td>
+          <td><strong>Cadastro de Operadores de Campo</strong><br><small>Nome, CPF, credencial com hash bcrypt, telefone, foto de perfil, veículo alocado.</small></td>
+          <td>Autenticação, controle de permissões por papel (vendedor, fotógrafo, admin) e gestão de equipes em campo.</td>
+          <td>Acesso restrito à administração da respectiva empresa contratante empregadora.</td>
+          <td>Mantido durante o vínculo de prestação de serviços; mediante solicitação de exclusão, anonimizado após apuração financeira de até 30 dias.</td>
         </tr>
         <tr>
-          <td><strong>Localização Geográfica (GPS)</strong><br><small>Latitude e longitude pontuais capturadas no ato de atendimento/check-in.</small></td>
-          <td>Registro de atendimento presencial em rota. Não executa rastreamento contínuo em segundo plano.</td>
-          <td>Base isolada da empresa contratante.</td>
-          <td>Vinculada ao histórico operacional da ficha <span class="placeholder">[PRAZO DE GUARDA A VALIDAR PELO CONTROLADOR]</span>.</td>
-          <td>Eliminação ou anonimização conforme ciclo de descarte de registros operacionais.</td>
+          <td><strong>Localização Geográfica Pontual (GPS)</strong><br><small>Latitude e longitude coletadas no momento exato do registro de atendimento.</small></td>
+          <td>Comprovação geográfica de atendimento presencial em rota comercial. <strong>Não realiza rastreamento contínuo em segundo plano.</strong></td>
+          <td>Acesso restrito à empresa contratante vinculada à ficha comercial.</td>
+          <td>Vinculada ao histórico operacional do atendimento presencial.</td>
         </tr>
         <tr>
-          <td><strong>Clientes e Compradores Finais</strong><br><small>Nome do responsável, CPF, endereço, telefone, assinatura digital colhida em tela.</small></td>
-          <td>Formalização da compra de álbuns/produtos fotográficos físicos, entrega e gestão de crediário da empresa vendedora.</td>
-          <td>Exclusivamente a empresa vendedora titular da ficha. <em>(Cobrança bancária Asaas LIVE permanece desabilitada até homologação e autorização expressa)</em>.</td>
-          <td>Vinculada à execução contratual da venda e obrigações fiscais/cíveis aplicáveis à empresa vendedora <span class="placeholder">[PRAZO ESPECÍFICO A VALIDAR COM JURÍDICO/CONTABILIDADE]</span>.</td>
-          <td>Controle estrito de acesso multi-tenant e descarte/anonimização após encerramento das obrigações contratuais e legais aplicáveis.</td>
+          <td><strong>Compradores Finais de Produtos Físicos</strong><br><small>Nome do comprador, CPF, telefone, endereço de entrega e assinatura digital colhida em tela.</small></td>
+          <td>Formalização do contrato de compra e venda presencial de álbuns e produtos fotográficos físicos.</td>
+          <td>Exclusivamente a empresa fotográfica contratante titular da venda. <em>Gateway de cobrança Asaas LIVE permanece estritamente desativado até homologação bancária formal.</em></td>
+          <td>Conservados pelo prazo legal de <strong>5 anos</strong> para fins fiscais e de garantia cível/consumidor (Arts. 173/174 CTN e Art. 27 CDC).</td>
         </tr>
         <tr>
-          <td><strong>Alunos e Menores Fotografados</strong><br><small>Nome do estudante, idade/turma e fotografias de eventos/formaturas.</small></td>
-          <td>Confecção física exclusiva dos álbuns/kits fotográficos adquiridos pelos pais ou responsáveis legais.</td>
-          <td>Empresa fotográfica contratante e produção gráfica autorizada. <em>Jamais expostos em demonstrativos financeiros ou painéis comuns da plataforma Lumora.</em></td>
-          <td>Estritamente vinculada à produção/garantia do material físico contratado pelos responsáveis <span class="placeholder">[BASE LEGAL ART. 14 LGPD E PRAZO DE EXPURGO A VALIDAR PELO JURÍDICO]</span>.</td>
-          <td>Expiração automática de fotos temporárias de apoio ao vendedor e exclusão após encerramento do ciclo produtivo/garantia definido pela empresa controladora.</td>
+          <td><strong>Estudantes e Menores Fotografados</strong><br><small>Nome do aluno, escola/turma e fotografias de eventos ou formaturas.</small></td>
+          <td>Produção material e montagem dos álbuns físicos contratados pelos pais ou responsáveis legais.</td>
+          <td>Empresa fotográfica contratante e laboratório gráfico autorizado. <strong>Estritamente isolados: jamais exibidos em demonstrativos B2B ou painéis de suporte da plataforma Lumora.</strong></td>
+          <td>Fotos temporárias de apoio ao vendedor expiram conforme regras operacionais do lote; imagens finais são descartadas conforme política de descarte do laboratório.</td>
         </tr>
         <tr>
-          <td><strong>Registros Financeiros Operacionais e Comissões</strong><br><small>Entradas, parcelas de crediário, comissões de vendedores (20%/25% e 10% sobre principal) e fechamentos mensais.</small></td>
-          <td>Apuração e liquidação de comissões dos vendedores e controle de carteira da empresa vendedora.</td>
-          <td>Administração financeira da própria empresa contratante e consulta individual somente-leitura pelo respectivo vendedor.</td>
-          <td>Guarda vinculada à escrituração contábil/fiscal da empresa contratante <span class="placeholder">[PRAZO CONTÁBIL/TRIBUTÁRIO A CONFIRMAR]</span>.</td>
-          <td>Preservação de integridade contábil com trilha imutável de estornos e ajustes.</td>
+          <td><strong>Registros Financeiros de Vendas e Comissões</strong><br><small>Entradas, crediário, comissões de vendedores (20%/25% na entrada e 10% sobre parcelas pagas) e fechamentos mensais.</small></td>
+          <td>Apuração e quitação de comissões por venda e controle da carteira da empresa contratante.</td>
+          <td>Administração financeira da própria empresa contratante e consulta somente-leitura pelo respectivo vendedor sobre suas próprias vendas.</td>
+          <td>Preservação contábil imutável para prestação de contas fiscais.</td>
         </tr>
         <tr>
-          <td><strong>Demonstrativos Mensais da Taxa Contratada Lumora e Custos da Plataforma (B2B — Etapa 3)</strong><br><small>Competência mensal, percentual contratado por empresa com vigência histórica, referências comerciais sanitizadas (código da ficha), valores de base/taxa/ajustes/saldo e livro de custos verificados da plataforma.</small></td>
-          <td>Apuração transparente da remuneração contratual variável B2B entre cada empresa cliente e a plataforma Lumora, conciliação externa de saldos e apuração de margem operacional da plataforma.</td>
-          <td>Proprietário da plataforma Lumora (com capacidade <code>PLATFORM_FINANCE</code>) e, de forma isolada e somente-leitura, administradores da própria empresa titular quanto ao seu respectivo demonstrativo. <strong>Sem CPF, sem telefone, sem fotos e sem dados de crianças.</strong></td>
-          <td>Durante a relação contratual B2B e período necessário à comprovação contábil/contratual entre pessoas jurídicas <span class="placeholder">[PRAZO CONTRATUAL A FORMALIZAR]</span>.</td>
-          <td>Snapshots mensais fechados são preservados para integridade contábil; distrato encerra novas apurações mantendo histórico auditável.</td>
+          <td><strong>Demonstrativos de Taxa da Plataforma B2B (Etapa 3)</strong><br><small>Competência mensal, alíquota percentual configurada por empresa com vigência histórica, referências comerciais sanitizadas (número da ficha) e custos operacionais.</small></td>
+          <td>Cálculo e conciliação do valor de remuneração pela disponibilização do software entre a Lumora e cada empresa licenciada.</td>
+          <td>Proprietário com capacidade <code>PLATFORM_FINANCE</code> e administradores da própria empresa contratante. <strong>Sem CPF, telefone, fotos ou dados de menores.</strong></td>
+          <td>Snapshots mensais congelados para comprovação contratual entre pessoas jurídicas.</td>
         </tr>
         <tr>
-          <td><strong>Trilha de Auditoria Operacional Sanitizada e Revisões Administrativas (Etapa 3)</strong><br><small>Eventos de alteração de preço, desconto, condições comerciais, telefone de contato, recebimentos, estornos e contratos, com autor, data e justificativa.</small></td>
-          <td>Governança operacional, rastreabilidade de alterações sensíveis e encaminhamento de inconsistências para conferência administrativa humana (sem bloqueio automático de vendas nem acusação automatizada).</td>
-          <td>Acesso restrito à governança autorizada da plataforma. <strong>Mascaramento padrão ativo:</strong> telefones exibidos apenas parcialmente com hash curto de referência, CPFs mascarados e supressão integral de fotos, assinaturas e dados de menores.</td>
-          <td>Retenção vinculada à auditoria contratual e segurança operacional <span class="placeholder">[PRAZO DE RETENÇÃO DE AUDITORIA A DEFINIR PELO JURÍDICO]</span>.</td>
-          <td>Descarte ou arquivamento frio ao término do período de auditoria definido pela governança jurídica.</td>
+          <td><strong>Suporte Técnico e Concessões de Acesso (Etapa 4)</strong><br><small>Chamados, mensagens, diagnósticos voluntários de aparelho (SO, versão), anexos permitidos (&le; 10MB) e autorizações técnicas com escopo e prazo.</small></td>
+          <td>Atendimento a incidentes operacionais reportados pelas empresas contratantes.</td>
+          <td>Técnicos credenciados pelo proprietário (com capacidade <code>TECHNICAL_SUPPORT</code>) restritos à empresa do chamado. <strong>Notas e anexos internos de técnicos são estritamente ocultados da visão da empresa.</strong> A concessão tem papel limitado <code>SUPPORT_AUTHORIZED</code> e não eleva a administrador geral.</td>
+          <td>Histórico de chamados mantido para auditoria de atendimento; sessões de suporte expiram automaticamente no prazo aprovado (máx. 24h).</td>
         </tr>
         <tr>
-          <td><strong>Central de Integrações e Cofre de Credenciais (B2B)</strong><br><small>Chaves criptografadas em AES-256-GCM, contadores de uso de APIs sem conteúdo de prompts/PII e auditoria de rotação.</small></td>
-          <td>Isolamento criptográfico de credenciais por empresa/ambiente e medição técnica de consumo sem exposição de segredos em backups de empresa.</td>
-          <td>Uso interno restrito do backend para comunicação com provedores explicitamente habilitados.</td>
-          <td>Enquanto a integração permanecer cadastrada; revogação imediata disponível via Step-Up Auth.</td>
-          <td>Invalidação criptográfica e revogação auditada sob comando do proprietário.</td>
+          <td><strong>Telemetria Mínima de Dispositivo (Etapa 4)</strong><br><small>Contagem agregada de pendências nas filas locais (vendas, recibos, cadastros), versão do app e plataforma operacional.</small></td>
+          <td>Monitoramento de saúde de sincronização e detecção preventiva de retenção indevida de dados em aparelhos de campo.</td>
+          <td>Painel técnico do proprietário. <strong>Zero PII: não envia nomes, CPFs, fotos nem conteúdo das filas offline.</strong> Limite de envio de 1 amostra a cada 15 minutos.</td>
+          <td>Substituição periódica pelos registros mais recentes do aparelho.</td>
         </tr>
       </tbody>
     </table>
 
-    <h2>4. Bens Físicos, Licenciamento B2B e Políticas das Lojas (Google Play e Apple App Store)</h2>
-    <p>O ecossistema observa separação técnica e financeira estrita entre duas relações distintas:</p>
+    <h2>3. Segurança da Informação e Controles de Acesso</h2>
     <ul>
-      <li><strong>Comercialização de Produtos Físicos pelas Empresas Clientes:</strong> Os valores recebidos de compradores finais referem-se exclusivamente à venda presencial de bens materiais físicos (álbuns, estojos e kits fotográficos impressos), cuja receita pertence integralmente à respectiva empresa fotográfica vendedora.</li>
-      <li><strong>Remuneração B2B pelo Uso Corporativo da Plataforma Lumora:</strong> A taxa percentual contratada por empresa é apurada em demonstrativo mensal meramente informativo dentro do painel administrativo e liquidada <strong>exclusivamente fora do aplicativo</strong> por meios corporativos entre pessoas jurídicas. O aplicativo não realiza venda de assinatura digital in-app, não desbloqueia conteúdo digital pago ao consumidor e não exibe checkout nem links externos de pagamento de acesso digital, em alinhamento técnico preventivo às diretrizes <em>Google Play Payments Policy</em> e <em>Apple App Store Review Guidelines (3.1.1, 3.1.3(e) e 3.1.3(f))</em>.</li>
+      <li><strong>Comunicação Criptografada:</strong> Todo o tráfego entre aplicativo e backend trafega obrigatoriamente sob protocolo TLS 1.3 / HTTPS.</li>
+      <li><strong>Cofre de Credenciais:</strong> Chaves de integração externas são cifradas em banco via algoritmo AES-256-GCM com vetores de inicialização únicos e autenticação reforçada para alteração.</li>
+      <li><strong>Bloqueio de Dumps Globais e Restauração via HTTP:</strong> Endpoints web de download de dump completo do banco e restauração remota via HTTP estão bloqueados em nível de aplicação em todas as rotas (incluindo rotas legadas), sendo restritos a rotinas seguras de infraestrutura.</li>
+      <li><strong>Proteção de Sessão de Suporte:</strong> Tokens de suporte emitidos são estritamente vinculados ao chamado e empresa autorizados, com verificação de não-revogação a cada requisição e bloqueio categórico de mutações em modo somente-leitura (<code>READ_ONLY</code>), além de veto absoluto a operações financeiras ou manipulação de taxas.</li>
     </ul>
 
-    <h2>5. Pendências Jurídicas e Contratuais Explícitas</h2>
+    <h2>4. Relação Comercial de Bens Físicos vs. Diretrizes de Pagamentos das Lojas</h2>
+    <p>Em conformidade com a <em>Google Play Payments Policy</em> e as <em>Apple App Store Review Guidelines (especificamente 3.1.1, 3.1.3(e) e 3.1.3(f))</em>:</p>
     <ul>
-      <li>Definição formal da pessoa jurídica controladora/operadora da plataforma Lumora, CNPJ e contato oficial do Encarregado (DPO).</li>
-      <li>Parecer jurídico definitivo sobre bases legais (incluindo Art. 14 da LGPD para contexto escolar/eventos) e tabela formal de prazos de retenção/expurgo por categoria documental.</li>
-      <li>Minuta contratual B2B padrão entre Lumora e empresas licenciadas (cláusulas de vigência da taxa variável, conciliação externa e responsabilidades de controlador/operador).</li>
+      <li><strong>Venda Exclusiva de Bens Materiais Físicos:</strong> O aplicativo móvel é uma ferramenta operacional para registro de vendas de mercadorias físicas palpáveis (álbuns encadernados, estojos e fotografias impressas). Nenhum pagamento processado destina-se à aquisição ou desbloqueio de conteúdo digital, bens virtuais ou serviços consumíveis no aplicativo.</li>
+      <li><strong>Licenciamento de Software B2B Fora do App:</strong> A remuneração devida à Lumora pelas empresas contratantes pelo uso da plataforma é apurada em demonstrativo contábil mensal e quitada diretamente entre as pessoas jurídicas fora do aplicativo, sem uso de faturamento in-app.</li>
     </ul>
 
-    <h2>6. Procedimento de Exclusão de Conta</h2>
-    <p>Os operadores credenciados podem registrar solicitação de inativação e anonimização conforme descrito na página de <a href="account-deletion.html">Procedimento de Exclusão de Conta</a>.</p>
+    <h2>5. Procedimento de Exclusão de Conta e Direitos dos Titulares</h2>
+    <p>Os operadores credenciados podem exercer seu direito de exclusão e anonimização cadastral através do canal nativo do aplicativo ou mediante solicitação formal, conforme detalhado no <a href="account-deletion.html">Procedimento de Exclusão de Conta e Dados</a>.</p>
+
+    <h2>6. Campos Corporativos Sob Responsabilidade do Proprietário</h2>
+    <div class="pending-box">
+      <strong>Definições Cadastrais da Empresa Controladora:</strong><br>
+      Os seguintes dados corporativos devem ser formalizados pela titularidade da plataforma Lumora para inclusão na publicação final:
+      <ul>
+        <li><strong>Razão Social da Sociedade Empresária:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>Nome Fantasia:</strong> SelectPhoto / Lumora</li>
+        <li><strong>CNPJ:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>Endereço Comercial da Sede:</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+        <li><strong>Canal Oficial do Encarregado pelo Tratamento de Dados (DPO):</strong> <span class="field-tag">[A DEFINIR PELO PROPRIETÁRIO]</span></li>
+      </ul>
+    </div>
 
     <footer>
-      &copy; 2026 SelectPhoto / Lumora — Minuta técnica atualizada na Etapa 3 para validação jurídica e contábil.
+      &copy; 2026 Plataforma Lumora / SelectPhoto — Documento técnico implementado no aplicativo e backend.
     </footer>
   </div>
 </body>

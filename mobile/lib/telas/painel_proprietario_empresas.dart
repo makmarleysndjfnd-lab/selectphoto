@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 import 'painel_proprietario_integracoes.dart';
 import 'painel_proprietario_faturamento.dart';
+import 'painel_proprietario_suporte.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
   const PainelProprietarioEmpresas({super.key});
@@ -770,6 +771,18 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 context,
                 MaterialPageRoute(
                   builder: (_) => const PainelProprietarioIntegracoes(),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.support_agent_rounded, color: Color(0xFF38BDF8)),
+            tooltip: 'Central de Suporte e Continuidade',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const PainelProprietarioSuporteContinuidade(),
                 ),
               );
             },

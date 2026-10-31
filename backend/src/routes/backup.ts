@@ -1,89 +1,67 @@
 import { Router, Response } from 'express';
 import { authenticateToken, AuthRequest, requireAdmin, requireSuperAdmin } from '../middleware/authMiddleware';
-import { generateBackupJson, restoreBackupJson } from '../services/backupService';
-import { getLatestOnlineBackupDate } from '../services/backupOnlineService';
-import multer from 'multer';
+import { generateBackupJson } from '../services/backupService';
+import {
+  assertGlobalDumpDownloadForbidden,
+  assertWebRestoreForbidden,
+} from '../services/continuityAuditService';
 
-const uploadMem = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-});
 const router = Router();
 
 // Geração e Download de Backup
-// Super Admin pode baixar global; Admin de empresa baixa apenas os dados da própria empresa
-router.get('/download', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+// Super Admin é BLOQUEADO de baixar dump global por HTTP (política de prevenção contra exfiltração de dados).
+// Sessões de suporte são BLOQUEADAS de baixar backups.
+// Admin de empresa pode baixar apenas os dados sanitizados da sua própria empresa.
+router.get('/download', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
-    const targetCompanyId = isSuperAdmin ? undefined : (req.user?.companyId || undefined);
+    // 1. Sessão de suporte jamais pode baixar backups
+    if (req.user?.role === 'SUPPORT_AUTHORIZED' || req.user?.isTemporarySupportSession) {
+      res.status(403).json({
+        error: 'SUPPORT_BACKUP_FORBIDDEN',
+        message: 'Sessões de suporte não têm autorização para baixar backups de dados.',
+      });
+      return;
+    }
 
+    const isSuperAdmin = req.user?.role === 'SUPER_ADMIN';
+    const targetCompanyId = req.user?.companyId || undefined;
+
+    // 2. Bloqueio de download GLOBAL em todos os caminhos HTTP (inclusive rotas legadas)
+    if (isSuperAdmin || !targetCompanyId) {
+      assertGlobalDumpDownloadForbidden();
+    }
+
+    // 3. Exportação sanitizada de dados da própria empresa para o administrador local
     const backupJsonString = await generateBackupJson(targetCompanyId);
     const dateStr = new Date().toISOString().split('T')[0];
-    const companySuffix = targetCompanyId ? `-${targetCompanyId}` : '-global';
-    const filename = `backup-selectphoto${companySuffix}-${dateStr}.json`;
+    const filename = `backup-selectphoto-empresa-${targetCompanyId}-${dateStr}.json`;
 
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    
     res.send(backupJsonString);
-  } catch (error) {
-    console.error('Erro ao baixar backup:', error);
+  } catch (error: any) {
+    if (error.status === 403 || error.code === 'GLOBAL_DUMP_DOWNLOAD_FORBIDDEN') {
+      res.status(403).json({
+        error: error.code || 'GLOBAL_DUMP_DOWNLOAD_FORBIDDEN',
+        message: error.message,
+      });
+      return;
+    }
+    console.error('Erro ao baixar backup sanitizado da empresa:', error);
     res.status(500).json({ error: 'Erro ao gerar backup' });
   }
 });
 
-// Restauração de Banco Integral - Restrita EXCLUSIVAMENTE a SUPER_ADMIN
-router.post('/restore', authenticateToken, requireSuperAdmin, uploadMem.single('file'), async (req: AuthRequest, res: Response) => {
+// Restauração de Banco Integral - Restrita a procedimentos de infraestrutura via CLI
+// O bloqueio de restauração HTTP vale para todas as rotas (novas e legadas)
+router.post('/restore', authenticateToken, requireSuperAdmin, async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
-    // Desabilitar restore HTTP em produção por padrão, exigindo ativação explícita
-    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_HTTP_RESTORE !== 'true') {
-      res.status(403).json({ error: 'Restauração HTTP está desabilitada em produção. Defina ENABLE_HTTP_RESTORE=true para habilitar.' });
-      return;
-    }
-
-    if (!req.file) {
-      res.status(400).json({ error: 'Nenhum arquivo enviado.' });
-      return;
-    }
-
-    const force = req.query.force === 'true';
-    const fileContent = req.file.buffer.toString('utf-8');
-    let backupData: any;
-
-    try {
-      backupData = JSON.parse(fileContent);
-    } catch {
-      res.status(400).json({ error: 'Arquivo de backup inválido (JSON corrompido).' });
-      return;
-    }
-
-    // Verificação de integridade dos metadados
-    if (!backupData._metadata || typeof backupData._metadata !== 'object') {
-      res.status(400).json({ error: 'Arquivo inválido: metadados de backup ausentes.' });
-      return;
-    }
-
-    // Verificação de data contra backup online
-    if (!force) {
-      const fileTimestamp = backupData._metadata?.timestamp;
-      if (fileTimestamp) {
-        const fileDate = new Date(fileTimestamp);
-        const onlineDate = await getLatestOnlineBackupDate();
-        if (onlineDate && onlineDate > fileDate) {
-          res.status(409).json({ 
-            error: 'O backup online é mais recente que o arquivo selecionado.',
-            requiresForce: true 
-          });
-          return;
-        }
-      }
-    }
-
-    await restoreBackupJson(backupData);
-    res.json({ message: 'Backup restaurado com sucesso!' });
+    assertWebRestoreForbidden();
   } catch (error: any) {
-    console.error('Erro ao restaurar backup:', error);
-    res.status(500).json({ error: error.message || 'Erro ao processar o arquivo de backup.' });
+    res.status(403).json({
+      error: error.code || 'WEB_RESTORE_FORBIDDEN',
+      message: error.message,
+    });
   }
 });
 

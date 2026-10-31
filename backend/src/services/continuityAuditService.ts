@@ -1,8 +1,14 @@
 import { PrismaClient } from '@prisma/client';
-import fs from 'fs';
-import path from 'path';
 
 const prisma = new PrismaClient();
+
+export type DisasterRecoveryVerificationStatus =
+  | 'BACKUP_CREATED'
+  | 'BACKUP_INTEGRITY_VERIFIED'
+  | 'RESTORE_TESTED_SUCCESS'
+  | 'RESTORE_TESTED_FAILURE'
+  | 'PENDING_VERIFICATION'
+  | 'NO_BACKUP_REGISTERED';
 
 export interface DisasterRecoveryStatus {
   lastBackupTimestamp: string | null;
@@ -10,7 +16,7 @@ export interface DisasterRecoveryStatus {
   sizeBytes: number | null;
   sanitizedSource: string;
   verifiedRestoreAt: string | null;
-  verifiedRestoreStatus: 'SUCCESS' | 'FAILED' | 'PENDING_VERIFICATION' | 'NO_BACKUP_REGISTERED';
+  verifiedRestoreStatus: DisasterRecoveryVerificationStatus;
   verifiedRestoreNotes: string | null;
   totalTables: number;
   totalRows: number;
@@ -22,8 +28,9 @@ export interface DisasterRecoveryStatus {
 }
 
 /**
- * Retorna o status de continuidade e recuperação de desastres (DR) para o painel do proprietário.
- * Cumpre a regra estrita de NÃO permitir download global de base ou restauração arbitrária pela web.
+ * Retorna o status real de continuidade e recuperação de desastres (DR) para o painel do proprietário.
+ * Cumpre a regra estrita de NÃO inventar dados, contagens ou datas de restauração:
+ * se não houver auditoria comprovada no ambiente, retorna NO_BACKUP_REGISTERED.
  */
 export async function getDisasterRecoveryStatus(
   db: PrismaClient = prisma
@@ -47,7 +54,7 @@ export async function getDisasterRecoveryStatus(
       sizeBytes: latestLog.sizeBytes,
       sanitizedSource: latestLog.sanitizedSource,
       verifiedRestoreAt: latestLog.verifiedRestoreAt ? latestLog.verifiedRestoreAt.toISOString() : null,
-      verifiedRestoreStatus: (latestLog.verifiedRestoreStatus as any) || 'SUCCESS',
+      verifiedRestoreStatus: (latestLog.verifiedRestoreStatus as DisasterRecoveryVerificationStatus) || 'PENDING_VERIFICATION',
       verifiedRestoreNotes: latestLog.verifiedRestoreNotes,
       totalTables: latestLog.totalTables,
       totalRows: latestLog.totalRows,
@@ -55,31 +62,7 @@ export async function getDisasterRecoveryStatus(
     };
   }
 
-  // Se nenhum log estiver no banco ainda, verificar metadados locais de backup criptografado verificado
-  const backupEncPath = path.resolve(__dirname, '../../backups/post_etapa3_delivery_backup.enc.json');
-  if (fs.existsSync(backupEncPath)) {
-    try {
-      const stats = fs.statSync(backupEncPath);
-      const raw = fs.readFileSync(backupEncPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      return {
-        lastBackupTimestamp: parsed.timestamp || stats.mtime.toISOString(),
-        sha256: parsed.sha256 || 'SHA-256_VERIFIED_ENCRYPTED_BACKUP',
-        sizeBytes: stats.size,
-        sanitizedSource: parsed.environment || 'production_sanitized_render_pg',
-        verifiedRestoreAt: parsed.timestamp || stats.mtime.toISOString(),
-        verifiedRestoreStatus: 'SUCCESS',
-        verifiedRestoreNotes:
-          'Backup real da produção pós-Etapa 3 capturado em modo transacional, com 57 tabelas conferidas e restauração testada em banco isolado.',
-        totalTables: parsed.totalTables || 57,
-        totalRows: parsed.totalRows || 1414,
-        securityPolicies,
-      };
-    } catch {
-      // fallback silencioso
-    }
-  }
-
+  // Sem prova registrada na base de auditoria, retorna NO_BACKUP_REGISTERED sem dados simulados
   return {
     lastBackupTimestamp: null,
     sha256: null,
@@ -87,7 +70,7 @@ export async function getDisasterRecoveryStatus(
     sanitizedSource: 'Nenhum backup registrado',
     verifiedRestoreAt: null,
     verifiedRestoreStatus: 'NO_BACKUP_REGISTERED',
-    verifiedRestoreNotes: 'Nenhum log de backup registrado no ambiente atual.',
+    verifiedRestoreNotes: 'Nenhum log auditado de backup ou restauração registrado neste ambiente.',
     totalTables: 0,
     totalRows: 0,
     securityPolicies,
@@ -104,7 +87,7 @@ export async function recordDisasterRecoveryLog(
     sizeBytes: number;
     sanitizedSource: string;
     verifiedRestoreAt?: Date;
-    verifiedRestoreStatus?: string;
+    verifiedRestoreStatus?: DisasterRecoveryVerificationStatus;
     verifiedRestoreNotes?: string;
     totalTables: number;
     totalRows: number;
@@ -117,8 +100,8 @@ export async function recordDisasterRecoveryLog(
       sha256: params.sha256,
       sizeBytes: params.sizeBytes,
       sanitizedSource: params.sanitizedSource,
-      verifiedRestoreAt: params.verifiedRestoreAt || new Date(),
-      verifiedRestoreStatus: params.verifiedRestoreStatus || 'SUCCESS',
+      verifiedRestoreAt: params.verifiedRestoreAt || null,
+      verifiedRestoreStatus: params.verifiedRestoreStatus || 'BACKUP_CREATED',
       verifiedRestoreNotes: params.verifiedRestoreNotes || null,
       totalTables: params.totalTables,
       totalRows: params.totalRows,

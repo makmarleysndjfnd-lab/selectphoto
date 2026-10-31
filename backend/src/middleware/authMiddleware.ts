@@ -23,6 +23,9 @@ export interface AuthRequest extends Request {
     actorRole?: string;
     effectiveCompanyId?: string;
     effectiveRole?: string;
+    supportGrantId?: string;
+    supportScope?: 'READ_ONLY' | 'OPERATIONAL_SUPPORT' | 'INTEGRATION_DEBUG' | string;
+    isTemporarySupportSession?: boolean;
   };
 }
 
@@ -36,6 +39,7 @@ export const VALID_ROLES = [
   'PHOTOGRAPHER',
   'DRIVER',
   'OPERATOR',
+  'SUPPORT_AUTHORIZED',
 ] as const;
 
 export type UserRole = (typeof VALID_ROLES)[number];
@@ -50,6 +54,7 @@ export const ROLE_RANK: Record<string, number> = {
   PHOTOGRAPHER: 20,
   DRIVER: 20,
   OPERATOR: 20,
+  SUPPORT_AUTHORIZED: 10,
 };
 
 export const authenticateToken = async (
@@ -80,7 +85,191 @@ export const authenticateToken = async (
       return;
     }
 
-    // Suporte a Impersonação por SUPER_ADMIN revalidado em tempo real
+    // =========================================================================
+    // 1. SESSÃO DE SUPORTE TEMPORÁRIO AUTORIZADO (CONTEXTO EXPLÍCITO E SEGURO)
+    // =========================================================================
+    if (
+      decoded.isTemporarySupportSession === true ||
+      decoded.purpose === 'SUPPORT_SESSION' ||
+      decoded.supportGrantId
+    ) {
+      if (!decoded.supportGrantId) {
+        res.status(403).json({ error: 'Support session token missing supportGrantId' });
+        return;
+      }
+
+      const grant = await getPrisma().supportAccessGrant.findUnique({
+        where: { id: decoded.supportGrantId },
+        include: { company: true },
+      });
+
+      if (!grant) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_INVALID',
+          message: 'Concessão de suporte não encontrada.',
+        });
+        return;
+      }
+
+      if (grant.status === 'REVOKED' || grant.revokedAt !== null) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_REVOKED',
+          message: 'Sessão de suporte revogada imediatamente pela empresa.',
+        });
+        return;
+      }
+
+      if (grant.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_INACTIVE',
+          message: `Sessão de suporte inativa (status atual: ${grant.status}).`,
+        });
+        return;
+      }
+
+      if (grant.expiresAt && grant.expiresAt < new Date()) {
+        await getPrisma().supportAccessGrant.update({
+          where: { id: grant.id },
+          data: { status: 'EXPIRED' },
+        });
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_EXPIRED',
+          message: 'Sessão de suporte expirada.',
+        });
+        return;
+      }
+
+      if (grant.companyId !== decoded.companyId) {
+        res.status(403).json({
+          error: 'SUPPORT_COMPANY_MISMATCH',
+          message: 'Token de suporte não corresponde à empresa autorizada na concessão.',
+        });
+        return;
+      }
+
+      if (grant.requestedByUserId !== decoded.id) {
+        res.status(403).json({
+          error: 'SUPPORT_USER_MISMATCH',
+          message: 'Token de suporte não pertence ao técnico solicitante.',
+        });
+        return;
+      }
+
+      const technicianUser = await getPrisma().user.findUnique({
+        where: { id: decoded.id },
+      });
+
+      if (!technicianUser || !technicianUser.active) {
+        res.status(403).json({ error: 'Conta de técnico inativa ou não encontrada' });
+        return;
+      }
+
+      if (!grant.company || grant.company.isActive === false) {
+        res.status(403).json({ error: 'A empresa dona dos dados está inativa' });
+        return;
+      }
+
+      // Regra de Ouro: O papel na sessão de suporte é ESTRITAMENTE 'SUPPORT_AUTHORIZED'.
+      // Mesmo que o usuário seja SUPER_ADMIN no banco, seu papel nesta requisição NUNCA é SUPER_ADMIN!
+      req.user = {
+        id: technicianUser.id,
+        cpf: technicianUser.cpf,
+        name: technicianUser.name,
+        role: 'SUPPORT_AUTHORIZED',
+        companyId: grant.companyId,
+        teamId: null,
+        photographerCode: null,
+        actorId: technicianUser.id,
+        actorRole: 'SUPPORT_AUTHORIZED',
+        effectiveCompanyId: grant.companyId,
+        effectiveRole: 'SUPPORT_AUTHORIZED',
+        supportGrantId: grant.id,
+        supportScope: grant.scope,
+        isTemporarySupportSession: true,
+      };
+
+      // ── Guarda de Escopo e Limites da Sessão de Suporte ─────────────────
+      const targetCompanyId = req.params.companyId || req.query.companyId || req.body?.companyId;
+      if (targetCompanyId && typeof targetCompanyId === 'string' && targetCompanyId !== grant.companyId) {
+        res.status(403).json({
+          error: 'SUPPORT_COMPANY_MISMATCH',
+          message: 'Sessão de suporte autorizada restrita exclusivamente à empresa da concessão.',
+        });
+        return;
+      }
+
+      const normalizedPath = ((req.baseUrl || '') + (req.path || '')).toLowerCase();
+
+      // Bloqueio de backups
+      if (normalizedPath.includes('/backup')) {
+        res.status(403).json({
+          error: 'SUPPORT_BACKUP_FORBIDDEN',
+          message: 'Sessões de suporte não têm autorização para download ou restauração de backups.',
+        });
+        return;
+      }
+
+      // Bloqueio de faturamento da plataforma, taxas e painel superadmin
+      if (
+        normalizedPath.includes('/owner/billing') ||
+        normalizedPath.includes('/closing') ||
+        normalizedPath.includes('/owner/rates') ||
+        normalizedPath.includes('/company-platform-rates') ||
+        normalizedPath.includes('/superadmin') ||
+        normalizedPath.includes('/owner')
+      ) {
+        res.status(403).json({
+          error: 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN',
+          message: 'Ações financeiras, fechamento de faturamento e configuração de taxas são proibidas para sessões de suporte.',
+        });
+        return;
+      }
+
+      // Bloqueio de mutações financeiras (pagamentos, baixas, estornos)
+      if (
+        (normalizedPath.includes('/finance') ||
+          normalizedPath.includes('/payment') ||
+          normalizedPath.includes('/refund')) &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
+      ) {
+        res.status(403).json({
+          error: 'SUPPORT_FINANCIAL_MUTATION_FORBIDDEN',
+          message: 'Sessões de suporte não podem registrar pagamentos, estornos ou baixas financeiras.',
+        });
+        return;
+      }
+
+      // Bloqueio de alteração de credenciais/senhas
+      if (
+        normalizedPath.includes('/password') &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
+      ) {
+        res.status(403).json({
+          error: 'SUPPORT_CREDENTIAL_CHANGE_FORBIDDEN',
+          message: 'Sessões de suporte não podem alterar senhas ou credenciais de usuários.',
+        });
+        return;
+      }
+
+      // Escopo READ_ONLY bloqueia qualquer mutação
+      if (
+        grant.scope === 'READ_ONLY' &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase())
+      ) {
+        res.status(403).json({
+          error: 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN',
+          message: 'Sessão de suporte em modo READ_ONLY não pode realizar mutações (POST/PUT/PATCH/DELETE).',
+        });
+        return;
+      }
+
+      next();
+      return;
+    }
+
+    // =========================================================================
+    // 2. IMPERSONAÇÃO LEGADA (AGORA EXIGE CONCESSÃO DE SUPORTE ATIVA)
+    // =========================================================================
     if (decoded.actorId && decoded.actorRole === 'SUPER_ADMIN') {
       const actor = await getPrisma().user.findUnique({
         where: { id: decoded.actorId },
@@ -106,25 +295,49 @@ export const authenticateToken = async (
         return;
       }
 
+      // Validação de concessão ativa para impedir que impersonação contorne autorização
+      const activeGrant = await getPrisma().supportAccessGrant.findFirst({
+        where: {
+          companyId: targetCompany.id,
+          requestedByUserId: actor.id,
+          status: 'ACTIVE',
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+      });
+
+      if (!activeGrant) {
+        res.status(403).json({
+          error: 'SUPPORT_GRANT_REQUIRED',
+          message: 'Acesso à empresa exige solicitação prévia e aprovação formal através da Central de Suporte.',
+        });
+        return;
+      }
+
       req.user = {
         id: actor.id,
         cpf: actor.cpf,
-        role: decoded.effectiveRole || 'COMPANY_ADMIN',
+        role: 'SUPPORT_AUTHORIZED', // Converte para o perfil controlado de suporte
         companyId: targetCompany.id,
         teamId: null,
         name: actor.name,
         photographerCode: null,
         actorId: actor.id,
-        actorRole: 'SUPER_ADMIN',
+        actorRole: 'SUPPORT_AUTHORIZED',
         effectiveCompanyId: targetCompany.id,
-        effectiveRole: decoded.effectiveRole || 'COMPANY_ADMIN',
+        effectiveRole: 'SUPPORT_AUTHORIZED',
+        supportGrantId: activeGrant.id,
+        supportScope: activeGrant.scope,
+        isTemporarySupportSession: true,
       };
 
       next();
       return;
     }
 
-    // Revalidação padrão em tempo real no banco de dados
+    // =========================================================================
+    // 3. REVALIDAÇÃO PADRÃO EM TEMPO REAL NO BANCO DE DADOS
+    // =========================================================================
     const user = await getPrisma().user.findUnique({
       where: { id: decoded.id },
       include: { company: true },
@@ -154,7 +367,6 @@ export const authenticateToken = async (
       }
     }
 
-    // O papel e a empresa vêm EXCLUSIVAMENTE do banco de dados, ignorando claims antigas ou adulteradas
     req.user = {
       id: user.id,
       cpf: user.cpf,
@@ -181,9 +393,29 @@ export const requireRoles = (allowedRoles: string[], customErrorMessage?: string
 
     if (allowedRoles.includes(req.user.role)) {
       next();
-    } else {
-      res.status(403).json({ error: customErrorMessage || `Forbidden: Requires one of [${allowedRoles.join(', ')}] role` });
+      return;
     }
+
+    // Sessão de suporte autorizada tem acesso operacional a rotas da empresa (ADMIN, COMPANY_ADMIN, OPERATOR, etc.)
+    // Jamais concede acesso a rotas que exigem estritamente SUPER_ADMIN
+    if (
+      req.user.role === 'SUPPORT_AUTHORIZED' &&
+      req.user.isTemporarySupportSession &&
+      !allowedRoles.includes('SUPER_ADMIN') &&
+      (allowedRoles.includes('COMPANY_ADMIN') ||
+        allowedRoles.includes('ADMIN') ||
+        allowedRoles.includes('SUPERVISOR') ||
+        allowedRoles.includes('SELLER_MANAGER') ||
+        allowedRoles.includes('OPERATOR') ||
+        allowedRoles.includes('SELLER'))
+    ) {
+      next();
+      return;
+    }
+
+    res.status(403).json({
+      error: customErrorMessage || `Forbidden: Requires one of [${allowedRoles.join(', ')}] role`,
+    });
   };
 };
 

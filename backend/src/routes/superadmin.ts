@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../middleware/authMiddleware';
-import jwt from 'jsonwebtoken';
+import { claimSupportSessionToken } from '../services/supportCentralService';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -57,7 +57,8 @@ router.put('/companies/:id/toggle', authenticateToken, requireSuperAdmin, async 
   }
 });
 
-// Impersonate Company (Generate token for a specific company as Super Admin)
+// Impersonate Company — Substituído por acesso de suporte formalmente autorizado pela empresa
+// Impede contornar a aprovação da empresa com token amplo de 12h
 router.post('/impersonate/:companyId', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { companyId } = req.params;
@@ -69,31 +70,56 @@ router.post('/impersonate/:companyId', authenticateToken, requireSuperAdmin, asy
     }
 
     if (!company.isActive) {
-      res.status(400).json({ error: 'Cannot impersonate an inactive company' });
+      res.status(400).json({ error: 'Cannot access an inactive company' });
       return;
     }
 
-    const actorId = req.user?.id || 'superadmin';
+    const actorId = req.user?.id;
+    if (!actorId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
 
-    // Generate a temporary token acting as COMPANY_ADMIN for that company
-    const token = jwt.sign(
-      { 
-        id: actorId, 
-        cpf: req.user?.cpf || null,
-        actorId: actorId,
-        actorRole: 'SUPER_ADMIN',
-        role: 'COMPANY_ADMIN',
+    // 1. Verifica se existe concessão de suporte ativa aprovada formalmente pela empresa dona dos dados
+    const activeGrant = await prisma.supportAccessGrant.findFirst({
+      where: {
         companyId: company.id,
-        effectiveCompanyId: company.id,
-        effectiveRole: 'COMPANY_ADMIN'
+        requestedByUserId: actorId,
+        status: 'ACTIVE',
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
       },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '12h' }
-    );
+      orderBy: { grantedAt: 'desc' },
+    });
 
-    res.json({ token, company });
-  } catch (error) {
-    console.error('Error impersonating company:', error);
+    if (!activeGrant) {
+      res.status(403).json({
+        error: 'SUPPORT_GRANT_REQUIRED',
+        message: 'Acesso ao ambiente da empresa exige solicitação prévia e aprovação formal através da Central de Suporte. Concessão ativa não encontrada.',
+      });
+      return;
+    }
+
+    // 2. Emite sessão de suporte autorizada e restrita ao escopo aprovado
+    const clientIp = (req.ip || req.socket.remoteAddress || 'unknown').substring(0, 45);
+    const session = await claimSupportSessionToken({
+      grantId: activeGrant.id,
+      technicianUserId: actorId,
+      ipAddress: clientIp,
+    });
+
+    res.json({
+      message: 'Sessão de suporte autorizada iniciada com sucesso.',
+      token: session.token,
+      grant: session.grant,
+      company,
+    });
+  } catch (error: any) {
+    if (error.status === 403) {
+      res.status(403).json({ error: error.message });
+      return;
+    }
+    console.error('Error starting authorized support session:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

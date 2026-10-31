@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import {
   authenticateToken,
   requireSuperAdmin,
+  requireCapability,
   AuthRequest,
 } from '../middleware/authMiddleware';
 import {
@@ -12,6 +13,7 @@ import {
   updateTicketStatus,
   requestSupportAccessGrant,
   revokeSupportAccessGrant,
+  claimSupportSessionToken,
 } from '../services/supportCentralService';
 import { getAggregatedOperationalMetrics } from '../services/operationalMetricsService';
 import {
@@ -30,6 +32,7 @@ const prisma = new PrismaClient();
 // Todas as rotas de suporte do proprietário exigem SUPER_ADMIN
 router.use(authenticateToken);
 router.use(requireSuperAdmin);
+router.use(requireCapability('TECHNICAL_SUPPORT'));
 
 // 1. Visão geral de chamados de todas as empresas
 router.get('/tickets', async (req: AuthRequest, res: Response): Promise<void> => {
@@ -188,6 +191,33 @@ router.get('/grants', async (req: AuthRequest, res: Response): Promise<void> => 
 // =========================================================================
 
 // 7. Status operacional agregado
+
+// 6b. Reivindicar token de sessão de suporte autorizada (pelo técnico solicitante)
+router.post('/grants/:id/claim-session', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const grantId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const clientIp = (req.ip || req.socket.remoteAddress || 'unknown').substring(0, 45);
+
+    const session = await claimSupportSessionToken({
+      grantId,
+      technicianUserId: user.id,
+      ipAddress: clientIp,
+    });
+
+    res.json({
+      success: true,
+      message: 'Sessão de suporte autorizada iniciada com sucesso.',
+      token: session.token,
+      expiresAt: session.expiresAt,
+      grant: session.grant,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Erro ao iniciar sessão de suporte.' });
+  }
+});
+
+// 7. Status operacional agregado
 router.get('/operational-metrics', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { companyId, startDate, endDate } = req.query;
@@ -272,6 +302,57 @@ router.post('/internal-alerts/:id/ack', async (req: AuthRequest, res: Response):
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Erro ao reconhecer alerta.' });
+  }
+});
+
+
+// 13. Anexar arquivo ao chamado (técnico Lumora — suporte a anexos internos)
+router.post('/tickets/:id/attachments', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const ticketId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const ticket = await prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { id: true, companyId: true },
+    });
+
+    if (!ticket) {
+      res.status(404).json({ error: 'Chamado não encontrado.' });
+      return;
+    }
+
+    const { fileName, fileSizeBytes, mimeType, storageKey, messageId, isInternalOnly } = req.body;
+    if (!fileName || !storageKey) {
+      res.status(400).json({ error: 'fileName e storageKey são obrigatórios.' });
+      return;
+    }
+
+    const size = Number(fileSizeBytes) || 0;
+    if (size > 10 * 1024 * 1024) {
+      res.status(400).json({ error: 'Arquivo excede o limite máximo permitido de 10 MB.' });
+      return;
+    }
+
+    const attachment = await prisma.supportTicketAttachment.create({
+      data: {
+        ticketId,
+        messageId: messageId || null,
+        fileName: String(fileName).trim(),
+        fileSize: size,
+        mimeType: mimeType || 'application/octet-stream',
+        storageUrl: storageKey,
+        isVoluntary: false,
+        isSanitized: true,
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: isInternalOnly ? 'Anexo técnico interno registrado.' : 'Arquivo anexado com sucesso.',
+      attachment,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Erro ao anexar arquivo.' });
   }
 });
 

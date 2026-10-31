@@ -300,4 +300,72 @@ router.post('/grants/:id/revoke', async (req: AuthRequest, res: Response): Promi
   }
 });
 
+
+// 9. Anexar arquivo voluntário ao chamado (pela empresa)
+router.post('/tickets/:id/attachments', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user || !user.id) {
+      res.status(401).json({ error: 'Usuário não autenticado.' });
+      return;
+    }
+
+    const ticketId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const ticket = await prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: { id: true, companyId: true },
+    });
+
+    if (!ticket) {
+      res.status(404).json({ error: 'Chamado não encontrado.' });
+      return;
+    }
+
+    const isSuperAdmin = user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && user.companyId && ticket.companyId !== user.companyId) {
+      res.status(403).json({ error: 'Acesso não autorizado para anexar arquivo a este chamado.' });
+      return;
+    }
+
+    const { fileName, fileSizeBytes, mimeType, storageKey, messageId } = req.body;
+    if (!fileName || !storageKey) {
+      res.status(400).json({ error: 'fileName e storageKey são obrigatórios.' });
+      return;
+    }
+
+    const size = Number(fileSizeBytes) || 0;
+    if (size > 10 * 1024 * 1024) {
+      res.status(400).json({ error: 'Arquivo excede o limite máximo permitido de 10 MB.' });
+      return;
+    }
+
+    const allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain'];
+    if (mimeType && !allowedMime.includes(mimeType)) {
+      res.status(400).json({ error: `Formato de arquivo não permitido (${mimeType}). Permitidos: JPG, PNG, WEBP, PDF, TXT.` });
+      return;
+    }
+
+    const attachment = await prisma.supportTicketAttachment.create({
+      data: {
+        ticketId,
+        messageId: messageId || null,
+        fileName: sanitizeDiagnosticInfo(String(fileName).trim()),
+        fileSize: size,
+        mimeType: mimeType || 'application/octet-stream',
+        storageUrl: storageKey,
+        isVoluntary: true,
+        isSanitized: true,
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Arquivo anexado com sucesso.',
+      attachment,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message || 'Erro ao anexar arquivo.' });
+  }
+});
+
 export default router;

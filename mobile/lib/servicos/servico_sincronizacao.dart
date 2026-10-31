@@ -675,4 +675,81 @@ class SyncService extends ChangeNotifier {
       }
     });
   }
+
+  /// Envia telemetria técnica mínima das filas offline para a Central do Proprietário.
+  /// REGRAS ESTRITAS DE PRIVACIDADE:
+  /// - Envia apenas quantitativos de requisições pendentes, versão, build, plataforma e estado de rede.
+  /// - NUNCA envia fotos, comprovantes, nomes, CPFs, coordenadas geográficas ou dados do payload.
+  /// - Controlado por frequência: envia no máximo 1 vez a cada 15 minutos (a menos que [force] seja true).
+  Future<void> sendDeviceTelemetry({bool force = false}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastSentStr = prefs.getString('last_telemetry_sent_at');
+      final now = DateTime.now();
+
+      if (!force && lastSentStr != null) {
+        final lastSent = DateTime.tryParse(lastSentStr);
+        if (lastSent != null && now.difference(lastSent).inMinutes < 15) {
+          return; // Throttled
+        }
+      }
+
+      int salesPending = 0;
+      int nonSalesPending = 0;
+      int uploadsPending = 0;
+      int otherPending = 0;
+
+      for (final r in _pendingRequests) {
+        if (r.type == 'REGISTER_SALE') {
+          salesPending++;
+        } else if (r.type == 'REGISTER_NONSALE') {
+          nonSalesPending++;
+        } else if (r.type == 'UPLOAD_RECEIPT') {
+          uploadsPending++;
+        } else {
+          otherPending++;
+        }
+      }
+
+      String platformName = 'UNKNOWN';
+      try {
+        if (Platform.isAndroid) {
+          platformName = 'ANDROID';
+        } else if (Platform.isIOS) {
+          platformName = 'IOS';
+        } else {
+          platformName = 'WEB';
+        }
+      } catch (_) {
+        platformName = 'WEB';
+      }
+
+      String? deviceId = prefs.getString('device_unique_id');
+      if (deviceId == null || deviceId.isEmpty) {
+        deviceId = generateUuid();
+        await prefs.setString('device_unique_id', deviceId);
+      }
+
+      await apiService.reportDeviceTelemetry({
+        'deviceId': deviceId,
+        'platform': platformName,
+        'appVersion': '1.0.24',
+        'buildNumber': 35,
+        'pendingOfflineCount': _pendingRequests.length,
+        'pendingSummary': {
+          'sales': salesPending,
+          'nonSales': nonSalesPending,
+          'receiptUploads': uploadsPending,
+          'other': otherPending,
+        },
+        'connectivityStatus': _isOnline ? 'CONNECTED' : 'OFFLINE',
+      });
+
+      await prefs.setString('last_telemetry_sent_at', now.toIso8601String());
+    } catch (e) {
+      if (kDebugMode) {
+        print('[SyncService] Falha silenciosa ao enviar telemetria: $e');
+      }
+    }
+  }
 }

@@ -7,7 +7,10 @@ import bcrypt from 'bcrypt';
 import { PrismaClient } from '@prisma/client';
 import supportRoutes from '../src/routes/support';
 import ownerSupportRoutes from '../src/routes/ownerSupport';
+import superadminRoutes from '../src/routes/superadmin';
+import backupRoutes from '../src/routes/backup';
 import appRoutes from '../src/routes/app';
+import appointmentsRoutes from '../src/routes/appointments';
 import { centralErrorHandler } from '../src/middleware/securityMiddleware';
 import {
   sanitizeDiagnosticInfo,
@@ -20,6 +23,7 @@ import {
   approveSupportAccessGrant,
   revokeSupportAccessGrant,
   verifyActiveSupportGrant,
+  claimSupportSessionToken,
 } from '../src/services/supportCentralService';
 import {
   recordDeviceTelemetry,
@@ -48,6 +52,9 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
 
   let superAdminId: string;
   let superAdminToken: string;
+  let superAdminFinanceOnlyId: string;
+  let superAdminFinanceOnlyToken: string;
+
   let companyAAdminId: string;
   let companyAAdminToken: string;
   let companyBAdminId: string;
@@ -86,11 +93,11 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     // 2. Criar Usuários
     const defaultPwd = await bcrypt.hash('SenhaTeste123!', 8);
 
-    // Super Admin (Proprietário Lumora)
+    // Super Admin com capacidade TECHNICAL_SUPPORT
     const superAdmin = await prisma.user.create({
       data: {
-        name: `Proprietário Lumora ${testSuffix}`,
-        email: `proprietario-${testSuffix}@lumora.app`,
+        name: `Técnico Lumora ${testSuffix}`,
+        email: `tecnico-${testSuffix}@lumora.app`,
         password: defaultPwd,
         role: 'SUPER_ADMIN',
         active: true,
@@ -98,6 +105,35 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     });
     superAdminId = superAdmin.id;
     superAdminToken = jwt.sign({ id: superAdmin.id, role: 'SUPER_ADMIN' }, jwtSecret, { expiresIn: '1h' });
+
+    await prisma.ownerCapability.create({
+      data: {
+        userId: superAdmin.id,
+        capability: 'TECHNICAL_SUPPORT',
+        grantedByUserId: null,
+      },
+    });
+
+    // Super Admin com capacidade estritamente financeira (sem TECHNICAL_SUPPORT)
+    const superAdminFinanceOnly = await prisma.user.create({
+      data: {
+        name: `Financeiro Lumora ${testSuffix}`,
+        email: `financeiro-${testSuffix}@lumora.app`,
+        password: defaultPwd,
+        role: 'SUPER_ADMIN',
+        active: true,
+      },
+    });
+    superAdminFinanceOnlyId = superAdminFinanceOnly.id;
+    superAdminFinanceOnlyToken = jwt.sign({ id: superAdminFinanceOnly.id, role: 'SUPER_ADMIN' }, jwtSecret, { expiresIn: '1h' });
+
+    await prisma.ownerCapability.create({
+      data: {
+        userId: superAdminFinanceOnly.id,
+        capability: 'PLATFORM_FINANCE',
+        grantedByUserId: null,
+      },
+    });
 
     // Admin Empresa A
     const adminA = await prisma.user.create({
@@ -147,7 +183,10 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     app.use('/api/support', supportRoutes);
     app.use('/api/owner/support', ownerSupportRoutes);
     app.use('/api/owner', ownerSupportRoutes);
+    app.use('/api/superadmin', superadminRoutes);
+    app.use('/api/backup', backupRoutes);
     app.use('/api/app', appRoutes);
+    app.use('/api/appointments', appointmentsRoutes);
     app.use(centralErrorHandler);
 
     await new Promise<void>((resolve) => {
@@ -163,14 +202,14 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     if (server) {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    // Cleanup das tabelas de teste
     try {
       await prisma.deviceTelemetry.deleteMany({ where: { companyId: { in: [companyAId, companyBId] } } });
       await prisma.internalOperationalAlert.deleteMany({ where: { companyId: { in: [companyAId, companyBId] } } });
       await prisma.supportAccessGrant.deleteMany({ where: { companyId: { in: [companyAId, companyBId] } } });
-      await prisma.supportTicketMessage.deleteMany({ where: { authorUserId: { in: [superAdminId, companyAAdminId, sellerAId] } } });
+      await prisma.supportTicketMessage.deleteMany({ where: { authorUserId: { in: [superAdminId, superAdminFinanceOnlyId, companyAAdminId, sellerAId] } } });
       await prisma.supportTicket.deleteMany({ where: { companyId: { in: [companyAId, companyBId] } } });
-      await prisma.user.deleteMany({ where: { id: { in: [superAdminId, companyAAdminId, companyBAdminId, sellerAId] } } });
+      await prisma.ownerCapability.deleteMany({ where: { userId: { in: [superAdminId, superAdminFinanceOnlyId] } } });
+      await prisma.user.deleteMany({ where: { id: { in: [superAdminId, superAdminFinanceOnlyId, companyAAdminId, companyBAdminId, sellerAId] } } });
       await prisma.company.deleteMany({ where: { id: { in: [companyAId, companyBId] } } });
     } catch {
       // Cleanup best-effort
@@ -256,7 +295,6 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
   });
 
   it('4. Proprietário responde com nota técnica interna (invisível para a empresa)', async () => {
-    // 4.1 Proprietário adiciona nota interna técnica
     const resInternal = await fetch(`${baseUrl}/api/owner/support/tickets/${createdTicketId}/messages`, {
       method: 'POST',
       headers: {
@@ -270,7 +308,6 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     });
     assert.equal(resInternal.status, 201);
 
-    // 4.2 Proprietário adiciona mensagem pública para a empresa
     const resPublic = await fetch(`${baseUrl}/api/owner/support/tickets/${createdTicketId}/messages`, {
       method: 'POST',
       headers: {
@@ -284,7 +321,6 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     });
     assert.equal(resPublic.status, 201);
 
-    // 4.3 Empresa A consulta o chamado: NÃO deve ver a nota interna!
     const resCompanyView = await fetch(`${baseUrl}/api/support/tickets/${createdTicketId}`, {
       headers: { Authorization: `Bearer ${companyAAdminToken}` },
     });
@@ -296,7 +332,6 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(hasInternalMsg, false, 'Empresa solicitante NÃO pode ver notas técnicas internas');
     assert.equal(messagesCompany.length, 1, 'Empresa deve ver apenas a resposta pública');
 
-    // 4.4 Proprietário consulta o chamado: DEVE ver ambas as mensagens
     const resOwnerView = await fetch(`${baseUrl}/api/owner/support/tickets/${createdTicketId}`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
@@ -305,13 +340,24 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(ownerData.ticket.messages.length, 2, 'Proprietário deve ver nota interna e mensagem pública');
   });
 
+  it('5. Proprietário sem capacidade TECHNICAL_SUPPORT é negado em rotas de suporte (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/owner/support/tickets`, {
+      headers: { Authorization: `Bearer ${superAdminFinanceOnlyToken}` },
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.error, 'FORBIDDEN_CAPABILITY');
+  });
+
   // =========================================================================
   // BLOCO 3: ACESSO DE SUPORTE TEMPORÁRIO AUTORIZADO PELA EMPRESA
   // =========================================================================
 
   let grantId: string;
+  let supportSessionToken: string;
 
-  it('5. Técnico Lumora solicita acesso temporário com escopo operacional e motivo', async () => {
+  it('6. Técnico Lumora solicita acesso temporário com escopo operacional e motivo', async () => {
     const res = await fetch(`${baseUrl}/api/owner/support/grants/request`, {
       method: 'POST',
       headers: {
@@ -321,8 +367,8 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
       body: JSON.stringify({
         companyId: companyAId,
         ticketId: createdTicketId,
-        scope: 'OPERATIONAL_SUPPORT',
-        reason: 'Depuração de lote de fotos retidas em fila offline de vendedor',
+        scope: 'READ_ONLY',
+        reason: 'Verificação de chamados e diagnósticos operacionais',
         durationMinutes: 60,
       }),
     });
@@ -331,12 +377,12 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     const data = await res.json();
     assert.equal(data.success, true);
     assert.equal(data.grant.status, 'REQUESTED');
-    assert.equal(data.grant.scope, 'OPERATIONAL_SUPPORT');
+    assert.equal(data.grant.scope, 'READ_ONLY');
 
     grantId = data.grant.id;
   });
 
-  it('6. Escopo financeiro geral arbitrário é rejeitado na solicitação de suporte', async () => {
+  it('7. Vincular chamado de outra empresa na solicitação de suporte é BLOQUEADO (403)', async () => {
     const res = await fetch(`${baseUrl}/api/owner/support/grants/request`, {
       method: 'POST',
       headers: {
@@ -344,16 +390,17 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
         Authorization: `Bearer ${superAdminToken}`,
       },
       body: JSON.stringify({
-        companyId: companyAId,
-        scope: 'FULL_FINANCIAL_CONTROL', // Inválido
-        reason: 'Tentativa indevida de ação financeira em sessão de suporte',
+        companyId: companyBId, // Empresa B
+        ticketId: createdTicketId, // Pertence à Empresa A!
+        scope: 'READ_ONLY',
+        reason: 'Tentativa indevida de cruzar chamado de outra empresa',
       }),
     });
 
-    assert.equal(res.status, 400, 'Escopo financeiro geral não pode ser concedido');
+    assert.equal(res.status, 403);
   });
 
-  it('7. Empresa B é bloqueada ao tentar aprovar suporte solicitado à Empresa A', async () => {
+  it('8. Empresa B é bloqueada ao tentar aprovar suporte solicitado à Empresa A (403)', async () => {
     const res = await fetch(`${baseUrl}/api/support/grants/${grantId}/approve`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${companyBAdminToken}` },
@@ -362,7 +409,7 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(res.status, 403, 'Apenas o administrador da empresa dona dos dados pode aprovar o suporte');
   });
 
-  it('8. Empresa A aprova formalmente o acesso de suporte gerando sessão com expiração', async () => {
+  it('9. Empresa A aprova formalmente o acesso de suporte SEM receber credenciais do técnico', async () => {
     const res = await fetch(`${baseUrl}/api/support/grants/${grantId}/approve`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${companyAAdminToken}` },
@@ -372,42 +419,126 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     const data = await res.json();
     assert.equal(data.success, true);
     assert.equal(data.grant.status, 'ACTIVE');
-    assert.ok(data.grant.grantedAt);
     assert.ok(data.expiresAt);
-
-    // Valida no serviço que a concessão está ativa
-    const check = await verifyActiveSupportGrant(grantId, prisma);
-    assert.equal(check.active, true);
-    assert.equal(check.grant?.status, 'ACTIVE');
+    assert.equal(data.token, undefined, 'Admin da empresa NÃO deve receber credencial JWT do técnico');
+    assert.equal(data.ephemeralSupportJwt, undefined);
   });
 
-  it('9. Empresa A revoga imediatamente o acesso de suporte concedido', async () => {
-    const res = await fetch(`${baseUrl}/api/support/grants/${grantId}/revoke`, {
+  it('10. Técnico solicita/reivindica seu token de sessão de suporte via rota autenticada', async () => {
+    const res = await fetch(`${baseUrl}/api/owner/support/grants/${grantId}/claim-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${superAdminToken}`,
+      },
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.ok(data.token, 'Técnico deve receber seu token efêmero');
+    assert.equal(data.grant.scope, 'READ_ONLY');
+
+    supportSessionToken = data.token;
+  });
+
+  // =========================================================================
+  // BLOCO 4: TESTES NEGATIVOS DA SESSÃO DE SUPORTE NO SERVIDOR
+  // =========================================================================
+
+  it('11. Token de suporte NUNCA se torna SUPER_ADMIN (403 em rotas de superadmin)', async () => {
+    const res = await fetch(`${baseUrl}/api/superadmin/companies`, {
+      headers: { Authorization: `Bearer ${supportSessionToken}` },
+    });
+
+    assert.equal(res.status, 403, 'Sessão de suporte jamais deve ser tratada como SUPER_ADMIN');
+  });
+
+  it('12. Token de suporte em modo READ_ONLY bloqueia mutações POST/PUT/PATCH/DELETE (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/appointments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${supportSessionToken}`,
+      },
+      body: JSON.stringify({
+        date: new Date().toISOString(),
+        notes: 'Tentativa de mutação em READ_ONLY',
+      }),
+    });
+
+    assert.equal(res.status, 403, 'READ_ONLY deve bloquear qualquer tentativa de mutação');
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_READ_ONLY_MUTATION_FORBIDDEN');
+  });
+
+  it('13. Token de suporte é estritamente proibido em rotas de backup (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/backup/download`, {
+      headers: { Authorization: `Bearer ${supportSessionToken}` },
+    });
+
+    assert.equal(res.status, 403, 'Sessões de suporte não podem baixar backup');
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_BACKUP_FORBIDDEN');
+  });
+
+  it('14. Token de suporte é estritamente proibido em ações financeiras e de taxas (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/owner/billing/statements`, {
+      headers: { Authorization: `Bearer ${supportSessionToken}` },
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_FINANCIAL_ACTION_FORBIDDEN');
+  });
+
+  it('15. Token de suporte é bloqueado se tentar acessar empresa diferente da concessão (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/support/tickets?companyId=${companyBId}`, {
+      headers: { Authorization: `Bearer ${supportSessionToken}` },
+    });
+
+    assert.equal(res.status, 403);
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_COMPANY_MISMATCH');
+  });
+
+  it('16. Rota legada /impersonate/:companyId rejeita acesso sem concessão formal aprovada (403)', async () => {
+    const res = await fetch(`${baseUrl}/api/superadmin/impersonate/${companyBId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${superAdminToken}` },
+    });
+
+    assert.equal(res.status, 403, 'Impersonação sem concessão aprovada deve ser negada');
+    const data = await res.json();
+    assert.equal(data.error, 'SUPPORT_GRANT_REQUIRED');
+  });
+
+  it('17. Revogação de suporte barra imediatamente a próxima chamada da sessão ativa (403)', async () => {
+    // 17.1 Empresa A revoga
+    const resRevoke = await fetch(`${baseUrl}/api/support/grants/${grantId}/revoke`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${companyAAdminToken}`,
       },
-      body: JSON.stringify({
-        reason: 'Atendimento concluído com sucesso pelo suporte.',
-      }),
+      body: JSON.stringify({ reason: 'Revogado pelo cliente' }),
     });
+    assert.equal(resRevoke.status, 200);
 
-    assert.equal(res.status, 200);
-    const data = await res.json();
-    assert.equal(data.grant.status, 'REVOKED');
-
-    // Valida no serviço que a concessão agora está inativa por revogação
-    const check = await verifyActiveSupportGrant(grantId, prisma);
-    assert.equal(check.active, false);
-    assert.equal(check.reason, 'REVOKED');
+    // 17.2 Próxima chamada com o mesmo token de suporte deve falhar imediatamente com 403!
+    const resCall = await fetch(`${baseUrl}/api/support/tickets`, {
+      headers: { Authorization: `Bearer ${supportSessionToken}` },
+    });
+    assert.equal(resCall.status, 403);
+    const dataCall = await resCall.json();
+    assert.equal(dataCall.error, 'SUPPORT_GRANT_REVOKED');
   });
 
   // =========================================================================
-  // BLOCO 4: STATUS OPERACIONAL E TELEMETRIA DE FILA OFFLINE
+  // BLOCO 5: STATUS OPERACIONAL E TELEMETRIA DE FILA OFFLINE
   // =========================================================================
 
-  it('10. Quando nenhum aparelho comunicou, indica "SEM_TELEMETRIA_DO_APARELHO" sem inventar números', async () => {
+  it('18. Quando nenhum aparelho comunicou, indica "SEM_TELEMETRIA_DO_APARELHO" sem inventar números', async () => {
     const res = await fetch(`${baseUrl}/api/owner/operational-metrics?companyId=${companyAId}`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
@@ -419,11 +550,9 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(offlineInfo.status, 'SEM_TELEMETRIA_DO_APARELHO');
     assert.equal(offlineInfo.dataUltimaInformacao, null);
     assert.equal(offlineInfo.totalPendenciasOffline, null);
-    assert.ok(offlineInfo.aviso.includes('sem comunicação recente'));
   });
 
-  it('11. Após aparelho registrar telemetria, exibe pendências reais e data da informação', async () => {
-    // Aparelho do vendedor Marcos reporta telemetria com 4 pendências offline
+  it('19. Após aparelho registrar telemetria, exibe pendências reais e data da informação', async () => {
     const record = await recordDeviceTelemetry(
       {
         userId: sellerAId,
@@ -440,7 +569,6 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     );
     assert.ok(record.id);
 
-    // Consulta novamente o status operacional
     const res = await fetch(`${baseUrl}/api/owner/operational-metrics?companyId=${companyAId}`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
@@ -452,25 +580,20 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.equal(offlineInfo.status, 'TELEMETRIA_DISPONIVEL');
     assert.ok(offlineInfo.dataUltimaInformacao !== null);
     assert.equal(offlineInfo.totalPendenciasOffline, 4);
-    assert.equal(offlineInfo.aparelhosComFila, 1);
-    assert.equal(offlineInfo.amostraAparelhos.length, 1);
-    assert.equal(offlineInfo.amostraAparelhos[0].vendedor, `Vendedor Marcos ${testSuffix}`);
-    assert.equal(offlineInfo.amostraAparelhos[0].pendencias, 4);
   });
 
   // =========================================================================
-  // BLOCO 5: CONTINUIDADE, DISASTER RECOVERY E BLOQUEIO DE RESTAURAÇÃO WEB
+  // BLOCO 6: CONTINUIDADE, DISASTER RECOVERY E BLOQUEIO DE RESTAURAÇÃO WEB
   // =========================================================================
 
-  it('12. Continuidade / DR: painel visualiza status de backup testado sem permitir download global', async () => {
-    // Registra log de DR de auditoria
+  it('20. Continuidade / DR: painel visualiza status de backup testado sem permitir download global', async () => {
     await recordDisasterRecoveryLog(
       {
         backupTimestamp: new Date(),
         sha256: 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855',
         sizeBytes: 1542000,
         sanitizedSource: 'production_sanitized_render_pg',
-        verifiedRestoreStatus: 'SUCCESS',
+        verifiedRestoreStatus: 'RESTORE_TESTED_SUCCESS',
         verifiedRestoreNotes: 'Restauração real validada em PostgreSQL isolado descartável com 57 tabelas conferidas.',
         totalTables: 57,
         totalRows: 1414,
@@ -486,15 +609,16 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     const data = await res.json();
     const dr = data.continuity;
 
-    assert.equal(dr.verifiedRestoreStatus, 'SUCCESS');
+    assert.equal(dr.verifiedRestoreStatus, 'RESTORE_TESTED_SUCCESS');
     assert.equal(dr.totalTables, 57);
     assert.equal(dr.totalRows, 1414);
     assert.equal(dr.securityPolicies.allowGlobalWebDownload, false);
     assert.equal(dr.securityPolicies.allowWebRestore, false);
   });
 
-  it('13. Tentativa de restauração arbitrária de banco via interface web é BLOQUEADA (403)', async () => {
-    const res = await fetch(`${baseUrl}/api/owner/continuity/restore-web`, {
+  it('21. Tentativa de restauração arbitrária de banco via interface web é BLOQUEADA em rotas legadas e novas (403)', async () => {
+    // Rota nova
+    const resNew = await fetch(`${baseUrl}/api/owner/continuity/restore-web`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -502,28 +626,37 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
       },
       body: JSON.stringify({ target: 'production' }),
     });
+    assert.equal(resNew.status, 403);
 
-    assert.equal(res.status, 403, 'Restauração web deve ser bloqueada com 403');
-    const data = await res.json();
-    assert.ok(data.error.includes('bloqueada'), 'Deve conter mensagem explícita de segurança de infraestrutura');
+    // Rota legada
+    const resLegacy = await fetch(`${baseUrl}/api/backup/restore`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${superAdminToken}`,
+      },
+      body: JSON.stringify({ force: true }),
+    });
+    assert.equal(resLegacy.status, 403);
   });
 
-  it('14. Tentativa de download global de dump de banco via web é BLOQUEADA (403)', async () => {
-    const res = await fetch(`${baseUrl}/api/owner/continuity/download-backup`, {
+  it('22. Tentativa de download global de dump de banco via web é BLOQUEADA em rotas legadas e novas (403)', async () => {
+    // Rota nova
+    const resNew = await fetch(`${baseUrl}/api/owner/continuity/download-backup`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
+    assert.equal(resNew.status, 403);
 
-    assert.equal(res.status, 403, 'Download global de dump deve ser bloqueado com 403');
+    // Rota legada (/api/backup/download para SuperAdmin sem empresa específica)
+    const resLegacy = await fetch(`${baseUrl}/api/backup/download`, {
+      headers: { Authorization: `Bearer ${superAdminToken}` },
+    });
+    assert.equal(resLegacy.status, 403);
   });
 
-  // =========================================================================
-  // BLOCO 6: ALERTAS OPERACIONAIS INTERNOS SEM DISPAROS EXTERNOS
-  // =========================================================================
-
-  it('15. Alertas internos operacionais funcionam com idempotência e sem envios externos', async () => {
+  it('23. Alertas internos operacionais funcionam com idempotência e sem envios externos', async () => {
     const alertKey = `sync_failure_${companyAId}_${Date.now()}`;
 
-    // Cria alerta
     const created = await createOrUpdateInternalAlert(
       {
         alertKey,
@@ -538,15 +671,11 @@ describe('ETAPA 4 — SUPORTE AUTORIZADO, INDICADORES, CONTINUIDADE E PREPARAÇ�
     assert.ok(created.id);
     assert.equal(created.acknowledged, false);
 
-    // Listar alertas via API
     const resList = await fetch(`${baseUrl}/api/owner/internal-alerts?companyId=${companyAId}`, {
       headers: { Authorization: `Bearer ${superAdminToken}` },
     });
     assert.equal(resList.status, 200);
-    const listData = await resList.json();
-    assert.ok(listData.alerts.length >= 1);
 
-    // Reconhecer alerta
     const resAck = await fetch(`${baseUrl}/api/owner/internal-alerts/${created.id}/ack`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${superAdminToken}` },

@@ -339,6 +339,20 @@ export async function requestSupportAccessGrant(
     throw err;
   }
 
+  if (params.ticketId) {
+    const ticket = await db.supportTicket.findUnique({ where: { id: params.ticketId }, select: { id: true, companyId: true } });
+    if (!ticket) {
+      const err: any = new Error('Chamado associado não encontrado.');
+      err.status = 404;
+      throw err;
+    }
+    if (ticket.companyId !== params.companyId) {
+      const err: any = new Error('Chamado informado pertence a outra empresa. Associação proibida.');
+      err.status = 403;
+      throw err;
+    }
+  }
+
   const durationMinutes = Math.min(Math.max(Number(params.durationMinutes) || 60, 15), 1440); // 15 min a 24 horas
 
   return db.supportAccessGrant.create({
@@ -402,27 +416,11 @@ export async function approveSupportAccessGrant(
     },
   });
 
-  // Emite token JWT de suporte efêmero estritamente amarrado ao escopo e empresa
-  const jwtSecret = process.env.JWT_SECRET || 'fallback_secret_only_for_tests';
-  const ephemeralSupportJwt = jwt.sign(
-    {
-      id: grant.requestedByUserId,
-      name: grant.requestedByName,
-      role: 'SUPPORT_AUTHORIZED',
-      supportGrantId: grant.id,
-      companyId: grant.companyId,
-      scope: grant.scope,
-      isTemporarySupportSession: true,
-    },
-    jwtSecret,
-    { expiresIn: `${grant.durationMinutes}m` }
-  );
-
+  // Não devolve credenciais de acesso do técnico ao administrador que apenas autoriza
   return {
     grant: updatedGrant,
-    rawSessionToken,
-    ephemeralSupportJwt,
     expiresAt,
+    status: 'ACTIVE',
   };
 }
 
@@ -488,4 +486,96 @@ export async function verifyActiveSupportGrant(grantId: string, db: PrismaClient
   }
 
   return { active: true, grant };
+}
+
+
+export async function claimSupportSessionToken(
+  params: {
+    grantId: string;
+    technicianUserId: string;
+    ipAddress?: string;
+  },
+  db: PrismaClient = prisma
+) {
+  const grant = await db.supportAccessGrant.findUnique({
+    where: { id: params.grantId },
+    include: {
+      company: { select: { id: true, name: true, isActive: true } },
+    },
+  });
+  if (!grant) {
+    const err: any = new Error('Concessão de suporte não encontrada.');
+    err.status = 404;
+    throw err;
+  }
+
+  if (grant.requestedByUserId !== params.technicianUserId) {
+    const err: any = new Error('Apenas o técnico solicitante pode reivindicar esta sessão de suporte.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (grant.status === 'REVOKED' || grant.revokedAt) {
+    const err: any = new Error('Esta concessão de suporte foi revogada pela empresa dona dos dados.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (grant.status !== 'ACTIVE') {
+    const err: any = new Error(`Concessão não está ativa para emissão de sessão (status: ${grant.status}). Aguarde autorização formal da empresa.`);
+    err.status = 403;
+    throw err;
+  }
+
+  if (grant.expiresAt && grant.expiresAt < new Date()) {
+    await db.supportAccessGrant.update({
+      where: { id: grant.id },
+      data: { status: 'EXPIRED' },
+    });
+    const err: any = new Error('Esta concessão de suporte já expirou.');
+    err.status = 403;
+    throw err;
+  }
+
+  if (!grant.company || grant.company.isActive === false) {
+    const err: any = new Error('Empresa associada está inativa.');
+    err.status = 403;
+    throw err;
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret || jwtSecret.trim() === '') {
+    const err: any = new Error('Erro crítico de configuração: JWT_SECRET não configurado.');
+    err.status = 500;
+    throw err;
+  }
+
+  const token = jwt.sign(
+    {
+      id: grant.requestedByUserId,
+      name: grant.requestedByName,
+      role: 'SUPPORT_AUTHORIZED',
+      supportGrantId: grant.id,
+      companyId: grant.companyId,
+      scope: grant.scope,
+      isTemporarySupportSession: true,
+      purpose: 'SUPPORT_SESSION',
+    },
+    jwtSecret,
+    { expiresIn: `${grant.durationMinutes}m` }
+  );
+
+  return {
+    token,
+    expiresAt: grant.expiresAt,
+    grant: {
+      id: grant.id,
+      companyId: grant.companyId,
+      companyName: grant.company.name,
+      scope: grant.scope,
+      reason: grant.reason,
+      status: grant.status,
+      expiresAt: grant.expiresAt,
+    },
+  };
 }
