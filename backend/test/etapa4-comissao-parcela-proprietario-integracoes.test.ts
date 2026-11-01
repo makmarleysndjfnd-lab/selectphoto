@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import http from 'http';
 import bcrypt from 'bcrypt';
 import { isProductionSafetyLocked } from '../src/services/asaasService';
+import { previewOrGetCompanyStatement } from '../src/services/platformBillingService';
 
 const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || 'test_jwt_secret_12345';
@@ -828,4 +829,399 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       assert.equal(auditDetails.provider, 'GEMINI');
     });
   });
+
+  describe('Bloco 5 — Competência Canônica Única de Comissões no Demonstrativo (Sem Dupla Contagem)', () => {
+    const compCanonicalId = 'comp_canon_' + uid;
+    const clientCanonicalId = 'client_canon_' + uid;
+    let agreementCanonicalId: string;
+    let paymentCanonicalId: string;
+    let paymentPartialId: string;
+
+    before(async () => {
+      // Cria empresa com contrato aprovado a 2,5% (2.500)
+      await prisma.company.create({
+        data: {
+          id: compCanonicalId,
+          name: 'Empresa Canonica Teste',
+          tradeName: 'Canonica Fotos',
+          cnpj: '45678901000199',
+          status: 'ACTIVE',
+        },
+      });
+
+      // Cria taxa contratual aprovada para a empresa
+      await prisma.companyPlatformRate.create({
+        data: {
+          companyId: compCanonicalId,
+          ratePercentage: 2.5,
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          reason: 'Taxa contratual canonica 2.5%',
+          createdByUserId: superAdminId,
+        },
+      });
+
+      // Cliente com nome e sequência elegíveis (sem marcadores de simulação)
+      await prisma.client.create({
+        data: {
+          id: clientCanonicalId,
+          companyId: compCanonicalId,
+          name: 'Colegio Alfa Real',
+          sequenceNumber: 'COL-REAL-2026',
+          city: 'Sao Paulo',
+          state: 'SP',
+        },
+      });
+
+      // Cria venda correspondente para o crediário
+      const sale = await prisma.sale.create({
+        data: {
+          id: `sale_canon_${uid}`,
+          companyId: compCanonicalId,
+          clientId: clientCanonicalId,
+          sellerId: sellerEmpresaId,
+          city: 'Sao Paulo',
+          product: 'Album Fotografico',
+          value: 1000,
+          paymentMethod: 'SPLIT',
+          paymentStatus: 'PAID',
+          status: 'PRONTO',
+          hasCover: true,
+          date: new Date('2026-10-10T12:00:00.000Z'),
+        },
+      });
+
+      // Contrato de crediário
+      const agr = await prisma.creditAgreement.create({
+        data: {
+          saleId: sale.id,
+          companyId: compCanonicalId,
+          clientId: clientCanonicalId,
+          sellerId: sellerEmpresaId,
+          buyerName: 'Responsavel Colegio Alfa',
+          buyerCpf: '11122233344',
+          street: 'Rua das Flores',
+          number: '100',
+          neighborhood: 'Centro',
+          city: 'Sao Paulo',
+          state: 'SP',
+          product: 'Album Fotografico',
+          totalSaleCents: 100000,
+          downPaymentCents: 35000,
+          financedPrincipalCents: 65000,
+          remainingPrincipalCents: 65000,
+          paidPrincipalCents: 0,
+          installmentsCount: 10,
+          periodicity: 'MONTHLY',
+          initialCommissionRate: 0.20,
+          installmentCommissionRate: 0.10,
+          status: 'ACTIVE',
+          firstDueDate: new Date('2026-10-10T12:00:00.000Z'),
+        },
+      });
+      agreementCanonicalId = agr.id;
+
+      // Cria parcelas
+      await prisma.creditInstallment.create({
+        data: {
+          agreementId: agr.id,
+          installmentNumber: 1,
+          dueDate: new Date('2026-10-10T12:00:00.000Z'),
+          amountCents: 6500,
+          paidCents: 6500,
+          status: 'PAID',
+          paidAt: new Date('2026-10-31T20:00:00.000Z'),
+        },
+      });
+
+      await prisma.creditInstallment.create({
+        data: {
+          agreementId: agr.id,
+          installmentNumber: 2,
+          dueDate: new Date('2026-11-10T12:00:00.000Z'),
+          amountCents: 6500,
+          paidCents: 3250,
+          status: 'PARTIALLY_PAID',
+          paidAt: new Date('2026-10-15T14:00:00.000Z'),
+        },
+      });
+    });
+
+    it('5.1 O exemplo canônico do prompt: pagamento em 31/10 com comissão registrada em 01/11 soma 650 centavos em outubro e ZERO em novembro', async () => {
+      // Pagamento com data efetiva em 31/10
+      const pay1 = await prisma.creditPayment.create({
+        data: {
+          agreementId: agreementCanonicalId,
+          companyId: compCanonicalId,
+          amountCents: 6500,
+          paymentMethod: 'PIX',
+          destination: 'COMPANY_ACCOUNT',
+          receivedByRole: 'ADMIN',
+          receiverUserId: companyAdminId,
+          paidAt: new Date('2026-10-31T20:00:00.000Z'), // Outubro
+          notes: 'Pagamento integral da 1a parcela',
+          externalPaymentId: 'pay_canon_oct_001',
+        },
+      });
+      paymentCanonicalId = pay1.id;
+
+      // Comissão registrada no banco com createdAt em 01/11
+      await prisma.creditCommission.create({
+        data: {
+          companyId: compCanonicalId,
+          agreementId: agreementCanonicalId,
+          paymentId: pay1.id,
+          sellerId: sellerEmpresaId,
+          amountCents: 650,
+          type: 'INSTALLMENT',
+          status: 'RELEASED',
+          createdAt: new Date('2026-11-01T02:00:00.000Z'), // Novembro
+        },
+      });
+
+      // Consulta demonstrativo de Outubro (2026-10)
+      const stOct = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-10' },
+        prisma
+      );
+      assert.equal(
+        (stOct.preview ?? stOct.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        650,
+        'Em outubro deve somar exatamente 650 centavos (data do pagamento)'
+      );
+
+      // Consulta demonstrativo de Novembro (2026-11)
+      const stNov = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-11' },
+        prisma
+      );
+      assert.equal(
+        (stNov.preview ?? stNov.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        0,
+        'Em novembro deve somar ZERO centavos (não duplicar comissão cujo pagamento é de outubro)'
+      );
+
+      // Validação via rota HTTP oficial do proprietário
+      const resHttpOct = await fetch(
+        `${baseUrl}/api/owner/billing/statements/preview?companyId=${compCanonicalId}&competence=2026-10`,
+        { headers: { Authorization: `Bearer ${superAdminToken}` } }
+      );
+      assert.equal(resHttpOct.status, 200);
+      const bodyHttpOct = await resHttpOct.json();
+      assert.equal(
+        (bodyHttpOct.preview ?? bodyHttpOct.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        650
+      );
+
+      const resHttpNov = await fetch(
+        `${baseUrl}/api/owner/billing/statements/preview?companyId=${compCanonicalId}&competence=2026-11`,
+        { headers: { Authorization: `Bearer ${superAdminToken}` } }
+      );
+      assert.equal(resHttpNov.status, 200);
+      const bodyHttpNov = await resHttpNov.json();
+      assert.equal(
+        (bodyHttpNov.preview ?? bodyHttpNov.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        0
+      );
+    });
+
+    it('5.2 Pagamento parcial e reenvio de parcela: comissão proporcional entra na competência do pagamento e reenvio com mesma chave não duplica', async () => {
+      // Pagamento parcial de 3.250 centavos em 15/10 gerando 325 centavos de comissão com createdAt em 01/11
+      const payPartial = await prisma.creditPayment.create({
+        data: {
+          agreementId: agreementCanonicalId,
+          companyId: compCanonicalId,
+          amountCents: 3250,
+          paymentMethod: 'PIX',
+          destination: 'COMPANY_ACCOUNT',
+          receivedByRole: 'ADMIN',
+          receiverUserId: companyAdminId,
+          paidAt: new Date('2026-10-15T14:00:00.000Z'), // Outubro
+          notes: 'Pagamento parcial da 2a parcela',
+          externalPaymentId: 'pay_canon_oct_part_002',
+          idempotencyKey: 'idem_key_part_123',
+        },
+      });
+      paymentPartialId = payPartial.id;
+
+      await prisma.creditCommission.create({
+        data: {
+          companyId: compCanonicalId,
+          agreementId: agreementCanonicalId,
+          paymentId: payPartial.id,
+          sellerId: sellerEmpresaId,
+          amountCents: 325,
+          type: 'INSTALLMENT',
+          status: 'RELEASED',
+          createdAt: new Date('2026-11-01T03:00:00.000Z'),
+          idempotencyKey: 'idem_comm_part_123',
+        },
+      });
+
+      // Tentativa de reenvio/duplicação com mesma chave de idempotência é barrada
+      await assert.rejects(
+        async () => {
+          await prisma.creditCommission.create({
+            data: {
+              companyId: compCanonicalId,
+              agreementId: agreementCanonicalId,
+              paymentId: payPartial.id,
+              sellerId: sellerEmpresaId,
+              amountCents: 325,
+              type: 'INSTALLMENT',
+              status: 'RELEASED',
+              createdAt: new Date('2026-11-01T03:00:00.000Z'),
+              idempotencyKey: 'idem_comm_part_123',
+            },
+          });
+        },
+        /Unique constraint failed/
+      );
+
+      // Agora Outubro tem 650 + 325 = 975 centavos
+      const stOct = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-10' },
+        prisma
+      );
+      assert.equal(
+        (stOct.preview ?? stOct.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        975
+      );
+
+      // Novembro continua ZERO centavos
+      const stNov = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-11' },
+        prisma
+      );
+      assert.equal(
+        (stNov.preview ?? stNov.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        0
+      );
+    });
+
+    it('5.3 Registro legado sem vínculo (paymentId = null) usa explicitamente createdAt como fallback: entra apenas na sua competência', async () => {
+      // Registro legado 1: sem paymentId, createdAt em 20/10
+      await prisma.creditCommission.create({
+        data: {
+          companyId: compCanonicalId,
+          agreementId: agreementCanonicalId,
+          paymentId: null, // Sem pagamento associado
+          sellerId: sellerEmpresaId,
+          amountCents: 400,
+          type: 'INSTALLMENT',
+          status: 'RELEASED',
+          createdAt: new Date('2026-10-20T10:00:00.000Z'), // Outubro
+        },
+      });
+
+      // Registro legado 2: sem paymentId, createdAt em 05/11
+      await prisma.creditCommission.create({
+        data: {
+          companyId: compCanonicalId,
+          agreementId: agreementCanonicalId,
+          paymentId: null, // Sem pagamento associado
+          sellerId: sellerEmpresaId,
+          amountCents: 500,
+          type: 'INSTALLMENT',
+          status: 'RELEASED',
+          createdAt: new Date('2026-11-05T10:00:00.000Z'), // Novembro
+        },
+      });
+
+      // Em outubro: 975 anteriores + 400 do legado de outubro = 1375 centavos
+      const stOct = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-10' },
+        prisma
+      );
+      assert.equal(
+        (stOct.preview ?? stOct.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        1375,
+        'Legado de outubro (400) deve entrar em outubro via fallback de createdAt'
+      );
+
+      // Em novembro: apenas os 500 do legado de novembro (zero das comissões com pagamento de outubro)
+      const stNov = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-11' },
+        prisma
+      );
+      assert.equal(
+        (stNov.preview ?? stNov.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        500,
+        'Legado de novembro (500) deve entrar em novembro via fallback de createdAt, sem resquícios de outubro'
+      );
+    });
+
+    it('5.4 Preservação de snapshot fechado: demonstrativo já fechado é retornado de forma imutável sem recálculo retroativo silencioso', async () => {
+      // Cria snapshot fechado para a competência 2026-10
+      await prisma.platformMonthlyStatement.create({
+        data: {
+          companyId: compCanonicalId,
+          competence: '2026-10',
+          startDate: new Date('2026-10-01T00:00:00.000Z'),
+          endDate: new Date('2026-11-01T00:00:00.000Z'),
+          status: 'CLOSED',
+          closedAt: new Date('2026-11-01T01:00:00.000Z'),
+          closedByUserId: superAdminId,
+          closedByName: 'Proprietario Geral',
+          eligibleSalesCount: 1,
+          eligibleSalesBaseCents: 100000,
+          grossPlatformFeeCents: 2500,
+          adjustmentsCents: 0,
+          netDueCents: 2500,
+          paidAmountCents: 0,
+          remainingBalanceCents: 2500,
+          carryForwardCreditCents: 0,
+          companyConfirmedSalesCents: 100000,
+          companyCreditReceivedPrincipalCents: 9750,
+          sellerInitialCommissionsCents: 7000,
+          sellerInstallmentCommissionsCents: 1375, // Valor imutável do snapshot fechado
+          providerFeesCents: 0,
+          isGratuitousZero: false,
+          roundingPolicy: 'ITEM_HALF_UP_SUM',
+          excludedPreContractCount: 0,
+          excludedPreContractBaseCents: 0,
+          excludedTestOrUnconfirmedCount: 0,
+          vigenciaBreakdown: [],
+        },
+      });
+
+      // Consulta a competência fechada 2026-10
+      const resClosed = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-10' },
+        prisma
+      );
+
+      assert.equal(resClosed.isClosed, true, 'Deve indicar que o statement está fechado');
+      assert.equal(
+        (resClosed.preview ?? resClosed.statement).financialSeparation.sellerInstallmentCommissions10Cents,
+        1375,
+        'Deve preservar fielmente o snapshot do statement fechado'
+      );
+
+      // Mesmo que seja inserida uma nova comissão em 2026-10 retroativamente:
+      await prisma.creditCommission.create({
+        data: {
+          companyId: compCanonicalId,
+          agreementId: agreementCanonicalId,
+          paymentId: null,
+          sellerId: sellerEmpresaId,
+          amountCents: 9999, // comissão extemporânea
+          type: 'INSTALLMENT',
+          status: 'RELEASED',
+          createdAt: new Date('2026-10-25T10:00:00.000Z'),
+        },
+      });
+
+      // A consulta ao mês fechado CONTINUA retornando o snapshot imutável sem alteração silenciosa
+      const resClosedAfter = await previewOrGetCompanyStatement(
+        { companyId: compCanonicalId, competence: '2026-10' },
+        prisma
+      );
+      assert.equal(
+        resClosedAfter.statement.financialSeparation.sellerInstallmentCommissions10Cents,
+        1375,
+        'Snapshot imutável nunca recalcula retroativamente mês fechado'
+      );
+    });
+  });
+
 });

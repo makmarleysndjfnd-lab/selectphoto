@@ -420,6 +420,8 @@ async function computeFinancialBucketsAndPreviewData(
   });
 
   // Comissões de 10% sobre principal das parcelas do crediário geradas no período (Bucket 3)
+  // Competência canônica: data efetiva do pagamento associado (payment.paidAt);
+  // createdAt somente como fallback explícito para registros legados sem vínculo (paymentId = null).
   const installmentCommissionsInPeriod = await db.creditCommission.findMany({
     where: {
       companyId,
@@ -427,22 +429,32 @@ async function computeFinancialBucketsAndPreviewData(
       type: 'INSTALLMENT',
       OR: [
         {
-          createdAt: {
-            gte: startDate,
-            lt: endDate,
-          },
-        },
-        {
+          paymentId: { not: null },
           payment: {
+            isReversed: false,
             paidAt: {
               gte: startDate,
               lt: endDate,
             },
           },
         },
+        {
+          paymentId: null,
+          createdAt: {
+            gte: startDate,
+            lt: endDate,
+          },
+        },
       ],
     },
     include: {
+      payment: {
+        select: {
+          id: true,
+          paidAt: true,
+          isReversed: true,
+        },
+      },
       agreement: {
         select: {
           client: {
@@ -474,6 +486,14 @@ async function computeFinancialBucketsAndPreviewData(
       isTestOrSimulationMarker(cc.agreement?.client?.sequenceNumber) ||
       isTestOrSimulationMarker(cc.agreement?.client?.name)
     ) {
+      continue;
+    }
+    if (cc.payment && cc.payment.isReversed) {
+      continue;
+    }
+    // Determinação estrita da competência canônica
+    const effectiveDate = cc.payment?.paidAt ?? cc.createdAt;
+    if (effectiveDate < startDate || effectiveDate >= endDate) {
       continue;
     }
     sellerInstallmentCommissionsCents += cc.amountCents;

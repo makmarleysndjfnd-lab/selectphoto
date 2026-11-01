@@ -143,35 +143,38 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     try {
       final compParam = _selectedClosingCompetence == 'ALL' ? 'ALL' : _selectedClosingCompetence;
 
-      final closingsFuture = _api.getMonthlyCreditClosings(
-        competence: _selectedClosingCompetence == 'ALL' ? null : _selectedClosingCompetence,
-        sellerId: _selectedClosingSellerId,
-        status: _selectedClosingStatus == 'ALL' ? null : _selectedClosingStatus,
-      );
-
-      final monthlySellersFuture = _api.getSellersCreditSummary(
+      // 1. Carrega as opções válidas de vendedores para a competência escolhida antes de consultar os fechamentos
+      final sellers = await _api.getSellersCreditSummary(
         competence: compParam,
         context: 'MONTHLY_CLOSING',
       );
 
-      final results = await Future.wait([closingsFuture, monthlySellersFuture]);
-      final closings = results[0] as List<dynamic>;
-      final sellers = results[1] as List<dynamic>;
+      // 2. Valida se o vendedor selecionado ainda é compatível com esta competência
+      String? effectiveSellerId = (_selectedClosingSellerId == null || _selectedClosingSellerId == 'ALL' || _selectedClosingSellerId!.isEmpty)
+          ? null
+          : _selectedClosingSellerId;
+
+      if (effectiveSellerId != null) {
+        final exists = sellers.any(
+          (s) => (s['sellerId'] ?? s['id'])?.toString() == effectiveSellerId,
+        );
+        if (!exists) {
+          effectiveSellerId = null;
+        }
+      }
+
+      // 3. Consulta os fechamentos com o filtro de vendedor alinhado (se limpou, traz todos da competência)
+      final closings = await _api.getMonthlyCreditClosings(
+        competence: _selectedClosingCompetence == 'ALL' ? null : _selectedClosingCompetence,
+        sellerId: effectiveSellerId,
+        status: _selectedClosingStatus == 'ALL' ? null : _selectedClosingStatus,
+      );
 
       if (mounted) {
         setState(() {
-          _monthlyClosings = closings;
           _monthlySellersSummary = sellers;
-
-          // Se o vendedor previamente selecionado não possuir movimentação na nova competência, limpa a seleção
-          if (_selectedClosingSellerId != null) {
-            final exists = _monthlySellersSummary.any(
-              (s) => (s['sellerId'] ?? s['id'])?.toString() == _selectedClosingSellerId,
-            );
-            if (!exists) {
-              _selectedClosingSellerId = null;
-            }
-          }
+          _selectedClosingSellerId = effectiveSellerId;
+          _monthlyClosings = closings;
           _isLoadingMonthlyClosings = false;
         });
       }
@@ -848,9 +851,9 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Comissão Lib.:', style: TextStyle(color: Colors.white38, fontSize: 9)),
-                    Text(currencyFormat.format(commission),
-                        style: const TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.bold)),
+                    const Flexible(child: Text('Comissão Lib.:', style: TextStyle(color: Colors.white38, fontSize: 9), overflow: TextOverflow.ellipsis)),
+                    Flexible(child: Text(currencyFormat.format(commission),
+                        style: const TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
                   ],
                 ),
               ],
@@ -2986,6 +2989,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
               // Competência
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: const Key('dropdown_closing_competence'),
                   value: _selectedClosingCompetence,
                   dropdownColor: const Color(0xFF160D24),
                   style: const TextStyle(color: Colors.white, fontSize: 11),
@@ -3013,6 +3017,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
               // Vendedor
               Expanded(
                 child: DropdownButtonFormField<String>(
+                  key: const Key('dropdown_closing_seller'),
                   value: _selectedClosingSellerId ?? 'ALL',
                   dropdownColor: const Color(0xFF160D24),
                   style: const TextStyle(color: Colors.white, fontSize: 11),
@@ -3127,15 +3132,27 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   Widget _buildMonthlyClosingCard(Map<String, dynamic> c) {
     final closingId = c['id']?.toString() ?? '';
     final competence = c['competence']?.toString() ?? '---';
-    final sellerName = c['seller']?['name']?.toString() ?? 'Vendedor';
+    final sellerName = c['seller']?['name']?.toString() ?? c['sellerName']?.toString() ?? 'Vendedor';
     final status = c['status']?.toString() ?? 'CLOSED';
 
-    final base = ((c['baseAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final gross = ((c['grossCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final adj = ((c['adjustmentDeductionsCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final net = ((c['netCommissionCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final paid = ((c['paidAmountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final remaining = ((c['remainingBalanceCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final base = (c['baseAmountCents'] != null)
+        ? ((c['baseAmountCents'] as num).toDouble() / 100.0)
+        : ((c['totalPrincipalReceived'] as num?)?.toDouble() ?? 0.0);
+    final gross = (c['grossCommissionCents'] != null)
+        ? ((c['grossCommissionCents'] as num).toDouble() / 100.0)
+        : ((c['totalCommission'] as num?)?.toDouble() ?? 0.0);
+    final adj = (c['adjustmentDeductionsCents'] != null)
+        ? ((c['adjustmentDeductionsCents'] as num).toDouble() / 100.0)
+        : ((c['adjustments'] as num?)?.toDouble() ?? 0.0);
+    final net = (c['netCommissionCents'] != null)
+        ? ((c['netCommissionCents'] as num).toDouble() / 100.0)
+        : ((c['netCommission'] as num?)?.toDouble() ?? 0.0);
+    final paid = (c['paidAmountCents'] != null)
+        ? ((c['paidAmountCents'] as num).toDouble() / 100.0)
+        : ((c['paidAmount'] as num?)?.toDouble() ?? 0.0);
+    final remaining = (c['remainingBalanceCents'] != null)
+        ? ((c['remainingBalanceCents'] as num).toDouble() / 100.0)
+        : ((c['remainingBalance'] as num?)?.toDouble() ?? 0.0);
 
     Color statusColor = const Color(0xFFEF4444);
     String statusLabel = 'A PAGAR';
