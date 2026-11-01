@@ -451,11 +451,11 @@ class _TelaCarteiraCrediarioVendedorState
     final financedCents = agreement['financedAmountCents'] ?? (totalCents - downCents > 0 ? totalCents - downCents : 0);
     final remainingCents = agreement['remainingPrincipalCents'] ?? 0;
     final initialRate = ((agreement['downPaymentCommissionRate'] ?? agreement['initialCommissionRate'] ?? 0.20) as num).toDouble() * 100;
+    final rateDesc = agreement['downPaymentCommissionRateDescription'] ?? (initialRate >= 25 ? '25% (Carro próprio)' : '20% (Carro empresa)');
     final downCommCents = agreement['downPaymentCommissionCents'] ?? (downCents * (initialRate / 100)).round();
     final paidCommCents = agreement['releasedInstallmentCommissionCents'] ?? 0;
     final futureCommCents = agreement['futureEstimatedCommissionCents'] ?? 0;
 
-    // Próximo vencimento
     final installments = (agreement['installments'] as List<dynamic>?) ?? [];
     DateTime? nextDue;
     bool isOverdue = false;
@@ -476,6 +476,33 @@ class _TelaCarteiraCrediarioVendedorState
       }
     }
 
+    final totalInst = agreement['totalInstallmentsCount'] ?? installments.length;
+    final paidInst = agreement['paidInstallmentsCount'] ?? installments.where((i) => i['status'] == 'PAID' || ((i['amountCents'] ?? 0) - (i['paidCents'] ?? i['paidPrincipalCents'] ?? 0) <= 0)).length;
+    final partialInst = agreement['partialInstallmentsCount'] ?? installments.where((i) {
+      final p = (i['paidCents'] ?? i['paidPrincipalCents'] ?? 0);
+      final a = (i['amountCents'] ?? 0);
+      return p > 0 && a > p;
+    }).length;
+    final pendingInst = agreement['pendingInstallmentsCount'] ?? (totalInst - paidInst - partialInst);
+
+    final isUniform = agreement['isUniform'] == true;
+    final uniformBrl = (agreement['uniformInstallmentAmountBrl'] as num?)?.toDouble();
+    final distinctAmounts = (agreement['distinctInstallmentAmountsBrl'] as List<dynamic>?) ?? [];
+
+    String parcelasInfo = '';
+    if (totalInst > 0) {
+      if (isUniform && uniformBrl != null) {
+        parcelasInfo = '${totalInst}x R\$ ${uniformBrl.toStringAsFixed(2)}';
+      } else if (distinctAmounts.isNotEmpty) {
+        parcelasInfo = '$totalInst parcelas (${distinctAmounts.map((amt) => 'R\$ ${(amt as num).toStringAsFixed(2)}').join(', ')})';
+      } else {
+        parcelasInfo = '$totalInst parcelas';
+      }
+    } else {
+      parcelasInfo = 'Sem parcelas geradas';
+    }
+
+    final double? unitCommForecast = (isUniform && uniformBrl != null) ? (uniformBrl * 0.10) : null;
     final isSettled = remainingCents == 0 || agreement['status'] == 'SETTLED';
 
     return Container(
@@ -499,6 +526,7 @@ class _TelaCarteiraCrediarioVendedorState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Cabeçalho do Card
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -527,17 +555,21 @@ class _TelaCarteiraCrediarioVendedorState
                 ],
               ),
               const Divider(color: Colors.white10, height: 16),
-              // Linha 1: Contrato (Valores de Venda e Financiamento)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+
+              // Linha 1: Valores de Venda, Entrada, Financiado e Saldo
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                alignment: WrapAlignment.spaceBetween,
                 children: [
                   _buildMiniInfo(
-                      'Total da Venda', 'R\$ ${(totalCents / 100).toStringAsFixed(2)}'),
-                  _buildMiniInfo('Entrada',
-                      'R\$ ${(downCents / 100).toStringAsFixed(2)}'),
-                  _buildMiniInfo('Financiado',
-                      'R\$ ${(financedCents / 100).toStringAsFixed(2)}'),
-                  _buildMiniInfo('Saldo Devedor',
+                      'Total Venda', 'R\$ ${(totalCents / 100).toStringAsFixed(2)}'),
+                  _buildMiniInfo(
+                      'Entrada', 'R\$ ${(downCents / 100).toStringAsFixed(2)}'),
+                  _buildMiniInfo(
+                      'Financiado', 'R\$ ${(financedCents / 100).toStringAsFixed(2)}'),
+                  _buildMiniInfo(
+                      'Saldo Devedor',
                       'R\$ ${(remainingCents / 100).toStringAsFixed(2)}',
                       color: remainingCents > 0
                           ? (isOverdue ? Colors.redAccent : const Color(0xFFFFB74D))
@@ -545,60 +577,146 @@ class _TelaCarteiraCrediarioVendedorState
                 ],
               ),
               const SizedBox(height: 10),
-              // Linha 2: Comissões do Vendedor (Entrada + Parcelas Pagas + Previsão Futura)
+
+              // Seção de Parcelas e Progresso
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black26,
+                  color: const Color(0xFF141E28),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Entrada (${initialRate.toInt()}%): R\$ ${(downCommCents / 100).toStringAsFixed(2)}',
-                      style: const TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.w600),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.format_list_numbered_rounded, color: Color(0xFF00E5FF), size: 14),
+                            const SizedBox(width: 6),
+                            Text(
+                              parcelasInfo,
+                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        if (unitCommForecast != null)
+                          Text(
+                            'Prev. p/ parc: R\$ ${unitCommForecast.toStringAsFixed(2)}',
+                            style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                      ],
                     ),
-                    Text(
-                      'Comissão parcelas recebidas: R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
-                      style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.w600),
-                    ),
-                    Text(
-                      'Prev. Futura: R\$ ${(futureCommCents / 100).toStringAsFixed(2)}',
-                      style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 10, fontWeight: FontWeight.w600),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        _buildProgressChip('$paidInst quitadas', Colors.greenAccent),
+                        _buildProgressChip('$partialInst parciais', Colors.amberAccent),
+                        _buildProgressChip('$pendingInst pendentes', Colors.white60),
+                      ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    nextDue != null
-                        ? 'Próximo Venc: ${nextDue.day.toString().padLeft(2, '0')}/${nextDue.month.toString().padLeft(2, '0')}/${nextDue.year}'
-                        : (isSettled ? 'Contrato Quitado' : 'Sem parcelas pendentes'),
-                    style: TextStyle(
-                      color: isOverdue ? Colors.redAccent : Colors.white60,
-                      fontSize: 11,
-                      fontWeight:
-                          isOverdue ? FontWeight.bold : FontWeight.normal,
+
+              // Seção de Comissões (Entrada separada + Parcelas 10%)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          'Entrada: R\$ ${(downCommCents / 100).toStringAsFixed(2)} ($rateDesc)',
+                          style: const TextStyle(color: Color(0xFF00E676), fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
                     ),
-                  ),
-                  const Row(
-                    children: [
-                      Text('Ver detalhes',
-                          style: TextStyle(
-                              color: Color(0xFF00E5FF), fontSize: 11)),
-                      Icon(Icons.chevron_right_rounded,
-                          color: Color(0xFF00E5FF), size: 16),
-                    ],
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          'Acumulada no Mês: R\$ ${(paidCommCents / 100).toStringAsFixed(2)}',
+                          style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          'Previsão Futura Total: R\$ ${(futureCommCents / 100).toStringAsFixed(2)}',
+                          style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      '* A comissão de 10% é apurada exclusivamente sobre o principal de parcelas pagas.',
+                      style: TextStyle(color: Colors.white38, fontSize: 9, fontStyle: FontStyle.italic),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Rodapé inteiro dentro do Card (Vencimento + Ver detalhes)
+              Container(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        nextDue != null
+                            ? 'Próximo Venc: ${nextDue.day.toString().padLeft(2, '0')}/${nextDue.month.toString().padLeft(2, '0')}/${nextDue.year}'
+                            : (isSettled ? 'Contrato Quitado' : 'Sem parcelas pendentes'),
+                        style: TextStyle(
+                          color: isOverdue ? Colors.redAccent : Colors.white60,
+                          fontSize: 11,
+                          fontWeight: isOverdue ? FontWeight.bold : FontWeight.normal,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Ver detalhes',
+                            style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11)),
+                        Icon(Icons.chevron_right_rounded,
+                            color: Color(0xFF00E5FF), size: 16),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildProgressChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -1159,7 +1277,8 @@ class _TelaCarteiraCrediarioVendedorState
   Widget _buildStateCard(String title, String amount, String explanation,
       IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: const Color(0xFF1A2634),
         borderRadius: BorderRadius.circular(12),

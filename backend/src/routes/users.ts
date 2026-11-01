@@ -77,7 +77,7 @@ router.get('/company', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     const users = await prisma.user.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId: req.user?.companyId, role: { not: 'SUPER_ADMIN' } },
       select: {
         id: true,
         name: true,
@@ -365,7 +365,7 @@ router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: R
     }
 
     const users = await prisma.user.findMany({
-      where: { companyId: req.user?.companyId },
+      where: { companyId: req.user?.companyId, role: { not: 'SUPER_ADMIN' } },
       include: {
         team: true,
         currentCars: true, // Fetch assigned cars

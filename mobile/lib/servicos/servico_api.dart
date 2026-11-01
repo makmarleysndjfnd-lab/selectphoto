@@ -1906,10 +1906,57 @@ class ApiService {
     }
   }
 
-  Future<List<dynamic>> getSellersCreditSummary() async {
+  Future<List<dynamic>> getSellersCreditSummary({
+    String? startDate,
+    String? endDate,
+    String? competence,
+    String? context,
+  }) async {
     try {
-      final resp = await _dio.get('/credit/sellers-summary');
+      final qParams = <String, dynamic>{};
+      if (startDate != null && startDate.isNotEmpty) qParams['startDate'] = startDate;
+      if (endDate != null && endDate.isNotEmpty) qParams['endDate'] = endDate;
+      if (competence != null && competence.isNotEmpty) qParams['competence'] = competence;
+      if (context != null && context.isNotEmpty) qParams['context'] = context;
+
+      final resp = await _dio.get('/credit/sellers-summary', queryParameters: qParams.isNotEmpty ? qParams : null);
       return List<dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getMyCompanyIntegrations() async {
+    try {
+      final resp = await _dio.get('/company/integrations');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveCompanyIntegration(Map<String, dynamic> data) async {
+    try {
+      final resp = await _dio.post('/company/integrations', data: data);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteCompanyIntegration(String id) async {
+    try {
+      final resp = await _dio.delete('/company/integrations/' + id);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> testCompanyIntegration(String id) async {
+    try {
+      final resp = await _dio.post('/company/integrations/' + id + '/test');
+      return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

@@ -27,7 +27,16 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     // Redirect ADMIN and SELLER to their dedicated screens
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.role == 'ADMIN') {
+      if (widget.role == 'SUPER_ADMIN') {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => const PainelProprietarioEmpresas(),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+            transitionDuration: const Duration(milliseconds: 400),
+          ),
+        );
+      } else if (widget.role == 'ADMIN' || widget.role == 'COMPANY_ADMIN') {
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
             pageBuilder: (_, __, ___) => const AdminDashboard(),

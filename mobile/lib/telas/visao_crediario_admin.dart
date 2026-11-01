@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../servicos/servico_api.dart';
+import 'tela_integracoes_empresa.dart';
 
 class VisaoCrediarioAdmin extends StatefulWidget {
   const VisaoCrediarioAdmin({super.key});
@@ -78,7 +79,11 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         status: _selectedStatus == 'ALL' ? null : _selectedStatus,
         sellerId: _selectedSellerId,
       );
-      final sellersSummaryFuture = _api.getSellersCreditSummary();
+      final sellersSummaryFuture = _api.getSellersCreditSummary(
+        startDate: _selectedDateRange?.start.toIso8601String(),
+        endDate: _selectedDateRange?.end.toIso8601String(),
+        context: 'CONTRACTS',
+      );
       final asaasConfigFuture = _api.getAsaasConfig();
       final asaasAlertsFuture = _api.getAsaasDuplicateAlerts(status: 'PENDING');
       final sellerPortfolioFuture = _selectedSellerId != null
@@ -183,7 +188,12 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         actions: [
           // Modo Asaas
           InkWell(
-            onTap: _showAsaasConfigDialog,
+            onTap: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TelaIntegracoesEmpresa()),
+              );
+              _refresh();
+            },
             borderRadius: BorderRadius.circular(16),
             child: Container(
               margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
@@ -652,15 +662,37 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           ],
         ),
         const SizedBox(height: 8),
-        SizedBox(
-          height: 110,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            children: [
-              // Card "Todos"
-              _buildSellerCard(
-                sellerId: null,
-                sellerName: 'Todos os Vendedores',
+        if (_sellersSummary.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF160D24),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.person_off_rounded, color: Colors.white38, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Nenhum vendedor com venda de crediário confirmada no período selecionado.',
+                    style: TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          SizedBox(
+            height: 110,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                // Card "Todos"
+                _buildSellerCard(
+                  sellerId: null,
+                  sellerName: 'Todos os Vendedores',
                 remaining: (_overview['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0,
                 overdue: (_overview['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0,
                 commission: (_overview['pendingCommissions'] as num?)?.toDouble() ?? 0.0,

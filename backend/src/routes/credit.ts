@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { calculateCreditSchedule, validateCpf } from '../services/creditService';
 import {
@@ -186,19 +186,109 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
       return;
     }
 
+    const { startDate, endDate, competence, context } = req.query as {
+      startDate?: string;
+      endDate?: string;
+      competence?: string;
+      context?: string;
+    };
+
     const now = new Date();
 
-    // Buscar todos os vendedores com contratos na empresa
+    // Filtro estrito: apenas papéis comerciais (SELLER e SELLER_MANAGER) da empresa autenticada.
+    // Exclui completamente SUPER_ADMIN, ADMIN e demais papéis não vendedores.
+    const userWhere: Prisma.UserWhereInput = {
+      companyId: companyId || undefined,
+      role: { in: ['SELLER', 'SELLER_MANAGER'] },
+    };
+
+    // Caso 1: Contexto de Fechamento Mensal (10%) ou competência informada
+    if (context === 'MONTHLY_CLOSING' || (competence && competence.trim().length > 0)) {
+      const targetComp = competence?.trim() || getCompetenceForDate(now);
+      const { startDate: compStart, endDate: compEnd } = getCompetenceRange(targetComp);
+
+      // Identificar vendedores com movimentação financeira na competência:
+      const payments = await prisma.creditPayment.findMany({
+        where: {
+          companyId: companyId || undefined,
+          isReversed: false,
+          paidAt: { gte: compStart, lt: compEnd },
+        },
+        include: { agreement: { select: { sellerId: true } } },
+      });
+      const paymentSellerIds = payments.map((p) => p.agreement?.sellerId).filter(Boolean) as string[];
+
+      const commissions = await prisma.creditCommission.findMany({
+        where: {
+          companyId: companyId || undefined,
+          createdAt: { gte: compStart, lt: compEnd },
+        },
+        select: { sellerId: true },
+      });
+      const commissionSellerIds = commissions.map((c) => c.sellerId);
+
+      const adjustments = await prisma.creditCommissionAdjustment.findMany({
+        where: {
+          companyId: companyId || undefined,
+          createdAt: { gte: compStart, lt: compEnd },
+        },
+        select: { sellerId: true },
+      });
+      const adjustmentSellerIds = adjustments.map((a) => a.sellerId);
+
+      const closings = await prisma.monthlyCreditClosing.findMany({
+        where: {
+          companyId: companyId || undefined,
+          competence: targetComp,
+        },
+        select: { sellerId: true },
+      });
+      const closingSellerIds = closings.map((cl: { sellerId: string }) => cl.sellerId);
+
+      const eligibleIds = Array.from(
+        new Set([
+          ...paymentSellerIds,
+          ...commissionSellerIds,
+          ...adjustmentSellerIds,
+          ...closingSellerIds,
+        ])
+      );
+
+      if (eligibleIds.length === 0) {
+        res.json([]);
+        return;
+      }
+
+      userWhere.id = { in: eligibleIds };
+    } else {
+      // Caso 2: Carteira / Contratos de Crediário por período
+      const agreementWhere: Prisma.CreditAgreementWhereInput = {
+        companyId: companyId || undefined,
+      };
+
+      if (startDate || endDate) {
+        agreementWhere.createdAt = {};
+        if (startDate) {
+          agreementWhere.createdAt.gte = new Date(startDate);
+        }
+        if (endDate) {
+          agreementWhere.createdAt.lte = new Date(endDate);
+        }
+      }
+
+      userWhere.creditAgreementsSeller = {
+        some: agreementWhere,
+      };
+    }
+
     const sellers = await prisma.user.findMany({
-      where: {
-        companyId,
-        creditAgreementsSeller: { some: {} },
-      },
+      where: userWhere,
       select: {
         id: true,
         name: true,
         active: true,
         creditAgreementsSeller: {
+          where: companyId ? { companyId } : undefined,
           select: {
             id: true,
             status: true,
@@ -229,6 +319,7 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
           select: { amountCents: true },
         },
       },
+      orderBy: { name: 'asc' },
     });
 
     const summary = sellers.map((s) => {
@@ -247,8 +338,8 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
         }
       }
 
-      const comissaoLiberadaCents = s.creditCommissions.reduce((sum, c) => sum + c.amountCents, 0);
-      const comissaoPendenteAjustesCents = s.creditCommissionAdjustments.reduce((sum, adj) => sum + adj.amountCents, 0);
+      const comissaoLiberadaCents = s.creditCommissions.reduce((sum: number, c: { amountCents: number }) => sum + c.amountCents, 0);
+      const comissaoPendenteAjustesCents = s.creditCommissionAdjustments.reduce((sum: number, adj: { amountCents: number }) => sum + adj.amountCents, 0);
       const comissaoLiquidaPagarCents = Math.max(0, comissaoLiberadaCents - comissaoPendenteAjustesCents);
 
       const totalRemainingPrincipal = Number((saldoAReceberCents / 100).toFixed(2));
@@ -1311,8 +1402,12 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
     const targetSellerId = (isAdmin && req.query.sellerId) ? String(req.query.sellerId) : currentUserId;
 
     const seller = await prisma.user.findFirst({
-      where: { id: targetSellerId, companyId },
-      select: { id: true, name: true, active: true },
+      where: {
+        id: targetSellerId,
+        companyId,
+        ...(isAdmin && req.query.sellerId ? { role: { in: ['SELLER', 'SELLER_MANAGER'] } } : {}),
+      },
+      select: { id: true, name: true, active: true, role: true },
     });
 
     if (!seller) {
@@ -1404,6 +1499,7 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
 
         const installmentCommissionCents = Math.round(inst.paidCents * a.installmentCommissionRate);
         const installmentFutureCommCents = Math.round(unpaidCents * a.installmentCommissionRate);
+        const instExpectedCommCents = Math.round(inst.amountCents * a.installmentCommissionRate);
         const instCompetence = effectivePaidAt ? getCompetenceForDate(new Date(effectivePaidAt)) : null;
 
         const linkedClosingId =
@@ -1424,15 +1520,31 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
           unpaidPrincipalBrl: Number((unpaidCents / 100).toFixed(2)),
           status: inst.status,
           paidAt: effectivePaidAt,
+          expectedCommissionCents: instExpectedCommCents,
+          expectedCommissionBrl: Number((instExpectedCommCents / 100).toFixed(2)),
+          accumulatedCommissionCents: installmentCommissionCents,
+          accumulatedCommissionBrl: Number((installmentCommissionCents / 100).toFixed(2)),
           commissionCents: installmentCommissionCents,
           commissionBrl: Number((installmentCommissionCents / 100).toFixed(2)),
           futureEstimatedCommissionCents: installmentFutureCommCents,
           futureEstimatedCommissionBrl: Number((installmentFutureCommCents / 100).toFixed(2)),
+          commissionExplanation: 'Previsão de 10% liberada proporcionalmente conforme o cliente paga o principal.',
           competence: instCompetence,
           monthlyClosingId: linkedClosingId,
           asaasCharge: inst.asaasCharge,
         };
       });
+
+      const totalInstallmentsCount = a.installments.length;
+      const paidInstallmentsCount = a.installments.filter((i) => i.status === 'PAID' || (i.amountCents - i.paidCents <= 0)).length;
+      const partialInstallmentsCount = a.installments.filter((i) => i.paidCents > 0 && (i.amountCents - i.paidCents > 0)).length;
+      const pendingInstallmentsCount = a.installments.filter((i) => i.paidCents === 0).length;
+
+      const instAmounts = a.installments.map((i) => i.amountCents);
+      const isUniform = instAmounts.length > 0 && instAmounts.every((amt) => amt === instAmounts[0]);
+      const uniformInstallmentAmountCents = isUniform && instAmounts.length > 0 ? instAmounts[0] : null;
+      const uniformInstallmentAmountBrl = uniformInstallmentAmountCents !== null ? Number((uniformInstallmentAmountCents / 100).toFixed(2)) : null;
+      const distinctInstallmentAmountsBrl = Array.from(new Set(instAmounts)).map((amt) => Number((amt / 100).toFixed(2)));
 
       return {
         ...a,
@@ -1442,11 +1554,23 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
         financedAmountBrl: Number((financedAmountCents / 100).toFixed(2)),
         paidPrincipalBrl: Number((a.paidPrincipalCents / 100).toFixed(2)),
         remainingPrincipalBrl: Number((a.remainingPrincipalCents / 100).toFixed(2)),
+        totalInstallmentsCount,
+        paidInstallmentsCount,
+        partialInstallmentsCount,
+        pendingInstallmentsCount,
+        isUniform,
+        uniformInstallmentAmountCents,
+        uniformInstallmentAmountBrl,
+        distinctInstallmentAmountsBrl,
         downPaymentCommissionRate: a.initialCommissionRate,
+        downPaymentCommissionRateFormatted: `${Math.round(a.initialCommissionRate * 100)}%`,
+        downPaymentCommissionRateDescription: a.initialCommissionRate >= 0.25 ? '25% (Carro próprio)' : '20% (Carro da empresa)',
         downPaymentCommissionCents: downPaymentCommCents,
         downPaymentCommissionBrl: Number((downPaymentCommCents / 100).toFixed(2)),
+        downPaymentCommissionExplanation: 'Comissão sobre a entrada, apurada e separada dos 10% das parcelas.',
         installmentCommissionRate: a.installmentCommissionRate,
         installmentCommissionRateFormatted: '10%',
+        installmentCommissionExplanation: 'Comissão de 10% sobre o principal recebido das parcelas.',
         futureEstimatedCommissionCents: agreementFutureCommCents,
         futureEstimatedCommissionBrl: Number((agreementFutureCommCents / 100).toFixed(2)),
         futureEstimatedCommissionLabel: 'Previsão futura (condicional ao pagamento do principal pelo cliente)',

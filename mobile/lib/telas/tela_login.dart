@@ -8,6 +8,10 @@ import '../config/app_config.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_inicial.dart';
+import 'painel_proprietario_empresas.dart';
+import 'painel_admin.dart';
+import 'painel_vendedor.dart';
+import 'painel_fotografo.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../widgets/led_button.dart';
@@ -38,6 +42,19 @@ class _LoginScreenState extends State<LoginScreen>
   late AnimationController _logoAnimController;
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
+
+  Widget _getScreenForRole(String role) {
+    if (role == 'SUPER_ADMIN') {
+      return const PainelProprietarioEmpresas();
+    } else if (role == 'ADMIN' || role == 'COMPANY_ADMIN') {
+      return const AdminDashboard();
+    } else if (role == 'SELLER' || role == 'SELLER_MANAGER') {
+      return const SellerDashboard();
+    } else if (role == 'PHOTOGRAPHER') {
+      return const PhotographerDashboard();
+    }
+    return HomeScreen(role: role);
+  }
 
   @override
   void initState() {
@@ -109,7 +126,7 @@ class _LoginScreenState extends State<LoginScreen>
             } catch (_) {}
             Navigator.of(context).pushReplacement(
               PageRouteBuilder(
-                pageBuilder: (_, __, ___) => HomeScreen(role: role),
+                pageBuilder: (_, __, ___) => _getScreenForRole(role),
                 transitionsBuilder: (_, anim, __, child) =>
                     FadeTransition(opacity: anim, child: child),
                 transitionDuration: const Duration(milliseconds: 300),
@@ -259,7 +276,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => HomeScreen(role: role!),
+        pageBuilder: (_, __, ___) => _getScreenForRole(role!),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
         transitionDuration: const Duration(milliseconds: 500),

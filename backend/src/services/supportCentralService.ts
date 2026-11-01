@@ -112,7 +112,7 @@ export async function listSupportTickets(
     priority?: string;
     category?: string;
     search?: string;
-  },
+  } = {},
   db: PrismaClient = prisma
 ) {
   const where: Prisma.SupportTicketWhereInput = {};

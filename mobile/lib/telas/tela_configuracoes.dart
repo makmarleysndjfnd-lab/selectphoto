@@ -10,6 +10,7 @@ import 'tela_config_impressora.dart';
 import 'tela_cadastro_custos.dart';
 import 'tela_demonstrativo_empresa_lumora.dart';
 import 'tela_suporte_empresa.dart';
+import 'tela_integracoes_empresa.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
@@ -903,6 +904,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const TelaSuporteEmpresa(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const Icon(Icons.api_rounded, color: Color(0xFF10B981)),
+                title: const Text('Integrações da minha empresa',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                    'Cadastre e teste suas credenciais de IA (Gemini), Asaas e WhatsApp',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded,
+                    color: Colors.white38, size: 16),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const TelaIntegracoesEmpresa(),
                   ),
                 ),
               ),
