@@ -1818,12 +1818,18 @@ class ApiService {
     String? search,
     String? status,
     String? sellerId,
+    String? startDate,
+    String? endDate,
+    String? dateFilterType,
   }) async {
     try {
       final params = <String, dynamic>{
         if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
         if (status != null && status.isNotEmpty) 'status': status,
         if (sellerId != null && sellerId.isNotEmpty) 'sellerId': sellerId,
+        if (startDate != null && startDate.isNotEmpty) 'startDate': startDate,
+        if (endDate != null && endDate.isNotEmpty) 'endDate': endDate,
+        if (dateFilterType != null && dateFilterType.isNotEmpty) 'dateFilterType': dateFilterType,
       };
       final resp = await _dio.get('/credit/agreements', queryParameters: params);
       return List<dynamic>.from(resp.data);
@@ -1944,9 +1950,17 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> deleteCompanyIntegration(String id) async {
+  Future<Map<String, dynamic>> deleteCompanyIntegration(
+    String id, {
+    required String passwordConfirmation,
+  }) async {
     try {
-      final resp = await _dio.delete('/company/integrations/' + id);
+      final resp = await _dio.delete(
+        '/company/integrations/' + id,
+        data: {
+          'passwordConfirmation': passwordConfirmation,
+        },
+      );
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));

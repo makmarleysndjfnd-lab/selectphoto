@@ -30,6 +30,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
 
   // Fechamentos Mensais (10%)
   List<dynamic> _monthlyClosings = [];
+  List<dynamic> _monthlySellersSummary = [];
   bool _isLoadingMonthlyClosings = false;
   String _selectedClosingCompetence = 'ALL';
   String? _selectedClosingSellerId;
@@ -40,6 +41,18 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   String _periodType = 'DUE_DATE';
   DateTimeRange? _selectedDateRange;
 
+  DateTime? get _effectiveEndDate => _selectedDateRange == null
+      ? null
+      : DateTime(
+          _selectedDateRange!.end.year,
+          _selectedDateRange!.end.month,
+          _selectedDateRange!.end.day,
+          23,
+          59,
+          59,
+          999,
+        );
+
   final currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final dateFormat = DateFormat('dd/MM/yyyy');
 
@@ -48,7 +61,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
-      if (_tabController.index == 1 && _monthlyClosings.isEmpty && !_isLoadingMonthlyClosings) {
+      if (_tabController.index == 1) {
         _loadMonthlyClosings();
       }
     });
@@ -72,16 +85,18 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       final overviewFuture = _api.getCreditOverview(
         sellerId: _selectedSellerId,
         startDate: _selectedDateRange?.start.toIso8601String(),
-        endDate: _selectedDateRange?.end.toIso8601String(),
+        endDate: _effectiveEndDate?.toIso8601String(),
       );
       final agreementsFuture = _api.getCreditAgreements(
         search: _searchController.text.trim(),
         status: _selectedStatus == 'ALL' ? null : _selectedStatus,
         sellerId: _selectedSellerId,
+        startDate: _selectedDateRange?.start.toIso8601String(),
+        endDate: _effectiveEndDate?.toIso8601String(),
       );
       final sellersSummaryFuture = _api.getSellersCreditSummary(
         startDate: _selectedDateRange?.start.toIso8601String(),
-        endDate: _selectedDateRange?.end.toIso8601String(),
+        endDate: _effectiveEndDate?.toIso8601String(),
         context: 'CONTRACTS',
       );
       final asaasConfigFuture = _api.getAsaasConfig();
@@ -126,14 +141,37 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     });
 
     try {
-      final closings = await _api.getMonthlyCreditClosings(
+      final compParam = _selectedClosingCompetence == 'ALL' ? 'ALL' : _selectedClosingCompetence;
+
+      final closingsFuture = _api.getMonthlyCreditClosings(
         competence: _selectedClosingCompetence == 'ALL' ? null : _selectedClosingCompetence,
         sellerId: _selectedClosingSellerId,
         status: _selectedClosingStatus == 'ALL' ? null : _selectedClosingStatus,
       );
+
+      final monthlySellersFuture = _api.getSellersCreditSummary(
+        competence: compParam,
+        context: 'MONTHLY_CLOSING',
+      );
+
+      final results = await Future.wait([closingsFuture, monthlySellersFuture]);
+      final closings = results[0] as List<dynamic>;
+      final sellers = results[1] as List<dynamic>;
+
       if (mounted) {
         setState(() {
           _monthlyClosings = closings;
+          _monthlySellersSummary = sellers;
+
+          // Se o vendedor previamente selecionado não possuir movimentação na nova competência, limpa a seleção
+          if (_selectedClosingSellerId != null) {
+            final exists = _monthlySellersSummary.any(
+              (s) => (s['sellerId'] ?? s['id'])?.toString() == _selectedClosingSellerId,
+            );
+            if (!exists) {
+              _selectedClosingSellerId = null;
+            }
+          }
           _isLoadingMonthlyClosings = false;
         });
       }
@@ -2986,9 +3024,13 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                   ),
                   items: [
                     const DropdownMenuItem(value: 'ALL', child: Text('Todos os Vendedores', style: TextStyle(fontSize: 11))),
-                    ..._sellersSummary.map((s) => DropdownMenuItem(
-                          value: s['sellerId']?.toString() ?? '',
-                          child: Text(s['sellerName']?.toString() ?? 'Vendedor', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+                    ..._monthlySellersSummary.map((s) => DropdownMenuItem(
+                          value: (s['sellerId'] ?? s['id'])?.toString() ?? '',
+                          child: Text(
+                            (s['sellerName'] ?? s['name'])?.toString() ?? 'Vendedor',
+                            style: const TextStyle(fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         )),
                   ],
                   onChanged: (val) {
@@ -3048,17 +3090,22 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
 
   Widget _buildMonthlyClosingsList() {
     if (_monthlyClosings.isEmpty) {
+      final isCompSelected = _selectedClosingCompetence != 'ALL';
+      final hasNoSellers = _monthlySellersSummary.isEmpty;
+
       return Container(
         padding: const EdgeInsets.all(32),
         alignment: Alignment.center,
         child: Column(
-          children: const [
-            Icon(Icons.event_busy_rounded, color: Colors.white24, size: 48),
-            SizedBox(height: 12),
+          children: [
+            const Icon(Icons.event_busy_rounded, color: Colors.white24, size: 48),
+            const SizedBox(height: 12),
             Text(
-              'Nenhum fechamento mensal de crediário encontrado com os filtros selecionados.',
+              hasNoSellers && isCompSelected
+                  ? 'Nenhum vendedor possui movimentação comercial ou parcelas recebidas na competência $_selectedClosingCompetence.'
+                  : 'Nenhum fechamento mensal de crediário encontrado com os filtros selecionados.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white54, fontSize: 13),
+              style: const TextStyle(color: Colors.white54, fontSize: 13),
             ),
           ],
         ),
@@ -3408,96 +3455,134 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   void _showProcessMonthlyClosingDialog() {
     final competences = _getCompetenceOptions().where((c) => c != 'ALL').toList();
     String selectedComp = competences.isNotEmpty ? competences.first : '2026-09';
-    String? selectedSellerId = _sellersSummary.isNotEmpty ? _sellersSummary.first['sellerId']?.toString() : null;
+    List<dynamic> dialogSellers = List.from(_monthlySellersSummary);
+    String? selectedSellerId = dialogSellers.isNotEmpty
+        ? (dialogSellers.first['sellerId'] ?? dialogSellers.first['id'])?.toString()
+        : null;
     final notesCtrl = TextEditingController();
     bool isSubmitting = false;
+    bool isLoadingSellers = false;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF160D24),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFA855F7)),
-          ),
-          title: Row(
-            children: const [
-              Icon(Icons.calendar_month_rounded, color: Color(0xFFA855F7), size: 20),
-              SizedBox(width: 8),
-              Text('Apuração Manual de Fechamento', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Gera o fechamento formal (10% das parcelas pagas) para uma competência já encerrada.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String>(
-                  value: selectedComp,
-                  dropdownColor: const Color(0xFF160D24),
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: const InputDecoration(
-                    labelText: 'Competência (YYYY-MM)',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                  ),
-                  items: competences.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                  onChanged: (val) {
-                    if (val != null) setDialogState(() => selectedComp = val);
-                  },
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: selectedSellerId,
-                  dropdownColor: const Color(0xFF160D24),
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: const InputDecoration(
-                    labelText: 'Vendedor',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                  ),
-                  items: _sellersSummary.map((s) => DropdownMenuItem(
-                        value: s['sellerId']?.toString() ?? '',
-                        child: Text(s['sellerName']?.toString() ?? 'Vendedor'),
-                      )).toList(),
-                  onChanged: (val) {
-                    if (val != null) setDialogState(() => selectedSellerId = val);
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: notesCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: const InputDecoration(
-                    labelText: 'Observações (opcional)',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                  ),
-                ),
+        builder: (ctx, setDialogState) {
+          void reloadDialogSellers(String comp) async {
+            setDialogState(() => isLoadingSellers = true);
+            try {
+              final sellers = await _api.getSellersCreditSummary(
+                competence: comp,
+                context: 'MONTHLY_CLOSING',
+              );
+              setDialogState(() {
+                dialogSellers = sellers;
+                if (selectedSellerId != null) {
+                  final exists = dialogSellers.any(
+                    (s) => (s['sellerId'] ?? s['id'])?.toString() == selectedSellerId,
+                  );
+                  if (!exists) {
+                    selectedSellerId = dialogSellers.isNotEmpty
+                        ? (dialogSellers.first['sellerId'] ?? dialogSellers.first['id'])?.toString()
+                        : null;
+                  }
+                } else if (dialogSellers.isNotEmpty) {
+                  selectedSellerId = (dialogSellers.first['sellerId'] ?? dialogSellers.first['id'])?.toString();
+                }
+                isLoadingSellers = false;
+              });
+            } catch (_) {
+              setDialogState(() => isLoadingSellers = false);
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFFA855F7)),
+            ),
+            title: Row(
+              children: const [
+                Icon(Icons.calendar_month_rounded, color: Color(0xFFA855F7), size: 20),
+                SizedBox(width: 8),
+                Text('Apuração Manual de Fechamento', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFA855F7),
-                foregroundColor: Colors.white,
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Gera o fechamento formal (10% das parcelas pagas) para uma competência já encerrada.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: selectedComp,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: const InputDecoration(
+                      labelText: 'Competência (YYYY-MM)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    ),
+                    items: competences.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setDialogState(() => selectedComp = val);
+                        reloadDialogSellers(val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedSellerId,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: InputDecoration(
+                      labelText: isLoadingSellers ? 'Carregando vendedores...' : 'Vendedor',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      enabledBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    ),
+                    items: dialogSellers.map((s) => DropdownMenuItem(
+                          value: (s['sellerId'] ?? s['id'])?.toString() ?? '',
+                          child: Text((s['sellerName'] ?? s['name'])?.toString() ?? 'Vendedor'),
+                        )).toList(),
+                    onChanged: isLoadingSellers
+                        ? null
+                        : (val) {
+                            if (val != null) setDialogState(() => selectedSellerId = val);
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: const InputDecoration(
+                      labelText: 'Observações (opcional)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    ),
+                  ),
+                ],
               ),
-              onPressed: (isSubmitting || selectedSellerId == null)
-                  ? null
-                  : () async {
-                      setDialogState(() => isSubmitting = true);
-                      try {
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: (isSubmitting || selectedSellerId == null)
+                    ? null
+                    : () async {
+                        setDialogState(() => isSubmitting = true);
+                        try {
                         await _api.processMonthlyCreditClosing(
                           sellerId: selectedSellerId!,
                           competence: selectedComp,
@@ -3527,10 +3612,11 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                   : const Text('Processar Fechamento', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
-        ),
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 
   Future<void> _openMonthlyClosingDetailsModal(String closingId) async {
     showModalBottomSheet(

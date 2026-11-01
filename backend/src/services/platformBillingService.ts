@@ -425,10 +425,22 @@ async function computeFinancialBucketsAndPreviewData(
       companyId,
       isReversed: false,
       type: 'INSTALLMENT',
-      createdAt: {
-        gte: startDate,
-        lt: endDate,
-      },
+      OR: [
+        {
+          createdAt: {
+            gte: startDate,
+            lt: endDate,
+          },
+        },
+        {
+          payment: {
+            paidAt: {
+              gte: startDate,
+              lt: endDate,
+            },
+          },
+        },
+      ],
     },
     include: {
       agreement: {

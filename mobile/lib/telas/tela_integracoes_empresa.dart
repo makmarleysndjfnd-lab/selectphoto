@@ -98,34 +98,79 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
   }
 
   Future<void> _deleteIntegration(String id, String providerName) async {
-    final confirm = await showDialog<bool>(
+    final passwordController = TextEditingController();
+    bool obscurePassword = true;
+
+    final confirmPassword = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text('Remover Credencial', style: TextStyle(color: Colors.white)),
-        content: Text(
-          'Deseja remover as credenciais do provedor $providerName da sua empresa?\n\n'
-          'Serviços que dependem desta chave ficarão temporariamente desativados.',
-          style: const TextStyle(color: Colors.white70),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text('Remover Credencial', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Deseja remover as credenciais do provedor $providerName da sua empresa?\n\n'
+                'Serviços que dependem desta chave ficarão temporariamente desativados.\n\n'
+                'Por segurança, digite a sua senha de administrador para confirmar a remoção:',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passwordController,
+                obscureText: obscurePassword,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Senha de Administrador',
+                  labelStyle: const TextStyle(color: Colors.white60),
+                  prefixIcon: const Icon(Icons.lock_outline, color: Colors.white54),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      obscurePassword ? Icons.visibility_off : Icons.visibility,
+                      color: Colors.white54,
+                    ),
+                    onPressed: () => setDialogState(() => obscurePassword = !obscurePassword),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFF0F1923),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, null),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () {
+                final pwd = passwordController.text.trim();
+                if (pwd.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Por favor, digite sua senha de confirmação.'),
+                      backgroundColor: Colors.orangeAccent,
+                    ),
+                  );
+                  return;
+                }
+                Navigator.pop(ctx, pwd);
+              },
+              child: const Text('Confirmar Remoção', style: TextStyle(color: Colors.white)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remover', style: TextStyle(color: Colors.white)),
-          ),
-        ],
       ),
     );
 
-    if (confirm != true) return;
+    if (confirmPassword == null || confirmPassword.isEmpty) return;
 
     try {
-      await _api.deleteCompanyIntegration(id);
+      await _api.deleteCompanyIntegration(id, passwordConfirmation: confirmPassword);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -524,25 +569,52 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
   }
 
   Widget _buildErrorView() {
+    final isForbidden = _errorMessage != null &&
+        (_errorMessage!.contains('403') ||
+            _errorMessage!.toLowerCase().contains('restrito') ||
+            _errorMessage!.toLowerCase().contains('administrador'));
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 48),
-            const SizedBox(height: 12),
-            Text(
-              _errorMessage ?? 'Erro ao carregar integrações.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            Icon(
+              isForbidden ? Icons.lock_person_rounded : Icons.error_outline_rounded,
+              color: isForbidden ? const Color(0xFFA855F7) : Colors.redAccent,
+              size: 56,
             ),
             const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadIntegrations,
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E5FF)),
-              child: const Text('Tentar Novamente', style: TextStyle(color: Color(0xFF0F1923))),
+            Text(
+              isForbidden ? 'Acesso Restrito ao Administrador' : 'Erro ao Carregar',
+              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 10),
+            Text(
+              isForbidden
+                  ? 'A visualização e gestão de integrações e chaves de API da empresa é exclusiva para administradores autorizados. Vendedores e operadores não possuem permissão de acesso.'
+                  : (_errorMessage ?? 'Erro ao carregar integrações.'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+            ),
+            const SizedBox(height: 24),
+            if (isForbidden)
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: const Text('Voltar ao Início'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                ),
+              )
+            else
+              ElevatedButton(
+                onPressed: _loadIntegrations,
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E5FF)),
+                child: const Text('Tentar Novamente', style: TextStyle(color: Color(0xFF0F1923))),
+              ),
           ],
         ),
       ),
@@ -630,6 +702,12 @@ class _ModalConfigurarIntegracaoState extends State<_ModalConfigurarIntegracao> 
       return;
     }
 
+    final pwd = _passwordCtrl.text.trim();
+    if (pwd.isEmpty) {
+      setState(() => _modalError = 'Informe sua senha de administrador para confirmar a operação.');
+      return;
+    }
+
     setState(() {
       _isSubmitting = true;
       _modalError = null;
@@ -641,12 +719,11 @@ class _ModalConfigurarIntegracaoState extends State<_ModalConfigurarIntegracao> 
         'provider': _selectedProvider,
         'environment': _selectedEnv,
         'secret': secret,
+        'passwordConfirmation': pwd,
         if (_selectedCategory == 'PAYMENT_GATEWAY' && _webhookCtrl.text.trim().isNotEmpty)
           'webhookToken': _webhookCtrl.text.trim(),
         if (_accountCtrl.text.trim().isNotEmpty)
           'accountName': _accountCtrl.text.trim(),
-        if (_passwordCtrl.text.trim().isNotEmpty)
-          'passwordConfirmation': _passwordCtrl.text.trim(),
       };
 
       await _api.saveCompanyIntegration(payload);

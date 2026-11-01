@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 import {
   authenticateToken,
@@ -66,6 +66,50 @@ export const COMPANY_SHARED_SERVICES = [
   },
 ];
 
+const ALLOWED_ADMIN_ROLES = ['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+
+/**
+ * Validação centralizada de autorização administrativa e contexto de empresa.
+ * Vendedores, fotógrafos e demais papéis recebem 403.
+ * SUPER_ADMIN requer a capacidade INTEGRATION_CONFIG para gerenciar integrações.
+ */
+async function authorizeCompanyAdmin(
+  req: AuthRequest,
+  res: Response
+): Promise<{ companyId: string; userId: string; userName: string; role: string } | null> {
+  const companyId = req.user?.companyId;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const userName = req.user?.name || 'Administrador';
+
+  if (!companyId || !userId) {
+    res.status(403).json({ error: 'Empresa ou usuário não identificado na sessão.' });
+    return null;
+  }
+
+  if (!ALLOWED_ADMIN_ROLES.includes(userRole || '')) {
+    res.status(403).json({ error: 'Acesso restrito a administradores da empresa.' });
+    return null;
+  }
+
+  if (userRole === 'SUPER_ADMIN') {
+    const cap = await prisma.ownerCapability.findFirst({
+      where: {
+        userId,
+        capability: 'INTEGRATION_CONFIG',
+      },
+    });
+    if (!cap) {
+      res.status(403).json({
+        error: 'Acesso negado: Requer a capacidade INTEGRATION_CONFIG para gerenciar integrações.',
+      });
+      return null;
+    }
+  }
+
+  return { companyId, userId, userName, role: userRole! };
+}
+
 function sanitizeMetadata(metadata: any): Record<string, any> {
   if (!metadata || typeof metadata !== 'object') return {};
   const {
@@ -100,15 +144,15 @@ function extractWebhookSummary(metadata: any): {
 
 /**
  * GET /api/company/integrations
- * Lista integrações configuradas da empresa autenticada e o catálogo de provedores disponíveis
+ * Lista integrações configuradas da empresa autenticada e o catálogo de provedores disponíveis.
+ * Restrito exclusivamente a administradores autorizados.
  */
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const companyId = req.user?.companyId;
-    if (!companyId) {
-      res.status(403).json({ error: 'Empresa não identificada.' });
-      return;
-    }
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
+
+    const { companyId } = auth;
 
     const integrations = await prisma.companyIntegration.findMany({
       where: { companyId },
@@ -161,24 +205,15 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
 /**
  * POST /api/company/integrations
- * Cadastra ou substitui uma credencial de integração para a própria empresa
+ * Cadastra ou substitui uma credencial de integração para a própria empresa.
+ * Exige confirmação de senha do administrador autenticado e persiste auditoria transacional.
  */
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const companyId = req.user?.companyId;
-    const currentUserId = req.user?.id;
-    const currentUserName = req.user?.name || 'Administrador';
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
 
-    if (!companyId || !currentUserId) {
-      res.status(403).json({ error: 'Empresa ou usuário não identificado.' });
-      return;
-    }
-
-    const userRole = req.user?.role;
-    if (!['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(userRole || '')) {
-      res.status(403).json({ error: 'Acesso restrito a administradores da empresa.' });
-      return;
-    }
+    const { companyId, userId: currentUserId, userName: currentUserName } = auth;
 
     const {
       category,
@@ -188,6 +223,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       webhookToken,
       accountName,
       passwordConfirmation,
+      removeWebhookToken,
     } = req.body;
 
     if (!category || !provider || !secret || typeof secret !== 'string' || !secret.trim()) {
@@ -195,16 +231,19 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Reautenticação do administrador para operações de credenciais
-    if (passwordConfirmation) {
-      const userRecord = await prisma.user.findUnique({
-        where: { id: currentUserId },
-        select: { password: true },
-      });
-      if (!userRecord || !bcrypt.compareSync(passwordConfirmation, userRecord.password)) {
-        res.status(401).json({ error: 'Senha de confirmação inválida.' });
-        return;
-      }
+    // Confirmação de senha estritamente obrigatória para operações com credenciais
+    if (!passwordConfirmation || typeof passwordConfirmation !== 'string' || !passwordConfirmation.trim()) {
+      res.status(401).json({ error: 'Senha de confirmação do administrador é obrigatória.' });
+      return;
+    }
+
+    const userRecord = await prisma.user.findUnique({
+      where: { id: currentUserId },
+      select: { password: true },
+    });
+    if (!userRecord || !userRecord.password || !bcrypt.compareSync(passwordConfirmation.trim(), userRecord.password)) {
+      res.status(401).json({ error: 'Senha de confirmação inválida.' });
+      return;
     }
 
     // Validação estrita do catálogo de autoatendimento
@@ -235,22 +274,6 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const encrypted = encryptSecret(secret.trim());
     const secretMasked = maskSecret(secret.trim());
 
-    // Metadados seguros e webhook opcional para Asaas
-    const configMetadata: Record<string, any> = {
-      accountName: accountName ? String(accountName).trim() : undefined,
-      registeredByUserId: currentUserId,
-      registeredAt: new Date().toISOString(),
-      financialLiveAuthorized: false,
-    };
-
-    if (category === 'PAYMENT_GATEWAY' && webhookToken && typeof webhookToken === 'string' && webhookToken.trim()) {
-      const encWh = encryptSecret(webhookToken.trim());
-      configMetadata.encryptedWebhookToken = encWh.encryptedSecret;
-      configMetadata.webhookIv = encWh.secretIv;
-      configMetadata.webhookTag = encWh.secretTag;
-      configMetadata.webhookMasked = maskSecret(webhookToken.trim());
-    }
-
     // Verificar se já existe integração para esta empresa / categoria / ambiente
     const existing = await prisma.companyIntegration.findUnique({
       where: {
@@ -262,57 +285,95 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       },
     });
 
-    let saved;
-    if (existing) {
-      saved = await prisma.companyIntegration.update({
-        where: { id: existing.id },
-        data: {
-          provider,
-          scope,
-          costPayer,
-          credentialSource,
-          encryptedSecret: encrypted.encryptedSecret,
-          secretIv: encrypted.secretIv,
-          secretTag: encrypted.secretTag,
-          secretMasked,
-          status: 'ACTIVE',
-          accountName: accountName ? String(accountName).trim() : existing.accountName,
-          configMetadata,
-          version: existing.version + 1,
-          updatedByUserId: currentUserId,
-          lastValidationStatus: null,
-          lastValidationError: null,
-        },
-      });
-    } else {
-      saved = await prisma.companyIntegration.create({
-        data: {
-          companyId,
-          category,
-          provider,
-          environment: cleanEnv,
-          scope,
-          costPayer,
-          credentialSource,
-          encryptedSecret: encrypted.encryptedSecret,
-          secretIv: encrypted.secretIv,
-          secretTag: encrypted.secretTag,
-          secretMasked,
-          status: 'ACTIVE',
-          accountName: accountName ? String(accountName).trim() : null,
-          configMetadata,
-          createdByUserId: currentUserId,
-          version: 1,
-        },
-      });
+    // Metadados seguros e tratamento de webhook:
+    // Se não fornecido novo token e não solicitado remoção, PRESERVA webhook existente
+    const configMetadata: Record<string, any> = {
+      accountName: accountName ? String(accountName).trim() : existing?.accountName || undefined,
+      registeredByUserId: currentUserId,
+      registeredAt: new Date().toISOString(),
+      financialLiveAuthorized: false,
+    };
+
+    if (removeWebhookToken === true || req.body.webhookToken === '') {
+      // Remoção explícita
+      delete configMetadata.encryptedWebhookToken;
+      delete configMetadata.webhookIv;
+      delete configMetadata.webhookTag;
+      delete configMetadata.webhookMasked;
+    } else if (
+      category === 'PAYMENT_GATEWAY' &&
+      webhookToken &&
+      typeof webhookToken === 'string' &&
+      webhookToken.trim()
+    ) {
+      // Novo webhook configurado
+      const encWh = encryptSecret(webhookToken.trim());
+      configMetadata.encryptedWebhookToken = encWh.encryptedSecret;
+      configMetadata.webhookIv = encWh.secretIv;
+      configMetadata.webhookTag = encWh.secretTag;
+      configMetadata.webhookMasked = maskSecret(webhookToken.trim());
+    } else if (existing?.configMetadata) {
+      // Preservar webhook e metadados anteriores
+      const prevMeta = existing.configMetadata as Record<string, any>;
+      if (prevMeta.encryptedWebhookToken && prevMeta.webhookIv && prevMeta.webhookTag) {
+        configMetadata.encryptedWebhookToken = prevMeta.encryptedWebhookToken;
+        configMetadata.webhookIv = prevMeta.webhookIv;
+        configMetadata.webhookTag = prevMeta.webhookTag;
+        configMetadata.webhookMasked = prevMeta.webhookMasked;
+      }
     }
 
-    // Auditoria sem segredos
-    try {
-      await prisma.integrationAuditEvent.create({
+    // Gravação e auditoria transacionais
+    const { saved } = await prisma.$transaction(async (tx) => {
+      let record;
+      if (existing) {
+        record = await tx.companyIntegration.update({
+          where: { id: existing.id },
+          data: {
+            provider,
+            scope,
+            costPayer,
+            credentialSource,
+            encryptedSecret: encrypted.encryptedSecret,
+            secretIv: encrypted.secretIv,
+            secretTag: encrypted.secretTag,
+            secretMasked,
+            status: 'ACTIVE',
+            accountName: accountName ? String(accountName).trim() : existing.accountName,
+            configMetadata,
+            version: existing.version + 1,
+            updatedByUserId: currentUserId,
+            lastValidationStatus: null,
+            lastValidationError: null,
+          },
+        });
+      } else {
+        record = await tx.companyIntegration.create({
+          data: {
+            companyId,
+            category,
+            provider,
+            environment: cleanEnv,
+            scope,
+            costPayer,
+            credentialSource,
+            encryptedSecret: encrypted.encryptedSecret,
+            secretIv: encrypted.secretIv,
+            secretTag: encrypted.secretTag,
+            secretMasked,
+            status: 'ACTIVE',
+            accountName: accountName ? String(accountName).trim() : null,
+            configMetadata,
+            createdByUserId: currentUserId,
+            version: 1,
+          },
+        });
+      }
+
+      await tx.integrationAuditEvent.create({
         data: {
           companyId,
-          integrationId: saved.id,
+          integrationId: record.id,
           action: existing ? 'COMPANY_INTEGRATION_UPDATE' : 'COMPANY_INTEGRATION_CREATE',
           authorUserId: currentUserId,
           authorName: currentUserName,
@@ -322,7 +383,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
             environment: cleanEnv,
             scope,
             costPayer,
-            version: saved.version,
+            version: record.version,
             hasWebhookToken: Boolean(configMetadata.encryptedWebhookToken),
           }),
           result: 'SUCCESS',
@@ -330,7 +391,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
           userAgent: (req.headers['user-agent'] || 'unknown').substring(0, 255),
         },
       });
-    } catch (_) {}
+
+      return { saved: record };
+    });
 
     const whSummary = extractWebhookSummary(saved.configMetadata);
 
@@ -362,17 +425,34 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
 /**
  * DELETE /api/company/integrations/:id
- * Remove uma credencial de integração pertencente à empresa do admin autenticado
+ * Remove uma credencial de integração pertencente à empresa do admin autenticado.
+ * Exige confirmação de senha do administrador autenticado e auditoria transacional persistente.
  */
 router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const companyId = req.user?.companyId;
-    const currentUserId = req.user?.id;
-    const currentUserName = req.user?.name || 'Administrador';
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
+
+    const { companyId, userId: currentUserId, userName: currentUserName } = auth;
     const id = String(req.params.id);
 
-    if (!companyId || !currentUserId) {
-      res.status(403).json({ error: 'Empresa ou usuário não identificado.' });
+    // Confirmação de senha obrigatória (recebida no body JSON ou header)
+    const passwordConfirmation =
+      req.body?.passwordConfirmation || (req.headers['x-password-confirmation'] as string);
+
+    if (!passwordConfirmation || typeof passwordConfirmation !== 'string' || !passwordConfirmation.trim()) {
+      res.status(401).json({
+        error: 'Senha de confirmação do administrador é obrigatória para remoção de credenciais.',
+      });
+      return;
+    }
+
+    const userRecord = await prisma.user.findUnique({
+      where: { id: currentUserId },
+      select: { password: true },
+    });
+    if (!userRecord || !userRecord.password || !bcrypt.compareSync(passwordConfirmation.trim(), userRecord.password)) {
+      res.status(401).json({ error: 'Senha de confirmação inválida.' });
       return;
     }
 
@@ -385,29 +465,35 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
       return;
     }
 
-    await prisma.companyIntegration.delete({
-      where: { id: existing.id },
-    });
-
-    try {
-      await prisma.integrationAuditEvent.create({
+    // Exclusão e auditoria transacionais: registra auditoria com integraçãoId nulo e dados no details
+    await prisma.$transaction(async (tx) => {
+      await tx.integrationAuditEvent.create({
         data: {
           companyId,
-          integrationId: existing.id,
+          integrationId: null, // Mantém nulo para sobreviver com integridade relacional
           action: 'COMPANY_INTEGRATION_DELETE',
           authorUserId: currentUserId,
           authorName: currentUserName,
           details: JSON.stringify({
+            deletedIntegrationId: existing.id,
             category: existing.category,
             provider: existing.provider,
             environment: existing.environment,
+            scope: existing.scope,
+            costPayer: existing.costPayer,
+            accountName: existing.accountName,
+            version: existing.version,
           }),
           result: 'SUCCESS',
           ipAddress: (req.ip || req.socket.remoteAddress || 'unknown').substring(0, 45),
           userAgent: (req.headers['user-agent'] || 'unknown').substring(0, 255),
         },
       });
-    } catch (_) {}
+
+      await tx.companyIntegration.delete({
+        where: { id: existing.id },
+      });
+    });
 
     res.json({ success: true, message: 'Integração removida com sucesso.' });
   } catch (err: any) {
@@ -418,17 +504,16 @@ router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response)
 
 /**
  * POST /api/company/integrations/:id/test
- * Testa a conectividade da integração da empresa utilizando adaptadores oficiais
+ * Testa a conectividade da integração da empresa utilizando adaptadores oficiais.
+ * Respeita estritamente o ambiente (SANDBOX vs PRODUCTION) e as travas LIVE.
  */
 router.post('/:id/test', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const companyId = req.user?.companyId;
-    const id = String(req.params.id);
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
 
-    if (!companyId) {
-      res.status(403).json({ error: 'Empresa não identificada.' });
-      return;
-    }
+    const { companyId } = auth;
+    const id = String(req.params.id);
 
     const integration = await prisma.companyIntegration.findFirst({
       where: { id, companyId },
@@ -458,7 +543,36 @@ router.post('/:id/test', authenticateToken, async (req: AuthRequest, res: Respon
     if (integration.provider === 'GEMINI') {
       testResult = await testGeminiConnection(plainSecret);
     } else if (integration.provider === 'ASAAS') {
-      testResult = await testAsaasSandboxConnection(plainSecret);
+      if (integration.environment === 'SANDBOX') {
+        testResult = await testAsaasSandboxConnection(plainSecret);
+      } else {
+        // Ambiente de Produção: respeitar travas de segurança da plataforma
+        const prodSafety = await isProductionSafetyLocked(companyId);
+        if (prodSafety.locked) {
+          testResult = {
+            success: false,
+            message:
+              'Operações financeiras LIVE em Produção estão bloqueadas pelas políticas de segurança da plataforma. O teste ativo não foi executado.',
+            details: {
+              environment: 'PRODUCTION',
+              productionSafetyLocked: true,
+              reason:
+                prodSafety.reason ||
+                'Etapa 4 em modo de homologação segura; operações Asaas LIVE não autorizadas.',
+            },
+          };
+        } else {
+          // Quando não bloqueado, validação sintática estrita sem disparar cobranças reais
+          const isValidFormat = plainSecret.startsWith('$aact_') || plainSecret.length >= 32;
+          testResult = {
+            success: isValidFormat,
+            message: isValidFormat
+              ? 'Chave de produção Asaas verificada sintaticamente sem disparo de cobrança real.'
+              : 'Formato da chave de produção Asaas inválido (esperado token iniciando com $aact_).',
+            details: { environment: 'PRODUCTION', formatValid: isValidFormat },
+          };
+        }
+      }
     } else if (integration.provider === 'META_WHATSAPP') {
       testResult = await testMetaWhatsAppConnection(plainSecret);
     } else {

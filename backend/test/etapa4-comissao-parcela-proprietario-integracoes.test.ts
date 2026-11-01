@@ -466,6 +466,31 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       assert.ok(Array.isArray(sellers));
       assert.equal(sellers.length, 0, 'Em período sem movimentação, lista de vendedores deve estar vazia');
     });
+
+    it('2.3 GET /api/credit/sellers-summary com context=MONTHLY_CLOSING e competence filtra estritamente por movimentação', async () => {
+      const today = new Date();
+      const nowComp = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      const res = await fetch(`${baseUrl}/api/credit/sellers-summary?context=MONTHLY_CLOSING&competence=${nowComp}`, {
+        headers: { Authorization: `Bearer ${companyAdminToken}` },
+      });
+      assert.equal(res.status, 200);
+      const sellers = await res.json();
+      assert.ok(Array.isArray(sellers));
+      const active = sellers.find((s) => s.sellerId === sellerEmpresaId);
+      assert.ok(active, 'Vendedor com parcelas pagas no mês deve aparecer no fechamento mensal');
+      const inactive = sellers.find((s) => s.sellerId === sellerInactiveId);
+      assert.equal(inactive, undefined, 'Vendedor sem movimentação no mês não deve aparecer');
+    });
+
+    it('2.4 GET /api/credit/sellers-summary com context=MONTHLY_CLOSING e competence=ALL retorna universo completo', async () => {
+      const res = await fetch(`${baseUrl}/api/credit/sellers-summary?context=MONTHLY_CLOSING&competence=ALL`, {
+        headers: { Authorization: `Bearer ${companyAdminToken}` },
+      });
+      assert.equal(res.status, 200);
+      const sellers = await res.json();
+      assert.ok(Array.isArray(sellers));
+      assert.ok(sellers.length > 0, 'ALL deve retornar vendedores com movimentação histórica');
+    });
   });
 
   // =========================================================================
@@ -516,9 +541,74 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
   // =========================================================================
   describe('Bloco 4 — APIs da Empresa (Self-Service), Criptografia no Cofre e Gate LIVE Bloqueado', () => {
     let integrationId: string;
+    let asaasId: string;
 
-    it('4.1 Rejeita cadastro sem senha de confirmação válida se fornecida', async () => {
-      const res = await fetch(`${baseUrl}/api/company/integrations`, {
+    it('4.0 Vendedor comum recebe 403 em TODAS as rotas de integração (GET, POST, DELETE, POST /:id/test)', async () => {
+      // 1. GET
+      const getRes = await fetch(`${baseUrl}/api/company/integrations`, {
+        headers: { Authorization: `Bearer ${sellerEmpresaToken}` },
+      });
+      assert.equal(getRes.status, 403, 'Vendedor deve receber 403 no GET /api/company/integrations');
+
+      // 2. POST
+      const postRes = await fetch(`${baseUrl}/api/company/integrations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sellerEmpresaToken}`,
+        },
+        body: JSON.stringify({
+          category: 'AI_RESEARCH',
+          provider: 'GEMINI',
+          environment: 'PRODUCTION',
+          secret: 'dummy_secret',
+          passwordConfirmation: 'qualquer',
+        }),
+      });
+      assert.equal(postRes.status, 403, 'Vendedor deve receber 403 no POST /api/company/integrations');
+
+      // 3. DELETE
+      const delRes = await fetch(`${baseUrl}/api/company/integrations/dummy_id`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sellerEmpresaToken}`,
+        },
+        body: JSON.stringify({ passwordConfirmation: 'qualquer' }),
+      });
+      assert.equal(delRes.status, 403, 'Vendedor deve receber 403 no DELETE /api/company/integrations/:id');
+
+      // 4. TEST
+      const testRes = await fetch(`${baseUrl}/api/company/integrations/dummy_id/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sellerEmpresaToken}`,
+        },
+        body: JSON.stringify({}),
+      });
+      assert.equal(testRes.status, 403, 'Vendedor deve receber 403 no POST /api/company/integrations/:id/test');
+    });
+
+    it('4.1 Rejeita cadastro sem senha de confirmação ou com senha inválida (401)', async () => {
+      // Sem senha
+      const resNoPass = await fetch(`${baseUrl}/api/company/integrations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${companyAdminToken}`,
+        },
+        body: JSON.stringify({
+          category: 'AI_RESEARCH',
+          provider: 'GEMINI',
+          environment: 'PRODUCTION',
+          secret: 'AIzaSyFakeKeyForTest1234567890',
+        }),
+      });
+      assert.equal(resNoPass.status, 401, 'Deve retornar 401 para requisição sem senha de confirmação');
+
+      // Senha incorreta
+      const resWrongPass = await fetch(`${baseUrl}/api/company/integrations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -532,8 +622,7 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
           passwordConfirmation: 'senha_completamente_errada',
         }),
       });
-
-      assert.equal(res.status, 401, 'Deve retornar 401 para senha de confirmação incorreta');
+      assert.equal(resWrongPass.status, 401, 'Deve retornar 401 para senha de confirmação incorreta');
     });
 
     it('4.2 Cadastra chave Gemini da própria empresa com senha correta e criptografa no cofre', async () => {
@@ -584,7 +673,7 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       const data = await res.json();
 
       assert.ok(Array.isArray(data.integrations));
-      const gemini = data.integrations.find((i: any) => i.provider === 'GEMINI');
+      const gemini = data.integrations.find((i) => i.provider === 'GEMINI');
       assert.ok(gemini, 'Integração Gemini deve constar na listagem');
       assert.equal(gemini.encryptedSecret, undefined, 'Campo encryptedSecret não deve ser retornado na API pública');
 
@@ -594,7 +683,7 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       assert.equal(prodSafety.locked, true, 'Função de segurança isProductionSafetyLocked deve ser true');
     });
 
-    it('4.4 Cadastrar chave de produção do Asaas NÃO destranca o gate LIVE da plataforma', async () => {
+    it('4.4 Cadastrar chave de produção do Asaas com webhookToken e confirma gate LIVE travado', async () => {
       const res = await fetch(`${baseUrl}/api/company/integrations`, {
         method: 'POST',
         headers: {
@@ -612,6 +701,9 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       });
 
       assert.equal(res.status, 200);
+      const body = await res.json();
+      asaasId = body.integration.id;
+      assert.equal(body.integration.hasWebhookToken, true, 'Deve indicar que possui webhook token');
 
       // O gate LIVE da plataforma continua ESTRITAMENTE travado
       const prodSafetyAfter = await isProductionSafetyLocked(companyId);
@@ -622,8 +714,36 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
       );
     });
 
-    it('4.5 Teste de conexão da integração via POST /api/company/integrations/:id/test', async () => {
-      const res = await fetch(`${baseUrl}/api/company/integrations/${integrationId}/test`, {
+    it('4.5 Rotacionar apiKey Asaas sem enviar webhookToken PRESERVA a configuração prévia do webhook', async () => {
+      const res = await fetch(`${baseUrl}/api/company/integrations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${companyAdminToken}`,
+        },
+        body: JSON.stringify({
+          category: 'PAYMENT_GATEWAY',
+          provider: 'ASAAS',
+          environment: 'PRODUCTION',
+          secret: '$aact_NOVA_CHAVE_ROTACIONADA_1234567890abcdef',
+          passwordConfirmation: adminPasswordPlain,
+        }),
+      });
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.integration.hasWebhookToken, true, 'Deve PRESERVAR o webhookToken após rotacionar apiKey');
+
+      const dbAsaas = await prisma.companyIntegration.findUnique({
+        where: { id: asaasId },
+      });
+      const meta = dbAsaas?.configMetadata;
+      assert.ok(meta?.encryptedWebhookToken, 'Token do webhook criptografado deve permanecer preservado no banco');
+      assert.ok(meta?.webhookIv, 'IV do webhook deve permanecer preservado');
+    });
+
+    it('4.6 Teste de conexão Asaas em PRODUCTION respeita o ambiente e as travas LIVE (sem chamar sandbox)', async () => {
+      const res = await fetch(`${baseUrl}/api/company/integrations/${asaasId}/test`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -634,8 +754,78 @@ describe('ETAPA 4 — COMISSÃO POR PARCELA, FILTRAGEM DE VENDEDORES, ISOLAMENTO
 
       assert.equal(res.status, 200);
       const body = await res.json();
-      assert.ok(body.lastValidatedAt, 'Deve conter data da verificação');
-      assert.ok(body.message, 'Deve conter mensagem do teste');
+      assert.equal(body.success, false, 'Teste em produção com travas de segurança ativas deve retornar false sem simular sucesso');
+      assert.ok(body.message.includes('LIVE') || body.message.includes('Produção'), 'Deve explicar as políticas de segurança');
+
+      const dbAsaas = await prisma.companyIntegration.findUnique({
+        where: { id: asaasId },
+      });
+      assert.equal(dbAsaas?.lastValidationStatus, 'FAILED', 'Deve gravar FAILED quando as travas LIVE impedirem o teste real');
+    });
+
+    it('4.7 DELETE /api/company/integrations/:id exige senha de confirmação (401 sem senha ou incorreta)', async () => {
+      // Sem senha
+      const resNoPass = await fetch(`${baseUrl}/api/company/integrations/${integrationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${companyAdminToken}`,
+        },
+      });
+      assert.equal(resNoPass.status, 401, 'DELETE sem senha deve retornar 401');
+
+      // Senha incorreta
+      const resWrongPass = await fetch(`${baseUrl}/api/company/integrations/${integrationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${companyAdminToken}`,
+        },
+        body: JSON.stringify({ passwordConfirmation: 'senha_errada' }),
+      });
+      assert.equal(resWrongPass.status, 401, 'DELETE com senha errada deve retornar 401');
+
+      // Registro continua existindo
+      const stillThere = await prisma.companyIntegration.findUnique({
+        where: { id: integrationId },
+      });
+      assert.ok(stillThere, 'Integração não deve ter sido removida');
+    });
+
+    it('4.8 DELETE /api/company/integrations/:id com senha correta remove registro e PERSISTE auditoria transacional', async () => {
+      const res = await fetch(`${baseUrl}/api/company/integrations/${integrationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${companyAdminToken}`,
+        },
+        body: JSON.stringify({ passwordConfirmation: adminPasswordPlain }),
+      });
+
+      assert.equal(res.status, 200, 'DELETE com senha correta deve retornar 200');
+
+      // Registro não existe mais na tabela CompanyIntegration
+      const deletedRecord = await prisma.companyIntegration.findUnique({
+        where: { id: integrationId },
+      });
+      assert.equal(deletedRecord, null, 'Integração deve ter sido excluída do banco');
+
+      // Auditoria foi gravada e SOBREVIVEU com integrationId nulo e dados no details
+      const audit = await prisma.integrationAuditEvent.findFirst({
+        where: {
+          companyId,
+          action: 'COMPANY_INTEGRATION_DELETE',
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      assert.ok(audit, 'Evento de auditoria de exclusão deve existir no banco');
+      assert.equal(audit.integrationId, null, 'integrationId deve ser null para integridade relacional após DELETE');
+      assert.equal(audit.authorUserId, companyAdminId);
+      const auditDetails = JSON.parse(audit.details);
+      assert.equal(auditDetails.deletedIntegrationId, integrationId, 'Details deve conter o ID da integração deletada');
+      assert.equal(auditDetails.category, 'AI_RESEARCH');
+      assert.equal(auditDetails.provider, 'GEMINI');
     });
   });
 });

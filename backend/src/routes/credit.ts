@@ -131,7 +131,11 @@ router.get('/overview', authenticateToken, requireCreditAccess, async (req: Auth
     if (startDate || endDate) {
       wherePayments.paidAt = {};
       if (startDate) wherePayments.paidAt.gte = new Date(startDate);
-      if (endDate) wherePayments.paidAt.lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        if (endDate.length <= 10) end.setHours(23, 59, 59, 999);
+        wherePayments.paidAt.lte = end;
+      }
     }
 
     const periodPayments = await prisma.creditPayment.findMany({
@@ -204,55 +208,108 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
 
     // Caso 1: Contexto de Fechamento Mensal (10%) ou competência informada
     if (context === 'MONTHLY_CLOSING' || (competence && competence.trim().length > 0)) {
-      const targetComp = competence?.trim() || getCompetenceForDate(now);
-      const { startDate: compStart, endDate: compEnd } = getCompetenceRange(targetComp);
+      const hasSpecificComp =
+        competence &&
+        competence.trim().length > 0 &&
+        competence.trim().toUpperCase() !== 'ALL' &&
+        competence.trim().toUpperCase() !== 'TODAS';
 
-      // Identificar vendedores com movimentação financeira na competência:
-      const payments = await prisma.creditPayment.findMany({
-        where: {
-          companyId: companyId || undefined,
-          isReversed: false,
-          paidAt: { gte: compStart, lt: compEnd },
-        },
-        include: { agreement: { select: { sellerId: true } } },
-      });
-      const paymentSellerIds = payments.map((p) => p.agreement?.sellerId).filter(Boolean) as string[];
+      let eligibleIds: string[] = [];
 
-      const commissions = await prisma.creditCommission.findMany({
-        where: {
-          companyId: companyId || undefined,
-          createdAt: { gte: compStart, lt: compEnd },
-        },
-        select: { sellerId: true },
-      });
-      const commissionSellerIds = commissions.map((c) => c.sellerId);
+      if (hasSpecificComp) {
+        const targetComp = competence!.trim();
+        const { startDate: compStart, endDate: compEnd } = getCompetenceRange(targetComp);
 
-      const adjustments = await prisma.creditCommissionAdjustment.findMany({
-        where: {
-          companyId: companyId || undefined,
-          createdAt: { gte: compStart, lt: compEnd },
-        },
-        select: { sellerId: true },
-      });
-      const adjustmentSellerIds = adjustments.map((a) => a.sellerId);
+        // Identificar vendedores com movimentação financeira na competência:
+        const payments = await prisma.creditPayment.findMany({
+          where: {
+            companyId: companyId || undefined,
+            isReversed: false,
+            paidAt: { gte: compStart, lt: compEnd },
+          },
+          include: { agreement: { select: { sellerId: true } } },
+        });
+        const paymentSellerIds = payments.map((p) => p.agreement?.sellerId).filter(Boolean) as string[];
 
-      const closings = await prisma.monthlyCreditClosing.findMany({
-        where: {
-          companyId: companyId || undefined,
-          competence: targetComp,
-        },
-        select: { sellerId: true },
-      });
-      const closingSellerIds = closings.map((cl: { sellerId: string }) => cl.sellerId);
+        const commissions = await prisma.creditCommission.findMany({
+          where: {
+            companyId: companyId || undefined,
+            createdAt: { gte: compStart, lt: compEnd },
+          },
+          select: { sellerId: true },
+        });
+        const commissionSellerIds = commissions.map((c) => c.sellerId);
 
-      const eligibleIds = Array.from(
-        new Set([
-          ...paymentSellerIds,
-          ...commissionSellerIds,
-          ...adjustmentSellerIds,
-          ...closingSellerIds,
-        ])
-      );
+        const adjustments = await prisma.creditCommissionAdjustment.findMany({
+          where: {
+            companyId: companyId || undefined,
+            createdAt: { gte: compStart, lt: compEnd },
+          },
+          select: { sellerId: true },
+        });
+        const adjustmentSellerIds = adjustments.map((a) => a.sellerId);
+
+        const closings = await prisma.monthlyCreditClosing.findMany({
+          where: {
+            companyId: companyId || undefined,
+            competence: targetComp,
+          },
+          select: { sellerId: true },
+        });
+        const closingSellerIds = closings.map((cl: { sellerId: string }) => cl.sellerId);
+
+        eligibleIds = Array.from(
+          new Set([
+            ...paymentSellerIds,
+            ...commissionSellerIds,
+            ...adjustmentSellerIds,
+            ...closingSellerIds,
+          ])
+        );
+      } else {
+        // Todas as competências: universo completo de vendedores com movimentação no crediário
+        const payments = await prisma.creditPayment.findMany({
+          where: {
+            companyId: companyId || undefined,
+            isReversed: false,
+          },
+          include: { agreement: { select: { sellerId: true } } },
+        });
+        const paymentSellerIds = payments.map((p) => p.agreement?.sellerId).filter(Boolean) as string[];
+
+        const commissions = await prisma.creditCommission.findMany({
+          where: {
+            companyId: companyId || undefined,
+          },
+          select: { sellerId: true },
+        });
+        const commissionSellerIds = commissions.map((c) => c.sellerId);
+
+        const adjustments = await prisma.creditCommissionAdjustment.findMany({
+          where: {
+            companyId: companyId || undefined,
+          },
+          select: { sellerId: true },
+        });
+        const adjustmentSellerIds = adjustments.map((a) => a.sellerId);
+
+        const closings = await prisma.monthlyCreditClosing.findMany({
+          where: {
+            companyId: companyId || undefined,
+          },
+          select: { sellerId: true },
+        });
+        const closingSellerIds = closings.map((cl: { sellerId: string }) => cl.sellerId);
+
+        eligibleIds = Array.from(
+          new Set([
+            ...paymentSellerIds,
+            ...commissionSellerIds,
+            ...adjustmentSellerIds,
+            ...closingSellerIds,
+          ])
+        );
+      }
 
       if (eligibleIds.length === 0) {
         res.json([]);
@@ -272,7 +329,11 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
           agreementWhere.createdAt.gte = new Date(startDate);
         }
         if (endDate) {
-          agreementWhere.createdAt.lte = new Date(endDate);
+          const end = new Date(endDate);
+          if (endDate.length <= 10) {
+            end.setHours(23, 59, 59, 999);
+          }
+          agreementWhere.createdAt.lte = end;
         }
       }
 
@@ -446,7 +507,13 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
     // Filtros de período refinados
     if (dateFilterType && (startDate || endDate)) {
       const start = startDate ? new Date(startDate) : undefined;
-      const end = endDate ? new Date(endDate) : undefined;
+      let end: Date | undefined;
+      if (endDate) {
+        end = new Date(endDate);
+        if (endDate.length <= 10) {
+          end.setHours(23, 59, 59, 999);
+        }
+      }
 
       if (dateFilterType === 'DUE_DATE') {
         where.installments = {
@@ -757,6 +824,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
 
       // 3. Criar registro do pagamento
       const effectiveReceiverId = destination === 'SELLER_HANDS' ? agreement.sellerId : currentUserId;
+      const paymentDate = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
       const payment = await tx.creditPayment.create({
         data: {
           agreementId: agreement.id,
@@ -766,7 +834,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           receivedByRole: destination === 'SELLER_HANDS' ? 'SELLER' : currentUserRole,
           receiverUserId: effectiveReceiverId,
           destination,
-          paidAt: req.body?.paidAt ? new Date(req.body.paidAt) : undefined,
+          paidAt: paymentDate,
           receiptUrl,
           notes,
           idempotencyKey: idempotencyKey ? String(idempotencyKey).trim() : undefined,
@@ -813,7 +881,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           data: {
             paidCents: newPaidCents,
             status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
-            paidAt: isFullyPaid ? new Date() : undefined,
+            paidAt: isFullyPaid ? paymentDate : undefined,
           },
         });
         updatedInstallmentIds.push(inst.id);
@@ -857,6 +925,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
             amountCents: commissionCents,
             status: 'RELEASED',
             type: 'INSTALLMENT',
+            createdAt: paymentDate,
           },
         });
       }
