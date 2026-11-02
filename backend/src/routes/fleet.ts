@@ -1,10 +1,10 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Get all cars with their current user and latest checklist
 router.get('/', authenticateToken, async (req: AuthRequest, res) => {

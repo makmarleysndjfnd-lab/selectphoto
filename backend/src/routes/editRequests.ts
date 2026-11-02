@@ -1,5 +1,5 @@
 import express, { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import dotenv from 'dotenv';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
@@ -8,7 +8,7 @@ import { recordOperationalAuditEvent } from '../services/operationalAuditService
 dotenv.config();
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Whitelist of allowed editable fields for Client
 const ALLOWED_CLIENT_FIELDS = new Set([

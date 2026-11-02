@@ -1,10 +1,10 @@
 import express, { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Submit a new cost (via Mobile App)
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {

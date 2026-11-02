@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
@@ -11,7 +11,7 @@ import {
 } from '../services/integrationResolver';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Instanciação direta por chamada com resolução dinâmica por empresa
 // Elimina fallback silencioso para a chave global quando a empresa não tem contratação ativa

@@ -33,6 +33,7 @@ import { requestLogger } from './middleware/requestLogger';
 import { securityHeaders, generalApiLimiter, centralErrorHandler } from './middleware/securityMiddleware';
 import { isExternalServicesDisabled } from './utils/externalServices';
 import { initDatabaseClassification } from './utils/initDatabaseClassification';
+import { disconnectPrisma } from './services/prisma';
 
 app.use(securityHeaders);
 app.use(requestLogger);
@@ -169,11 +170,68 @@ if (
   initMonthlyCreditClosingCron();
 }
 
+let server: any = null;
+let isShuttingDown = false;
+
+export async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`🛑 [SHUTDOWN] Recebido sinal ${signal}. Fechando servidor HTTP e liberando conexões...`);
+
+  if (server) {
+    server.close(async (err: any) => {
+      if (err) {
+        console.error('⚠️ [SHUTDOWN] Erro ao fechar servidor HTTP:', err);
+      } else {
+        console.log('✅ [SHUTDOWN] Servidor HTTP encerrado com sucesso.');
+      }
+      try {
+        await disconnectPrisma();
+        console.log('✅ [SHUTDOWN] Conexões do banco de dados liberadas.');
+      } catch (dbErr) {
+        console.error('⚠️ [SHUTDOWN] Erro ao desconectar Prisma:', dbErr);
+      }
+      if (process.env.NODE_ENV !== 'test') {
+        process.exit(0);
+      }
+    });
+
+    // Timeout de segurança de 10s caso conexões HTTP permaneçam abertas
+    setTimeout(async () => {
+      console.warn('⚠️ [SHUTDOWN] Forçando encerramento após timeout de 10s.');
+      try {
+        await disconnectPrisma();
+      } catch (_) {}
+      if (process.env.NODE_ENV !== 'test') {
+        process.exit(0);
+      }
+    }, 10000).unref();
+  } else {
+    try {
+      await disconnectPrisma();
+    } catch (_) {}
+    if (process.env.NODE_ENV !== 'test') {
+      process.exit(0);
+    }
+  }
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
+process.on('beforeExit', async () => {
+  try {
+    await disconnectPrisma();
+  } catch (_) {}
+});
+
 // Bind exclusivo em 127.0.0.1 quando em staging/testes ou host padrão
 const host = isExternalServicesDisabled() ? '127.0.0.1' : (process.env.HOST || '0.0.0.0');
 
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(Number(port), host, () => {
+  server = app.listen(Number(port), host, () => {
     console.log(`Server running on http://${host}:${port}`);
     initDatabaseClassification().catch((err) => {
       console.warn('⚠️ Falha ao inicializar classificação de empresas:', err);

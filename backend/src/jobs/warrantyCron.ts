@@ -1,10 +1,8 @@
 import cron from 'node-cron';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { sendPushNotification } from '../utils/firebaseConfig';
 import { s3 } from '../middleware/upload';
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
-
-const prisma = new PrismaClient();
 
 // This function checks the cars and generates notifications
 export const checkWarranties = async () => {

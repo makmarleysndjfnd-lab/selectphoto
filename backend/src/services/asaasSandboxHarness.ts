@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './prisma';
 import { resolveCompanyIntegration } from './integrationResolver';
 import {
   validateExternalUrl,
@@ -10,7 +10,7 @@ import {
 } from './vaultService';
 import { isProductionSafetyLocked } from './asaasService';
 
-const prisma = new PrismaClient();
+
 
 export interface HarnessStepResult {
   step: number;

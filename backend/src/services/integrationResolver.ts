@@ -1,11 +1,12 @@
-import { PrismaClient, CompanyIntegration } from '@prisma/client';
+import { CompanyIntegration } from '@prisma/client';
+import { prisma } from './prisma';
 import {
   decryptSecret,
   isAllowedEnvVarReference,
   isAllowedEnvVarForIntegration,
 } from './vaultService';
 
-const prisma = new PrismaClient();
+
 
 export interface ResolvedIntegration {
   integration: CompanyIntegration | null;

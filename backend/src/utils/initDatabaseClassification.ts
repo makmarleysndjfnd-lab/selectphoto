@@ -1,13 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma, getPrisma } from '../services/prisma';
 import { CONFIRMED_TEST_COMPANY_IDS, PROJECT_COMPANY_ID } from '../constants/companyClassification';
-
-let _prisma: PrismaClient | null = null;
-function getPrisma(): PrismaClient {
-  if (!_prisma) {
-    _prisma = new PrismaClient();
-  }
-  return _prisma;
-}
 
 /**
  * Garante idempotentemente a coluna `classification` na tabela Company

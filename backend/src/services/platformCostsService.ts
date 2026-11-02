@@ -1,9 +1,9 @@
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma as defaultPrisma, PrismaClient, Prisma } from './prisma';
 import { getCompetenceRange } from './monthlyCreditClosingService';
 import { centsToBrlNumber, previewOrGetCompanyStatement } from './platformBillingService';
 import { isTestOrSimulationMarker, recordOperationalAuditEvent } from './operationalAuditService';
 
-const defaultPrisma = new PrismaClient();
+
 
 export const VALID_COST_CATEGORIES = [
   'INFRASTRUCTURE',

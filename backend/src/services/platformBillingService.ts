@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma as defaultPrisma, PrismaClient, Prisma } from './prisma';
 import {
   getCompetenceRange,
   getCompetenceForDate,
@@ -19,7 +19,7 @@ export function isStatementClosedStatus(status: string | null | undefined): bool
   return (CLOSED_STATEMENT_STATUSES as readonly string[]).includes(status);
 }
 
-const defaultPrisma = new PrismaClient();
+
 
 export const ROUNDING_POLICY_ITEM_HALF_UP_SUM = 'ITEM_HALF_UP_SUM';
 

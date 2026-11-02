@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma, Prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { calculateCreditSchedule, validateCpf } from '../services/creditService';
 import {
@@ -26,7 +26,7 @@ import {
 } from '../services/monthlyCreditClosingService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 /**
  * Middleware para bloquear acesso de perfis sem permissão ao crediário (ex: PHOTOGRAPHER).

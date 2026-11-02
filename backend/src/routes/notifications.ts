@@ -1,10 +1,10 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Whitelist of allowed editable fields for Client during EDIT_REQUEST_APPROVAL
 const ALLOWED_CLIENT_FIELDS = new Set([

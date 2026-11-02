@@ -1,10 +1,10 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { resolveSellerCommissionRate } from '../utils/commission';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Helper de autorização para fechamento de vendedor
 async function canAccessSellerClosing(user: any, sellerId: string): Promise<boolean> {

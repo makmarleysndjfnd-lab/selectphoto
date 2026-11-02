@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // ── ROTAS ESTÁTICAS E DE PERFIL (DEVEM FICAR ANTES DE /:id) ───────────────────
 

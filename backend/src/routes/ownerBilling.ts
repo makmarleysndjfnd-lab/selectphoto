@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import {
   authenticateToken,
   requireCapability,
@@ -28,7 +28,7 @@ import {
 } from '../services/platformCostsService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // ============================================================================
 // 1. CONSULTA SELF-SERVICE DO DEMONSTRATIVO PELA PRÓPRIA EMPRESA (SOMENTE LEITURA)

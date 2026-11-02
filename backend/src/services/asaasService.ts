@@ -5,10 +5,10 @@
  * DIRETRIZ LGPD: NUNCA envia dados ou fotos de crianças para o Asaas. Apenas dados do Responsável Legal.
  */
 
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './prisma';
 import { resolveCompanyIntegration } from './integrationResolver';
 
-const prisma = new PrismaClient();
+
 
 export type AsaasMode = 'DISABLED' | 'SANDBOX' | 'PRODUCTION';
 

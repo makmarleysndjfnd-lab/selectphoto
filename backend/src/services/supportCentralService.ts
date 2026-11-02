@@ -1,8 +1,6 @@
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma, PrismaClient, Prisma } from './prisma';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-
-const prisma = new PrismaClient();
 
 // Sanitizador de diagnóstico e mensagens: remove senhas, chaves de API, CPFs, números de cartão e credenciais
 export function sanitizeDiagnosticInfo(data: any): any {

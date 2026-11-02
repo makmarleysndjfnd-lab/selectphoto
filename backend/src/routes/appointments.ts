@@ -1,9 +1,9 @@
 import express, { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Helper to check if a user is allowed to access/modify a given seller's appointments
 async function canAccessSellerAppointments(reqUser: any, targetSellerId: string): Promise<boolean> {

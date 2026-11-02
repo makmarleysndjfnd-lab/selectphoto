@@ -10,3 +10,6 @@ scripts/seed-local-admin.ts
 uploads/
 public/apk/
 public/apk/*.apk
+pgdata/
+*.log
+capacity-benchmark-report.json

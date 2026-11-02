@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import {
   authenticateToken,
   requireCapability,
@@ -28,7 +28,7 @@ import { isProductionSafetyLocked } from '../services/asaasService';
 import { createOrUpdateInternalAlert } from '../services/internalAlertService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // ── Definições do Catálogo Oficial de Integrações ────────────────────────────
 

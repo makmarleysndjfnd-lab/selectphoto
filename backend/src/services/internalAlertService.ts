@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma, PrismaClient } from './prisma';
 import { sanitizeDiagnosticInfo } from './supportCentralService';
-
-const prisma = new PrismaClient();
 
 export interface InternalAlertParams {
   alertKey: string;

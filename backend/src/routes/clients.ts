@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { randomUUID } from 'crypto';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { getNextVisibleCode } from '../utils/visibleCode';
 import { isClientClosedForPhotographer, sanitizeClientForPhotographer } from '../utils/photographerIsolation';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Allowed client fields for sync
 const ALLOWED_SYNC_CLIENT_FIELDS = [

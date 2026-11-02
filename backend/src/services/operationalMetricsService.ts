@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma, PrismaClient } from './prisma';
 import { sanitizeDiagnosticInfo } from './supportCentralService';
 import { createOrUpdateInternalAlert } from './internalAlertService';
-
-const prisma = new PrismaClient();
 
 export interface OperationalMetricsFilter {
   companyId?: string;

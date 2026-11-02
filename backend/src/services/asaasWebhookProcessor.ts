@@ -1,9 +1,9 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './prisma';
 import { decryptSecret } from './vaultService';
 import { isGlobalLiveGateLocked } from './asaasService';
 
-const prisma = new PrismaClient();
+
 
 export interface AsaasWebhookProcessResult {
   status: number;

@@ -1,9 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Get all teams
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {

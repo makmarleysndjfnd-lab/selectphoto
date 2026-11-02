@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import bcrypt from 'bcrypt';
 import {
   authenticateToken,
@@ -18,7 +18,7 @@ import {
 import { isProductionSafetyLocked } from '../services/asaasService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Catálogo permitido para autoatendimento do Admin da Empresa
 export const COMPANY_SELF_SERVICE_CATALOG = [

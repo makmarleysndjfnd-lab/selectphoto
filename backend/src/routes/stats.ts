@@ -1,9 +1,9 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 const getOpenAIClient = () => {
   const apiKey = process.env.OPENAI_API_KEY;

@@ -1,10 +1,10 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, requireSuperAdmin, AuthRequest } from '../middleware/authMiddleware';
 import { claimSupportSessionToken } from '../services/supportCentralService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Get all companies
 router.get('/companies', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {

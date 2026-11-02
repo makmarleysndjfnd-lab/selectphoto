@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import {
   authenticateToken,
   requireSuperAdmin,
@@ -27,7 +27,7 @@ import {
 } from '../services/internalAlertService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Todas as rotas de suporte do proprietário exigem SUPER_ADMIN
 router.use(authenticateToken);

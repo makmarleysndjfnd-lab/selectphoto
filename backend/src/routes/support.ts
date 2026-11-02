@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import {
   createSupportTicket,
@@ -15,7 +15,7 @@ import {
 import supportSessionRoutes from './supportSession';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Rotas específicas da sessão técnica de atendimento autorizado
 router.use('/session', supportSessionRoutes);

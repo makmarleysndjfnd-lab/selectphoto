@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import {
   listSupportTickets,
@@ -22,7 +22,7 @@ import {
 import { isGlobalLiveGateLocked } from '../services/asaasService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 // Todas as rotas desta sessão exigem autenticação
 router.use(authenticateToken);

@@ -1,6 +1,4 @@
-import { PrismaClient, Prisma } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma, PrismaClient, Prisma } from './prisma';
 
 export interface CompetenceRange {
   competence: string;

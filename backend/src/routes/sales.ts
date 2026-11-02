@@ -1,5 +1,5 @@
 import { NextFunction, Response, Router } from 'express';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { prisma, Prisma } from '../services/prisma';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
@@ -8,7 +8,7 @@ import { resolveSellerCommissionRate } from '../utils/commission';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = Router();
-const prisma = new PrismaClient();
+
 
 const SALE_MANAGER_ROLES = ['COMPANY_ADMIN', 'ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'SUPER_ADMIN'];
 

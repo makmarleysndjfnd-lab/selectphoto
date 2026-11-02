@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma, getPrisma, PrismaClient, Prisma } from '../services/prisma';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import {
@@ -12,13 +12,7 @@ import { recordOperationalAuditEvent } from '../services/operationalAuditService
 import { isConfirmedTestCompany } from '../constants/companyClassification';
 
 const router = Router();
-let _prisma: PrismaClient | null = null;
-function getPrisma(): PrismaClient {
-  if (!_prisma) {
-    _prisma = new PrismaClient();
-  }
-  return _prisma;
-}
+
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

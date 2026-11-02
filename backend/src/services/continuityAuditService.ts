@@ -1,6 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma, PrismaClient } from './prisma';
 
-const prisma = new PrismaClient();
+
 
 export type DisasterRecoveryVerificationStatus =
   | 'BACKUP_CREATED'

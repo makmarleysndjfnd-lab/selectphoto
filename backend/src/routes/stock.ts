@@ -1,9 +1,9 @@
 import express, { Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../services/prisma';
 import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Helper de validação estrita de inteiros sem truncamento decimal
 function parseStrictInteger(value: any): { valid: boolean; value?: number; error?: string } {

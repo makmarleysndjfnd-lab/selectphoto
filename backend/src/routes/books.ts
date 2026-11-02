@@ -1,10 +1,10 @@
 import express from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma, Prisma } from '../services/prisma';
 import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
 
 // Close Event Batch (Photographer)
 router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {

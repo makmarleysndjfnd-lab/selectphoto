@@ -1,7 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient, Prisma } from '@prisma/client';
-
-const defaultPrisma = new PrismaClient();
+import { prisma as defaultPrisma, PrismaClient, Prisma } from './prisma';
 
 export type OperationalAuditCategory =
   | 'PRICE'

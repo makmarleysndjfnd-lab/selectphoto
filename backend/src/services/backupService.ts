@@ -1,7 +1,7 @@
-import { PrismaClient, Prisma } from '@prisma/client';
+import { prisma, Prisma, PrismaClient } from './prisma';
 import { encryptSecret, decryptSecret } from './vaultService';
 
-const prisma = new PrismaClient();
+
 
 const OWNER_ONLY_GOVERNANCE_MODELS = new Set([
   'OwnerCapability',
@@ -290,7 +290,7 @@ export const restoreBackupJson = async (
   let totalRowsRestored = 0;
 
   await dbClient.$transaction(
-    async (tx) => {
+    async (tx: Prisma.TransactionClient) => {
       await tx.$executeRawUnsafe(`SET session_replication_role = replica;`);
 
       try {
