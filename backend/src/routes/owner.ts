@@ -9,6 +9,7 @@ import {
   AuthRequest,
 } from '../middleware/authMiddleware';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import { isConfirmedTestCompany } from '../constants/companyClassification';
 
 const router = Router();
 let _prisma: PrismaClient | null = null;
@@ -125,6 +126,7 @@ router.post('/auth/step-up', authenticateToken, async (req: AuthRequest, res: Re
     res.json({
       success: true,
       stepUpToken: rawToken,
+      token: rawToken,
       expiresAt: expiresAt.toISOString(),
       expiresInSeconds: 600,
       message: 'Reautenticação reforçada confirmada com validade de 10 minutos.',
@@ -201,10 +203,19 @@ router.get(
       const prisma = getPrisma();
       const statusFilter = req.query.status as string | undefined;
       const search = req.query.search as string | undefined;
+      const classificationFilter = (req.query.classification || req.query.scope) as string | undefined;
 
       const where: Prisma.CompanyWhereInput = {};
       if (statusFilter && statusFilter !== 'ALL') {
         where.status = statusFilter;
+      }
+      if (classificationFilter === 'TEST_DEMO') {
+        where.classification = 'TEST_DEMO';
+      } else if (classificationFilter === 'ALL') {
+        // Sem restrição de classificação: retorna operacionais e testes
+      } else {
+        // Padrão canônico de segurança: apenas empresas operacionais
+        where.classification = 'OPERATIONAL';
       }
       if (search && search.trim().length > 0) {
         where.OR = [
@@ -245,6 +256,8 @@ router.get(
           legalName: c.legalName,
           tradeName: c.tradeName,
           status: c.status,
+          classification: (c as any).classification || 'OPERATIONAL',
+          isTestExample: (c as any).classification === 'TEST_DEMO' || isConfirmedTestCompany(c.id),
           isActive: c.isActive,
           adminContactName: c.adminContactName,
           adminContactEmail: c.adminContactEmail,
@@ -336,6 +349,8 @@ router.get(
         legalName: company.legalName,
         tradeName: company.tradeName,
         status: company.status,
+        classification: (company as any).classification || 'OPERATIONAL',
+        isTestExample: (company as any).classification === 'TEST_DEMO' || isConfirmedTestCompany(company.id),
         isActive: company.isActive,
         adminContactName: company.adminContactName,
         adminContactEmail: company.adminContactEmail,
@@ -829,6 +844,7 @@ router.get(
       const prisma = getPrisma();
       const companyId = req.query.companyId as string | undefined;
       const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+      const excludeTestExamples = req.query.excludeTestExamples === 'true';
 
       const where: Prisma.ContractAuditEventWhereInput = {};
       if (companyId) {
@@ -841,13 +857,17 @@ router.get(
         take: limit,
         include: {
           company: {
-            select: { id: true, name: true, cnpj: true },
+            select: { id: true, name: true, cnpj: true, classification: true },
           },
         },
       });
 
-      res.json(
-        logs.map((log) => ({
+      const mappedLogs = logs.map((log) => {
+        const isTestExample =
+          isConfirmedTestCompany(log.companyId) ||
+          (log.company as any)?.classification === 'TEST_DEMO';
+
+        return {
           id: log.id,
           action: log.action,
           companyId: log.companyId,
@@ -858,8 +878,15 @@ router.get(
           reason: log.reason,
           ipAddress: log.ipAddress,
           createdAt: log.createdAt,
-        }))
-      );
+          isTestExample,
+        };
+      });
+
+      const filteredLogs = excludeTestExamples
+        ? mappedLogs.filter((l) => !l.isTestExample)
+        : mappedLogs;
+
+      res.json(filteredLogs);
     } catch (error) {
       console.error('Erro ao consultar logs de auditoria:', error);
       res.status(500).json({ error: 'Erro interno ao consultar logs de auditoria.' });

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "classification" TEXT NOT NULL DEFAULT 'OPERATIONAL';
+

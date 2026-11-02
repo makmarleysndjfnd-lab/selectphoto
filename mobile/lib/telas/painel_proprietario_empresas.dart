@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../servicos/servico_api.dart';
 import 'painel_proprietario_integracoes.dart';
 import 'painel_proprietario_faturamento.dart';
 import 'painel_proprietario_suporte.dart';
+import 'tela_login.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
   const PainelProprietarioEmpresas({super.key});
@@ -25,7 +27,9 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
   List<Map<String, dynamic>> _logsAuditoria = [];
   Map<String, dynamic>? _perfilProprietario;
 
+  String _filtroClassificacao = 'OPERATIONAL'; // 'OPERATIONAL', 'TEST_DEMO', 'ALL'
   String _filtroStatus = 'ALL';
+  bool _ocultarTestesAuditoria = true;
   final TextEditingController _buscaController = TextEditingController();
 
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy');
@@ -35,6 +39,9 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _carregarDados();
   }
 
@@ -57,8 +64,12 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
       final empresas = await _api.getOwnerCompanies(
         status: _filtroStatus,
         search: _buscaController.text,
+        classification: _filtroClassificacao,
       );
-      final logs = await _api.getOwnerAuditLogs(limit: 30);
+      final logs = await _api.getOwnerAuditLogs(
+        limit: 50,
+        excludeTestExamples: _ocultarTestesAuditoria,
+      );
 
       setState(() {
         _perfilProprietario = perfil;
@@ -95,7 +106,9 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
           children: const [
             Icon(Icons.security_rounded, color: Color(0xFF38BDF8)),
             SizedBox(width: 8),
-            Text('Autenticação Reforçada', style: TextStyle(color: Colors.white, fontSize: 18)),
+            Expanded(
+              child: Text('Autenticação Reforçada', style: TextStyle(color: Colors.white, fontSize: 18)),
+            ),
           ],
         ),
         content: Form(
@@ -163,6 +176,79 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     );
 
     return result ?? false;
+  }
+
+  // ── Logout Seguro e Desconexão de Sessão do Proprietário ─────────────────
+
+  Future<void> _confirmarESair() async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.logout_rounded, color: Colors.redAccent),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Sair da Conta', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Deseja realmente sair da Central do Proprietário?\n\nAs credenciais de acesso desta sessão serão removidas com segurança deste dispositivo.\n\n(O banco offline e as fichas locais são preservados integralmente).',
+          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sair da Conta'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar != true || !mounted) return;
+
+    // 1. Tentar revogar sessão reforçada no servidor (com fail-safe se offline)
+    if (_stepUpToken != null) {
+      try {
+        await _api.ownerRevokeStepUp(stepUpToken: _stepUpToken);
+      } catch (e) {
+        debugPrint('Aviso: falha de rede ao revogar step-up no backend: $e');
+      }
+    }
+
+    // 2. Limpar token em memória no cliente
+    _api.clearToken();
+
+    // 3. Limpar chaves da sessão persistida em SharedPreferences
+    // NOTA DE SEGURANÇA: Não executar prefs.clear() para preservar banco offline e fichas
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('jwt_token');
+      await prefs.remove('user_role');
+      await prefs.remove('user_id');
+      await prefs.remove('user_name');
+      await prefs.remove('company_id');
+      await prefs.remove('company_name');
+      await prefs.remove('owner_session');
+    } catch (e) {
+      debugPrint('Aviso ao remover credenciais locais: $e');
+    }
+
+    // 4. Voltar ao Login removendo todas as telas da pilha
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
   }
 
   // ── Modal de Configuração de Taxa da Plataforma ───────────────────────────
@@ -527,7 +613,9 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Histórico de Vigências da Taxa Lumora', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                    const Expanded(
+                      child: Text('Histórico de Vigências da Taxa Lumora', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                    ),
                     TextButton.icon(
                       icon: const Icon(Icons.edit_note_rounded, size: 18, color: Color(0xFF38BDF8)),
                       label: const Text('Nova Vigência', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12)),
@@ -723,7 +811,10 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Central do Proprietário', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text(
+              'Central do Proprietário',
+              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+            ),
             Text(
               _temStepUpAtivo
                   ? '🔒 Sessão Reforçada Ativa (${_stepUpExpiresAt!.difference(DateTime.now()).inMinutes}m)'
@@ -739,57 +830,39 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
           if (_temStepUpAtivo)
             IconButton(
               icon: const Icon(Icons.lock_open_rounded, color: Color(0xFF38BDF8)),
-              tooltip: 'Revogar Sessão Reforçada',
+              tooltip: 'Revogar Sessão Reforçada (10m)',
               onPressed: () async {
                 await _api.ownerRevokeStepUp(stepUpToken: _stepUpToken);
                 setState(() {
                   _stepUpToken = null;
                   _stepUpExpiresAt = null;
                 });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Sessão reforçada revogada com sucesso.')),
-                );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Sessão reforçada revogada com sucesso.')),
+                  );
+                }
               },
             ),
           IconButton(
-            icon: const Icon(Icons.receipt_long_rounded, color: Color(0xFF38BDF8)),
-            tooltip: 'Faturamento, Custos e Auditoria',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const PainelProprietarioFaturamentoAuditoriaCustos(),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.hub_rounded, color: Color(0xFF38BDF8)),
-            tooltip: 'Central de Integrações e APIs',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const PainelProprietarioIntegracoes(),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.support_agent_rounded, color: Color(0xFF38BDF8)),
-            tooltip: 'Central de Suporte e Continuidade',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const PainelProprietarioSuporteContinuidade(),
-                ),
-              );
-            },
-          ),
-          IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+            tooltip: 'Atualizar',
             onPressed: _carregarDados,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8.0),
+            child: TextButton.icon(
+              onPressed: _confirmarESair,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 18),
+              label: const Text(
+                'Sair',
+                style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
           ),
         ],
         bottom: TabBar(
@@ -806,12 +879,19 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
       ),
       body: _carregando
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF38BDF8)))
-          : TabBarView(
-              controller: _tabController,
+          : Column(
               children: [
-                _buildTabEmpresas(),
-                _buildTabAuditoria(),
-                _buildTabCapacidades(),
+                _buildQuickNavBar(),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildTabEmpresas(),
+                      _buildTabAuditoria(),
+                      _buildTabCapacidades(),
+                    ],
+                  ),
+                ),
               ],
             ),
       floatingActionButton: _tabController.index == 0
@@ -823,6 +903,105 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
               onPressed: _abrirModalNovaEmpresa,
             )
           : null,
+    );
+  }
+
+  Widget _buildQuickNavBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E293B),
+        border: Border(bottom: BorderSide(color: Color(0xFF334155), width: 1)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildQuickNavButton(
+              icon: Icons.receipt_long_rounded,
+              label: 'Faturamento',
+              color: const Color(0xFF38BDF8),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const PainelProprietarioFaturamentoAuditoriaCustos(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildQuickNavButton(
+              icon: Icons.hub_rounded,
+              label: 'APIs',
+              color: const Color(0xFF34D399),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const PainelProprietarioIntegracoes(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _buildQuickNavButton(
+              icon: Icons.support_agent_rounded,
+              label: 'Suporte',
+              color: const Color(0xFFA78BFA),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const PainelProprietarioSuporteContinuidade(),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickNavButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -864,7 +1043,15 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _buildFilterChip('Todas', 'ALL'),
+                _buildClassificationChip('Operacionais', 'OPERATIONAL'),
+                const SizedBox(width: 8),
+                _buildClassificationChip('Testes / Demo', 'TEST_DEMO'),
+                const SizedBox(width: 8),
+                _buildClassificationChip('Todas as Empresas', 'ALL'),
+                const SizedBox(width: 16),
+                Container(height: 24, width: 1, color: const Color(0xFF334155)),
+                const SizedBox(width: 16),
+                _buildFilterChip('Todas as Situações', 'ALL'),
                 const SizedBox(width: 8),
                 _buildFilterChip('Ativas', 'ACTIVE'),
                 const SizedBox(width: 8),
@@ -884,6 +1071,25 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             ..._empresas.map((empresa) => _buildEmpresaCard(empresa)),
         ],
       ),
+    );
+  }
+
+  Widget _buildClassificationChip(String label, String value) {
+    final isSelected = _filtroClassificacao == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: isSelected,
+      selectedColor: const Color(0xFF34D399),
+      backgroundColor: const Color(0xFF1E293B),
+      labelStyle: TextStyle(
+        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF94A3B8),
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 12,
+      ),
+      onSelected: (_) {
+        setState(() => _filtroClassificacao = value);
+        _carregarDados();
+      },
     );
   }
 
@@ -910,6 +1116,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     final isSuspensa = empresa['status'] == 'SUSPENDED';
     final currentRate = empresa['currentRate'];
     final isRateConfigured = empresa['isRateConfigured'] == true;
+    final isTestDemo = empresa['isTestExample'] == true || empresa['classification'] == 'TEST_DEMO';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -917,7 +1124,11 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
         color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: isSuspensa ? const Color(0xFFEF4444).withOpacity(0.4) : const Color(0xFF334155),
+          color: isSuspensa
+              ? const Color(0xFFEF4444).withOpacity(0.4)
+              : isTestDemo
+                  ? const Color(0xFFF59E0B).withOpacity(0.35)
+                  : const Color(0xFF334155),
         ),
       ),
       child: Padding(
@@ -927,6 +1138,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: Text(
@@ -934,21 +1146,46 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                     style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isSuspensa ? const Color(0xFFEF4444).withOpacity(0.15) : Colors.green.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: isSuspensa ? const Color(0xFFEF4444) : Colors.green),
-                  ),
-                  child: Text(
-                    isSuspensa ? 'SUSPENSA' : 'ATIVA',
-                    style: TextStyle(
-                      color: isSuspensa ? const Color(0xFFEF4444) : Colors.greenAccent,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
+                const SizedBox(width: 8),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isTestDemo) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0xFFF59E0B)),
+                        ),
+                        child: const Text(
+                          'TESTE / DEMO',
+                          style: TextStyle(
+                            color: Color(0xFFFBBF24),
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isSuspensa ? const Color(0xFFEF4444).withOpacity(0.15) : Colors.green.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: isSuspensa ? const Color(0xFFEF4444) : Colors.green),
+                      ),
+                      child: Text(
+                        isSuspensa ? 'SUSPENSA' : 'ATIVA',
+                        style: TextStyle(
+                          color: isSuspensa ? const Color(0xFFEF4444) : Colors.greenAccent,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -1021,16 +1258,18 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             ),
             const SizedBox(height: 12),
 
-            // Ações do Card
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // Ações do Card com Quebra Responsiva (Wrap)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 TextButton.icon(
                   icon: const Icon(Icons.info_outline_rounded, size: 16),
                   label: const Text('Detalhes & Vigências', style: TextStyle(fontSize: 12)),
                   onPressed: () => _abrirDetalhesEmpresa(empresa['id']),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFF38BDF8)),
@@ -1041,7 +1280,6 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   label: const Text('Ajustar Taxa', style: TextStyle(fontSize: 12)),
                   onPressed: () => _abrirModalConfigurarTaxa(empresa),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFF34D399)),
@@ -1059,7 +1297,6 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                     );
                   },
                 ),
-                const SizedBox(width: 8),
                 IconButton(
                   icon: Icon(
                     isSuspensa ? Icons.play_arrow_rounded : Icons.pause_circle_outline_rounded,
@@ -1091,18 +1328,52 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
           'Registro imutável de alterações contratuais, criação de empresas, ajustes de taxa e suspensões.',
           style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
         ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF334155)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Text(
+                  'Ocultar eventos de testes/fictícios',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                ),
+              ),
+              Switch(
+                value: _ocultarTestesAuditoria,
+                activeColor: const Color(0xFF38BDF8),
+                onChanged: (val) {
+                  setState(() => _ocultarTestesAuditoria = val);
+                  _carregarDados();
+                },
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 16),
         if (_logsAuditoria.isEmpty)
           const Center(child: Text('Nenhum log registrado até o momento.', style: TextStyle(color: Color(0xFF94A3B8))))
         else
           ..._logsAuditoria.map((log) {
+            final isTestEvent = log['isTestExample'] == true;
+
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E293B),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF334155)),
+                border: Border.all(
+                  color: isTestEvent
+                      ? const Color(0xFFF59E0B).withOpacity(0.35)
+                      : const Color(0xFF334155),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1110,16 +1381,35 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF38BDF8).withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          log['action'] ?? '',
-                          style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11),
-                        ),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF38BDF8).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              log['action'] ?? '',
+                              style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11),
+                            ),
+                          ),
+                          if (isTestEvent) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF59E0B).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+                              ),
+                              child: const Text(
+                                'TESTE',
+                                style: TextStyle(color: Color(0xFFFBBF24), fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       Text(
                         log['createdAt'] != null ? _dateTimeFormat.format(DateTime.parse(log['createdAt'])) : '',
@@ -1219,7 +1509,10 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    Expanded(
+                      child: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    ),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(

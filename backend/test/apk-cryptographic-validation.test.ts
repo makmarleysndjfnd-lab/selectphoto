@@ -239,9 +239,9 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.8+11)
 
   it('10. Manifesto confiável da release possui versão, build, pacote e hash auditados', () => {
     assert.deepEqual(RELEASE_APK, {
-      version: '1.0.29',
-      buildNumber: 40,
-      sha256: '2C5FDFA437508306D27DE02B99A98BEBC0EC08056D142840B27033AD960FBB96',
+      version: '1.0.30',
+      buildNumber: 41,
+      sha256: '0B632F32D67FFACD45BD007BEFA38545C6BBE4F01EC04794A0B64BFCEEE31E95',
       packageName: 'com.example.mobile',
     });
   });

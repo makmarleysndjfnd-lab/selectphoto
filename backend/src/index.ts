@@ -32,6 +32,7 @@ app.set('trust proxy', 1);
 import { requestLogger } from './middleware/requestLogger';
 import { securityHeaders, generalApiLimiter, centralErrorHandler } from './middleware/securityMiddleware';
 import { isExternalServicesDisabled } from './utils/externalServices';
+import { initDatabaseClassification } from './utils/initDatabaseClassification';
 
 app.use(securityHeaders);
 app.use(requestLogger);
@@ -174,6 +175,9 @@ const host = isExternalServicesDisabled() ? '127.0.0.1' : (process.env.HOST || '
 if (process.env.NODE_ENV !== 'test') {
   app.listen(Number(port), host, () => {
     console.log(`Server running on http://${host}:${port}`);
+    initDatabaseClassification().catch((err) => {
+      console.warn('⚠️ Falha ao inicializar classificação de empresas:', err);
+    });
   });
 }
 

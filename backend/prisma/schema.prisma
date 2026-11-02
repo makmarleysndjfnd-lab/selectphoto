@@ -23,6 +23,7 @@ model Company {
   adminContactPhone  String?
   contractNotes      String?
   status             String   @default("ACTIVE")
+  classification     String   @default("OPERATIONAL")
   suspensionReason   String?
   suspendedAt        DateTime?
   suspendedByUserId  String?

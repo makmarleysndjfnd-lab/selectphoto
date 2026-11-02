@@ -2161,11 +2161,18 @@ class ApiService {
   }
 
   /// Listar empresas na Central do Proprietário
-  Future<List<Map<String, dynamic>>> getOwnerCompanies({String? status, String? search}) async {
+  Future<List<Map<String, dynamic>>> getOwnerCompanies({
+    String? status,
+    String? search,
+    String? classification = 'OPERATIONAL',
+  }) async {
     try {
       final queryParams = <String, dynamic>{};
       if (status != null && status != 'ALL') queryParams['status'] = status;
       if (search != null && search.trim().isNotEmpty) queryParams['search'] = search.trim();
+      if (classification != null && classification.isNotEmpty) {
+        queryParams['classification'] = classification;
+      }
 
       final resp = await _dio.get('/owner/companies', queryParameters: queryParams);
       return (resp.data as List).map((e) => Map<String, dynamic>.from(e)).toList();
@@ -2294,10 +2301,15 @@ class ApiService {
   }
 
   /// Trilha de auditoria contratual
-  Future<List<Map<String, dynamic>>> getOwnerAuditLogs({String? companyId, int limit = 50}) async {
+  Future<List<Map<String, dynamic>>> getOwnerAuditLogs({
+    String? companyId,
+    int limit = 50,
+    bool excludeTestExamples = false,
+  }) async {
     try {
       final queryParams = <String, dynamic>{'limit': limit};
       if (companyId != null) queryParams['companyId'] = companyId;
+      if (excludeTestExamples) queryParams['excludeTestExamples'] = 'true';
 
       final resp = await _dio.get('/owner/audit-logs', queryParameters: queryParams);
       return (resp.data as List).map((e) => Map<String, dynamic>.from(e)).toList();

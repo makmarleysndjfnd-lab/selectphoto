@@ -15,7 +15,11 @@ class FakeEtapa2ApiService extends ApiService {
   final List<Map<String, dynamic>> storedIntegrations = [];
 
   @override
-  Future<List<Map<String, dynamic>>> getOwnerCompanies({String? status, String? search}) async {
+  Future<List<Map<String, dynamic>>> getOwnerCompanies({
+    String? status,
+    String? search,
+    String? classification,
+  }) async {
     return [
       {
         'id': 'comp_test_1',

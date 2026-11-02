@@ -64,10 +64,15 @@ class _PainelProprietarioIntegracoesState
   Future<void> _inicializarDados() async {
     setState(() => _carregando = true);
     try {
-      final empresas = await _api.getOwnerCompanies();
+      final empresas = await _api.getOwnerCompanies(classification: 'OPERATIONAL');
       final cats = await _api.getIntegrationCatalogs();
-      final selected = _empresaSelecionada ??
-          (empresas.isNotEmpty ? empresas.first : null);
+      Map<String, dynamic>? selected = _empresaSelecionada;
+      if (selected == null && empresas.isNotEmpty) {
+        selected = empresas.firstWhere(
+          (e) => e['name'] == 'Select Photo Default' || e['classification'] == 'OPERATIONAL',
+          orElse: () => empresas.first,
+        );
+      }
       final readiness = await _api.getAsaasLiveReadinessReport(
         companyId: selected?['id']?.toString(),
       );
@@ -204,7 +209,7 @@ class _PainelProprietarioIntegracoesState
                     final pwd = senhaController.text;
                     final resp = await _api.ownerStepUpAuth(pwd);
                     senhaController.clear();
-                    _stepUpToken = resp['token'];
+                    _stepUpToken = (resp['stepUpToken'] ?? resp['token']) as String?;
                     _stepUpExpiresAt = DateTime.parse(resp['expiresAt']);
                     if (ctx.mounted) Navigator.pop(ctx, true);
                   } catch (e) {
@@ -507,6 +512,10 @@ class _PainelProprietarioIntegracoesState
       return;
     }
 
+    final targetCompany = _empresaSelecionada!;
+    final String targetCompanyId = targetCompany['id'];
+    final String targetCompanyName = targetCompany['name'] ?? 'Empresa';
+
     final authed = await _garantirStepUpAuth('Cadastrar Nova Integração');
     if (!authed) return;
 
@@ -524,7 +533,7 @@ class _PainelProprietarioIntegracoesState
     String pagadorCusto = cat['defaultCostPayer']?.toString() ?? 'COMPANY';
 
     final titularidadeController = TextEditingController(
-      text: '${_empresaSelecionada!['name']} - $provedorSelecionado',
+      text: '$targetCompanyName - $provedorSelecionado',
     );
     final chaveController = TextEditingController();
     final webhookTokenController = TextEditingController();
@@ -585,11 +594,20 @@ class _PainelProprietarioIntegracoesState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Empresa: ${_empresaSelecionada!['name']}',
+                          'Empresa-Alvo: $targetCompanyName',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Ambiente: $ambienteSelecionado',
+                          style: TextStyle(
+                            color: ambienteSelecionado == 'PRODUCTION' ? const Color(0xFFF87171) : const Color(0xFF38BDF8),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -853,7 +871,7 @@ class _PainelProprietarioIntegracoesState
 
         final hasPlainSecret = plainSecretVal.isNotEmpty;
         final data = <String, dynamic>{
-          'companyId': _empresaSelecionada!['id'],
+          'companyId': targetCompanyId,
           'category': category,
           'provider': provedorSelecionado,
           'scope': escopoSelecionado,
@@ -878,8 +896,8 @@ class _PainelProprietarioIntegracoesState
               ? 'Integração bancária cadastrada em estado DESATIVADO (não financeiro) aguardando validação.'
               : 'Integração cadastrada com sucesso na Central.',
         );
-        if (_empresaSelecionada != null) {
-          await _carregarIntegracoesEmpresa(_empresaSelecionada!['id']);
+        if (_empresaSelecionada?['id'] == targetCompanyId) {
+          await _carregarIntegracoesEmpresa(targetCompanyId);
         }
       } catch (e) {
         _mostrarErro('Falha ao cadastrar integração: $e');
@@ -1191,9 +1209,13 @@ class _PainelProprietarioIntegracoesState
                 dropdownColor: const Color(0xFF1E293B),
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 items: _empresas.map((e) {
+                  final isTest = e['isTestExample'] == true || e['classification'] == 'TEST_DEMO';
                   return DropdownMenuItem<String>(
                     value: e['id'],
-                    child: Text(e['name'] ?? 'Sem Nome'),
+                    child: Text(
+                      isTest ? '${e['name']} [TESTE]' : (e['name'] ?? 'Sem Nome'),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   );
                 }).toList(),
                 onChanged: (id) {
@@ -1292,7 +1314,12 @@ class _PainelProprietarioIntegracoesState
                     ],
                   ),
                 ),
-                if (!configurada) _buildStatusBadge('DISABLED'),
+                if (!configurada)
+                  _buildStatusBadge(
+                    (cat['defaultScope'] == 'PLATFORM_SHARED' || categoryCode == 'GEO_LOCATION')
+                        ? 'SHARED_AVAILABLE'
+                        : 'NOT_CONFIGURED',
+                  ),
               ],
             ),
             const SizedBox(height: 10),
@@ -1317,6 +1344,27 @@ class _PainelProprietarioIntegracoesState
                       _cadastrarPrimeiraIntegracao(cat, initialEnvironment: missingEnv),
                 ),
               ],
+            ] else if (categoryCode == 'GEO_LOCATION') ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.35)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.check_circle_outline_rounded, color: Color(0xFF38BDF8), size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Serviço compartilhado ativo: O ViaCEP está habilitado de fábrica na plataforma e não exige cadastro ou chaves individuais para consulta de endereços.',
+                        style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ] else ...[
               Row(
                 children: [
@@ -1413,7 +1461,123 @@ class _PainelProprietarioIntegracoesState
               'Última Validação:',
               '${_dateFormat.format(DateTime.parse(integracao['lastValidatedAt']))} (${integracao['lastValidationStatus'] ?? 'PENDING'})',
             ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
+
+          // Explicações de prontidão real por provedor
+          if (integracao['provider'] == 'GROK')
+            Container(
+              margin: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.4)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Color(0xFFFBBF24), size: 16),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Pendente de Implementação (501): O radar de eventos ainda retorna 501 para Grok. A chave pode ser salva, mas não há suporte operacional ativo no app.',
+                      style: TextStyle(color: Color(0xFFFBBF24), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (integracao['provider'] == 'GEMINI')
+            Container(
+              margin: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.check_circle_outline_rounded, color: Color(0xFF34D399), size: 16),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Em uso operacional: A chave do cofre é resolvida pelo backend para buscas reais e radar de eventos (/api/events/search-city).',
+                      style: TextStyle(color: Color(0xFF34D399), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (integracao['provider'] == 'WHATSAPP' || integracao['category'] == 'MESSAGING')
+            Container(
+              margin: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF38BDF8).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.4)),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, color: Color(0xFF38BDF8), size: 16),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Validação técnica: O teste valida o token junto à Meta, porém ainda não há fluxo de disparos automáticos de mensagens conectado ao app.',
+                      style: TextStyle(color: Color(0xFF38BDF8), fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (integracao['provider'] == 'ASAAS' || integracao['category'] == 'PAYMENT_GATEWAY')
+            Container(
+              margin: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: integracao['environment'] == 'PRODUCTION'
+                    ? const Color(0xFFEF4444).withOpacity(0.12)
+                    : const Color(0xFF14B8A6).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: integracao['environment'] == 'PRODUCTION'
+                      ? const Color(0xFFEF4444).withOpacity(0.4)
+                      : const Color(0xFF14B8A6).withOpacity(0.4),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    integracao['environment'] == 'PRODUCTION'
+                        ? Icons.shield_rounded
+                        : Icons.science_rounded,
+                    color: integracao['environment'] == 'PRODUCTION'
+                        ? const Color(0xFFF87171)
+                        : const Color(0xFF2DD4BF),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      integracao['environment'] == 'PRODUCTION'
+                          ? 'Trava de Segurança LIVE Ativa: O servidor operacional bloqueia transações bancárias reais automáticas. Salvar a chave não expõe clientes a cobranças indevidas.'
+                          : 'Ambiente Sandbox: Destinado a homologação de parcelas e testes de integração com a API do Asaas sem movimentação de dinheiro real.',
+                      style: TextStyle(
+                        color: integracao['environment'] == 'PRODUCTION'
+                            ? const Color(0xFFF87171)
+                            : const Color(0xFF2DD4BF),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 6),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1518,6 +1682,16 @@ class _PainelProprietarioIntegracoesState
         bg = Colors.redAccent.withOpacity(0.2);
         fg = Colors.redAccent;
         label = 'REVOGADO';
+        break;
+      case 'SHARED_AVAILABLE':
+        bg = const Color(0xFF38BDF8).withOpacity(0.2);
+        fg = const Color(0xFF38BDF8);
+        label = 'COMPARTILHADO ATIVO';
+        break;
+      case 'NOT_CONFIGURED':
+        bg = const Color(0xFF64748B).withOpacity(0.2);
+        fg = const Color(0xFF94A3B8);
+        label = 'SEM CADASTRO';
         break;
       default:
         bg = const Color(0xFF64748B).withOpacity(0.2);
