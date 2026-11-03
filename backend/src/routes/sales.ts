@@ -330,7 +330,7 @@ function parseSaleInput(body: any) {
  */
 async function runSerializableTransaction<T>(
   action: (tx: Prisma.TransactionClient) => Promise<T>,
-  maxRetries = 3
+  maxRetries = 8
 ): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -351,10 +351,20 @@ async function runSerializableTransaction<T>(
             err.message.includes('deadlock detected') ||
             err.message.includes('Transaction failed due to a write conflict')));
 
-      if (isSerializationConflict && attempt <= maxRetries) {
-        const delayMs = 20 * attempt + Math.floor(Math.random() * 30);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
+      if (isSerializationConflict) {
+        if (attempt <= maxRetries) {
+          const baseDelay = 60 * Math.pow(1.5, attempt - 1);
+          const jitter = Math.floor(Math.random() * 80);
+          const delayMs = Math.round(baseDelay + jitter);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw {
+          status: 409,
+          code: 'CONCURRENCY_CONFLICT',
+          message: 'Conflito de concorrência temporário no processamento da transação. Por favor, tente novamente.',
+          cause: err,
+        };
       }
       throw err;
     }
@@ -820,6 +830,23 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         });
       }
 
+      if (hasReceipt && !postCredit) {
+        const nextBookStatus =
+          client.bookStatus === 'DISTRIBUTED_REBOLO' || client.bookStatus === 'IN_STOCK_REBOLO'
+            ? 'REBOLO_SOLD'
+            : 'SOLD';
+
+        await tx.client.update({
+          where: { id: input.clientId },
+          data: {
+            status: 'PRONTO',
+            outcomeStatus: 'SOLD',
+            outcomeUpdatedAt: sale.date,
+            bookStatus: nextBookStatus,
+          },
+        });
+      }
+
       if (postCredit) {
         const street = postCredit.street || client.street;
         const number = postCredit.number || client.number;
@@ -941,6 +968,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       correlationId,
       name: error?.name,
       code: error?.code,
+      message: error?.message,
     });
     res.status(500).json({ error: 'Internal server error' });
   }

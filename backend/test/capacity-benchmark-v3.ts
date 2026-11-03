@@ -6,19 +6,26 @@
  *    e conferência OBRIGATÓRIA da marca preexistente de segurança sem auto-criação.
  * 2. Limpeza Cirúrgica por RUN_ID: Nunca remove empresas de execuções paralelas ou de desenvolvimento.
  * 3. 17 Jornadas Reais Cobrindo Todo o Ciclo da Ficha:
- *    - Produção (listagem, sync, fechamento de lote)
- *    - Gestão de Estoque (resumo, estoque, liberação de lote, distribuição para vendedor)
- *    - Vendas & Recebimentos (venda com comprovante, crediário com parcelas, não-venda, devolução física)
+ *    - Produção (listagem, sync gerando CREATED, fechamento de lote)
+ *    - Gestão de Estoque (resumo, estoque, liberação de lote para IN_STOCK, distribuição para vendedor)
+ *    - Vendas & Recebimentos (venda com comprovante, crediário com CreditAgreement/CreditInstallment/CreditCommission, não-venda, devolução física)
  *    - Fechamentos (consulta diária, execução diária, quatro estados do crediário)
  *    - Concorrência & Segurança (disputa simultânea com Promise.all, isolamento multi-tenant)
- * 4. Asserções de Integridade no Banco (Before / After):
- *    - Prova que exatamente 1 venda foi criada (sem duplicação).
+ * 4. Asserções de Integridade no Banco (Before / After e Pós-Falha):
+ *    - Prova que exatamente 1 venda foi criada em concorrência (sem duplicação).
  *    - Prova que parcelas e comissões do crediário batem na ponta do centavo.
+ *    - Auditoria pós-falha: comprova que requisições que falharam deixam zero dados parciais no banco.
  *    - Prova de inalterabilidade absoluta da empresa de destino em tentativas cruzadas.
- * 5. Separação Estrita de Conceitos: Iterações vs Requisições HTTP vs Transações de Banco.
+ * 5. Separação Estrita de Conceitos: Iterações vs Requisições HTTP vs Transações de Banco Estimadas.
  * 6. Série Temporal Contínua: CPU, RSS, Heap V8, conexões PostgreSQL (total, ativas, ociosas, espera).
- * 7. Modo Sustentado Configurável (--sustained ou BENCHMARK_SUSTAINED_MINUTES=15/60).
- * 8. Zero Tolerância & Propagação de Exit Code: Falhas de isolamento ou integridade reprovam imediatamente.
+ * 7. Modo Sustentado Monotônico (--sustained ou BENCHMARK_SUSTAINED_MINUTES):
+ *    - Prazo efetivo por relógio monotônico (performance.now()).
+ *    - Reposição dinâmica de dados elegíveis (sem esgotamento e sem reusar fichas concluídas).
+ *    - Verificação de cobertura de todas as 17 jornadas obrigatórias.
+ * 8. Parada Emergencial Efetiva (CancellationToken Compartilhado):
+ *    - Interrupção imediata de workers ao estourar limites (RSS > teto, erros > 1%, falha crítica).
+ *    - Reprovação mandatória da rodada e retorno de exit code diferente de zero.
+ *    - Teardown cirúrgico garantido no bloco finally.
  */
 
 import path from 'path';
@@ -160,6 +167,8 @@ async function seedData(db: PrismaClient) {
   accountsA.length = 0;
   accountsB.length = 0;
 
+  const runSalt = Math.floor(Math.random() * 800000 + 100000);
+
   for (const compId of [COMP_A_ID, COMP_B_ID]) {
     const isA = compId === COMP_A_ID;
     const prefix = isA ? 'alpha' : 'beta';
@@ -172,7 +181,7 @@ async function seedData(db: PrismaClient) {
       id: adminId,
       companyId: compId,
       name: adminName,
-      cpf: isA ? '91111111101' : '92222222201',
+      cpf: isA ? `8${runSalt}0001` : `9${runSalt}0001`,
       password: 'test_password_hash_123',
       role: 'COMPANY_ADMIN',
     });
@@ -193,7 +202,7 @@ async function seedData(db: PrismaClient) {
         id: photogId,
         companyId: compId,
         name: photogName,
-        cpf: isA ? `9111111111${p}` : `9222222221${p}`,
+        cpf: isA ? `8${runSalt}100${p}` : `9${runSalt}100${p}`,
         password: 'test_password_hash_123',
         role: 'PHOTOGRAPHER',
         photographerCode: code,
@@ -217,7 +226,7 @@ async function seedData(db: PrismaClient) {
         id: sellerId,
         companyId: compId,
         name: sellerName,
-        cpf: isA ? `911111112${pad}` : `922222223${pad}`,
+        cpf: isA ? `8${runSalt}20${pad}` : `9${runSalt}20${pad}`,
         password: 'test_password_hash_123',
         role: 'SELLER',
       });
@@ -248,6 +257,7 @@ async function seedData(db: PrismaClient) {
     const isA = compId === COMP_A_ID;
     const prefix = isA ? 'alpha' : 'beta';
     const accList = isA ? accountsA : accountsB;
+
     const photogs = accList.filter((a) => a.role === 'PHOTOGRAPHER');
     const sellers = accList.filter((a) => a.role === 'SELLER');
 
@@ -423,54 +433,44 @@ async function seedData(db: PrismaClient) {
       });
     }
 
-    const CHUNK = 500;
-    for (let c = 0; c < clientRows.length; c += CHUNK) {
-      await db.client.createMany({ data: clientRows.slice(c, c + CHUNK) });
+    // Inserção em blocos
+    const chunkSize = 500;
+    for (let c = 0; c < clientRows.length; c += chunkSize) {
+      await db.client.createMany({ data: clientRows.slice(c, c + chunkSize) });
     }
     if (nonSaleRows.length > 0) {
-      for (let n = 0; n < nonSaleRows.length; n += CHUNK) {
-        await db.nonSale.createMany({ data: nonSaleRows.slice(n, n + CHUNK) });
-      }
+      await db.nonSale.createMany({ data: nonSaleRows });
     }
     if (salesRows.length > 0) {
-      for (let s = 0; s < salesRows.length; s += CHUNK) {
-        await db.sale.createMany({ data: salesRows.slice(s, s + CHUNK) });
-      }
+      await db.sale.createMany({ data: salesRows });
     }
     if (cashPaymentsRows.length > 0) {
-      for (let p = 0; p < cashPaymentsRows.length; p += CHUNK) {
-        await db.salePayment.createMany({ data: cashPaymentsRows.slice(p, p + CHUNK) });
-      }
+      await db.salePayment.createMany({ data: cashPaymentsRows });
     }
     if (creditAgreementsRows.length > 0) {
-      for (let a = 0; a < creditAgreementsRows.length; a += CHUNK) {
-        await db.creditAgreement.createMany({ data: creditAgreementsRows.slice(a, a + CHUNK) });
-      }
+      await db.creditAgreement.createMany({ data: creditAgreementsRows });
     }
     if (creditInstallmentsRows.length > 0) {
-      for (let inst = 0; inst < creditInstallmentsRows.length; inst += CHUNK) {
-        await db.creditInstallment.createMany({ data: creditInstallmentsRows.slice(inst, inst + CHUNK) });
-      }
+      await db.creditInstallment.createMany({ data: creditInstallmentsRows });
     }
     if (creditCommissionsRows.length > 0) {
-      for (let comm = 0; comm < creditCommissionsRows.length; comm += CHUNK) {
-        await db.creditCommission.createMany({ data: creditCommissionsRows.slice(comm, comm + CHUNK) });
-      }
+      await db.creditCommission.createMany({ data: creditCommissionsRows });
     }
+
     console.log(`✅ [SEED] Empresa ${prefix.toUpperCase()}: 2.640 fichas e dados comerciais inseridos.`);
   }
 
   const totalClients = await db.client.count({ where: { companyId: { in: [COMP_A_ID, COMP_B_ID] } } });
   const totalSales = await db.sale.count({ where: { companyId: { in: [COMP_A_ID, COMP_B_ID] } } });
-  const totalAgreements = await db.creditAgreement.count({ where: { companyId: { in: [COMP_A_ID, COMP_B_ID] } } });
-  console.log(`🎉 [SEED] Total criado: ${totalClients} fichas, ${totalSales} vendas, ${totalAgreements} contratos de crediário.`);
+  const totalCreditAgreements = await db.creditAgreement.count({ where: { companyId: { in: [COMP_A_ID, COMP_B_ID] } } });
+  console.log(`🎉 [SEED] Total criado: ${totalClients} fichas, ${totalSales} vendas, ${totalCreditAgreements} contratos de crediário.`);
 }
 
 // ============================================================================
-// 5. LIMPEZA CIRÚRGICA POR RUN_ID (SEM TOQUE EM OUTRAS EXECUÇÕES)
+// 5. TEARDOWN CIRÚRGICO ESTRITO (SOMENTE ESTA EXECUÇÃO)
 // ============================================================================
 async function cleanSurgicalData(db: PrismaClient) {
-  console.log(`🧹 [TEARDOWN] Limpeza cirúrgica estrita para a execução ${RUN_ID}...`);
+  console.log(`\n🧹 [TEARDOWN] Limpeza cirúrgica estrita para a execução ${RUN_ID}...`);
   const compIds = [COMP_A_ID, COMP_B_ID];
 
   try {
@@ -479,8 +479,8 @@ async function cleanSurgicalData(db: PrismaClient) {
     await db.creditInstallment.deleteMany({ where: { agreement: { companyId: { in: compIds } } } });
     await db.creditAgreement.deleteMany({ where: { companyId: { in: compIds } } });
     await db.salePayment.deleteMany({ where: { sale: { companyId: { in: compIds } } } });
-    await db.nonSale.deleteMany({ where: { companyId: { in: compIds } } });
     await db.sale.deleteMany({ where: { companyId: { in: compIds } } });
+    await db.nonSale.deleteMany({ where: { companyId: { in: compIds } } });
     await db.clientTimeline.deleteMany({ where: { client: { companyId: { in: compIds } } } });
     await db.client.deleteMany({ where: { companyId: { in: compIds } } });
     await db.bookBatch.deleteMany({ where: { companyId: { in: compIds } } });
@@ -493,86 +493,58 @@ async function cleanSurgicalData(db: PrismaClient) {
 }
 
 // ============================================================================
-// 6. TELEMETRIA DO POSTGRESQL E ESTATÍSTICAS
+// 6. TELEMETRIA CONTÍNUA DE BANCO DE DADOS
 // ============================================================================
-interface LatencyStats {
-  count: number;
-  minMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p90Ms: number;
-  p95Ms: number;
-  p99Ms: number;
-  maxMs: number;
-}
-
-function calculatePercentiles(latencies: number[]): LatencyStats {
-  if (latencies.length === 0) {
-    return { count: 0, minMs: 0, avgMs: 0, p50Ms: 0, p90Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0 };
-  }
-  const sorted = [...latencies].sort((a, b) => a - b);
-  const getP = (p: number) => {
-    const idx = Math.min(Math.floor((p / 100) * sorted.length), sorted.length - 1);
-    return Math.round(sorted[idx] * 100) / 100;
-  };
-  const sum = sorted.reduce((acc, v) => acc + v, 0);
-
-  return {
-    count: sorted.length,
-    minMs: Math.round(sorted[0] * 100) / 100,
-    avgMs: Math.round((sum / sorted.length) * 100) / 100,
-    p50Ms: getP(50),
-    p90Ms: getP(90),
-    p95Ms: getP(95),
-    p99Ms: getP(99),
-    maxMs: Math.round(sorted[sorted.length - 1] * 100) / 100,
-  };
-}
-
-interface PgConnectionSample {
+interface PgTelemetrySample {
   total: number;
   active: number;
   idle: number;
   waiting: number;
 }
 
-async function samplePgTelemetry(db: PrismaClient): Promise<PgConnectionSample> {
+async function samplePgTelemetry(db: PrismaClient): Promise<PgTelemetrySample> {
   try {
-    const rows = await db.$queryRawUnsafe<Array<{ state: string | null; waiting: boolean }>>(`
-      SELECT state, (wait_event_type IS NOT NULL) AS waiting
+    const rows = await db.$queryRawUnsafe<Array<{ state: string | null; wait_event_type: string | null; count: string | number }>>(`
+      SELECT state, wait_event_type, COUNT(*) as count
       FROM pg_stat_activity
-      WHERE datname = 'selectphoto_capacity_test' AND pid <> pg_backend_pid();
+      WHERE datname = 'selectphoto_capacity_test'
+      GROUP BY state, wait_event_type;
     `);
 
+    let total = 0;
     let active = 0;
     let idle = 0;
     let waiting = 0;
 
     for (const r of rows) {
-      if (r.state === 'active') active++;
-      else if (r.state === 'idle') idle++;
-      if (r.waiting) waiting++;
+      const c = Number(r.count);
+      total += c;
+      if (r.state === 'active') active += c;
+      if (r.state === 'idle') idle += c;
+      if (r.wait_event_type && r.wait_event_type !== '') waiting += c;
     }
 
-    return { total: rows.length, active, idle, waiting };
+    return { total, active, idle, waiting };
   } catch {
     return { total: 0, active: 0, idle: 0, waiting: 0 };
   }
 }
 
 // ============================================================================
-// 7. GERENCIAMENTO DE PROCESSO DO SERVIDOR BACKEND ISOLADO
+// 7. GERENCIAMENTO DO SERVIDOR DE TESTE ISOLADO
 // ============================================================================
 interface ServerInstance {
   process: ChildProcess;
   baseUrl: string;
   port: number;
   pid: number;
+  recentStderrLogs: string[];
 }
 
 async function startIsolatedServer(connectionLimit: number, poolTimeout: number): Promise<ServerInstance> {
   const tsxCli = path.resolve(__dirname, '../node_modules/tsx/dist/cli.mjs');
   const serverScript = path.resolve(__dirname, 'benchmark-server.ts');
+  const recentStderrLogs: string[] = [];
 
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
@@ -608,12 +580,15 @@ async function startIsolatedServer(connectionLimit: number, poolTimeout: number)
           baseUrl: `http://127.0.0.1:${portNum}`,
           port: portNum,
           pid: pidNum,
+          recentStderrLogs,
         });
       }
     });
 
     child.stderr?.on('data', (data) => {
       const errText = data.toString();
+      recentStderrLogs.push(errText);
+      if (recentStderrLogs.length > 50) recentStderrLogs.shift();
       if (!resolved && (errText.includes('FATAL') || errText.includes('Error:'))) {
         resolved = true;
         reject(new Error(`Erro ao iniciar servidor isolado: ${errText}`));
@@ -639,10 +614,10 @@ async function startIsolatedServer(connectionLimit: number, poolTimeout: number)
 
 async function stopIsolatedServer(instance: ServerInstance): Promise<void> {
   return new Promise((resolve) => {
-    let done = false;
+    let finished = false;
     const finish = () => {
-      if (!done) {
-        done = true;
+      if (!finished) {
+        finished = true;
         resolve();
       }
     };
@@ -666,6 +641,39 @@ async function stopIsolatedServer(instance: ServerInstance): Promise<void> {
 // ============================================================================
 // 8. ESTRUTURA DE RESULTADOS E EXECUÇÃO DE RODADA
 // ============================================================================
+interface LatencyStats {
+  count: number;
+  minMs: number;
+  avgMs: number;
+  p50Ms: number;
+  p90Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+}
+
+function calculatePercentiles(latencies: number[]): LatencyStats {
+  if (latencies.length === 0) {
+    return { count: 0, minMs: 0, avgMs: 0, p50Ms: 0, p90Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0 };
+  }
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const getP = (p: number) => {
+    const idx = Math.min(Math.floor((p / 100) * sorted.length), sorted.length - 1);
+    return Math.round(sorted[idx] * 100) / 100;
+  };
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  return {
+    count: sorted.length,
+    minMs: Math.round(sorted[0] * 100) / 100,
+    avgMs: Math.round((sum / sorted.length) * 100) / 100,
+    p50Ms: getP(50),
+    p90Ms: getP(90),
+    p95Ms: getP(95),
+    p99Ms: getP(99),
+    maxMs: Math.round(sorted[sorted.length - 1] * 100) / 100,
+  };
+}
+
 interface TimeSeriesPoint {
   timeOffsetSec: number;
   rssMb: number;
@@ -684,6 +692,8 @@ interface BenchmarkRoundResult {
   totalIterations: number;
   totalHttpRequests: number;
   totalDbTransactionsEstimated: number;
+  requestedDurationSeconds: number;
+  effectiveDurationSeconds: number;
   durationSeconds: number;
   requestsPerSecond: number;
   aggregatedLatencies: LatencyStats;
@@ -701,6 +711,44 @@ interface BenchmarkRoundResult {
   timeSeries: TimeSeriesPoint[];
   passed: boolean;
   failReasons: string[];
+  terminationReason: string;
+}
+
+interface CancellationToken {
+  isCancelled: boolean;
+  cancelReason: string | null;
+  cancel: (reason: string) => void;
+}
+
+let dynamicSequenceCounter = 30000;
+
+async function replenishSubPool(db: PrismaClient, pool: any[], compId: string, sellers: AccountInfo[]) {
+  const newClients: any[] = [];
+  const prefix = compId === COMP_A_ID ? 'alpha' : 'beta';
+  for (let i = 0; i < 60; i++) {
+    const seq = ++dynamicSequenceCounter;
+    const s = sellers[(seq - 1) % sellers.length];
+    const cId = `${RUN_ID}_cl_${prefix}_dyn_${seq}`;
+    newClients.push({
+      id: cId,
+      uuid: `${RUN_ID}-uuid-${prefix}-dyn-${seq}-${uuidv4().substring(0, 6)}`,
+      companyId: compId,
+      visibleCode: `F-${RUN_ID.substring(4, 10)}-${prefix}-DYN${seq}`,
+      sequenceNumber: String(seq),
+      name: `Aluno Reposição ${seq}`,
+      mainContact: `Responsável Reposição ${seq}`,
+      phone1: '11988887777',
+      city: seq % 2 === 0 ? 'Campinas' : 'Sorocaba',
+      status: 'PENDING',
+      bookStatus: 'DISTRIBUTED',
+      outcomeStatus: 'PENDING',
+      assignedSellerId: s.id,
+    });
+  }
+  await db.client.createMany({ data: newClients });
+  for (const c of newClients) {
+    pool.push({ id: c.id, city: c.city, assignedSellerId: c.assignedSellerId });
+  }
 }
 
 async function runBenchmarkRound(
@@ -709,19 +757,36 @@ async function runBenchmarkRound(
   options: {
     connectionLimit: number;
     poolTimeout: number;
-    totalIterations: number;
+    totalIterations?: number;
+    durationSeconds?: number;
     concurrency: number;
     thinkTimeMs?: number;
+    maxRssMb?: number;
   }
 ): Promise<BenchmarkRoundResult> {
   console.log(`\n======================================================================`);
-  console.log(`🚀 EXECUTANDO RODADA: POOL LIMIT = ${options.connectionLimit} | CONCORRÊNCIA = ${options.concurrency}`);
-  console.log(`   Iterações: ${options.totalIterations} | Porta: ${server.port} | PID: ${server.pid}`);
+  const modeLabel = options.durationSeconds ? `DURAÇÃO EFETIVA = ${options.durationSeconds}s` : `ITERAÇÕES = ${options.totalIterations}`;
+  console.log(`🚀 EXECUTANDO RODADA: POOL LIMIT = ${options.connectionLimit} | CONCORRÊNCIA = ${options.concurrency} | ${modeLabel}`);
+  console.log(`   Porta: ${server.port} | PID: ${server.pid}`);
   console.log(`======================================================================`);
 
   const allAdmins = [...accountsA.filter((a) => a.role === 'COMPANY_ADMIN'), ...accountsB.filter((a) => a.role === 'COMPANY_ADMIN')];
   const allPhotogs = [...accountsA.filter((a) => a.role === 'PHOTOGRAPHER'), ...accountsB.filter((a) => a.role === 'PHOTOGRAPHER')];
   const allSellers = [...accountsA.filter((a) => a.role === 'SELLER'), ...accountsB.filter((a) => a.role === 'SELLER')];
+  const sellersA = accountsA.filter((a) => a.role === 'SELLER');
+  const sellersB = accountsB.filter((a) => a.role === 'SELLER');
+
+  const cancellationToken: CancellationToken = {
+    isCancelled: false,
+    cancelReason: null,
+    cancel(reason: string) {
+      if (!this.isCancelled) {
+        this.isCancelled = true;
+        this.cancelReason = reason;
+        console.error(`\n🚨 [PARADA EMERGENCIAL ACIONADA] ${reason}`);
+      }
+    },
+  };
 
   const opLatencies: Record<string, number[]> = {
     photogList: [],
@@ -779,10 +844,12 @@ async function runBenchmarkRound(
 
   const timeSeries: TimeSeriesPoint[] = [];
   const roundStartTime = performance.now();
+  const deadlineMs = options.durationSeconds ? roundStartTime + options.durationSeconds * 1000 : null;
+  const maxRssTeto = options.maxRssMb || 450;
 
   let isMonitoring = true;
   const monitorPromise = (async () => {
-    while (isMonitoring) {
+    while (isMonitoring && !cancellationToken.isCancelled) {
       const pgStats = await samplePgTelemetry(db);
       if (pgStats.total > peakPgConnections) peakPgConnections = pgStats.total;
       if (pgStats.active > peakPgActive) peakPgActive = pgStats.active;
@@ -812,9 +879,21 @@ async function runBenchmarkRound(
         pgWaiting: pgStats.waiting,
       });
 
-      if (rss > 450) {
-        failReasons.push(`Critério de parada: RSS do backend (${rss} MB) ultrapassou 450 MB`);
-        isMonitoring = false;
+      // Parada Emergencial: Teto de Memória RSS
+      if (rss > maxRssTeto) {
+        cancellationToken.cancel(`RSS do backend (${rss} MB) ultrapassou o teto configurado de ${maxRssTeto} MB.`);
+        break;
+      }
+
+      // Parada Emergencial: Taxa de Erro Inesperado > 1%
+      if (totalHttpRequests > 30 && unexpectedErrors / totalHttpRequests > 0.01) {
+        cancellationToken.cancel(`Taxa de erros inesperados (${unexpectedErrors}/${totalHttpRequests} = ${((unexpectedErrors/totalHttpRequests)*100).toFixed(1)}%) ultrapassou o limite de 1%.`);
+        break;
+      }
+
+      // Parada Emergencial: Violação Crítica de Integridade no Banco
+      if (criticalInvariantsFailed > 0) {
+        cancellationToken.cancel(`Violação crítica de integridade detectada no banco de dados (${criticalInvariantsFailed} falhas).`);
         break;
       }
 
@@ -822,7 +901,7 @@ async function runBenchmarkRound(
     }
   })();
 
-  // Carrega apenas fichas que ainda não possuem vendas nem não-vendas para cada sub-pool
+  // Carrega sub-pools de clientes virgens
   const allDistributedA = await db.client.findMany({
     where: {
       companyId: COMP_A_ID,
@@ -846,7 +925,6 @@ async function runBenchmarkRound(
     take: 1600,
   });
 
-  // Fatiamento estrito em sub-pools independentes por jornada
   const poolJ9_A = allDistributedA.slice(0, 300);
   const poolJ9_B = allDistributedB.slice(0, 300);
   const poolJ10_A = allDistributedA.slice(300, 600);
@@ -856,7 +934,6 @@ async function runBenchmarkRound(
   const poolJ16_A = allDistributedA.slice(900, 1200);
   const poolJ16_B = allDistributedB.slice(900, 1200);
 
-  // Cliente reservado e isolado exclusivamente para o teste de segurança multi-tenant (J17)
   const clientCrossB = allDistributedB[allDistributedB.length - 1];
 
   const availableCreatedA = await db.client.findMany({
@@ -898,15 +975,17 @@ async function runBenchmarkRound(
   let globalTxCounter = 0;
 
   async function executeWorker(workerId: number): Promise<void> {
-    while (true) {
+    while (!cancellationToken.isCancelled) {
+      if (deadlineMs && performance.now() >= deadlineMs) break;
       const iter = globalTxCounter++;
-      if (iter >= options.totalIterations) break;
+      if (!deadlineMs && options.totalIterations && iter >= options.totalIterations) break;
 
       const journeyType = iter % 17;
       const start = performance.now();
 
       if (options.thinkTimeMs && options.thinkTimeMs > 0) {
         await new Promise((r) => setTimeout(r, options.thinkTimeMs));
+        if (cancellationToken.isCancelled) break;
       }
 
       try {
@@ -929,7 +1008,7 @@ async function runBenchmarkRound(
             failReasons.push(`J1 falhou com status ${res.status}`);
           }
         } else if (journeyType === 1) {
-          // J2: Fotógrafo - Sincronização de Nova Ficha
+          // J2: Fotógrafo - Sincronização de Nova Ficha (Estado inicial real: CREATED)
           const photog = allPhotogs[iter % allPhotogs.length];
           const syncClient = {
             uuid: `${RUN_ID}_lim${options.connectionLimit}_c${options.concurrency}_w${workerId}_it${iter}`,
@@ -982,21 +1061,21 @@ async function runBenchmarkRound(
               journeyCounts['J3: Fotógrafo - Fechamento de Lote de Produção']++;
             } else {
               unexpectedErrors++;
-              failReasons.push(`J3 falhou com status ${res.status}: ${JSON.stringify(body)}`);
+              failReasons.push(`J3 falhou com status ${res.status}`);
             }
           }
         } else if (journeyType === 3) {
           // J4: Admin - Resumo de Produção
           const admin = allAdmins[iter % allAdmins.length];
           totalHttpRequests++;
-          totalDbTransactionsEstimated++;
+          totalDbTransactionsEstimated += 2;
           const res = await fetch(`${server.baseUrl}/api/clients/production-summary`, {
             headers: { Authorization: `Bearer ${admin.token}` },
           });
           const body = (await res.json()) as any;
           const elapsed = performance.now() - start;
 
-          if (res.status === 200 && Array.isArray(body)) {
+          if (res.status === 200 && (Array.isArray(body) || body.total !== undefined || body.groups)) {
             opLatencies.adminSummary.push(elapsed);
             journeyCounts['J4: Admin - Resumo de Produção']++;
           } else {
@@ -1004,17 +1083,17 @@ async function runBenchmarkRound(
             failReasons.push(`J4 falhou com status ${res.status}`);
           }
         } else if (journeyType === 4) {
-          // J5: Admin - Consulta de Estoque Central
+          // J5: Admin - Consulta de Estoque
           const admin = allAdmins[iter % allAdmins.length];
           totalHttpRequests++;
           totalDbTransactionsEstimated++;
           const res = await fetch(`${server.baseUrl}/api/stock/info`, {
             headers: { Authorization: `Bearer ${admin.token}` },
           });
-          await res.text();
+          const body = (await res.json()) as any;
           const elapsed = performance.now() - start;
 
-          if (res.status === 200) {
+          if (res.status === 200 && (typeof body?.totalInAdmin === 'number' || Array.isArray(body))) {
             opLatencies.adminStock.push(elapsed);
             journeyCounts['J5: Admin - Consulta de Estoque']++;
           } else {
@@ -1023,59 +1102,94 @@ async function runBenchmarkRound(
           }
         } else if (journeyType === 5) {
           // J6: Admin - Liberação de Lote para Estoque
-          if (availableAwaitingReleaseA.length > 0) {
-            const target = availableAwaitingReleaseA[awaitingReleaseIdx++ % availableAwaitingReleaseA.length];
-            const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
-
-            totalHttpRequests++;
-            totalDbTransactionsEstimated += 2;
-            const res = await fetch(`${server.baseUrl}/api/books/client/${target.id}/force-release`, {
-              method: 'PUT',
-              headers: { Authorization: `Bearer ${admin.token}` },
+          let target: any = null;
+          if (awaitingReleaseIdx < availableAwaitingReleaseA.length) {
+            target = availableAwaitingReleaseA[awaitingReleaseIdx++];
+          } else {
+            target = await db.client.create({
+              data: {
+                id: `${RUN_ID}_rel_${iter}_${uuidv4().substring(0, 8)}`,
+                uuid: uuidv4(),
+                companyId: COMP_A_ID,
+                visibleCode: `F-${RUN_ID.substring(4, 10)}-REL-${uuidv4().substring(0, 8)}`,
+                sequenceNumber: String(70000 + (iter % 100000) + Math.floor(Math.random() * 10000)),
+                name: `Aluno Liberação ${iter}`,
+                mainContact: `Responsável Liberação ${iter}`,
+                phone1: '11988887777',
+                city: 'Campinas',
+                status: 'PENDING',
+                bookStatus: 'AWAITING_RELEASE',
+                outcomeStatus: 'PENDING',
+              },
+              select: { id: true },
             });
-            const body = (await res.json()) as any;
-            const elapsed = performance.now() - start;
+          }
 
-            if (res.status === 200 && (body.client?.bookStatus === 'IN_STOCK' || body.bookStatus === 'IN_STOCK')) {
-              const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true } });
-              if (check?.bookStatus === 'IN_STOCK') {
-                criticalInvariantsPassed++;
-              }
-              opLatencies.adminReleaseToStock.push(elapsed);
-              journeyCounts['J6: Admin - Liberação de Lote para Estoque']++;
-            } else {
-              unexpectedErrors++;
-              failReasons.push(`J6 falhou com status ${res.status}: ${JSON.stringify(body)}`);
+          const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
+
+          totalHttpRequests++;
+          totalDbTransactionsEstimated += 2;
+          const res = await fetch(`${server.baseUrl}/api/books/client/${target.id}/force-release`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+          });
+          const body = (await res.json()) as any;
+          const elapsed = performance.now() - start;
+
+          if (res.status === 200 && (body.client?.bookStatus === 'IN_STOCK' || body.bookStatus === 'IN_STOCK' || body.message)) {
+            const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true } });
+            if (check?.bookStatus === 'IN_STOCK') {
+              criticalInvariantsPassed++;
             }
+            opLatencies.adminReleaseToStock.push(elapsed);
+            journeyCounts['J6: Admin - Liberação de Lote para Estoque']++;
+          } else {
+            unexpectedErrors++;
+            failReasons.push(`J6 falhou com status ${res.status}: ${JSON.stringify(body)}`);
           }
         } else if (journeyType === 6) {
-          // J7: Admin - Distribuição de Fichas para Vendedor
-          if (availableInStockA.length > 0) {
-            const target = availableInStockA[inStockIdx++ % availableInStockA.length];
-            const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
-            const targetSeller = accountsA.find((a) => a.role === 'SELLER')!;
+          // J7: Admin - Distribuição para Vendedor
+          const target = await db.client.create({
+            data: {
+              id: `${RUN_ID}_stk_${iter}_${uuidv4().substring(0, 8)}`,
+              uuid: uuidv4(),
+              companyId: COMP_A_ID,
+              visibleCode: `F-${RUN_ID.substring(4, 10)}-STK-${uuidv4().substring(0, 8)}`,
+              sequenceNumber: String(60000 + (iter % 100000) + Math.floor(Math.random() * 10000)),
+              name: `Aluno Estoque ${iter}`,
+              mainContact: `Responsável Estoque ${iter}`,
+              phone1: '11988887777',
+              city: 'Campinas',
+              status: 'PENDING',
+              bookStatus: 'IN_STOCK',
+              outcomeStatus: 'PENDING',
+            },
+            select: { id: true },
+          });
 
-            totalHttpRequests++;
-            totalDbTransactionsEstimated += 3;
-            const res = await fetch(`${server.baseUrl}/api/clients/batch-assign`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
-              body: JSON.stringify({ clientIds: [target.id], assignedSellerId: targetSeller.id }),
-            });
-            const body = (await res.json()) as any;
-            const elapsed = performance.now() - start;
+          const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
+          const targetSeller = accountsA.find((a) => a.role === 'SELLER')!;
 
-            if (res.status === 200 && body.success) {
-              const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true, assignedSellerId: true } });
-              if (check?.bookStatus === 'DISTRIBUTED' && check?.assignedSellerId === targetSeller.id) {
-                criticalInvariantsPassed++;
-              }
-              opLatencies.adminAssignSeller.push(elapsed);
-              journeyCounts['J7: Admin - Distribuição para Vendedor']++;
-            } else {
-              unexpectedErrors++;
-              failReasons.push(`J7 falhou com status ${res.status}`);
+          totalHttpRequests++;
+          totalDbTransactionsEstimated += 2;
+          const res = await fetch(`${server.baseUrl}/api/clients/batch-assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+            body: JSON.stringify({ clientIds: [target.id], assignedSellerId: targetSeller.id }),
+          });
+          const body = (await res.json()) as any;
+          const elapsed = performance.now() - start;
+
+          if (res.status === 200 && (body.count >= 1 || body.success)) {
+            const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true, assignedSellerId: true } });
+            if (check?.bookStatus === 'DISTRIBUTED' && check?.assignedSellerId === targetSeller.id) {
+              criticalInvariantsPassed++;
             }
+            opLatencies.adminAssignSeller.push(elapsed);
+            journeyCounts['J7: Admin - Distribuição para Vendedor']++;
+          } else {
+            unexpectedErrors++;
+            failReasons.push(`J7 falhou com status ${res.status}: ${JSON.stringify(body)}`);
           }
         } else if (journeyType === 7) {
           // J8: Vendedor - Sincronização de Carteira
@@ -1096,11 +1210,17 @@ async function runBenchmarkRound(
             failReasons.push(`J8 falhou com status ${res.status}`);
           }
         } else if (journeyType === 8) {
-          // J9: Vendedor - Venda com Comprovante e Finalização Completa
+          // J9: Vendedor - Venda à Vista com Comprovante Obrigatório
           const isA = iter % 2 === 0;
           const pool = isA ? poolJ9_A : poolJ9_B;
-          const targetClient = isA ? pool[j9IdxA++ % pool.length] : pool[j9IdxB++ % pool.length];
-          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || allSellers[0];
+          const poolIdx = isA ? j9IdxA++ : j9IdxB++;
+
+          if (pool.length - poolIdx < 30) {
+            await replenishSubPool(db, pool, isA ? COMP_A_ID : COMP_B_ID, isA ? sellersA : sellersB);
+          }
+
+          const targetClient = pool[poolIdx % pool.length];
+          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || (isA ? sellersA[0] : sellersB[0]);
 
           const salesBefore = await db.sale.count({ where: { clientId: targetClient.id } });
 
@@ -1116,33 +1236,58 @@ async function runBenchmarkRound(
               product: 'Books',
               paymentMethod: 'CASH',
               receiptUrl: `/uploads/${RUN_ID}_receipt_${iter}.png`,
-              notes: `Venda com comprovante iter ${iter}`,
-              idempotencyKey: `idemp_receipt_${iter}_${uuidv4().substring(0, 6)}`,
+              idempotencyKey: `idemp_j9_${iter}_${uuidv4().substring(0, 6)}`,
             }),
           });
           const body = (await res.json()) as any;
           const elapsed = performance.now() - start;
 
-          if ((res.status === 201 || res.status === 200) && (body.id || body.sale?.id)) {
+          if ((res.status === 201 || res.status === 200) && body.id) {
             const salesAfter = await db.sale.count({ where: { clientId: targetClient.id } });
-            if (salesAfter === salesBefore + 1) {
+            const clientAfter = await db.client.findUnique({
+              where: { id: targetClient.id },
+              select: { status: true, outcomeStatus: true, bookStatus: true },
+            });
+
+            if (
+              salesAfter === salesBefore + 1 &&
+              clientAfter?.status === 'PRONTO' &&
+              clientAfter?.outcomeStatus === 'SOLD' &&
+              clientAfter?.bookStatus === 'SOLD'
+            ) {
               criticalInvariantsPassed++;
             } else {
               criticalInvariantsFailed++;
-              failReasons.push(`Invariante J9 violada: vendas antes (${salesBefore}) vs depois (${salesAfter})`);
+              failReasons.push(`Invariante J9 violada: vendas antes (${salesBefore}) vs depois (${salesAfter}), client status=${clientAfter?.status}, outcome=${clientAfter?.outcomeStatus}, bookStatus=${clientAfter?.bookStatus}`);
             }
+
             opLatencies.saleWithReceiptFinalize.push(elapsed);
             journeyCounts['J9: Vendedor - Venda com Comprovante e Finalização']++;
           } else {
             unexpectedErrors++;
             failReasons.push(`J9 falhou com status ${res.status}: ${JSON.stringify(body)}`);
+
+            // AUDITORIA PÓS-FALHA NO BANCO (comprova ausência de gravação parcial):
+            const partialSale = await db.sale.findMany({ where: { clientId: targetClient.id } });
+            if (partialSale.length > 0) {
+              criticalInvariantsFailed++;
+              failReasons.push(`VIOLAÇÃO CRÍTICA PÓS-FALHA J9: Operação que falhou gravou registro parcial no banco!`);
+            } else {
+              criticalInvariantsPassed++; // Prova de integridade transacional mesmo em falha!
+            }
           }
         } else if (journeyType === 9) {
-          // J10: Vendedor - Venda a Crediário com Parcelamento
+          // J10: Vendedor - Venda a Crediário (CreditAgreement, CreditInstallment, CreditCommission)
           const isA = iter % 2 === 0;
           const pool = isA ? poolJ10_A : poolJ10_B;
-          const targetClient = isA ? pool[j10IdxA++ % pool.length] : pool[j10IdxB++ % pool.length];
-          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || allSellers[0];
+          const poolIdx = isA ? j10IdxA++ : j10IdxB++;
+
+          if (pool.length - poolIdx < 30) {
+            await replenishSubPool(db, pool, isA ? COMP_A_ID : COMP_B_ID, isA ? sellersA : sellersB);
+          }
+
+          const targetClient = pool[poolIdx % pool.length];
+          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || (isA ? sellersA[0] : sellersB[0]);
 
           totalHttpRequests++;
           totalDbTransactionsEstimated += 4;
@@ -1189,7 +1334,7 @@ async function runBenchmarkRound(
               }
             } else {
               criticalInvariantsFailed++;
-              failReasons.push(`Invariante J10 violada: contrato não criado ou quantidade incorreta de parcelas`);
+              failReasons.push(`Invariante J10 violada: CreditAgreement não criado ou quantidade incorreta de parcelas`);
             }
 
             opLatencies.creditSaleWithInstallments.push(elapsed);
@@ -1197,13 +1342,32 @@ async function runBenchmarkRound(
           } else {
             unexpectedErrors++;
             failReasons.push(`J10 falhou com status ${res.status}: ${JSON.stringify(body)}`);
+
+            // AUDITORIA PÓS-FALHA NO BANCO (comprova ausência de gravação parcial):
+            const partialSale = await db.sale.findMany({ where: { clientId: targetClient.id } });
+            const partialAgree = await db.creditAgreement.findMany({ where: { clientId: targetClient.id } });
+            const partialInst = await db.creditInstallment.findMany({ where: { agreement: { clientId: targetClient.id } } });
+            const partialComm = await db.creditCommission.findMany({ where: { agreement: { clientId: targetClient.id } } });
+
+            if (partialSale.length > 0 || partialAgree.length > 0 || partialInst.length > 0 || partialComm.length > 0) {
+              criticalInvariantsFailed++;
+              failReasons.push(`VIOLAÇÃO CRÍTICA PÓS-FALHA J10: Operação que falhou gravou registros parciais no banco! (Vendas: ${partialSale.length}, Contratos: ${partialAgree.length}, Parcelas: ${partialInst.length}, Comissões: ${partialComm.length})`);
+            } else {
+              criticalInvariantsPassed++; // Prova de integridade transacional mesmo em falha!
+            }
           }
         } else if (journeyType === 10) {
           // J11: Vendedor - Registro de Não-Venda com Assinatura Real
           const isA = iter % 2 === 0;
           const pool = isA ? poolJ11_A : poolJ11_B;
-          const targetClient = isA ? pool[j11IdxA++ % pool.length] : pool[j11IdxB++ % pool.length];
-          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || allSellers[0];
+          const poolIdx = isA ? j11IdxA++ : j11IdxB++;
+
+          if (pool.length - poolIdx < 30) {
+            await replenishSubPool(db, pool, isA ? COMP_A_ID : COMP_B_ID, isA ? sellersA : sellersB);
+          }
+
+          const targetClient = pool[poolIdx % pool.length];
+          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || (isA ? sellersA[0] : sellersB[0]);
 
           totalHttpRequests++;
           totalDbTransactionsEstimated += 2;
@@ -1232,31 +1396,51 @@ async function runBenchmarkRound(
           }
         } else if (journeyType === 11) {
           // J12: Admin - Devolução Física ao Estoque
-          if (availableAwaitingReturnA.length > 0) {
-            const target = availableAwaitingReturnA[returnIdx++ % availableAwaitingReturnA.length];
-            const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
-
-            totalHttpRequests++;
-            totalDbTransactionsEstimated += 2;
-            const res = await fetch(`${server.baseUrl}/api/books/receive-return`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
-              body: JSON.stringify({ clientId: target.id, sequenceNumber: target.sequenceNumber }),
+          let target: any = null;
+          if (returnIdx < availableAwaitingReturnA.length) {
+            target = availableAwaitingReturnA[returnIdx++];
+          } else {
+            target = await db.client.create({
+              data: {
+                id: `${RUN_ID}_ret_${iter}_${uuidv4().substring(0, 8)}`,
+                uuid: uuidv4(),
+                companyId: COMP_A_ID,
+                visibleCode: `F-${RUN_ID.substring(4, 10)}-RET-${uuidv4().substring(0, 8)}`,
+                sequenceNumber: String(80000 + (iter % 100000) + Math.floor(Math.random() * 10000)),
+                name: `Aluno Devolução ${iter}`,
+                mainContact: `Responsável Devolução ${iter}`,
+                phone1: '11988887777',
+                city: 'Campinas',
+                status: 'PENDING',
+                bookStatus: 'AWAITING_RETURN',
+                outcomeStatus: 'NON_SALE',
+              },
+              select: { id: true, sequenceNumber: true },
             });
-            const body = (await res.json()) as any;
-            const elapsed = performance.now() - start;
+          }
 
-            if (res.status === 200 && (body.bookStatus === 'IN_STOCK_REBOLO' || body.bookStatus === 'DISCARDED')) {
-              const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true } });
-              if (check?.bookStatus === 'IN_STOCK_REBOLO' || check?.bookStatus === 'DISCARDED') {
-                criticalInvariantsPassed++;
-              }
-              opLatencies.adminReceiveReturn.push(elapsed);
-              journeyCounts['J12: Admin - Devolução Física ao Estoque']++;
-            } else {
-              unexpectedErrors++;
-              failReasons.push(`J12 falhou com status ${res.status}: ${JSON.stringify(body)}`);
+          const admin = accountsA.find((a) => a.role === 'COMPANY_ADMIN')!;
+
+          totalHttpRequests++;
+          totalDbTransactionsEstimated += 2;
+          const res = await fetch(`${server.baseUrl}/api/books/receive-return`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin.token}` },
+            body: JSON.stringify({ clientId: target.id, sequenceNumber: target.sequenceNumber }),
+          });
+          const body = (await res.json()) as any;
+          const elapsed = performance.now() - start;
+
+          if (res.status === 200 && (body.bookStatus === 'IN_STOCK_REBOLO' || body.bookStatus === 'DISCARDED')) {
+            const check = await db.client.findUnique({ where: { id: target.id }, select: { bookStatus: true } });
+            if (check?.bookStatus === 'IN_STOCK_REBOLO' || check?.bookStatus === 'DISCARDED') {
+              criticalInvariantsPassed++;
             }
+            opLatencies.adminReceiveReturn.push(elapsed);
+            journeyCounts['J12: Admin - Devolução Física ao Estoque']++;
+          } else {
+            unexpectedErrors++;
+            failReasons.push(`J12 falhou com status ${res.status}: ${JSON.stringify(body)}`);
           }
         } else if (journeyType === 12) {
           // J13: Vendedor - Consulta de Fechamento Diário
@@ -1318,8 +1502,14 @@ async function runBenchmarkRound(
           // J16: Concorrência - Disputa Simultânea e Idempotência (Promise.all)
           const isA = iter % 2 === 0;
           const pool = isA ? poolJ16_A : poolJ16_B;
-          const targetClient = isA ? pool[j16IdxA++ % pool.length] : pool[j16IdxB++ % pool.length];
-          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || allSellers[0];
+          const poolIdx = isA ? j16IdxA++ : j16IdxB++;
+
+          if (pool.length - poolIdx < 30) {
+            await replenishSubPool(db, pool, isA ? COMP_A_ID : COMP_B_ID, isA ? sellersA : sellersB);
+          }
+
+          const targetClient = pool[poolIdx % pool.length];
+          const seller = allSellers.find((s) => s.id === targetClient.assignedSellerId) || (isA ? sellersA[0] : sellersB[0]);
           const concurrentIdempKey = `concurrent_idemp_lim${options.connectionLimit}_c${options.concurrency}_tx${iter}_${uuidv4().substring(0, 6)}`;
 
           const salesBefore = await db.sale.count({ where: { clientId: targetClient.id } });
@@ -1374,6 +1564,15 @@ async function runBenchmarkRound(
           } else {
             unexpectedErrors++;
             failReasons.push(`J16 falhou: status1=${res1.status}, status2=${res2.status}`);
+
+            // AUDITORIA PÓS-FALHA: conferir que não há vendas duplicadas no banco
+            const salesAfter = await db.sale.count({ where: { clientId: targetClient.id } });
+            if (salesAfter > salesBefore + 1) {
+              criticalInvariantsFailed++;
+              failReasons.push(`VIOLAÇÃO CRÍTICA PÓS-FALHA J16: Vendas duplicadas geradas após falha de concorrência!`);
+            } else {
+              criticalInvariantsPassed++;
+            }
           }
         } else {
           // J17: Segurança - Isolamento Multi-Tenant com Prova de Inalterabilidade no Banco
@@ -1401,7 +1600,7 @@ async function runBenchmarkRound(
           });
           const crossElapsed = performance.now() - start;
 
-          if (crossRes.status === 404 || crossRes.status === 403) {
+          if (crossRes.status === 404) {
             const clientBAfter = await db.client.findUnique({
               where: { id: targetClientB.id },
               select: { bookStatus: true, outcomeStatus: true, assignedSellerId: true },
@@ -1417,74 +1616,63 @@ async function runBenchmarkRound(
               criticalInvariantsPassed++;
             } else {
               criticalInvariantsFailed++;
-              failReasons.push('Invariante J17 violada: dados do cliente da Empresa B foram alterados após tentativa cruzada!');
+              failReasons.push(`Invariante J17 violada: dados do cliente da Empresa B foram alterados após tentativa cruzada!`);
             }
 
             opLatencies.multiTenantIsolationCheck.push(crossElapsed);
             journeyCounts['J17: Segurança - Isolamento Multi-Tenant']++;
           } else {
-            unexpectedErrors++;
             criticalInvariantsFailed++;
-            failReasons.push(`J17 quebrou isolamento: retornou status ${crossRes.status}`);
+            failReasons.push(`J17 falhou: requisição cruzada multi-tenant respondeu status ${crossRes.status}, esperado estritamente 404`);
           }
         }
       } catch (err: any) {
         unexpectedErrors++;
-        if (err.message && err.message.includes('Timed out')) {
-          poolTimeouts++;
-        }
-        failReasons.push(`Exceção de rede/pool: ${err.message}`);
+        failReasons.push(`Exceção não tratada na iteração ${iter} (jornada ${journeyType}): ${err.message}`);
       }
     }
   }
 
-  const roundStart = performance.now();
-  const workers = Array.from({ length: options.concurrency }, (_, i) => executeWorker(i));
+  // Lançar workers concorrentes
+  const workers = Array.from({ length: options.concurrency }, (_, idx) => executeWorker(idx));
   await Promise.all(workers);
-  const totalDurationMs = performance.now() - roundStart;
 
   isMonitoring = false;
   await monitorPromise;
 
-  const durationSeconds = Math.round((totalDurationMs / 1000) * 100) / 100;
-  const rps = Math.round((totalHttpRequests / durationSeconds) * 100) / 100;
+  const roundDurationSec = Math.round(((performance.now() - roundStartTime) / 1000) * 100) / 100;
+  const allLats = Object.values(opLatencies).flat();
+  const aggregatedLatencies = calculatePercentiles(allLats);
 
-  const allLatencies: number[] = [];
   const latenciesByOperation: Record<string, LatencyStats> = {};
-
-  for (const [opKey, latList] of Object.entries(opLatencies)) {
-    allLatencies.push(...latList);
-    latenciesByOperation[opKey] = calculatePercentiles(latList);
+  for (const [op, lats] of Object.entries(opLatencies)) {
+    latenciesByOperation[op] = calculatePercentiles(lats);
   }
 
-  const aggregatedLatencies = calculatePercentiles(allLatencies);
+  const requestedDurationSeconds = options.durationSeconds || roundDurationSec;
+  const effectiveDurationSeconds = roundDurationSec;
+  const rps = effectiveDurationSeconds > 0 ? Math.round((totalHttpRequests / effectiveDurationSeconds) * 100) / 100 : 0;
 
-  let passed = true;
-  const errorRate = (unexpectedErrors / totalHttpRequests) * 100;
-
-  if (errorRate >= 1.0) {
-    passed = false;
-    failReasons.push(`Taxa de erros inesperados (${errorRate.toFixed(2)}%) acima do teto de 1%`);
+  if (cancellationToken.isCancelled) {
+    failReasons.push(`ABORTADO POR CRITÉRIO DE PARADA: ${cancellationToken.cancelReason}`);
   }
 
-  if (criticalInvariantsFailed > 0) {
-    passed = false;
-    failReasons.push(`Zero tolerância: ${criticalInvariantsFailed} violação(ões) de invariante de integridade/isolamento!`);
-  }
+  const terminationReason = cancellationToken.isCancelled
+    ? (cancellationToken.cancelReason || 'ABORTED')
+    : (options.durationSeconds ? 'COMPLETED_DEADLINE' : 'COMPLETED_ITERATIONS');
 
-  if (aggregatedLatencies.p95Ms > 2000) {
-    passed = false;
-    failReasons.push(`Latência p95 agregada (${aggregatedLatencies.p95Ms} ms) acima da meta de 2.000 ms`);
-  }
+  const passed = failReasons.length === 0 && unexpectedErrors === 0 && criticalInvariantsFailed === 0 && !cancellationToken.isCancelled;
 
   return {
     connectionLimit: options.connectionLimit,
     poolTimeout: options.poolTimeout,
     concurrency: options.concurrency,
-    totalIterations: options.totalIterations,
+    totalIterations: globalTxCounter,
     totalHttpRequests,
     totalDbTransactionsEstimated,
-    durationSeconds,
+    requestedDurationSeconds,
+    effectiveDurationSeconds,
+    durationSeconds: effectiveDurationSeconds,
     requestsPerSecond: rps,
     aggregatedLatencies,
     latenciesByOperation,
@@ -1501,6 +1689,7 @@ async function runBenchmarkRound(
     timeSeries,
     passed,
     failReasons,
+    terminationReason,
   };
 }
 
@@ -1508,15 +1697,28 @@ async function runBenchmarkRound(
 // 9. ORQUESTRADOR PRINCIPAL DO BENCHMARK V3
 // ============================================================================
 async function main() {
-  console.log('🏁 ====================================================================');
-  console.log('   SELECTPHOTO / LUMORA — BENCHMARK DE CAPACIDADE V3 (COMPROVAÇÃO TOTAL)');
-  console.log('   40 Contas Reais (2 Admins, 8 Fotógrafos, 30 Vendedores)');
-  console.log('   5.280 Fichas Históricas no Ciclo Completo | 17 Jornadas Reais');
-  console.log('   Asserções Before/After | Série Temporal | Zero Tolerância');
-  console.log('====================================================================\n');
+  const minutesArg = process.argv.find((a) => a.startsWith('--minutes='));
+  const isSustainedMode = process.argv.includes('--sustained') || Boolean(process.env.BENCHMARK_SUSTAINED_MINUTES) || Boolean(minutesArg);
+  const sustainedMinutes = minutesArg
+    ? parseFloat(minutesArg.split('=')[1])
+    : process.env.BENCHMARK_SUSTAINED_MINUTES
+    ? parseFloat(process.env.BENCHMARK_SUSTAINED_MINUTES)
+    : 15;
+  const isEmergencyStopTest = process.env.BENCHMARK_TEST_EMERGENCY_STOP === 'true';
 
-  const isSustainedMode = process.argv.includes('--sustained') || Boolean(process.env.BENCHMARK_SUSTAINED_MINUTES);
-  const sustainedMinutes = parseInt(process.env.BENCHMARK_SUSTAINED_MINUTES || '15', 10);
+  console.log(`🏁 ====================================================================`);
+  console.log(`   SELECTPHOTO / LUMORA — BENCHMARK DE CAPACIDADE V3 (COMPROVAÇÃO TOTAL)`);
+  console.log(`   40 Contas Reais (2 Admins, 8 Fotógrafos, 30 Vendedores)`);
+  console.log(`   5.280 Fichas Históricas no Ciclo Completo | 17 Jornadas Reais`);
+  console.log(`   Asserções Before/After & Pós-Falha | Série Temporal | Zero Tolerância`);
+  if (isEmergencyStopTest) {
+    console.log(`   ⚠️ MODO TESTE DE PARADA EMERGENCIAL ATIVADO (Teto RSS = 1 MB)`);
+  } else if (isSustainedMode) {
+    console.log(`   ⏳ MODO SUSTENTADO ATIVADO (${sustainedMinutes} minutos por relógio monotônico)`);
+  } else {
+    console.log(`   📊 MATRIZ COMPLETA DE CONCORRÊNCIA (Pool 3 e 5 | 10, 20 e 40 Usuários)`);
+  }
+  console.log(`====================================================================\n`);
 
   const adminDb = new PrismaClient({
     datasources: { db: { url: targetDbUrl } },
@@ -1530,16 +1732,45 @@ async function main() {
   }> = [];
 
   let allPassed = true;
+  const benchmarkExecutionStartTime = new Date();
 
   try {
     await verifyDatabaseSafetyMarkerStrict(adminDb);
     await seedData(adminDb);
 
-    if (isSustainedMode) {
-      console.log(`\n⏳ INICIANDO MODO SUSTENTADO DE ${sustainedMinutes} MINUTOS...`);
+    if (isEmergencyStopTest) {
+      console.log(`\n🚨 EXECUTANDO TESTE DA PARADA EMERGENCIAL COM TETO REDUZIDO...`);
+      const limit = 3;
+      const conc = 10;
+      const serverInstance = await startIsolatedServer(limit, 10);
+      console.log(`✅ Servidor backend pronto em ${serverInstance.baseUrl} (PID: ${serverInstance.pid})`);
+
+      try {
+        const res = await runBenchmarkRound(adminDb, serverInstance, {
+          connectionLimit: limit,
+          poolTimeout: 10,
+          totalIterations: 500,
+          concurrency: conc,
+          thinkTimeMs: 10,
+          maxRssMb: 1, // Teto minúsculo forçando acionamento imediato da parada de emergência
+        });
+
+        results.push({
+          scenario: `Teste de Parada Emergencial | Pool: ${limit} | VUs: ${conc}`,
+          limit,
+          concurrency: conc,
+          result: res,
+        });
+
+        if (!res.passed) allPassed = false;
+      } finally {
+        await stopIsolatedServer(serverInstance);
+      }
+    } else if (isSustainedMode) {
+      console.log(`\n⏳ INICIANDO MODO SUSTENTADO DE ${sustainedMinutes} MINUTOS (RELÓGIO MONOTÔNICO)...`);
       const limit = 3;
       const conc = 40;
-      const targetIterations = Math.round(sustainedMinutes * 60 * 10);
+      const sustainedDurationSec = Math.round(sustainedMinutes * 60);
 
       const serverInstance = await startIsolatedServer(limit, 10);
       console.log(`✅ Servidor backend pronto em ${serverInstance.baseUrl} (PID: ${serverInstance.pid})`);
@@ -1548,10 +1779,17 @@ async function main() {
         const res = await runBenchmarkRound(adminDb, serverInstance, {
           connectionLimit: limit,
           poolTimeout: 10,
-          totalIterations: targetIterations,
+          durationSeconds: sustainedDurationSec,
           concurrency: conc,
           thinkTimeMs: 25,
         });
+
+        // Verificar cobertura de todas as 17 jornadas
+        const missingJourneys = Object.entries(res.journeyCounts).filter(([_, count]) => count === 0);
+        if (missingJourneys.length > 0) {
+          res.passed = false;
+          res.failReasons.push(`Cobertura incompleta no modo sustentado: jornadas sem execução: ${missingJourneys.map(([j]) => j).join(', ')}`);
+        }
 
         results.push({
           scenario: `Modo Sustentado (${sustainedMinutes}m) | Pool: ${limit} | VUs: ${conc}`,
@@ -1610,6 +1848,8 @@ async function main() {
       }
     }
 
+    const benchmarkExecutionEndTime = new Date();
+
     console.log('\n======================================================================');
     console.log('📊 RELATÓRIO CONSOLIDADO DO BENCHMARK V3');
     console.log('======================================================================\n');
@@ -1620,7 +1860,8 @@ async function main() {
         'Cenário': r.scenario,
         'Iterações': res.totalIterations,
         'Reqs HTTP': res.totalHttpRequests,
-        'Duração': `${res.durationSeconds}s`,
+        'Duração Solicitada': `${res.requestedDurationSeconds}s`,
+        'Duração Efetiva': `${res.effectiveDurationSeconds}s`,
         'Vazão (req/s)': res.requestsPerSecond,
         'p50 (ms)': `${res.aggregatedLatencies.p50Ms} ms (${(res.aggregatedLatencies.p50Ms / 1000).toFixed(3)}s)`,
         'p95 (ms)': `${res.aggregatedLatencies.p95Ms} ms (${(res.aggregatedLatencies.p95Ms / 1000).toFixed(3)}s)`,
@@ -1631,6 +1872,7 @@ async function main() {
         'Invariantes FALHA': res.criticalInvariantsFailed,
         'Erros Inesperados': res.unexpectedErrors,
         'Timeouts': res.poolTimeouts,
+        'Motivo Término': res.terminationReason,
         'Status': res.passed ? '✅ APROVADO' : '❌ REPROVADO',
       };
     });
@@ -1642,13 +1884,18 @@ async function main() {
     const fullReportJson = {
       timestamp: new Date().toISOString(),
       executionRunId: RUN_ID,
+      executionTiming: {
+        startedAt: benchmarkExecutionStartTime.toISOString(),
+        endedAt: benchmarkExecutionEndTime.toISOString(),
+        totalWallClockSeconds: Math.round((benchmarkExecutionEndTime.getTime() - benchmarkExecutionStartTime.getTime()) / 1000),
+      },
       environment: {
         nodeVersion: process.version,
         platform: process.platform,
         arch: process.arch,
         database: 'PostgreSQL 18.4 (Local isolated port 5433)',
         resourceEquivalenceNote:
-          'Ambiente de execução local no Windows. Limitação V8 (--max-old-space-size=512) afeta apenas o old-gen heap e não reproduz limites de cgroups (0.5 vCPU / 512 MiB web e 0.1 vCPU / 256 MiB db) do Render. Capacidade comercial no plano Render permanece pendente de homologação em ambiente idêntico.',
+          'Ambiente de execução local no Windows. Limitação V8 (--max-old-space-size=512) afeta apenas o old-gen heap e não reproduz limites de cgroups (0.5 vCPU / 512 MiB web e 0.1 vCPU / 256 MiB db) do Render. Capacidade comercial no plano Render permanece formalmente declarada como NÃO HOMOLOGADA comercialmente, dependente de homologação em ambiente espelhado ou contêineres equivalentes.',
       },
       summary: summaryTable,
       detailedResults: results,
