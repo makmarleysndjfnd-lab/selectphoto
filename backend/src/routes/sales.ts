@@ -1527,13 +1527,84 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
       return res.status(403).json({ error: 'Empresa não identificada' });
     }
 
-    const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+    const { startDate, endDate, search, sellerId, city, batchId, paymentMethod } = req.query as {
+      startDate?: string;
+      endDate?: string;
+      search?: string;
+      sellerId?: string;
+      city?: string;
+      batchId?: string;
+      paymentMethod?: string;
+    };
+
+    const where: any = {
+      ...(companyId ? { companyId } : {}),
+    };
+
+    // Filtro de vendedor
+    if (sellerId && typeof sellerId === 'string' && sellerId.trim()) {
+      where.sellerId = sellerId.trim();
+    }
+
+    // Filtro de cidade (na venda ou no cliente)
+    if (city && typeof city === 'string' && city.trim()) {
+      const cityQuery = city.trim();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { city: { contains: cityQuery, mode: 'insensitive' } },
+            { client: { city: { contains: cityQuery, mode: 'insensitive' } } },
+          ],
+        },
+      ];
+    }
+
+    // Filtro de lote
+    if (batchId && typeof batchId === 'string' && batchId.trim()) {
+      where.client = {
+        ...(where.client || {}),
+        batchId: batchId.trim(),
+      };
+    }
+
+    // Filtro de forma de pagamento
+    if (paymentMethod && typeof paymentMethod === 'string' && paymentMethod.trim()) {
+      const pm = paymentMethod.trim();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { method: { equals: pm, mode: 'insensitive' } },
+            { payments: { some: { method: { equals: pm, mode: 'insensitive' } } } },
+          ],
+        },
+      ];
+    }
+
+    // Filtro de busca geral (código da ficha, responsável, criança)
+    if (search && typeof search === 'string' && search.trim()) {
+      const q = search.trim();
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { fichaNumber: { contains: q, mode: 'insensitive' } },
+            { client: { name: { contains: q, mode: 'insensitive' } } },
+            { client: { sequenceNumber: { contains: q, mode: 'insensitive' } } },
+            { client: { visibleCode: { contains: q, mode: 'insensitive' } } },
+            { client: { children: { some: { name: { contains: q, mode: 'insensitive' } } } } },
+          ],
+        },
+      ];
+    }
+
+    // Validação de período com cobertura até 23:59:59.999 do dia útil no fuso da operação
     const dateFilter: { gte?: Date; lte?: Date } = {};
     if (startDate) {
       const match = String(startDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
       if (match) {
-        const [, y, m, d] = match.map(Number);
-        dateFilter.gte = new Date(y, m - 1, d, 0, 0, 0, 0);
+        dateFilter.gte = new Date(`${String(startDate).slice(0, 10)}T00:00:00.000-03:00`);
       } else {
         const dStart = new Date(startDate);
         if (!isNaN(dStart.getTime())) {
@@ -1545,8 +1616,7 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
     if (endDate) {
       const match = String(endDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
       if (match) {
-        const [, y, m, d] = match.map(Number);
-        dateFilter.lte = new Date(y, m - 1, d, 23, 59, 59, 999);
+        dateFilter.lte = new Date(`${String(endDate).slice(0, 10)}T23:59:59.999-03:00`);
       } else {
         const dEnd = new Date(endDate);
         if (!isNaN(dEnd.getTime())) {
@@ -1555,12 +1625,12 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
         }
       }
     }
+    if (Object.keys(dateFilter).length > 0) {
+      where.date = dateFilter;
+    }
 
     const sales = await prisma.sale.findMany({
-      where: {
-        ...(companyId ? { companyId } : {}),
-        ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-      },
+      where,
       include: {
         client: {
           include: {
@@ -1586,6 +1656,8 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
       },
       orderBy: { date: 'desc' },
     });
+
+    res.json(sales);
 
     res.json(sales);
   } catch (error) {

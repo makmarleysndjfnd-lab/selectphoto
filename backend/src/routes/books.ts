@@ -6,6 +6,77 @@ import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
 const router = express.Router();
 
 
+// Start Photographer Batch Session
+router.post('/session/start', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const { batchId, eventName, city } = req.body;
+        const photographerId = req.user?.id;
+        const companyId = req.user?.companyId;
+
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+        if (!photographerId) {
+            return res.status(400).json({ error: 'Identificação de fotógrafo ausente no token' });
+        }
+
+        const effectiveBatchId = (typeof batchId === 'string' && batchId.trim().length > 0)
+            ? batchId.trim()
+            : undefined;
+        const cleanEventName = typeof eventName === 'string' ? eventName.trim() : 'Evento';
+        const cleanCity = typeof city === 'string' && city.trim().length > 0 ? city.trim() : null;
+        const batchName = cleanCity
+            ? `Lote - ${cleanEventName} (${cleanCity})`
+            : `Lote - ${cleanEventName}`;
+
+        let batch;
+        if (effectiveBatchId) {
+            batch = await prisma.bookBatch.upsert({
+                where: { id: effectiveBatchId },
+                update: {
+                    name: batchName,
+                    ...(cleanCity ? { city: cleanCity } : {}),
+                },
+                create: {
+                    id: effectiveBatchId,
+                    name: batchName,
+                    city: cleanCity,
+                    photographerId,
+                    companyId,
+                    status: 'CREATED',
+                    totalProduced: 0
+                },
+                include: { photographer: { select: { id: true, name: true } } }
+            });
+        } else {
+            batch = await prisma.bookBatch.create({
+                data: {
+                    name: batchName,
+                    city: cleanCity,
+                    photographerId,
+                    companyId,
+                    status: 'CREATED',
+                    totalProduced: 0
+                },
+                include: { photographer: { select: { id: true, name: true } } }
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            batchId: batch.id,
+            name: batch.name,
+            status: batch.status,
+            photographerId: batch.photographerId,
+            city: batch.city,
+            totalProduced: batch.totalProduced ?? 0,
+            batch
+        });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message || 'Erro ao iniciar sessão de lote' });
+    }
+});
+
 // Close Event Batch (Photographer)
 router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
     try {
@@ -87,21 +158,44 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
                 };
             }
 
-            // 4. Criar o BookBatch
+            // 4. Reutilizar ou criar o BookBatch
             const effectiveEvent = cleanEventName || eligibleClients[0]?.event || 'Evento';
             const effectiveCity = cleanCity || eligibleClients[0]?.city || null;
             const batchName = effectiveCity
                 ? `Lote - ${effectiveEvent} (${effectiveCity})`
                 : `Lote - ${effectiveEvent}`;
 
-            const newBatch = await tx.bookBatch.create({
-                data: {
-                    name: batchName,
-                    photographerId: photographerId!,
-                    companyId,
-                    status: 'AWAITING_RELEASE'
+            let targetBatch: any = null;
+            if (cleanBatchId) {
+                const existing = await tx.bookBatch.findFirst({
+                    where: { id: cleanBatchId, ...(companyId ? { companyId } : {}) }
+                });
+                if (existing) {
+                    targetBatch = await tx.bookBatch.update({
+                        where: { id: cleanBatchId },
+                        data: {
+                            name: batchName,
+                            city: effectiveCity || existing.city,
+                            status: 'AWAITING_RELEASE',
+                            totalProduced: Math.max(existing.totalProduced || 0, eligibleClients.length)
+                        }
+                    });
                 }
-            });
+            }
+
+            if (!targetBatch) {
+                targetBatch = await tx.bookBatch.create({
+                    data: {
+                        ...(cleanBatchId ? { id: cleanBatchId } : {}),
+                        name: batchName,
+                        city: effectiveCity,
+                        photographerId: photographerId!,
+                        companyId,
+                        status: 'AWAITING_RELEASE',
+                        totalProduced: eligibleClients.length
+                    }
+                });
+            }
 
             // 5. Atualizar as fichas para AWAITING_RELEASE associando o batchId
             const updateRes = await tx.client.updateMany({
@@ -112,20 +206,20 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
                 },
                 data: {
                     bookStatus: 'AWAITING_RELEASE',
-                    batchId: newBatch.id
+                    batchId: targetBatch.id
                 }
             });
 
-            if (updateRes.count === 0) {
-                // Se por corrida extrema nenhuma ficha foi associada, remove o lote para nunca deixar lote vazio
-                await tx.bookBatch.delete({ where: { id: newBatch.id } });
+            if (updateRes.count === 0 && !cleanBatchId) {
+                // Se por corrida extrema nenhuma ficha foi associada em lote novo, remove para não deixar lixo
+                await tx.bookBatch.delete({ where: { id: targetBatch.id } });
                 return { count: 0, alreadyClosed: true, batch: null, message: 'Todas as fichas deste lote já foram enviadas. Lote finalizado.' };
             }
 
             return {
                 count: updateRes.count,
                 alreadyClosed: false,
-                batch: newBatch,
+                batch: targetBatch,
                 batchName,
                 message: `${updateRes.count} ficha(s) enviada(s) para a gráfica no lote "${batchName}".`
             };
@@ -836,7 +930,66 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
             orderBy: { date: 'desc' }
         });
 
-        res.json(batches);
+        const formattedBatches = batches.map(batch => {
+            const allClients = batch.clients || [];
+            
+            // Fichas ativas para a operação de rotas/gráfica (exclui SOLD e REBOLO_SOLD)
+            const activeClients = allClients.filter(c => 
+                c.bookStatus !== 'SOLD' && c.bookStatus !== 'REBOLO_SOLD'
+            );
+
+            // Contagens por estágio do fluxo
+            const inProductionCount = allClients.filter(c => c.bookStatus === 'CREATED').length;
+            const awaitingReleaseCount = allClients.filter(c => c.bookStatus === 'AWAITING_RELEASE').length;
+            const inStockCount = allClients.filter(c => c.bookStatus === 'IN_STOCK' || c.bookStatus === 'IN_STOCK_REBOLO').length;
+            const distributedCount = allClients.filter(c => c.bookStatus === 'DISTRIBUTED' || c.bookStatus === 'DISTRIBUTED_REBOLO' || c.bookStatus === 'AWAITING_RETURN').length;
+            const soldCount = allClients.filter(c => c.bookStatus === 'SOLD' || c.bookStatus === 'REBOLO_SOLD').length;
+            
+            // Marco de total produzido: totalProduced gravado ou total histórico de fichas vinculadas
+            const totalProduced = batch.totalProduced && batch.totalProduced > 0 
+                ? batch.totalProduced 
+                : Math.max(allClients.length, inProductionCount + awaitingReleaseCount + inStockCount + distributedCount + soldCount);
+
+            // Cidades distintas (não vazias)
+            const citiesSet = new Set<string>();
+            if (batch.city && batch.city.trim()) citiesSet.add(batch.city.trim());
+            for (const c of allClients) {
+                if (c.city && c.city.trim()) citiesSet.add(c.city.trim());
+            }
+            const distinctCities = Array.from(citiesSet);
+
+            return {
+                ...batch,
+                totalProduced,
+                cities: distinctCities,
+                clients: activeClients, // Somente ativas no fluxo operacional
+                counts: {
+                    produced: totalProduced,
+                    inProduction: inProductionCount,
+                    awaitingRelease: awaitingReleaseCount,
+                    inStock: inStockCount,
+                    distributed: distributedCount,
+                    sold: soldCount,
+                    active: activeClients.length
+                }
+            };
+        });
+
+        // Filtrar lotes totalmente concluídos sem estoque ativo nem em produção
+        // "Lotes totalmente concluídos sem estoque ativo saem das rotas operacionais."
+        const includeConcluded = req.query.includeConcluded === 'true';
+        const operationalBatches = includeConcluded 
+            ? formattedBatches 
+            : formattedBatches.filter(b => {
+                // Se está em produção (CREATED) ou na gráfica (AWAITING_RELEASE), sempre exibe
+                if (b.status === 'CREATED' || b.status === 'AWAITING_RELEASE') return true;
+                // Se tem fichas ativas (em estoque, gráfica ou aguardando), exibe
+                if (b.counts.inStock > 0 || b.counts.awaitingRelease > 0 || b.counts.inProduction > 0) return true;
+                // Se não sobrou nenhuma ficha ativa (todas vendidas ou distribuídas sem estoque), sai da lista operacional
+                return false;
+            });
+
+        res.json(operationalBatches);
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }

@@ -29,9 +29,9 @@ void main() {
           equals('selectphoto-k1ac.onrender.com'));
       expect(AppConfig.officialProductionUrl,
           equals('https://selectphoto-k1ac.onrender.com/api'));
-      expect(AppConfig.appVersion, equals('1.0.29'));
-      expect(AppConfig.buildNumber, equals(40));
-      expect(AppConfig.fullVersion, equals('1.0.29+40'));
+      expect(AppConfig.appVersion, equals('1.0.31'));
+      expect(AppConfig.buildNumber, equals(42));
+      expect(AppConfig.fullVersion, equals('1.0.31+42'));
     });
 
     test('2. Validador em release aceita apenas HTTPS e host oficial', () {

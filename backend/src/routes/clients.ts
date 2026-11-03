@@ -13,7 +13,8 @@ const ALLOWED_SYNC_CLIENT_FIELDS = [
   'name', 'phone1', 'phone2', 'cep', 'street', 'number', 'complement', 'condo',
   'block', 'apartment', 'neighborhood', 'city', 'state', 'referencePoint',
   'houseColor', 'gateColor', 'gateObservation', 'profession', 'visitTime',
-  'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded', 'event'
+  'clothesColor', 'notes', 'teamId', 'latitude', 'longitude', 'geocoded', 'event',
+  'batchId'
 ] as const;
 
 // Sync clients from mobile (batch)
@@ -100,6 +101,17 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
       let finalSignatureUrl = clientData.signatureUrl || null;
       if (clientData.signatureBase64) {
         finalSignatureUrl = `data:image/png;base64,${clientData.signatureBase64}`;
+      }
+
+      // Auto-vincular ao lote ativo do fotógrafo se não especificado
+      if (!sanitizedData.batchId && photographerId) {
+        const activeBatch = await prisma.bookBatch.findFirst({
+          where: { photographerId, companyId, status: 'CREATED' },
+          orderBy: { date: 'desc' }
+        });
+        if (activeBatch) {
+          sanitizedData.batchId = activeBatch.id;
+        }
       }
 
       // 1. Localizar se já existe ficha com esse UUID permanente

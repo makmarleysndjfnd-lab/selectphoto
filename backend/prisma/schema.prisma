@@ -539,7 +539,9 @@ model BookBatch {
   date           DateTime @default(now())
   photographerId String
   companyId      String?
-  status         String   @default("CREATED") // CREATED, DISTRIBUTED
+  status         String   @default("CREATED") // CREATED, AWAITING_RELEASE, IN_STOCK, DISTRIBUTED
+  totalProduced  Int?     @default(0)
+  city           String?
   photographer   User     @relation("PhotographerBookBatches", fields: [photographerId], references: [id])
   company        Company? @relation(fields: [companyId], references: [id])
   clients        Client[]

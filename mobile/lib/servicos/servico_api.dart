@@ -505,7 +505,15 @@ class ApiService {
   }
 
   // Sales
-  Future<List<dynamic>> getSalesHistory({DateTime? startDate, DateTime? endDate}) async {
+  Future<List<dynamic>> getSalesHistory({
+    DateTime? startDate,
+    DateTime? endDate,
+    String? search,
+    String? sellerId,
+    String? city,
+    String? batchId,
+    String? paymentMethod,
+  }) async {
     try {
       final queryParams = <String, dynamic>{};
       if (startDate != null) {
@@ -514,11 +522,43 @@ class ApiService {
       if (endDate != null) {
         queryParams['endDate'] = endDate.toIso8601String().split('T')[0];
       }
+      if (search != null && search.trim().isNotEmpty) {
+        queryParams['search'] = search.trim();
+      }
+      if (sellerId != null && sellerId.trim().isNotEmpty) {
+        queryParams['sellerId'] = sellerId.trim();
+      }
+      if (city != null && city.trim().isNotEmpty) {
+        queryParams['city'] = city.trim();
+      }
+      if (batchId != null && batchId.trim().isNotEmpty) {
+        queryParams['batchId'] = batchId.trim();
+      }
+      if (paymentMethod != null && paymentMethod.trim().isNotEmpty) {
+        queryParams['paymentMethod'] = paymentMethod.trim();
+      }
       final response = await _dio.get(
         '/sales/history',
         queryParameters: queryParams.isNotEmpty ? queryParams : null,
       );
       return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> startBookBatchSession({
+    required String batchId,
+    required String eventName,
+    String? city,
+  }) async {
+    try {
+      final response = await _dio.post('/books/session/start', data: {
+        'batchId': batchId,
+        'eventName': eventName,
+        if (city != null) 'city': city,
+      });
+      return Map<String, dynamic>.from(response.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

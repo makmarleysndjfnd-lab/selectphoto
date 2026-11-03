@@ -56,7 +56,7 @@ class LedMenuItem extends StatelessWidget {
                   children: [
                     Icon(
                       icon,
-                      color: selected ? color : const Color(0xFF546E7A),
+                      color: selected ? color : Colors.white70,
                       size: 24,
                     ),
                     const SizedBox(width: 16),
@@ -64,8 +64,8 @@ class LedMenuItem extends StatelessWidget {
                       child: Text(
                         label,
                         style: TextStyle(
-                          color: selected ? Colors.white : const Color(0xFF546E7A),
-                          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                          color: selected ? Colors.white : Colors.white70,
+                          fontWeight: selected ? FontWeight.bold : FontWeight.w500,
                           fontSize: 14,
                         ),
                       ),

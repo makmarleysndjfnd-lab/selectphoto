@@ -5,8 +5,8 @@ import crypto from 'crypto';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { recordDeviceTelemetry } from '../services/operationalMetricsService';
 
-export const CURRENT_APP_VERSION = '1.0.30';
-export const CURRENT_BUILD_NUMBER = 41;
+export const CURRENT_APP_VERSION = '1.0.31';
+export const CURRENT_BUILD_NUMBER = 42;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -22,9 +22,9 @@ export interface ApkReleaseDescriptor {
  * endpoint exclusivamente ao artefato que passou pela auditoria do manifesto.
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
-  version: '1.0.30',
-  buildNumber: 41,
-  sha256: '0B632F32D67FFACD45BD007BEFA38545C6BBE4F01EC04794A0B64BFCEEE31E95',
+  version: '1.0.31',
+  buildNumber: 42,
+  sha256: '2F11019226356F9353A6EFA1DE197B6EFD66B0D81FDB0E2C3E07FDA936EB7AC1',
   packageName: 'com.example.mobile',
 });
 

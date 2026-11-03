@@ -11,8 +11,8 @@ class AppConfig {
   static const String _definedServerUrl = String.fromEnvironment('SERVER_URL');
 
   /// Versão do aplicativo compilada
-  static const String appVersion = '1.0.30';
-  static const int buildNumber = 41;
+  static const String appVersion = '1.0.31';
+  static const int buildNumber = 42;
   static const String fullVersion = '$appVersion+$buildNumber';
 
   /// Retorna se a SERVER_URL foi definida em tempo de compilação.

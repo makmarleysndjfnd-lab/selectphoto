@@ -101,7 +101,7 @@ void main() {
       await tester.pumpWidget(buildSettingsScreen(isFotografo: true));
       await tester.pumpAndSettle();
 
-      expect(find.text('Configurar Impressora'), findsOneWidget);
+      expect(find.textContaining('Configurar Impressora'), findsOneWidget);
       expect(find.text('Baixar Backup (JSON)'), findsNothing);
     });
 
@@ -110,7 +110,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Baixar Backup (JSON)'), findsOneWidget);
-      expect(find.text('Configurar Impressora'), findsNothing);
+      expect(find.textContaining('Configurar Impressora'), findsNothing);
     });
   });
 }

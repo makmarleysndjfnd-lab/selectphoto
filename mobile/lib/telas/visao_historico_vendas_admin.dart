@@ -13,12 +13,23 @@ class VisaoHistoricoVendasAdmin extends StatefulWidget {
 
 class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   final ApiService _api = ApiService();
-  bool _isLoading = true;
+  bool _isLoading = false;
+  bool _hasSearched = false;
   List<dynamic> _sales = [];
-  String _filtroTexto = '';
+  List<dynamic> _sellers = [];
+  List<dynamic> _batches = [];
+
+  // Filtros principais
+  final TextEditingController _searchController = TextEditingController();
+  String? _selectedSellerId;
   DateTime? _startDate;
   DateTime? _endDate;
-  final TextEditingController _searchController = TextEditingController();
+
+  // Mais filtros
+  bool _showMoreFilters = false;
+  final TextEditingController _cityController = TextEditingController();
+  String? _selectedBatchId;
+  String? _selectedPaymentMethod;
 
   final NumberFormat _currencyFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy HH:mm');
@@ -27,25 +38,53 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   @override
   void initState() {
     super.initState();
-    _carregarHistorico();
+    // NÃO carregar resultados no initState. Apenas carregar metadados de apoio aos filtros.
+    _carregarMetadadosFiltros();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _cityController.dispose();
     super.dispose();
   }
 
-  Future<void> _carregarHistorico() async {
+  Future<void> _carregarMetadadosFiltros() async {
+    try {
+      final results = await Future.wait([
+        _api.getCompanyUsers(),
+        _api.getBookBatches(),
+      ]);
+      final users = List<dynamic>.from(results[0]);
+      final batches = List<dynamic>.from(results[1]);
+      if (mounted) {
+        setState(() {
+          _sellers = users.where((u) {
+            final role = (u['role'] ?? '').toString().toUpperCase();
+            return role == 'SELLER' || role == 'SELLER_MANAGER' || role == 'VENDEDOR';
+          }).toList();
+          _batches = batches;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _executarBusca() async {
     setState(() => _isLoading = true);
     try {
       final data = await _api.getSalesHistory(
         startDate: _startDate,
         endDate: _endDate,
+        search: _searchController.text.trim().isNotEmpty ? _searchController.text.trim() : null,
+        sellerId: _selectedSellerId,
+        city: _cityController.text.trim().isNotEmpty ? _cityController.text.trim() : null,
+        batchId: _selectedBatchId,
+        paymentMethod: _selectedPaymentMethod,
       );
       if (mounted) {
         setState(() {
           _sales = data;
+          _hasSearched = true;
           _isLoading = false;
         });
       }
@@ -62,6 +101,21 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     }
   }
 
+  void _limparFiltros() {
+    setState(() {
+      _searchController.clear();
+      _cityController.clear();
+      _selectedSellerId = null;
+      _selectedBatchId = null;
+      _selectedPaymentMethod = null;
+      _startDate = null;
+      _endDate = null;
+      _hasSearched = false;
+      _sales = [];
+      _showMoreFilters = false;
+    });
+  }
+
   Future<void> _pickStartDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -72,7 +126,6 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     );
     if (picked != null) {
       setState(() => _startDate = picked);
-      _carregarHistorico();
     }
   }
 
@@ -86,57 +139,10 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     );
     if (picked != null) {
       setState(() => _endDate = picked);
-      _carregarHistorico();
     }
   }
 
-  void _limparFiltroDatas() {
-    setState(() {
-      _startDate = null;
-      _endDate = null;
-    });
-    _carregarHistorico();
-  }
-
-  bool _matchesDate(dynamic sale) {
-    if (_startDate == null && _endDate == null) return true;
-    final rawDate = sale['date'];
-    if (rawDate == null) return false;
-    final d = DateTime.tryParse(rawDate.toString())?.toLocal();
-    if (d == null) return false;
-
-    if (_startDate != null) {
-      final start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day, 0, 0, 0, 0);
-      if (d.isBefore(start)) return false;
-    }
-    if (_endDate != null) {
-      final end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day, 23, 59, 59, 999);
-      if (d.isAfter(end)) return false;
-    }
-    return true;
-  }
-
-  List<dynamic> get _salesFiltradas {
-    return _sales.where((sale) {
-      if (!_matchesDate(sale)) return false;
-
-      if (_filtroTexto.trim().isEmpty) return true;
-      final query = _filtroTexto.trim().toLowerCase();
-
-      final client = sale['client'] as Map<String, dynamic>? ?? {};
-      final clientName = (client['name'] ?? client['clientName'] ?? '').toString().toLowerCase();
-      final code = (client['visibleCode'] ?? client['sequenceNumber'] ?? sale['fichaNumber'] ?? '').toString().toLowerCase();
-      final city = (sale['city'] ?? client['city'] ?? '').toString().toLowerCase();
-      final seller = (sale['seller']?['name'] ?? '').toString().toLowerCase();
-      final batch = (client['batch']?['name'] ?? client['batchName'] ?? '').toString().toLowerCase();
-
-      return clientName.contains(query) ||
-          code.contains(query) ||
-          city.contains(query) ||
-          seller.contains(query) ||
-          batch.contains(query);
-    }).toList();
-  }
+  List<dynamic> get _salesFiltradas => _sales;
 
   Map<String, List<Map<String, dynamic>>> get _salesGroupedBySeller {
     final map = <String, List<Map<String, dynamic>>>{};
@@ -270,191 +276,431 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
               style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
             ),
             Text(
-              'Consultas organizadas por vendedor e período',
+              'Resultados disponíveis sob consulta',
               style: TextStyle(color: Colors.white60, fontSize: 11),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.white70),
-            onPressed: _carregarHistorico,
-          ),
-        ],
       ),
       body: Column(
         children: [
-          // Barra de busca por texto
+          // Painel de Filtros
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+            padding: const EdgeInsets.all(14),
             color: const Color(0xFF151528),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (val) => setState(() => _filtroTexto = val),
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'Buscar por ficha, cliente, lote, cidade ou vendedor...',
-                hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
-                prefixIcon: const Icon(Icons.search, color: Color(0xFFCE93D8), size: 20),
-                suffixIcon: _filtroTexto.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() => _filtroTexto = '');
-                        },
-                      )
-                    : null,
-                filled: true,
-                fillColor: const Color(0xFF22223A),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-          ),
-
-          // Barra de filtro por período (Data Inicial e Data Final)
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            color: const Color(0xFF151528),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: InkWell(
-                    onTap: _pickStartDate,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF22223A),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white12,
+                // Busca geral (código da ficha, responsável, criança)
+                TextField(
+                  controller: _searchController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar código da ficha, responsável ou criança...',
+                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                    prefixIcon: const Icon(Icons.search, color: Color(0xFFCE93D8), size: 20),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: const Color(0xFF22223A),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+
+                // Seleção de Vendedor e Datas
+                Row(
+                  children: [
+                    // Dropdown de Vendedor
+                    Expanded(
+                      flex: 5,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF22223A),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _selectedSellerId != null ? const Color(0xFFCE93D8) : Colors.white12,
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            dropdownColor: const Color(0xFF2A2A4A),
+                            value: _selectedSellerId,
+                            hint: const Text('Todos os vendedores',
+                                style: TextStyle(color: Colors.white54, fontSize: 11)),
+                            items: [
+                              const DropdownMenuItem<String>(
+                                value: null,
+                                child: Text('Todos os vendedores',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12)),
+                              ),
+                              ..._sellers.map((s) => DropdownMenuItem<String>(
+                                    value: s['id']?.toString(),
+                                    child: Text(
+                                      s['name']?.toString() ?? 'Vendedor',
+                                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  )),
+                            ],
+                            onChanged: (val) => setState(() => _selectedSellerId = val),
+                          ),
                         ),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.calendar_today_rounded,
-                              size: 14,
-                              color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white54),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              _startDate != null ? 'De: ${_dateOnlyFormat.format(_startDate!)}' : 'Data inicial',
-                              style: TextStyle(
-                                color: _startDate != null ? Colors.white : Colors.white54,
-                                fontSize: 11,
-                                fontWeight: _startDate != null ? FontWeight.bold : FontWeight.normal,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Data Inicial
+                    Expanded(
+                      flex: 4,
+                      child: InkWell(
+                        onTap: _pickStartDate,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF22223A),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white12,
                             ),
                           ),
-                        ],
+                          child: Row(
+                            children: [
+                              Icon(Icons.calendar_today_rounded,
+                                  size: 13,
+                                  color: _startDate != null ? const Color(0xFFCE93D8) : Colors.white54),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  _startDate != null ? _dateOnlyFormat.format(_startDate!) : 'Data inicial',
+                                  style: TextStyle(
+                                    color: _startDate != null ? Colors.white : Colors.white54,
+                                    fontSize: 11,
+                                    fontWeight: _startDate != null ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Data Final
+                    Expanded(
+                      flex: 4,
+                      child: InkWell(
+                        onTap: _pickEndDate,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF22223A),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white12,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.event_available_rounded,
+                                  size: 13,
+                                  color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white54),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  _endDate != null ? _dateOnlyFormat.format(_endDate!) : 'Data final',
+                                  style: TextStyle(
+                                    color: _endDate != null ? Colors.white : Colors.white54,
+                                    fontSize: 11,
+                                    fontWeight: _endDate != null ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Alternador de Mais Filtros
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () => setState(() => _showMoreFilters = !_showMoreFilters),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _showMoreFilters ? 'Menos filtros' : 'Mais filtros (cidade, lote, forma de pagamento)',
+                          style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 11),
+                        ),
+                        Icon(
+                          _showMoreFilters ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                          color: const Color(0xFF90CAF9),
+                          size: 16,
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: _pickEndDate,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF22223A),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white12,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.event_available_rounded,
-                              size: 14,
-                              color: _endDate != null ? const Color(0xFFCE93D8) : Colors.white54),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              _endDate != null ? 'Até: ${_dateOnlyFormat.format(_endDate!)}' : 'Data final',
-                              style: TextStyle(
-                                color: _endDate != null ? Colors.white : Colors.white54,
-                                fontSize: 11,
-                                fontWeight: _endDate != null ? FontWeight.bold : FontWeight.normal,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+
+                // Seção expansível: Cidade, Lote e Forma de Pagamento
+                if (_showMoreFilters) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      // Cidade
+                      Expanded(
+                        child: TextField(
+                          controller: _cityController,
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                          decoration: InputDecoration(
+                            hintText: 'Cidade...',
+                            hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
+                            prefixIcon: const Icon(Icons.location_on_outlined, color: Color(0xFFFFB74D), size: 16),
+                            filled: true,
+                            fillColor: const Color(0xFF22223A),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              borderSide: BorderSide.none,
                             ),
                           ),
-                        ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      // Lote
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF22223A),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _selectedBatchId != null ? const Color(0xFFCE93D8) : Colors.white12,
+                            ),
+                          ),
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              isExpanded: true,
+                              dropdownColor: const Color(0xFF2A2A4A),
+                              value: _selectedBatchId,
+                              hint: const Text('Todos os lotes',
+                                  style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              items: [
+                                const DropdownMenuItem<String>(
+                                  value: null,
+                                  child: Text('Todos os lotes',
+                                      style: TextStyle(color: Colors.white70, fontSize: 11)),
+                                ),
+                                ..._batches.map((b) => DropdownMenuItem<String>(
+                                      value: b['id']?.toString(),
+                                      child: Text(
+                                        b['name']?.toString() ?? 'Lote',
+                                        style: const TextStyle(color: Colors.white, fontSize: 11),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    )),
+                              ],
+                              onChanged: (val) => setState(() => _selectedBatchId = val),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Forma de Pagamento
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22223A),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _selectedPaymentMethod != null ? const Color(0xFF00C853) : Colors.white12,
                       ),
                     ),
-                  ),
-                ),
-                if (_startDate != null || _endDate != null) ...[
-                  const SizedBox(width: 6),
-                  IconButton(
-                    icon: const Icon(Icons.clear_rounded, color: Colors.white70, size: 20),
-                    tooltip: 'Limpar período',
-                    onPressed: _limparFiltroDatas,
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF2A2A4A),
+                        value: _selectedPaymentMethod,
+                        hint: const Text('Todas as formas de pagamento',
+                            style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        items: const [
+                          DropdownMenuItem<String>(
+                            value: null,
+                            child: Text('Todas as formas de pagamento',
+                                style: TextStyle(color: Colors.white70, fontSize: 11)),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'PIX',
+                            child: Text('PIX', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'DINHEIRO',
+                            child: Text('Dinheiro', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'CARTAO_CREDITO',
+                            child: Text('Cartão de Crédito', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'CARTAO_DEBITO',
+                            child: Text('Cartão de Débito', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'CREDIARIO',
+                            child: Text('Crediário', style: TextStyle(color: Colors.white, fontSize: 12)),
+                          ),
+                        ],
+                        onChanged: (val) => setState(() => _selectedPaymentMethod = val),
+                      ),
+                    ),
                   ),
                 ],
+                const SizedBox(height: 12),
+
+                // Botões de Ação: Filtrar e Limpar
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00C853),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.filter_list_rounded, size: 18),
+                        label: const Text('Filtrar', style: TextStyle(fontWeight: FontWeight.bold)),
+                        onPressed: _isLoading ? null : _executarBusca,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 1,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white70,
+                          side: const BorderSide(color: Colors.white24),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        icon: const Icon(Icons.clear_rounded, size: 16),
+                        label: const Text('Limpar'),
+                        onPressed: _limparFiltros,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
 
-          // Totalizador geral de vendas e contadores
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: const Color(0xFF1A1A2E),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${filtered.length} ${filtered.length == 1 ? 'venda' : 'vendas'} · ${sortedSellers.length} ${sortedSellers.length == 1 ? 'vendedor' : 'vendedores'}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
-                ),
-                if (filtered.isNotEmpty)
+          // Totalizador geral quando há resultados
+          if (_hasSearched && filtered.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              color: const Color(0xFF1A1A2E),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
                   Text(
-                    'Total Geral: ${_currencyFormat.format(grandTotal)}',
+                    '${filtered.length} ${filtered.length == 1 ? 'venda' : 'vendas'} · ${sortedSellers.length} ${sortedSellers.length == 1 ? 'vendedor' : 'vendedores'}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    'Total: ${_currencyFormat.format(grandTotal)}',
                     style: const TextStyle(color: Color(0xFF00C853), fontSize: 13, fontWeight: FontWeight.bold),
                   ),
-              ],
+                ],
+              ),
             ),
-          ),
 
-          // Lista de vendas agrupadas por vendedor
+          // Área de Resultados
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
-                : sortedSellers.isEmpty
+                : !_hasSearched
                     ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.point_of_sale_rounded, color: Colors.white24, size: 56),
-                            const SizedBox(height: 12),
-                            Text(
-                              _filtroTexto.isEmpty && _startDate == null && _endDate == null
-                                  ? 'Nenhuma venda registrada até o momento.'
-                                  : 'Nenhuma venda encontrada para os filtros selecionados.',
-                              style: const TextStyle(color: Colors.white54, fontSize: 14),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
+                        child: Padding(
+                          padding: const EdgeInsets.all(32.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(18),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFCE93D8).withOpacity(0.12),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.filter_alt_outlined, color: Color(0xFFCE93D8), size: 48),
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Selecione os filtros e toque em Filtrar',
+                                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Os registros de venda serão carregados sob consulta com os parâmetros selecionados.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.white54, fontSize: 13),
+                              ),
+                            ],
+                          ),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: sortedSellers.length,
-                        itemBuilder: (context, index) {
-                          final sellerKey = sortedSellers[index];
-                          final sellerSales = _salesGroupedBySeller[sellerKey]!;
-                          return _buildSellerGroup(sellerKey, sellerSales);
-                        },
-                      ),
+                    : sortedSellers.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                Icon(Icons.search_off_rounded, color: Colors.white24, size: 56),
+                                SizedBox(height: 12),
+                                Text(
+                                  'Nenhuma venda encontrada para os filtros informados.',
+                                  style: TextStyle(color: Colors.white54, fontSize: 14),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(12),
+                            itemCount: sortedSellers.length,
+                            itemBuilder: (context, index) {
+                              final sellerKey = sortedSellers[index];
+                              final sellerSales = _salesGroupedBySeller[sellerKey]!;
+                              return _buildSellerGroup(sellerKey, sellerSales);
+                            },
+                          ),
           ),
         ],
       ),
@@ -613,6 +859,44 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
               const SizedBox(height: 8),
               const Divider(color: Colors.white10, height: 1),
               const SizedBox(height: 6),
+
+              // Métodos de pagamento (suporte a pagamentos divididos)
+              if (sale['payments'] is List && (sale['payments'] as List).isNotEmpty) ...[
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: (sale['payments'] as List).map((p) {
+                    final pMethod = p['method']?.toString() ?? 'OUTRO';
+                    final pVal = double.tryParse(p['value']?.toString() ?? '0') ?? 0.0;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00C853).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF00C853).withOpacity(0.3)),
+                      ),
+                      child: Text(
+                        '$pMethod: ${_currencyFormat.format(pVal)}',
+                        style: const TextStyle(color: Color(0xFF00C853), fontSize: 10, fontWeight: FontWeight.w600),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 6),
+              ] else if (sale['method'] != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    sale['method'].toString(),
+                    style: const TextStyle(color: Colors.white70, fontSize: 10),
+                  ),
+                ),
+                const SizedBox(height: 6),
+              ],
 
               // Rodapé: Data e Indicadores de anexos
               Row(

@@ -769,6 +769,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                     children: [
                       _sideMenuItem(7, Icons.account_balance_wallet_rounded,
                           'Fechamentos'),
+                      _sideMenuItem(13, Icons.local_shipping_rounded,
+                          'Rotas e Chegada da Gráfica'),
                       _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
@@ -1479,6 +1481,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         break;
       case 12:
         tabWidget = const VisaoCrediarioAdmin();
+        break;
+      case 13:
+        tabWidget = const VisaoRotasChegada();
         break;
       default:
         tabWidget = const VisaoFechamentoAdmin();
@@ -2474,54 +2479,6 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 🚛 Card Rotas e Chegada da Gráfica no topo da Aba Books
-          LedCard(
-            color: const Color(0xFF1A1A2E),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.local_shipping_rounded,
-                          color: Color(0xFFFFB74D), size: 22),
-                      SizedBox(width: 8),
-                      Text('Rotas e Chegada da Gráfica',
-                          style: TextStyle(
-                              color: Color(0xFFFFB74D),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                      'Confirme a chegada dos lotes impressos por evento para o estoque e distribua aos vendedores.',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: LedButton.icon(
-                      onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const VisaoRotasChegada())),
-                      icon: const Icon(Icons.inventory_rounded,
-                          color: Colors.black),
-                      label: const Text('Abrir Chegada da Gráfica',
-                          style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold)),
-                      style: LedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFFB74D)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 20),
 
           // Resumo geral
           InkWell(

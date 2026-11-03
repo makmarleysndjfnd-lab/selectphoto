@@ -11,6 +11,7 @@ import 'tela_cadastro_custos.dart';
 import 'tela_demonstrativo_empresa_lumora.dart';
 import 'tela_suporte_empresa.dart';
 import 'tela_integracoes_empresa.dart';
+import 'tela_sincronizacao.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
@@ -24,18 +25,27 @@ class SettingsScreen extends StatefulWidget {
   final bool canManageRoi;
 
   /// [isFotografo] controla funcionalidades exclusivas do fotógrafo:
-  /// impresora bluetooth visível somente para fotógrafos,
-  /// download de backup visível somente para não-fotógrafos.
+  /// lista unificada vertical com ações de lote, impressora, sincronização e segurança.
   final bool isFotografo;
 
   /// [isVendedor] exibe ações operacionais do vendedor (transferência de capas, books e despesas).
   final bool isVendedor;
+
+  /// Ações e dados do lote ativo para fotógrafos
+  final VoidCallback? onPrintLote;
+  final VoidCallback? onFinalizeLote;
+  final String? currentLoteName;
+  final int? currentLoteCount;
 
   const SettingsScreen({
     super.key,
     this.canManageRoi = false,
     this.isFotografo = false,
     this.isVendedor = false,
+    this.onPrintLote,
+    this.onFinalizeLote,
+    this.currentLoteName,
+    this.currentLoteCount,
   });
 
   @override
@@ -575,6 +585,242 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final settings = Provider.of<SettingsProvider>(context);
+
+    // ── VISÃO UNIFICADA DO FOTÓGRAFO ──────────────────────────────────────────
+    if (widget.isFotografo) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Configurações do Fotógrafo',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          backgroundColor: const Color(0xFF1A1A2E),
+          iconTheme: const IconThemeData(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF161625),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // 1. Imprimir Lote Atual
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.print_rounded, color: Color(0xFFFFB74D)),
+                ),
+                title: const Text('Imprimir Lote Atual',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(
+                  widget.currentLoteName != null && widget.currentLoteName!.isNotEmpty
+                      ? 'Lote em uso: ${widget.currentLoteName} (${widget.currentLoteCount ?? 0} ficha(s))'
+                      : 'Imprime o relatório de fechamento do lote em uso',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                onTap: () {
+                  if (widget.onPrintLote != null) {
+                    widget.onPrintLote!();
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Nenhum lote ativo configurado para impressão.'),
+                      backgroundColor: Colors.orange,
+                    ));
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 2. Finalizar Produção do Lote
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.done_all_rounded, color: Color(0xFFCE93D8)),
+                ),
+                title: const Text('Finalizar Produção do Lote',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                  'Notifica o admin e encerra a produção deste lote para envio à gráfica',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                onTap: () {
+                  if (widget.onFinalizeLote != null) {
+                    widget.onFinalizeLote!();
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Nenhum lote ativo para finalizar.'),
+                      backgroundColor: Colors.orange,
+                    ));
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 3. Sincronização / Pendências Offline
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.sync_rounded, color: Color(0xFF4FC3F7)),
+                ),
+                title: const Text('Sincronização & Pendências Offline',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                  'Sincroniza fichas e fotos locais com o servidor',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SyncScreen()),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 4. Modo Escuro
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(
+                    settings.isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                    color: const Color(0xFF90CAF9),
+                  ),
+                ),
+                title: const Text('Modo Escuro',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(
+                  settings.isDarkMode ? 'Tema escuro ativado' : 'Tema claro ativado',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: Switch(
+                  value: settings.isDarkMode,
+                  onChanged: (val) => settings.setDarkMode(val),
+                  activeColor: const Color(0xFF4FC3F7),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 5. Configurar Impressora Bluetooth
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.bluetooth_connected_rounded, color: Color(0xFF81C784)),
+                ),
+                title: const Text('Configurar Impressora Bluetooth',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                  'Conectar impressora térmica portátil para comprovantes',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PrinterConfigScreen()),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 6. Notificações Disponíveis
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.notifications_active_outlined, color: Colors.amberAccent),
+                ),
+                title: const Text('Notificações Disponíveis',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text(
+                  'Scout Automático de Eventos (Push IA) na sua região',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
+                  ),
+                  child: const Text('Ativo',
+                      style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 7. Política de Privacidade
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.privacy_tip_outlined, color: Color(0xFF4FC3F7)),
+                ),
+                title: const Text('Política de Privacidade',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Minuta técnica e proteção de dados',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: const Icon(Icons.open_in_new_rounded, color: Colors.white38, size: 18),
+                onTap: () => _openLegalUrl('privacy.html'),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // 8. Exclusão de Conta
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.person_remove_outlined, color: Colors.orangeAccent),
+                ),
+                title: const Text('Exclusão de Conta',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Procedimento e canal de encerramento cadastral',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                trailing: const Icon(Icons.open_in_new_rounded, color: Colors.white38, size: 18),
+                onTap: () => _openLegalUrl('account-deletion.html'),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 9. Sair da Conta (preserva rascunhos e fichas locais)
+            LedCard(
+              color: const Color(0xFF1A1A2E),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white12,
+                  child: Icon(Icons.logout_rounded, color: Colors.redAccent),
+                ),
+                title: const Text('Sair da Conta',
+                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Preserva rascunhos e fichas pendentes no dispositivo',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                onTap: () => _handleLogout(context),
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      );
+    }
+
+    // ── VISÃO GERAL (ADMIN / SUPER_ADMIN / VENDEDOR) ──────────────────────────
 
     return Scaffold(
       appBar: AppBar(

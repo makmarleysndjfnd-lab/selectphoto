@@ -25,3 +25,4 @@ child.on('exit', (code) => {
     process.exit(1);
   }
 });
+

@@ -714,10 +714,28 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                         prefs.getInt('lote_sequence_count') ??
                         1;
 
+                    // Identidade estável e persistente da sessão do lote
+                    String sessionBatchId = prefs.getString('lote_session_batch_id') ?? '';
+                    if (sessionBatchId.isEmpty) {
+                      sessionBatchId = SyncService.generateUuid();
+                      await prefs.setString('lote_session_batch_id', sessionBatchId);
+                    }
+
                     await prefs.setString('lote_city', city);
                     await prefs.setString('lote_event_name', event);
                     await prefs.setStringList('lote_session_fichas', []);
                     await prefs.setInt('lote_sequence_count', seq);
+
+                    // Registrar sessão no servidor se online (de forma resiliente)
+                    try {
+                      await ApiService().startBookBatchSession(
+                        batchId: sessionBatchId,
+                        eventName: event,
+                        city: city,
+                      );
+                    } catch (e) {
+                      debugPrint('Aviso: sessão de lote criada localmente (offline): $e');
+                    }
 
                     if (mounted) {
                       setState(() {
@@ -993,6 +1011,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         'clothesColor': _clothesColorController.text.trim(),
         'children': validChildren,
         'signatureBase64': base64Signature,
+        'batchId': prefs.getString('lote_session_batch_id'),
       };
 
       bool persistedSuccessfully = false;
@@ -1341,13 +1360,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                   Navigator.pop(context);
 
                   try {
+                    final prefs = await SharedPreferences.getInstance();
+                    final activeBatchId = prefs.getString('lote_session_batch_id');
+
                     final res = await ApiService().createBookBatch(
                       eventToFinish,
                       city: cityToFinish,
                       clientIds: fichasToFinish,
+                      batchId: activeBatchId,
                     );
 
-                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.remove('lote_session_batch_id');
                     await prefs.remove('lote_city');
                     await prefs.remove('lote_event_name');
                     await prefs.remove('lote_sequence_count');
@@ -1405,111 +1428,19 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
         });
   }
 
-  void _showSettingsMenuModal() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+  void _openFotografoSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsScreen(
+          canManageRoi: false,
+          isFotografo: true,
+          onPrintLote: _printLote,
+          onFinalizeLote: _showFechamentoDialog,
+          currentLoteName: _currentEventName,
+          currentLoteCount: _sessionFichas.length,
+        ),
       ),
-      builder: (ctx) {
-        return SafeArea(
-          child: SingleChildScrollView(
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                        color: Colors.white30,
-                        borderRadius: BorderRadius.circular(2)),
-                  ),
-                  const SizedBox(height: 16),
-                  const Text('Menu de Configurações & Ações',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 20),
-                  ListTile(
-                    leading: const CircleAvatar(
-                        backgroundColor: Colors.white12,
-                        child: Icon(Icons.print, color: Colors.orangeAccent)),
-                    title: const Text('Imprimir Lote Atual',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Imprime o relatório de fechamento do lote em uso',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _printLote();
-                    },
-                  ),
-                  ListTile(
-                    leading: const CircleAvatar(
-                        backgroundColor: Colors.white12,
-                        child: Icon(Icons.done_all_rounded,
-                            color: Color(0xFFCE93D8))),
-                    title: const Text('Finalizar Fechamento do Evento',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Notifica o admin e encerra a produção deste lote',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _showFechamentoDialog();
-                    },
-                  ),
-                  ListTile(
-                    leading: const CircleAvatar(
-                        backgroundColor: Colors.white12,
-                        child: Icon(Icons.sync, color: Colors.blueAccent)),
-                    title: const Text('Sincronização Offline',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Sincroniza fichas e fotos locais com o servidor',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) =>
-                                  const tela_sincronizacao.SyncScreen()));
-                    },
-                  ),
-                  ListTile(
-                    leading: const CircleAvatar(
-                        backgroundColor: Colors.white12,
-                        child: Icon(Icons.settings, color: Colors.white70)),
-                    title: const Text('Configurações do App & Impressora',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.bold)),
-                    subtitle: const Text(
-                        'Configurar impressora bluetooth e parâmetros',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const SettingsScreen(
-                                  canManageRoi: false, isFotografo: true)));
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -1610,8 +1541,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                   ),
                   IconButton(
                     icon: const Icon(Icons.settings, color: Colors.white70),
-                    onPressed: _showSettingsMenuModal,
-                    tooltip: 'Configurações & Ações',
+                    onPressed: _openFotografoSettings,
+                    tooltip: 'Configurações do Fotógrafo',
                   ),
                 ],
               ),
