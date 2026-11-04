@@ -12,8 +12,12 @@ router.post('/session/start', authMiddleware, async (req: AuthRequest, res) => {
         const { batchId, eventName, city } = req.body;
         const photographerId = req.user?.id;
         const companyId = req.user?.companyId;
+        const userRole = (req.user?.role || '').toUpperCase();
 
-        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+        if (userRole === 'SELLER' || userRole === 'VENDEDOR') {
+            return res.status(403).json({ error: 'Acesso negado: vendedores não iniciam sessões de lote' });
+        }
+        if (!companyId && userRole !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Empresa não identificada' });
         }
         if (!photographerId) {
@@ -31,23 +35,56 @@ router.post('/session/start', authMiddleware, async (req: AuthRequest, res) => {
 
         let batch;
         if (effectiveBatchId) {
-            batch = await prisma.bookBatch.upsert({
+            const existingBatch = await prisma.bookBatch.findUnique({
                 where: { id: effectiveBatchId },
-                update: {
-                    name: batchName,
-                    ...(cleanCity ? { city: cleanCity } : {}),
-                },
-                create: {
-                    id: effectiveBatchId,
-                    name: batchName,
-                    city: cleanCity,
-                    photographerId,
-                    companyId,
-                    status: 'CREATED',
-                    totalProduced: 0
-                },
                 include: { photographer: { select: { id: true, name: true } } }
             });
+
+            if (existingBatch) {
+                if (existingBatch.companyId !== companyId && userRole !== 'SUPER_ADMIN') {
+                    return res.status(403).json({ error: 'Lote pertence a outra empresa' });
+                }
+                if (existingBatch.photographerId !== photographerId && userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+                    return res.status(403).json({ error: 'Lote pertence a outro fotógrafo' });
+                }
+                // Idempotência: se o lote já foi fechado/avançou (status !== 'CREATED'), retorna sem alterar status ou totalProduced
+                if (existingBatch.status !== 'CREATED') {
+                    return res.status(200).json({
+                        success: true,
+                        batchId: existingBatch.id,
+                        name: existingBatch.name,
+                        status: existingBatch.status,
+                        photographerId: existingBatch.photographerId,
+                        city: existingBatch.city,
+                        totalProduced: existingBatch.totalProduced ?? 0,
+                        alreadyClosed: true,
+                        batch: existingBatch
+                    });
+                }
+
+                // Se ainda está em CREATED, atualiza metadados mantendo o lote ativo
+                batch = await prisma.bookBatch.update({
+                    where: { id: effectiveBatchId },
+                    data: {
+                        name: batchName,
+                        ...(cleanCity ? { city: cleanCity } : {}),
+                    },
+                    include: { photographer: { select: { id: true, name: true } } }
+                });
+            } else {
+                batch = await prisma.bookBatch.create({
+                    data: {
+                        id: effectiveBatchId,
+                        name: batchName,
+                        city: cleanCity,
+                        photographerId,
+                        companyId,
+                        status: 'CREATED',
+                        totalProduced: 0
+                    },
+                    include: { photographer: { select: { id: true, name: true } } }
+                });
+            }
         } else {
             batch = await prisma.bookBatch.create({
                 data: {
@@ -83,8 +120,12 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
         const { eventName, city, clientIds, batchId } = req.body;
         const photographerId = req.user?.id;
         const companyId = req.user?.companyId;
+        const userRole = (req.user?.role || '').toUpperCase();
 
-        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+        if (userRole === 'SELLER' || userRole === 'VENDEDOR') {
+            return res.status(403).json({ error: 'Acesso negado: vendedores não fecham lotes' });
+        }
+        if (!companyId && userRole !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Empresa não identificada' });
         }
         if (!photographerId) return res.status(400).json({ error: 'Missing photographer' });
@@ -95,6 +136,31 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
         const cleanBatchId = typeof batchId === 'string' && batchId.trim().length > 0 ? batchId.trim() : null;
         const cleanEventName = typeof eventName === 'string' ? eventName.trim() : '';
         const cleanCity = typeof city === 'string' && city.trim().length > 0 ? city.trim() : null;
+
+        // Validação de posse e idempotência prévia se batchId foi fornecido
+        if (cleanBatchId) {
+            const existingBatch = await prisma.bookBatch.findUnique({
+                where: { id: cleanBatchId }
+            });
+            if (existingBatch) {
+                if (existingBatch.companyId !== companyId && userRole !== 'SUPER_ADMIN') {
+                    return res.status(403).json({ error: 'Lote pertence a outra empresa' });
+                }
+                if (existingBatch.photographerId !== photographerId && userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+                    return res.status(403).json({ error: 'Lote pertence a outro fotógrafo' });
+                }
+                if (existingBatch.status !== 'CREATED') {
+                    return res.status(200).json({
+                        message: 'Lote já finalizado anteriormente.',
+                        alreadyClosed: true,
+                        count: 0,
+                        batchId: existingBatch.id,
+                        totalProduced: existingBatch.totalProduced ?? 0,
+                        batches: [existingBatch]
+                    });
+                }
+            }
+        }
 
         // Não permitir fechamento ambíguo por apenas evento e cidade sem o conjunto de fichas ou batchId
         if (cleanClientIds.length === 0 && !cleanBatchId) {
@@ -123,7 +189,7 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
             // 1. Buscar candidatas no escopo restrito
             const candidates = await tx.client.findMany({
                 where: scopeWhere,
-                select: { id: true, bookStatus: true, name: true, event: true, city: true }
+                select: { id: true, bookStatus: true, name: true, event: true, city: true, batchId: true }
             });
 
             if (candidates.length === 0) {
@@ -171,13 +237,31 @@ router.post('/close-event', authMiddleware, async (req: AuthRequest, res) => {
                     where: { id: cleanBatchId, ...(companyId ? { companyId } : {}) }
                 });
                 if (existing) {
+                    if (existing.status !== 'CREATED') {
+                        return {
+                            count: 0,
+                            alreadyClosed: true,
+                            batch: existing,
+                            message: 'Lote já finalizado anteriormente.'
+                        };
+                    }
+
+                    // Congelamento imutável de totalProduced na transição para AWAITING_RELEASE
+                    const clientsAlreadyInBatch = await tx.client.count({
+                        where: { batchId: existing.id, companyId }
+                    });
+                    const newlyAddedCount = eligibleClients.filter(c => c.batchId !== existing.id).length;
+                    const frozenTotal = existing.totalProduced && existing.totalProduced > 0
+                        ? existing.totalProduced
+                        : Math.max(clientsAlreadyInBatch + newlyAddedCount, eligibleClients.length);
+
                     targetBatch = await tx.bookBatch.update({
                         where: { id: cleanBatchId },
                         data: {
                             name: batchName,
                             city: effectiveCity || existing.city,
                             status: 'AWAITING_RELEASE',
-                            totalProduced: Math.max(existing.totalProduced || 0, eligibleClients.length)
+                            totalProduced: frozenTotal
                         }
                     });
                 }
@@ -903,12 +987,24 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
 router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
     try {
         const companyId = req.user?.companyId;
-        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+        const userRole = (req.user?.role || '').toUpperCase();
+
+        if (userRole === 'SELLER' || userRole === 'VENDEDOR') {
+            return res.status(403).json({ error: 'Acesso restrito: vendedores não têm permissão para listar lotes da gráfica' });
+        }
+
+        if (!companyId && userRole !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Empresa não identificada' });
         }
 
+        const isPhotographer = userRole === 'PHOTOGRAPHER' || userRole === 'FOTOGRAFO';
+        const batchWhere: any = companyId ? { companyId } : {};
+        if (isPhotographer && req.user?.id) {
+            batchWhere.photographerId = req.user.id;
+        }
+
         const batches = await prisma.bookBatch.findMany({
-            where: { companyId },
+            where: batchWhere,
             include: { 
                 photographer: { select: { id: true, name: true } },
                 clients: {
@@ -958,11 +1054,16 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
             }
             const distinctCities = Array.from(citiesSet);
 
+            // Para preservar a privacidade de fichas cadastradas em campo aberto durante a produção,
+            // não expõe identidades individuais de clientes enquanto o lote estiver com status CREATED,
+            // retornando apenas os totais/contadores agregados.
+            const clientsForResponse = batch.status === 'CREATED' ? [] : activeClients;
+
             return {
                 ...batch,
                 totalProduced,
                 cities: distinctCities,
-                clients: activeClients, // Somente ativas no fluxo operacional
+                clients: clientsForResponse, // Somente ativas no fluxo operacional (ou vazio para privacidade em CREATED)
                 counts: {
                     produced: totalProduced,
                     inProduction: inProductionCount,
@@ -975,17 +1076,17 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
             };
         });
 
-        // Filtrar lotes totalmente concluídos sem estoque ativo nem em produção
-        // "Lotes totalmente concluídos sem estoque ativo saem das rotas operacionais."
+        // Filtrar lotes totalmente concluídos sem estoque ativo, nem em produção, nem distribuídos
+        // Reter os lotes em exibição operacional até a conclusão operacional real
         const includeConcluded = req.query.includeConcluded === 'true';
         const operationalBatches = includeConcluded 
             ? formattedBatches 
             : formattedBatches.filter(b => {
                 // Se está em produção (CREATED) ou na gráfica (AWAITING_RELEASE), sempre exibe
                 if (b.status === 'CREATED' || b.status === 'AWAITING_RELEASE') return true;
-                // Se tem fichas ativas (em estoque, gráfica ou aguardando), exibe
-                if (b.counts.inStock > 0 || b.counts.awaitingRelease > 0 || b.counts.inProduction > 0) return true;
-                // Se não sobrou nenhuma ficha ativa (todas vendidas ou distribuídas sem estoque), sai da lista operacional
+                // Se tem fichas ativas (em estoque, gráfica, com vendedor ou em produção), exibe
+                if (b.counts.inStock > 0 || b.counts.awaitingRelease > 0 || b.counts.inProduction > 0 || b.counts.distributed > 0) return true;
+                // Se não sobrou nenhuma ficha ativa (todas vendidas ou concluídas), sai da lista operacional
                 return false;
             });
 

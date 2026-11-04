@@ -3,6 +3,7 @@ import '../servicos/servico_api.dart';
 import 'package:flutter/services.dart';
 import '../widgets/authenticated_image.dart';
 import '../widgets/led_button.dart';
+import 'visao_rotas_chegada.dart';
 
 double normalizeCommissionPercentage(dynamic rate, dynamic percentage) {
   final raw = rate is num
@@ -102,10 +103,72 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
               const SizedBox(height: 20),
               _buildAnaliseDesempenhoCard(),
               const SizedBox(height: 20),
+              _buildRotasChegadaCard(),
+              const SizedBox(height: 20),
               _buildCidadesALiberarCard(),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRotasChegadaCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFFFB74D).withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.local_shipping_rounded, color: Color(0xFFFFB74D), size: 22),
+              SizedBox(width: 8),
+              Text(
+                'Rotas e Chegada da Gráfica',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Acompanhe lotes em produção, confirme a chegada dos impressos da gráfica e distribua rotas aos vendedores.',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: LedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const VisaoRotasChegada()),
+              ),
+              icon: const Icon(Icons.inventory_rounded, color: Colors.white, size: 20),
+              label: const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  'Abrir Chegada da Gráfica',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              style: LedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF8F00),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

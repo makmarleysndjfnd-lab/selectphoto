@@ -830,7 +830,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         });
       }
 
-      if (hasReceipt && !postCredit) {
+      if (hasReceipt || postCredit) {
         const nextBookStatus =
           client.bookStatus === 'DISTRIBUTED_REBOLO' || client.bookStatus === 'IN_STOCK_REBOLO'
             ? 'REBOLO_SOLD'
@@ -843,6 +843,23 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             outcomeStatus: 'SOLD',
             outcomeUpdatedAt: sale.date,
             bookStatus: nextBookStatus,
+          },
+        });
+
+        await tx.clientTimeline.create({
+          data: {
+            clientId: input.clientId,
+            cycle: client.commercialCycle || 1,
+            previousStatus: client.bookStatus,
+            newStatus: nextBookStatus,
+            previousSellerId: client.assignedSellerId,
+            newSellerId: client.assignedSellerId,
+            authorId: sellerId,
+            authorRole: 'SELLER',
+            action: 'SALE',
+            reason: postCredit
+              ? `Venda a prazo concluída no valor de R$ ${input.value} com entrada de R$ ${(postCredit.downPaymentCents / 100).toFixed(2)} financiado em ${postCredit.installmentsCount}x`
+              : `Venda concluída no valor de R$ ${input.value} (${input.paymentMethod}) com anexos`,
           },
         });
       }

@@ -910,12 +910,14 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     final bool step1Done = status != 'CREATED';
 
     final bool step2Active = status == 'AWAITING_RELEASE';
-    final bool step2Done = status == 'IN_STOCK' || status == 'DISTRIBUTED';
+    final bool step2Done = status == 'IN_STOCK' || status == 'DISTRIBUTED' || inStockCount > 0 || distributedCount > 0;
 
-    final bool step3Active = status == 'IN_STOCK';
-    final bool step3Done = status == 'DISTRIBUTED' && inStockCount == 0;
+    // Se há fichas no estoque central, a etapa Estoque está ativa; se todas já foram para vendedores, está concluída
+    final bool step3Active = inStockCount > 0 || (status == 'IN_STOCK' && distributedCount == 0);
+    final bool step3Done = (status == 'DISTRIBUTED' || distributedCount > 0) && inStockCount == 0;
 
-    final bool step4Active = status == 'DISTRIBUTED' || distributedCount > 0;
+    // Se há fichas com vendedores, a etapa Vendedor está ativa
+    final bool step4Active = distributedCount > 0 || status == 'DISTRIBUTED';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -927,7 +929,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
             _buildStepDot(2, 'Gráfica', step2Active, step2Done),
             _buildStepLine(step2Done),
             _buildStepDot(3, 'Estoque', step3Active, step3Done),
-            _buildStepLine(step3Done),
+            _buildStepLine(step3Done || (step2Done && inStockCount == 0 && distributedCount > 0)),
             _buildStepDot(4, 'Vendedor', step4Active, false),
           ],
         ),

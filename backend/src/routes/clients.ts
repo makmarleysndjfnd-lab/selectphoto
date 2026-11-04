@@ -103,8 +103,46 @@ router.post('/sync', authenticateToken, async (req: AuthRequest, res: Response) 
         finalSignatureUrl = `data:image/png;base64,${clientData.signatureBase64}`;
       }
 
-      // Auto-vincular ao lote ativo do fotógrafo se não especificado
-      if (!sanitizedData.batchId && photographerId) {
+      // Gerenciamento de batchId offline, validação de posse e auto-criação resiliente
+      if (sanitizedData.batchId) {
+        const batchExists = await prisma.bookBatch.findUnique({
+          where: { id: sanitizedData.batchId }
+        });
+        if (batchExists) {
+          if (batchExists.companyId !== companyId && req.user?.role !== 'SUPER_ADMIN') {
+            results.failed++;
+            results.details.push({
+              sequenceNumber: seqNum || clientUuid,
+              uuid: clientUuid,
+              success: false,
+              error: 'Lote associado pertence a outra empresa',
+              reason: 'Lote associado pertence a outra empresa',
+            });
+            continue;
+          }
+        } else {
+          // Lote criado offline no app que ainda não existe no banco oficial:
+          // Cria automaticamente como CREATED vinculado ao fotógrafo autenticado e sua empresa
+          const eventTitle = sanitizedData.event || 'Evento';
+          const batchCity = sanitizedData.city?.trim() || null;
+          const batchName = batchCity
+            ? `Lote - ${eventTitle} (${batchCity})`
+            : `Lote - ${eventTitle}`;
+
+          await prisma.bookBatch.create({
+            data: {
+              id: sanitizedData.batchId,
+              name: batchName,
+              city: batchCity,
+              photographerId: photographerId || req.user?.id!,
+              companyId,
+              status: 'CREATED',
+              totalProduced: 0
+            }
+          });
+        }
+      } else if (photographerId) {
+        // Auto-vincular ao lote ativo do fotógrafo se não especificado
         const activeBatch = await prisma.bookBatch.findFirst({
           where: { photographerId, companyId, status: 'CREATED' },
           orderBy: { date: 'desc' }

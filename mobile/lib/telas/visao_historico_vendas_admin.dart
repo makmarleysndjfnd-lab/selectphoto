@@ -15,6 +15,8 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   final ApiService _api = ApiService();
   bool _isLoading = false;
   bool _hasSearched = false;
+  int _activeQueryToken = 0;
+  String? _appliedFilterSummary;
   List<dynamic> _sales = [];
   List<dynamic> _sellers = [];
   List<dynamic> _batches = [];
@@ -70,6 +72,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   }
 
   Future<void> _executarBusca() async {
+    final currentToken = ++_activeQueryToken;
     setState(() => _isLoading = true);
     try {
       final data = await _api.getSalesHistory(
@@ -81,27 +84,66 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
         batchId: _selectedBatchId,
         paymentMethod: _selectedPaymentMethod,
       );
-      if (mounted) {
-        setState(() {
-          _sales = data;
-          _hasSearched = true;
-          _isLoading = false;
-        });
+      if (!mounted || currentToken != _activeQueryToken) return;
+
+      // Resumo imutável dos filtros efetivamente executados nesta busca
+      final List<String> parts = [];
+      if (_startDate != null && _endDate != null) {
+        parts.add('${_dateOnlyFormat.format(_startDate!)} até ${_dateOnlyFormat.format(_endDate!)}');
+      } else if (_startDate != null) {
+        parts.add('A partir de ${_dateOnlyFormat.format(_startDate!)}');
+      } else if (_endDate != null) {
+        parts.add('Até ${_dateOnlyFormat.format(_endDate!)}');
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red.shade800,
-            content: Text('Erro ao carregar histórico de vendas: $e'),
-          ),
+      if (_selectedSellerId != null) {
+        final sMatch = _sellers.firstWhere(
+          (s) => s['id']?.toString() == _selectedSellerId,
+          orElse: () => null,
         );
+        if (sMatch != null && sMatch['name'] != null) {
+          parts.add('Vendedor: ${sMatch['name']}');
+        }
       }
+      if (_searchController.text.trim().isNotEmpty) {
+        parts.add('Termo: "${_searchController.text.trim()}"');
+      }
+      if (_cityController.text.trim().isNotEmpty) {
+        parts.add('Cidade: "${_cityController.text.trim()}"');
+      }
+      if (_selectedBatchId != null) {
+        final bMatch = _batches.firstWhere(
+          (b) => b['id']?.toString() == _selectedBatchId,
+          orElse: () => null,
+        );
+        if (bMatch != null && bMatch['name'] != null) {
+          parts.add('Lote: ${bMatch['name']}');
+        }
+      }
+      if (_selectedPaymentMethod != null) {
+        parts.add('Pagamento: $_selectedPaymentMethod');
+      }
+      final summary = parts.isNotEmpty ? parts.join(' · ') : 'Todos os filtros livres';
+
+      setState(() {
+        _sales = data;
+        _hasSearched = true;
+        _isLoading = false;
+        _appliedFilterSummary = summary;
+      });
+    } catch (e) {
+      if (!mounted || currentToken != _activeQueryToken) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.red.shade800,
+          content: Text('Erro ao carregar histórico de vendas: $e'),
+        ),
+      );
     }
   }
 
   void _limparFiltros() {
+    _activeQueryToken++;
     setState(() {
       _searchController.clear();
       _cityController.clear();
@@ -113,6 +155,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
       _hasSearched = false;
       _sales = [];
       _showMoreFilters = false;
+      _appliedFilterSummary = null;
     });
   }
 
@@ -144,25 +187,42 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
 
   List<dynamic> get _salesFiltradas => _sales;
 
-  Map<String, List<Map<String, dynamic>>> get _salesGroupedBySeller {
+  Map<String, List<Map<String, dynamic>>> get _salesGroupedBySellerId {
     final map = <String, List<Map<String, dynamic>>>{};
     for (final item in _salesFiltradas) {
       final sale = item as Map<String, dynamic>;
-      final rawSeller = sale['seller']?['name']?.toString().trim();
-      final sellerKey = (rawSeller != null && rawSeller.isNotEmpty)
-          ? rawSeller
-          : 'Vendedor não identificado';
-      map.putIfAbsent(sellerKey, () => []).add(sale);
+      final sellerId = sale['sellerId']?.toString().trim();
+      final key = (sellerId != null && sellerId.isNotEmpty) ? sellerId : 'unidentified';
+      map.putIfAbsent(key, () => []).add(sale);
     }
     return map;
   }
 
-  List<String> get _sortedSellers {
-    final keys = _salesGroupedBySeller.keys.toList();
+  String _sellerDisplayName(String sellerKey) {
+    if (sellerKey == 'unidentified') return 'Vendedor não identificado';
+    final sales = _salesGroupedBySellerId[sellerKey];
+    if (sales != null && sales.isNotEmpty) {
+      final name = sales.first['seller']?['name']?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    final found = _sellers.firstWhere(
+      (s) => s['id']?.toString() == sellerKey,
+      orElse: () => null,
+    );
+    if (found != null && found['name'] != null) {
+      return found['name'].toString().trim();
+    }
+    return 'Vendedor ($sellerKey)';
+  }
+
+  List<String> get _sortedSellerKeys {
+    final keys = _salesGroupedBySellerId.keys.toList();
     keys.sort((a, b) {
-      if (a == 'Vendedor não identificado') return 1;
-      if (b == 'Vendedor não identificado') return -1;
-      return a.toLowerCase().compareTo(b.toLowerCase());
+      if (a == 'unidentified') return 1;
+      if (b == 'unidentified') return -1;
+      final nameA = _sellerDisplayName(a).toLowerCase();
+      final nameB = _sellerDisplayName(b).toLowerCase();
+      return nameA.compareTo(nameB);
     });
     return keys;
   }
@@ -257,7 +317,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   @override
   Widget build(BuildContext context) {
     final filtered = _salesFiltradas;
-    final sortedSellers = _sortedSellers;
+    final sortedSellerKeys = _sortedSellerKeys;
     final grandTotal = filtered.fold<double>(
       0.0,
       (acc, item) => acc + (double.tryParse(item['value']?.toString() ?? '0') ?? 0.0),
@@ -628,17 +688,31 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               color: const Color(0xFF1A1A2E),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${filtered.length} ${filtered.length == 1 ? 'venda' : 'vendas'} · ${sortedSellers.length} ${sortedSellers.length == 1 ? 'vendedor' : 'vendedores'}',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '${filtered.length} ${filtered.length == 1 ? 'venda' : 'vendas'} · ${sortedSellerKeys.length} ${sortedSellerKeys.length == 1 ? 'vendedor' : 'vendedores'}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        'Total: ${_currencyFormat.format(grandTotal)}',
+                        style: const TextStyle(color: Color(0xFF00C853), fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ],
                   ),
-                  Text(
-                    'Total: ${_currencyFormat.format(grandTotal)}',
-                    style: const TextStyle(color: Color(0xFF00C853), fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
+                  if (_appliedFilterSummary != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Filtros aplicados: $_appliedFilterSummary',
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -677,7 +751,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                           ),
                         ),
                       )
-                    : sortedSellers.isEmpty
+                    : sortedSellerKeys.isEmpty
                         ? Center(
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -694,11 +768,12 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                           )
                         : ListView.builder(
                             padding: const EdgeInsets.all(12),
-                            itemCount: sortedSellers.length,
+                            itemCount: sortedSellerKeys.length,
                             itemBuilder: (context, index) {
-                              final sellerKey = sortedSellers[index];
-                              final sellerSales = _salesGroupedBySeller[sellerKey]!;
-                              return _buildSellerGroup(sellerKey, sellerSales);
+                              final sellerKey = sortedSellerKeys[index];
+                              final sellerSales = _salesGroupedBySellerId[sellerKey]!;
+                              final sellerName = _sellerDisplayName(sellerKey);
+                              return _buildSellerGroup(sellerName, sellerSales);
                             },
                           ),
           ),
@@ -867,7 +942,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                   runSpacing: 4,
                   children: (sale['payments'] as List).map((p) {
                     final pMethod = p['method']?.toString() ?? 'OUTRO';
-                    final pVal = double.tryParse(p['value']?.toString() ?? '0') ?? 0.0;
+                    final pVal = double.tryParse((p['amount'] ?? p['value'])?.toString() ?? '0') ?? 0.0;
                     return Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
