@@ -29,6 +29,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   List<dynamic> _asaasDuplicateAlerts = [];
 
   // Fechamentos Mensais (10%)
+  Map<String, dynamic>? _closingConfig;
   List<dynamic> _monthlyClosings = [];
   List<dynamic> _monthlySellersSummary = [];
   bool _isLoadingMonthlyClosings = false;
@@ -104,6 +105,9 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       final sellerPortfolioFuture = _selectedSellerId != null
           ? _api.getSellerCreditPortfolio(sellerId: _selectedSellerId)
           : Future.value(<String, dynamic>{});
+      final closingConfigFuture = _api
+          .getCreditClosingConfig()
+          .catchError((_) => <String, dynamic>{});
 
       final results = await Future.wait([
         overviewFuture,
@@ -112,6 +116,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         asaasConfigFuture,
         asaasAlertsFuture,
         sellerPortfolioFuture,
+        closingConfigFuture,
       ]);
 
       if (mounted) {
@@ -122,6 +127,10 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           _asaasConfig = results[3] as Map<String, dynamic>;
           _asaasDuplicateAlerts = results[4] as List<dynamic>;
           _selectedSellerPortfolio = results[5] as Map<String, dynamic>;
+          final cfg = results[6] as Map<String, dynamic>;
+          if (cfg.isNotEmpty) {
+            _closingConfig = cfg;
+          }
           _isLoading = false;
         });
       }
@@ -348,7 +357,9 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _buildKpiSection(),
-                            const SizedBox(height: 20),
+                            const SizedBox(height: 16),
+                            _buildClosingDatesConfigCard(),
+                            const SizedBox(height: 16),
                             _buildInadimplenciaBanner(),
                             const SizedBox(height: 20),
                             _buildFilterSection(),
@@ -2897,6 +2908,8 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  _buildClosingDatesConfigCard(),
+                  const SizedBox(height: 16),
                   _buildMonthlyClosingKpis(),
                   const SizedBox(height: 16),
                   _buildMonthlyClosingFilterBar(),
@@ -2905,6 +2918,242 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildClosingDatesConfigCard() {
+    final now = DateTime.now();
+    final defaultStart = DateTime(now.year, now.month, 1);
+    final defaultEnd = DateTime(now.year, now.month + 1, 0);
+    final defaultPayout = DateTime(now.year, now.month + 1, 5);
+
+    final startDate = _closingConfig?['startDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['startDate'].toString()) ?? defaultStart)
+        : defaultStart;
+    final endDate = _closingConfig?['endDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['endDate'].toString()) ?? defaultEnd)
+        : defaultEnd;
+    final payoutDate = _closingConfig?['payoutDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['payoutDate'].toString()) ?? defaultPayout)
+        : defaultPayout;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.45), width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.edit_calendar_rounded, color: Color(0xFFA855F7), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Período do Fechamento e Pagamento',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ],
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.settings_rounded, size: 14),
+                label: const Text('Configurar Datas', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                ),
+                onPressed: () => _showConfigureClosingDatesDialog(startDate, endDate, payoutDate),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildClosingStat('Início do Fechamento', dateFormat.format(startDate), const Color(0xFF38BDF8)),
+              ),
+              Expanded(
+                child: _buildClosingStat('Término do Fechamento', dateFormat.format(endDate), const Color(0xFF38BDF8)),
+              ),
+              Expanded(
+                child: _buildClosingStat('Data p/ Pagar Vendedor', dateFormat.format(payoutDate), const Color(0xFF10B981)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showConfigureClosingDatesDialog(DateTime initialStart, DateTime initialEnd, DateTime initialPayout) {
+    DateTime pickedStart = DateTime(initialStart.year, initialStart.month, initialStart.day);
+    DateTime pickedEnd = DateTime(initialEnd.year, initialEnd.month, initialEnd.day);
+    DateTime pickedPayout = DateTime(initialPayout.year, initialPayout.month, initialPayout.day);
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          Future<void> selectDate(int which) async {
+            final initial = which == 0 ? pickedStart : (which == 1 ? pickedEnd : pickedPayout);
+            final chosen = await showDatePicker(
+              context: ctx,
+              initialDate: initial,
+              firstDate: DateTime(2024, 1, 1),
+              lastDate: DateTime(2030, 12, 31),
+            );
+            if (chosen != null) {
+              setDialogState(() {
+                if (which == 0) {
+                  pickedStart = chosen;
+                  if (pickedEnd.isBefore(pickedStart)) {
+                    pickedEnd = pickedStart;
+                  }
+                } else if (which == 1) {
+                  pickedEnd = chosen;
+                } else {
+                  pickedPayout = chosen;
+                }
+              });
+            }
+          }
+
+          Widget dateRow(String label, DateTime value, VoidCallback onTap, Color accent) {
+            return InkWell(
+              onTap: isSaving ? null : onTap,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0D0714),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: accent.withOpacity(0.5)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                        const SizedBox(height: 4),
+                        Text(
+                          dateFormat.format(value),
+                          style: TextStyle(color: accent, fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                    Icon(Icons.calendar_today_rounded, color: accent, size: 18),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFFA855F7)),
+            ),
+            title: Row(
+              children: const [
+                Icon(Icons.edit_calendar_rounded, color: Color(0xFFA855F7), size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Configurar Datas do Fechamento',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Defina o período de início e término para contabilizar a comissão das parcelas pagas (boletos) e a data programada para pagar o vendedor.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  dateRow('Data de Início da Contabilização', pickedStart, () => selectDate(0), const Color(0xFF38BDF8)),
+                  dateRow('Data de Término da Contabilização', pickedEnd, () => selectDate(1), const Color(0xFF38BDF8)),
+                  dateRow('Data para Pagar o Vendedor', pickedPayout, () => selectDate(2), const Color(0xFF10B981)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSaving ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (pickedEnd.isBefore(pickedStart)) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('A data de término não pode ser anterior à data de início.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+                        setDialogState(() => isSaving = true);
+                        try {
+                          final updated = await _api.updateCreditClosingConfig(
+                            startDate: pickedStart.toIso8601String(),
+                            endDate: pickedEnd.toIso8601String(),
+                            payoutDate: pickedPayout.toIso8601String(),
+                          );
+                          if (mounted) {
+                            setState(() {
+                              _closingConfig = updated;
+                            });
+                            Navigator.pop(ctx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Datas do fechamento e pagamento salvas com sucesso!'),
+                                backgroundColor: Color(0xFF10B981),
+                              ),
+                            );
+                            _refresh();
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSaving = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Erro ao salvar datas: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Salvar Configuração', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -3202,6 +3451,26 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                         'Vendedor: $sellerName',
                         style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11),
                       ),
+                      if (c['startDate'] != null && c['endDate'] != null)
+                        Builder(
+                          builder: (_) {
+                            final sd = DateTime.tryParse(c['startDate'].toString());
+                            final ed = DateTime.tryParse(c['endDate'].toString());
+                            final pd = c['payoutDate'] != null
+                                ? DateTime.tryParse(c['payoutDate'].toString())
+                                : (_closingConfig?['payoutDate'] != null
+                                    ? DateTime.tryParse(_closingConfig!['payoutDate'].toString())
+                                    : null);
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 3),
+                              child: Text(
+                                'Período: ${sd != null ? dateFormat.format(sd) : '--'} a ${ed != null ? dateFormat.format(ed) : '--'}'
+                                '${pd != null ? ' • Pagar em: ${dateFormat.format(pd)}' : ''}',
+                                style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.w600),
+                              ),
+                            );
+                          },
+                        ),
                     ],
                   ),
                 ],

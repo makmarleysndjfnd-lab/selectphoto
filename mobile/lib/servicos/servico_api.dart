@@ -50,6 +50,8 @@ class ApiService {
   bool _isIsolatedSession = false;
 
   static ApiService? _mockInstance;
+  static void Function(String message)? onSessionReplacedByOtherDevice;
+
   @visibleForTesting
   static void setMockInstance(ApiService? mock) {
     _mockInstance = mock;
@@ -230,6 +232,15 @@ class ApiService {
               await prefs.remove('jwt_token');
             }
           } catch (_) {}
+
+          final respData = error.response?.data;
+          if (!_isIsolatedSession &&
+              respData is Map &&
+              respData['code'] == 'SESSION_REPLACED_BY_OTHER_DEVICE') {
+            final msg = respData['error']?.toString() ??
+                'Sua conta foi conectada em outro aparelho e esta sessão foi encerrada.';
+            onSessionReplacedByOtherDevice?.call(msg);
+          }
         }
         return handler.next(error);
       },
@@ -251,8 +262,17 @@ class ApiService {
   }
 
   void clearToken() {
+    final prevToken = _token;
     _token = null;
     if (!_isIsolatedSession) {
+      if (prevToken != null && prevToken.isNotEmpty) {
+        _dio
+            .post(
+              '/auth/logout',
+              options: Options(headers: {'Authorization': 'Bearer $prevToken'}),
+            )
+            .catchError((_) => Response(requestOptions: RequestOptions(path: '/auth/logout')));
+      }
       SharedPreferences.getInstance().then((prefs) {
         prefs.remove('jwt_token');
       }).catchError((_) {});
@@ -364,9 +384,21 @@ class ApiService {
 
   Future<Map<String, dynamic>> login(String cpf, String password) async {
     try {
+      String? deviceId;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        deviceId = prefs.getString('device_installation_id');
+        if (deviceId == null || deviceId.isEmpty) {
+          deviceId =
+              'dev_${DateTime.now().microsecondsSinceEpoch}_${cpf.hashCode.abs()}';
+          await prefs.setString('device_installation_id', deviceId);
+        }
+      } catch (_) {}
+
       final response = await _dio.post('/auth/login', data: {
         'cpf': cpf,
         'password': password,
+        if (deviceId != null) 'deviceId': deviceId,
       });
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
@@ -2083,6 +2115,34 @@ class ApiService {
 
   // ================= Fechamento Mensal do Crediário (Etapa 2) =================
 
+  /// Retorna a configuração de datas do fechamento do crediário (Data de Início, Data de Término e Data de Pagamento)
+  Future<Map<String, dynamic>> getCreditClosingConfig() async {
+    try {
+      final resp = await _dio.get('/credit/closing-config');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Atualiza a configuração de datas do fechamento do crediário e data de pagamento ao vendedor (Admin)
+  Future<Map<String, dynamic>> updateCreditClosingConfig({
+    required String startDate,
+    required String endDate,
+    required String payoutDate,
+  }) async {
+    try {
+      final resp = await _dio.put('/credit/closing-config', data: {
+        'startDate': startDate,
+        'endDate': endDate,
+        'payoutDate': payoutDate,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   /// Retorna os 4 estados visíveis de comissão para a carteira do vendedor
   Future<Map<String, dynamic>> getSellerFourStates({String? sellerId}) async {
     try {
@@ -2128,12 +2188,18 @@ class ApiService {
     required String sellerId,
     required String competence,
     String? notes,
+    String? startDate,
+    String? endDate,
+    String? payoutDate,
   }) async {
     try {
       final resp = await _dio.post('/credit/monthly-closings/process', data: {
         'sellerId': sellerId,
         'competence': competence,
         if (notes != null) 'notes': notes,
+        if (startDate != null) 'startDate': startDate,
+        if (endDate != null) 'endDate': endDate,
+        if (payoutDate != null) 'payoutDate': payoutDate,
       });
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {

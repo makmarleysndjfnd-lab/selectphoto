@@ -743,7 +743,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                   onPressed: isSubmitting ? null : () => Navigator.pop(dialogContext),
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white70)),
                 ),
-                LedButton(
+                ElevatedButton.icon(
                   onPressed: (isSubmitting || isLoadingPreviews || selectedCities.isEmpty)
                       ? null
                       : () async {
@@ -774,11 +774,38 @@ class _SellerDashboardState extends State<SellerDashboard>
                             }
                           }
                         },
-                  style: LedButton.styleFrom(backgroundColor: const Color(0xFF4FC3F7)),
-                  child: isSubmitting
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                      : Text('Fechar Selecionadas (${selectedCities.length})',
-                          style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF),
+                    foregroundColor: const Color(0xFF0A141E),
+                    disabledBackgroundColor: Colors.white12,
+                    disabledForegroundColor: Colors.white54,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 2,
+                  ),
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(color: Color(0xFF0A141E), strokeWidth: 2),
+                        )
+                      : Icon(
+                          Icons.check_circle_rounded,
+                          size: 18,
+                          color: (isSubmitting || isLoadingPreviews || selectedCities.isEmpty)
+                              ? Colors.white54
+                              : const Color(0xFF0A141E),
+                        ),
+                  label: Text(
+                    'Fechar Selecionadas (${selectedCities.length})',
+                    style: TextStyle(
+                      color: (isSubmitting || isLoadingPreviews || selectedCities.isEmpty)
+                          ? Colors.white54
+                          : const Color(0xFF0A141E),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ],
             );
@@ -1021,14 +1048,9 @@ class _SellerDashboardState extends State<SellerDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildCrediarioCard(),
+                    _buildTopQuickActionsBar(),
+                    const SizedBox(height: 16),
                     _buildClientList(),
-                    const SizedBox(height: 20),
-                    _buildSearchCard(),
-                    if (_isManager) ...[
-                      const SizedBox(height: 20),
-                      _buildDistribuicaoEquipeCard(),
-                    ],
                   ],
                 ),
               ),
@@ -1052,87 +1074,350 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
-  Widget _buildCrediarioCard() {
+  Widget _buildTopQuickActionsBar() {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildTopActionButton(
+            icon: Icons.account_balance_wallet_rounded,
+            label: 'Meus\nCrediários',
+            accentColor: const Color(0xFF00E5FF),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const TelaCarteiraCrediarioVendedor(),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildTopActionButton(
+            icon: Icons.calendar_month_rounded,
+            label: 'Abrir\nAgenda',
+            accentColor: const Color(0xFF4FC3F7),
+            badgeCount: _personalAppointments.length,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TelaAgenda()),
+              ).then((_) => _fetchClients());
+            },
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildTopActionButton(
+            icon: Icons.qr_code_scanner_rounded,
+            label: 'Buscar\nFicha',
+            accentColor: const Color(0xFF29B6F6),
+            onTap: _showBuscaFichaModal,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _buildTopActionButton(
+            icon: Icons.swap_horiz_rounded,
+            label: 'Distribuição\nVendedor',
+            accentColor: const Color(0xFFCE93D8),
+            onTap: _showDistribuicaoVendedorModal,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopActionButton({
+    required IconData icon,
+    required String label,
+    required Color accentColor,
+    required VoidCallback onTap,
+    int badgeCount = 0,
+  }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF0D253F), Color(0xFF133B5C)],
+          colors: [Color(0xFF13273A), Color(0xFF1A2634)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.4)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accentColor.withOpacity(0.45), width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF00E5FF).withOpacity(0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: accentColor.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const TelaCarteiraCrediarioVendedor(),
-              ),
-            );
-          },
+          borderRadius: BorderRadius.circular(14),
+          onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00E5FF).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.account_balance_wallet_rounded,
-                    color: Color(0xFF00E5FF),
-                    size: 26,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Meus Crediários & Comissões',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: accentColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(icon, color: accentColor, size: 22),
+                    ),
+                    if (badgeCount > 0)
+                      Positioned(
+                        right: -4,
+                        top: -4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: accentColor,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            badgeCount.toString(),
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
-                      SizedBox(height: 3),
-                      Text(
-                        'Consulte seus contratos e a comissão mensal dos 10%',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
-                const Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  color: Color(0xFF00E5FF),
-                  size: 16,
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    height: 1.15,
+                  ),
                 ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  void _showBuscaFichaModal() {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFF4FC3F7).withOpacity(0.35)),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
+          contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          title: Row(
+            children: [
+              const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFF4FC3F7), size: 22),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Buscar por código da ficha',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+              IconButton(
+                onPressed: () {
+                  Navigator.pop(dialogCtx);
+                  _openQRScanner();
+                },
+                icon: const Icon(Icons.camera_alt, color: Color(0xFF4FC3F7)),
+                tooltip: 'Ler QR Code',
+              ),
+              IconButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Busque por código permanente, nome da criança ou responsável',
+                style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _codeController,
+                      autofocus: true,
+                      style: const TextStyle(color: Colors.white),
+                      textCapitalization: TextCapitalization.words,
+                      onSubmitted: (_) {
+                        Navigator.pop(dialogCtx);
+                        _searchClient();
+                      },
+                      decoration: InputDecoration(
+                        hintText: 'Código, Criança ou Responsável...',
+                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                        prefixIcon: const Icon(Icons.tag_rounded, color: Color(0xFF4FC3F7), size: 18),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white.withOpacity(0.15)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5),
+                        ),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.05),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF0288D1), Color(0xFF4FC3F7)],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: IconButton(
+                      onPressed: () {
+                        Navigator.pop(dialogCtx);
+                        _searchClient();
+                      },
+                      icon: const Icon(Icons.search_rounded, color: Colors.white, size: 22),
+                      tooltip: 'Buscar ficha',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDistribuicaoVendedorModal() {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A1A2E),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: const Color(0xFFCE93D8).withOpacity(0.5)),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              title: Row(
+                children: [
+                  const Icon(Icons.swap_horiz_rounded, color: Color(0xFFCE93D8), size: 22),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Distribuição entre Vendedores',
+                      style: TextStyle(color: Color(0xFFCE93D8), fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(dialogCtx),
+                    icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Atribua os books da sua rota para os vendedores da sua equipe.',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<Map<String, dynamic>>(
+                    isExpanded: true,
+                    value: _selectedSellerForTransfer,
+                    hint: const Text(
+                      'Selecione o vendedor da empresa',
+                      style: TextStyle(color: Colors.white54),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    dropdownColor: const Color(0xFF1A1A2E),
+                    items: _companySellers.map((seller) {
+                      return DropdownMenuItem<Map<String, dynamic>>(
+                        value: seller,
+                        child: Text(
+                          seller['name'] ?? 'Vendedor',
+                          style: const TextStyle(color: Colors.white),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      setState(() {
+                        _selectedSellerForTransfer = val;
+                      });
+                      setDialogState(() {});
+                    },
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: const Color(0xFF1A2535),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.white12),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFFCE93D8)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  LedButton.icon(
+                    onPressed: _selectedSellerForTransfer == null
+                        ? null
+                        : () {
+                            Navigator.pop(dialogCtx);
+                            _showRepassBookDialog();
+                          },
+                    icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+                    label: const Text('Escanear / Repassar Book', style: TextStyle(color: Colors.white)),
+                    style: LedButton.styleFrom(
+                      backgroundColor: const Color(0xFF9C27B0),
+                      disabledBackgroundColor: Colors.grey.shade800,
+                      minimumSize: const Size(double.infinity, 45),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1342,6 +1627,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
+  // ignore: unused_element
   Widget _buildDistribuicaoEquipeCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1413,6 +1699,7 @@ class _SellerDashboardState extends State<SellerDashboard>
 
 
 
+  // ignore: unused_element
   Widget _buildSearchCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1597,9 +1884,7 @@ class _SellerDashboardState extends State<SellerDashboard>
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _buildAppointmentsSummaryCard(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         TextField(
           controller: _filterController,
           onChanged: _filterClientList,
@@ -1752,7 +2037,9 @@ class _SellerDashboardState extends State<SellerDashboard>
           ],
         ],
 
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
+        _buildFechamentoDoDiaCard(),
+        const SizedBox(height: 16),
         LedButton.icon(
           onPressed: () {
             _showFechamentoCidadeDialog();
@@ -1765,8 +2052,6 @@ class _SellerDashboardState extends State<SellerDashboard>
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
-        const SizedBox(height: 8),
-        _buildFechamentoDoDiaCard(),
       ],
     );
   }
@@ -1839,7 +2124,7 @@ class _SellerDashboardState extends State<SellerDashboard>
             final adminPixKey = data['adminPixKey']?.toString().trim();
 
             return Container(
-              margin: const EdgeInsets.only(top: 16, bottom: 24),
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFF1E293B),
@@ -2033,6 +2318,7 @@ class _SellerDashboardState extends State<SellerDashboard>
     );
   }
 
+  // ignore: unused_element
   Widget _buildAppointmentsSummaryCard() {
     final today = DateTime.now();
     final startOfToday = DateTime(today.year, today.month, today.day);

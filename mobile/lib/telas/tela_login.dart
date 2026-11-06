@@ -216,6 +216,8 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => _isLoading = true);
 
     String? role;
+    bool disconnectedPreviousDevice = false;
+    String? sessionNotice;
     try {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final response = await apiService.login(cpf, password);
@@ -223,6 +225,8 @@ class _LoginScreenState extends State<LoginScreen>
       final token = response['token']?.toString();
       final user = response['user'];
       role = user?['role']?.toString();
+      disconnectedPreviousDevice = response['disconnectedPreviousDevice'] == true;
+      sessionNotice = response['sessionNotice']?.toString();
 
       if (token == null || token.trim().isEmpty) {
         throw Exception('Token não retornado pelo servidor.');
@@ -273,6 +277,46 @@ class _LoginScreenState extends State<LoginScreen>
       _showError('Credenciais inválidas.');
       return;
     }
+
+    if (disconnectedPreviousDevice) {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A2535),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.phonelink_erase_rounded, color: Color(0xFF00E5FF)),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Aparelho Anterior Desconectado',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            sessionNotice ??
+                'Este login estava conectado em outro aparelho e foi desconectado automaticamente do aparelho anterior.',
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Continuar', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!mounted) return;
 
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(

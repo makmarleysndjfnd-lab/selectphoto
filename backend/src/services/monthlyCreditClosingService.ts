@@ -6,6 +6,98 @@ export interface CompetenceRange {
   endDate: Date;
 }
 
+export interface CompanyClosingSchedule {
+  startDate: Date;
+  displayEndDate: Date;
+  queryEndDateExclusive: Date;
+  payoutDate: Date;
+  isConfigured: boolean;
+}
+
+/**
+ * Converte uma data de calendário para o início do dia no fuso America/Sao_Paulo (00:00:00 BRT = 03:00:00 UTC)
+ */
+export function toBrtStartOfDay(input: Date | string): Date {
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.0+)?Z?)?$/);
+    if (dateOnlyMatch) {
+      const y = parseInt(dateOnlyMatch[1], 10);
+      const m = parseInt(dateOnlyMatch[2], 10);
+      const day = parseInt(dateOnlyMatch[3], 10);
+      return new Date(Date.UTC(y, m - 1, day, 3, 0, 0, 0));
+    }
+  }
+  const d = new Date(input);
+  if (isNaN(d.getTime())) {
+    return d;
+  }
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.format(d).split('-');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  return new Date(Date.UTC(year, month - 1, day, 3, 0, 0, 0));
+}
+
+/**
+ * Retorna o cronograma de fechamento de crediário da empresa (datas de início, término e pagamento ao vendedor).
+ * Se a empresa tiver datas configuradas pelo Admin, usa o período configurado; caso contrário, usa o mês corrente.
+ */
+export async function getCompanyClosingSchedule(
+  companyId: string,
+  fallbackCompetence?: string,
+  dbClient?: Prisma.TransactionClient | PrismaClient
+): Promise<CompanyClosingSchedule> {
+  const db = dbClient || prisma;
+  const company = await db.company.findUnique({
+    where: { id: companyId },
+    select: {
+      creditClosingStartDate: true,
+      creditClosingEndDate: true,
+      creditClosingPayoutDate: true,
+    },
+  });
+
+  if (company?.creditClosingStartDate && company?.creditClosingEndDate) {
+    const startDate = toBrtStartOfDay(company.creditClosingStartDate);
+    const displayEndDate = toBrtStartOfDay(company.creditClosingEndDate);
+    // Fim exclusivo: início do dia seguinte ao término configurado (inclui todo o dia de término até 23:59:59.999 BRT)
+    const queryEndDateExclusive = new Date(displayEndDate.getTime() + 24 * 60 * 60 * 1000);
+    const payoutDate = company.creditClosingPayoutDate
+      ? toBrtStartOfDay(company.creditClosingPayoutDate)
+      : new Date(displayEndDate.getTime() + 5 * 24 * 60 * 60 * 1000);
+
+    return {
+      startDate,
+      displayEndDate,
+      queryEndDateExclusive,
+      payoutDate,
+      isConfigured: true,
+    };
+  }
+
+  const targetComp = fallbackCompetence || getCompetenceForDate(new Date());
+  const { startDate, endDate } = getCompetenceRange(targetComp);
+  const displayEndDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+  const payoutDate = company?.creditClosingPayoutDate
+    ? toBrtStartOfDay(company.creditClosingPayoutDate)
+    : new Date(endDate.getTime() + 4 * 24 * 60 * 60 * 1000); // Dia 05 do mês seguinte
+
+  return {
+    startDate,
+    displayEndDate,
+    queryEndDateExclusive: endDate,
+    payoutDate,
+    isConfigured: false,
+  };
+}
+
 /**
  * Retorna os limites temporais estritos de uma competência "YYYY-MM" no fuso America/Sao_Paulo (UTC-3).
  * Início: dia 01 às 00:00:00.000 BRT (inclusive) = 03:00:00.000 UTC
@@ -84,11 +176,15 @@ export async function calculateSellerMonthlyCreditClosing(params: {
   companyId: string;
   sellerId: string;
   competence: string;
+  customStartDate?: Date;
+  customEndDateExclusive?: Date;
   tx?: Prisma.TransactionClient;
 }) {
-  const { companyId, sellerId, competence } = params;
+  const { companyId, sellerId, competence, customStartDate, customEndDateExclusive } = params;
   const db = params.tx || prisma;
-  const { startDate, endDate } = getCompetenceRange(competence);
+  const defaultRange = getCompetenceRange(competence);
+  const startDate = customStartDate || defaultRange.startDate;
+  const endDate = customEndDateExclusive || defaultRange.endDate;
 
   // 1. Buscar comissões de parcelas posteriores recebidas nessa competência que ainda não foram liquidadas
   const commissions = await db.creditCommission.findMany({
@@ -194,10 +290,16 @@ export async function processMonthlyCreditClosing(params: {
   competence: string;
   closedByUserId?: string;
   notes?: string;
+  customStartDate?: Date | string;
+  customEndDate?: Date | string;
+  customPayoutDate?: Date | string;
 }) {
-  const { companyId, sellerId, competence, closedByUserId, notes } = params;
+  const { companyId, sellerId, competence, closedByUserId, notes, customStartDate, customEndDate, customPayoutDate } = params;
 
-  if (!isCompetenceEnded(competence)) {
+  const schedule = await getCompanyClosingSchedule(companyId, competence);
+  const hasCustomDates = Boolean(customStartDate && customEndDate);
+
+  if (!hasCustomDates && !schedule.isConfigured && !isCompetenceEnded(competence)) {
     throw {
       status: 400,
       code: 'COMPETENCE_NOT_ENDED',
@@ -205,7 +307,19 @@ export async function processMonthlyCreditClosing(params: {
     };
   }
 
-  const { startDate, endDate } = getCompetenceRange(competence);
+  const defaultRange = getCompetenceRange(competence);
+  const startDate = customStartDate
+    ? toBrtStartOfDay(customStartDate)
+    : (schedule.isConfigured ? schedule.startDate : defaultRange.startDate);
+  const displayEndDate = customEndDate
+    ? toBrtStartOfDay(customEndDate)
+    : (schedule.isConfigured ? schedule.displayEndDate : defaultRange.endDate);
+  const queryEndDateExclusive = customEndDate
+    ? new Date(toBrtStartOfDay(customEndDate).getTime() + 24 * 60 * 60 * 1000)
+    : (schedule.isConfigured ? schedule.queryEndDateExclusive : defaultRange.endDate);
+  const payoutDate = customPayoutDate
+    ? toBrtStartOfDay(customPayoutDate)
+    : (schedule.isConfigured ? schedule.payoutDate : null);
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -248,6 +362,8 @@ export async function processMonthlyCreditClosing(params: {
         companyId,
         sellerId,
         competence,
+        customStartDate: startDate,
+        customEndDateExclusive: queryEndDateExclusive,
         tx,
       });
 
@@ -259,7 +375,8 @@ export async function processMonthlyCreditClosing(params: {
           competence,
           status: calculation.netCommissionCents === 0 ? 'PAID' : 'CLOSED',
           startDate,
-          endDate,
+          endDate: displayEndDate,
+          payoutDate,
           totalPrincipalReceivedCents: calculation.totalPrincipalReceivedCents,
           totalCommissionCents: calculation.totalCommissionCents,
           adjustmentsCents: calculation.adjustmentsCents,
@@ -685,7 +802,7 @@ export async function handleCreditPaymentReversalCommission(params: {
  */
 export async function getSellerFourCommissionStates(companyId: string, sellerId: string, now: Date = new Date()) {
   const { currentOpen } = getRelevantCompetences(now);
-  const { startDate: openStart, endDate: openEnd } = getCompetenceRange(currentOpen);
+  const schedule = await getCompanyClosingSchedule(companyId, currentOpen);
 
   // 1. Prevista/futura: parcelas pendentes/parciais futuras de contratos ativos
   const activeAgreements = await prisma.creditAgreement.findMany({
@@ -713,11 +830,13 @@ export async function getSellerFourCommissionStates(companyId: string, sellerId:
     }
   }
 
-  // 2. Acumulada no mês aberto atual: parcelas recebidas desde o início do mês atual
+  // 2. Acumulada no mês/período configurado atual: parcelas recebidas no intervalo ativo
   const openMonthCalculation = await calculateSellerMonthlyCreditClosing({
     companyId,
     sellerId,
     competence: currentOpen,
+    customStartDate: schedule.startDate,
+    customEndDateExclusive: schedule.queryEndDateExclusive,
   });
 
   // 3. Meses fechados persistidos: buscar todos os MonthlyCreditClosing
@@ -740,6 +859,12 @@ export async function getSellerFourCommissionStates(companyId: string, sellerId:
   return {
     sellerId,
     currentOpenCompetence: currentOpen,
+    closingConfig: {
+      startDate: schedule.startDate,
+      endDate: schedule.displayEndDate,
+      payoutDate: schedule.payoutDate,
+      isConfigured: schedule.isConfigured,
+    },
     states: {
       // Estado 1: Prevista / Futura
       future: {
@@ -752,12 +877,15 @@ export async function getSellerFourCommissionStates(companyId: string, sellerId:
       // Estado 2: Acumulada no Mês Aberto
       accumulatedCurrentMonth: {
         competence: currentOpen,
+        startDate: schedule.startDate,
+        endDate: schedule.displayEndDate,
+        payoutDate: schedule.payoutDate,
         principalReceivedCents: openMonthCalculation.totalPrincipalReceivedCents,
         principalReceived: openMonthCalculation.totalPrincipalReceived,
         commissionCents: openMonthCalculation.netCommissionCents,
         commission: openMonthCalculation.netCommission,
         itemsCount: openMonthCalculation.itemsCount,
-        label: 'Acumulada no Mês (competência aberta, não quitada)',
+        label: 'Acumulada no Período do Fechamento (boletos pagos)',
       },
       // Estado 3: Mês Fechado — A Pagar
       closedAwaitingPayment: {

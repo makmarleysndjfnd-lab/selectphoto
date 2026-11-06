@@ -521,6 +521,19 @@ export const authenticateToken = async (
       }
     }
 
+    // Bloqueio estrito de Login Duplo (Single Active Session):
+    // Se o token possui sessionId e o usuário logou em outro aparelho (alterando activeSessionId),
+    // desconecta imediatamente o aparelho anterior com 401.
+    if (decoded.sessionId) {
+      if (!user.activeSessionId || user.activeSessionId !== decoded.sessionId) {
+        res.status(401).json({
+          error: 'Sua conta foi conectada em outro aparelho. Esta sessão foi desconectada automaticamente.',
+          code: 'SESSION_REPLACED_BY_OTHER_DEVICE',
+        });
+        return;
+      }
+    }
+
     req.user = {
       id: user.id,
       cpf: user.cpf,

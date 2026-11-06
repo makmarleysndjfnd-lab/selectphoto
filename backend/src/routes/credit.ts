@@ -23,6 +23,8 @@ import {
   recordMonthlyCreditPayout,
   handleCreditPaymentReversalCommission,
   getSellerFourCommissionStates,
+  getCompanyClosingSchedule,
+  toBrtStartOfDay,
 } from '../services/monthlyCreditClosingService';
 
 const router = Router();
@@ -1668,17 +1670,29 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
     const pendingAdjustmentsCents = adjustments.filter((a) => a.status === 'PENDING').reduce((sum, a) => sum + a.amountCents, 0);
     const netCommissionPayableCents = Math.max(0, releasedCents - pendingAdjustmentsCents);
 
-    // Comissão de 10% gerada por parcelas efetivamente recebidas na competência selecionada
-    const { startDate, endDate } = getCompetenceRange(targetCompetence);
+    // Comissão de 10% gerada por parcelas efetivamente recebidas no período do fechamento configurado (ou competência selecionada)
+    const closingSchedule = await getCompanyClosingSchedule(companyId, targetCompetence);
+    const hasExplicitCompQuery = Boolean(req.query.competence && String(req.query.competence).trim().length > 0);
+    const defaultRange = getCompetenceRange(targetCompetence);
+
+    const periodStart = hasExplicitCompQuery ? defaultRange.startDate : closingSchedule.startDate;
+    const periodEndExclusive = hasExplicitCompQuery ? defaultRange.endDate : closingSchedule.queryEndDateExclusive;
+    const periodDisplayEnd = hasExplicitCompQuery
+      ? new Date(defaultRange.endDate.getTime() - 24 * 60 * 60 * 1000)
+      : closingSchedule.displayEndDate;
+
     const monthPayments = await prisma.creditPayment.findMany({
       where: {
         companyId,
         agreement: { sellerId: targetSellerId },
         isReversed: false,
-        paidAt: { gte: startDate, lt: endDate },
+        paidAt: { gte: periodStart, lt: periodEndExclusive },
       },
       select: {
+        id: true,
+        agreementId: true,
         amountCents: true,
+        paidAt: true,
         agreement: { select: { installmentCommissionRate: true } },
       },
     });
@@ -1686,10 +1700,35 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
       (acc, p) => acc + Math.round(p.amountCents * (p.agreement?.installmentCommissionRate || 0.10)),
       0
     );
+    const periodPaidPrincipalCents = monthPayments.reduce((acc, p) => acc + p.amountCents, 0);
+
+    // Enriquece cada contrato com a comissão contabilizada dentro do período de fechamento atual
+    const enrichedAgreements = agreements.map((ag) => {
+      const agMonthPayments = monthPayments.filter((p) => p.agreementId === ag.id);
+      const agPeriodCommCents = agMonthPayments.reduce(
+        (acc, p) => acc + Math.round(p.amountCents * (ag.installmentCommissionRate || 0.10)),
+        0
+      );
+      return {
+        ...ag,
+        periodPaidCommissionCents: agPeriodCommCents,
+        periodPaidCommissionBrl: Number((agPeriodCommCents / 100).toFixed(2)),
+        periodPaymentsCount: agMonthPayments.length,
+      };
+    });
 
     res.json({
       seller,
       selectedCompetence: targetCompetence,
+      closingConfig: {
+        startDate: periodStart,
+        endDate: periodDisplayEnd,
+        payoutDate: closingSchedule.payoutDate,
+        isConfigured: closingSchedule.isConfigured,
+      },
+      periodPaidPrincipalCents,
+      periodPaidPrincipal: Number((periodPaidPrincipalCents / 100).toFixed(2)),
+      periodPaymentsCount: monthPayments.length,
       totalReceivableCents,
       totalReceivable: Number((totalReceivableCents / 100).toFixed(2)),
       overdueCents,
@@ -1717,7 +1756,7 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
       pendingAdjustments: Number((pendingAdjustmentsCents / 100).toFixed(2)),
       netCommissionPayableCents,
       netCommissionPayable: Number((netCommissionPayableCents / 100).toFixed(2)),
-      agreements,
+      agreements: enrichedAgreements,
       commissions,
       adjustments,
     });
@@ -1888,6 +1927,102 @@ router.post('/commissions/:id/pay', authenticateToken, requireAdminOrSupervisor,
  */
 
 /**
+ * GET /api/credit/closing-config
+ * Retorna a configuração de datas do fechamento (Data de Início, Data de Término e Data de Pagamento ao Vendedor)
+ */
+router.get('/closing-config', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
+    const schedule = await getCompanyClosingSchedule(companyId);
+    res.json({
+      startDate: schedule.startDate,
+      endDate: schedule.displayEndDate,
+      payoutDate: schedule.payoutDate,
+      isConfigured: schedule.isConfigured,
+    });
+  } catch (error: any) {
+    console.error('Error fetching credit closing config:', error);
+    res.status(500).json({ error: error.message || 'Erro ao carregar configuração de datas do fechamento' });
+  }
+});
+
+/**
+ * PUT /api/credit/closing-config
+ * Atualiza a configuração de datas de início, término da contabilização do fechamento e data de pagamento ao vendedor (Admin)
+ */
+router.put('/closing-config', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
+
+    const { startDate, endDate, payoutDate } = req.body;
+    if (!startDate || !endDate || !payoutDate) {
+      res.status(400).json({
+        error: 'Informe a Data de Início, Data de Término do fechamento e a Data para Pagar o Vendedor.',
+      });
+      return;
+    }
+
+    const parsedStart = toBrtStartOfDay(startDate);
+    const parsedEnd = toBrtStartOfDay(endDate);
+    const parsedPayout = toBrtStartOfDay(payoutDate);
+
+    if (isNaN(parsedStart.getTime()) || isNaN(parsedEnd.getTime()) || isNaN(parsedPayout.getTime())) {
+      res.status(400).json({ error: 'Formato de data inválido.' });
+      return;
+    }
+
+    if (parsedEnd.getTime() < parsedStart.getTime()) {
+      res.status(400).json({ error: 'A Data de Término não pode ser anterior à Data de Início.' });
+      return;
+    }
+
+    await prisma.company.update({
+      where: { id: companyId },
+      data: {
+        creditClosingStartDate: parsedStart,
+        creditClosingEndDate: parsedEnd,
+        creditClosingPayoutDate: parsedPayout,
+      },
+    });
+
+    // Atualiza também fechamentos abertos/atuais que ainda não foram quitados se pertencerem à competência da data de início
+    const targetComp = getCompetenceForDate(parsedStart);
+    await prisma.monthlyCreditClosing.updateMany({
+      where: {
+        companyId,
+        competence: targetComp,
+        status: { in: ['CLOSED', 'PARTIALLY_PAID'] },
+      },
+      data: {
+        startDate: parsedStart,
+        endDate: parsedEnd,
+        payoutDate: parsedPayout,
+      },
+    });
+
+    res.json({
+      success: true,
+      startDate: parsedStart,
+      endDate: parsedEnd,
+      payoutDate: parsedPayout,
+      isConfigured: true,
+    });
+  } catch (error: any) {
+    console.error('Error updating credit closing config:', error);
+    res.status(500).json({ error: error.message || 'Erro ao salvar configuração de datas do fechamento' });
+  }
+});
+
+/**
  * GET /api/credit/monthly-closings
  * Lista fechamentos mensais por competência e vendedor
  * Admin vê de todos os vendedores; Vendedor comum só vê os próprios
@@ -1921,6 +2056,8 @@ router.get('/monthly-closings', authenticateToken, requireCreditAccess, async (r
       ...(status ? { status } : {}),
     };
 
+    const schedule = companyId ? await getCompanyClosingSchedule(companyId) : null;
+
     const closings = await prisma.monthlyCreditClosing.findMany({
       where,
       orderBy: [{ competence: 'desc' }, { createdAt: 'desc' }],
@@ -1935,6 +2072,14 @@ router.get('/monthly-closings', authenticateToken, requireCreditAccess, async (r
     });
 
     res.json({
+      closingConfig: schedule
+        ? {
+            startDate: schedule.startDate,
+            endDate: schedule.displayEndDate,
+            payoutDate: schedule.payoutDate,
+            isConfigured: schedule.isConfigured,
+          }
+        : null,
       closings: closings.map((c) => ({
         id: c.id,
         competence: c.competence,
@@ -1944,6 +2089,7 @@ router.get('/monthly-closings', authenticateToken, requireCreditAccess, async (r
         sellerActive: c.seller.active,
         startDate: c.startDate,
         endDate: c.endDate,
+        payoutDate: (c as any).payoutDate || schedule?.payoutDate || null,
         totalPrincipalReceived: Number((c.totalPrincipalReceivedCents / 100).toFixed(2)),
         totalCommission: Number((c.totalCommissionCents / 100).toFixed(2)),
         adjustments: Number((c.adjustmentsCents / 100).toFixed(2)),
@@ -2079,7 +2225,7 @@ router.post('/monthly-closings/process', authenticateToken, requireAdminOrSuperv
       return;
     }
 
-    const { sellerId, competence, notes } = req.body;
+    const { sellerId, competence, notes, startDate, endDate, payoutDate } = req.body;
     if (!sellerId || !competence) {
       res.status(400).json({ error: 'sellerId e competence (YYYY-MM) são obrigatórios' });
       return;
@@ -2091,6 +2237,9 @@ router.post('/monthly-closings/process', authenticateToken, requireAdminOrSuperv
       competence: String(competence).trim(),
       closedByUserId: req.user?.id,
       notes,
+      customStartDate: startDate,
+      customEndDate: endDate,
+      customPayoutDate: payoutDate,
     });
 
     const closing = result.closing!;
@@ -2101,6 +2250,9 @@ router.post('/monthly-closings/process', authenticateToken, requireAdminOrSuperv
         id: closing.id,
         competence: closing.competence,
         status: closing.status,
+        startDate: closing.startDate,
+        endDate: closing.endDate,
+        payoutDate: (closing as any).payoutDate || null,
         totalPrincipalReceived: Number((closing.totalPrincipalReceivedCents / 100).toFixed(2)),
         totalCommission: Number((closing.totalCommissionCents / 100).toFixed(2)),
         adjustments: Number((closing.adjustmentsCents / 100).toFixed(2)),

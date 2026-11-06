@@ -28,6 +28,10 @@ model Company {
   suspendedAt        DateTime?
   suspendedByUserId  String?
 
+  creditClosingStartDate  DateTime?
+  creditClosingEndDate    DateTime?
+  creditClosingPayoutDate DateTime?
+
   users                User[]
   teams                Team[]
   clients              Client[]
@@ -128,6 +132,9 @@ model User {
   dailyClosings           DailyClosing[]
   fcmToken                String?
   pixKey                  String?
+  activeSessionId         String?
+  activeDeviceId          String?
+  sessionStartedAt        DateTime?
   notificationsSent       Notification[]                 @relation("NotificationsSent")
   notificationsReceived   Notification[]                 @relation("NotificationsReceived")
   clientEditRequests      ClientEditRequest[]
@@ -937,6 +944,7 @@ model MonthlyCreditClosing {
   
   startDate                   DateTime
   endDate                     DateTime
+  payoutDate                  DateTime?
   
   totalPrincipalReceivedCents Int       @default(0)
   totalCommissionCents        Int       @default(0)

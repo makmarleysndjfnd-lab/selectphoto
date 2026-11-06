@@ -15,6 +15,29 @@ export async function initDatabaseClassification(): Promise<void> {
       `ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "classification" TEXT NOT NULL DEFAULT 'OPERATIONAL';`
     );
 
+    // 1.1 Garantir colunas de sessão única por aparelho e cronograma de fechamento do crediário
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "creditClosingStartDate" TIMESTAMP(3);`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "creditClosingEndDate" TIMESTAMP(3);`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "creditClosingPayoutDate" TIMESTAMP(3);`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeSessionId" TEXT;`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "activeDeviceId" TEXT;`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "sessionStartedAt" TIMESTAMP(3);`
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "MonthlyCreditClosing" ADD COLUMN IF NOT EXISTS "payoutDate" TIMESTAMP(3);`
+    );
+
     // 2. Classificar os 51 registros de teste catalogados
     if (CONFIRMED_TEST_COMPANY_IDS.length > 0) {
       const quotedIds = CONFIRMED_TEST_COMPANY_IDS.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
