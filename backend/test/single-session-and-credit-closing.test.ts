@@ -461,7 +461,14 @@ describe('SESSÃO ÚNICA POR APARELHO E FECHAMENTO GRADATIVO DO CREDIÁRIO', { c
       'Deve retornar sessionNotice explicando a desconexão do aparelho anterior'
     );
 
-    // 3. Aparelho 1 tenta fazer requisição com seu token antigo -> 401 SESSION_REPLACED_BY_OTHER_DEVICE
+    // 3. Aparelho 1 tenta fazer requisição com seu token antigo (ou o heartbeat /api/auth/session) -> 401 SESSION_REPLACED_BY_OTHER_DEVICE
+    const resDev1SessionHeartbeat = await dispatchExpressRequest(app, '/api/auth/session', {
+      headers: { Authorization: `Bearer ${bodyDev1.token}` },
+    });
+    assert.equal(resDev1SessionHeartbeat.status, 401, 'Heartbeat do Aparelho 1 parado deve receber 401 imediatamente');
+    const errHeartbeat: any = await resDev1SessionHeartbeat.json();
+    assert.equal(errHeartbeat.code, 'SESSION_REPLACED_BY_OTHER_DEVICE');
+
     const resDev1After = await dispatchExpressRequest(app, '/api/credit/seller/portfolio', {
       headers: { Authorization: `Bearer ${bodyDev1.token}` },
     });
@@ -470,6 +477,10 @@ describe('SESSÃO ÚNICA POR APARELHO E FECHAMENTO GRADATIVO DO CREDIÁRIO', { c
     assert.equal(errDev1.code, 'SESSION_REPLACED_BY_OTHER_DEVICE');
 
     // 4. Aparelho 2 funciona normalmente
+    const resDev2SessionHeartbeat = await dispatchExpressRequest(app, '/api/auth/session', {
+      headers: { Authorization: `Bearer ${bodyDev2.token}` },
+    });
+    assert.equal(resDev2SessionHeartbeat.status, 200, 'Heartbeat do Aparelho 2 deve retornar 200');
     const resPort2 = await dispatchExpressRequest(app, '/api/credit/seller/portfolio', {
       headers: { Authorization: `Bearer ${bodyDev2.token}` },
     });

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -76,12 +77,14 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> {
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   bool _isRedirectingSession = false;
+  Timer? _sessionHeartbeatTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     ApiService.onSessionReplacedByOtherDevice = (String message) {
       if (_isRedirectingSession) return;
       _isRedirectingSession = true;
@@ -106,6 +109,27 @@ class _MyAppState extends State<MyApp> {
         });
       });
     };
+
+    _sessionHeartbeatTimer = Timer.periodic(
+      const Duration(seconds: 6),
+      (_) {
+        ApiService().checkActiveSessionHeartbeat();
+      },
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ApiService().checkActiveSessionHeartbeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _sessionHeartbeatTimer?.cancel();
+    super.dispose();
   }
 
   @override

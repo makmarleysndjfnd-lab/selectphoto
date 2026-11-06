@@ -4,8 +4,16 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { loginRateLimiter } from '../middleware/securityMiddleware';
+import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 
 const router = Router();
+
+router.get('/session', authenticateToken, async (req: AuthRequest, res: Response) => {
+  res.json({
+    valid: true,
+    userId: req.user?.id || null,
+  });
+});
 
 
 router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {

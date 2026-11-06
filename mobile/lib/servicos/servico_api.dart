@@ -279,13 +279,24 @@ class ApiService {
     }
   }
 
-  /// Revalida a sessão atual com o servidor backend
+  /// Revalida a sessão atual com o servidor backend (verifica inclusive Login Duplo)
   Future<bool> revalidateSession() async {
+    if (_token == null || _token!.isEmpty) return false;
     try {
-      final res = await _dio.get('/users/company');
+      final res = await _dio.get('/auth/session');
       return res.statusCode == 200;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Verifica silenciosamente se a sessão atual continua ativa ou se foi substituída por outro aparelho
+  Future<void> checkActiveSessionHeartbeat() async {
+    if (_isIsolatedSession || _token == null || _token!.isEmpty) return;
+    try {
+      await _dio.get('/auth/session');
+    } catch (_) {
+      // Se retornar 401 SESSION_REPLACED_BY_OTHER_DEVICE, o interceptor do Dio já dispara onSessionReplacedByOtherDevice
     }
   }
 

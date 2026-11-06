@@ -236,6 +236,38 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           ],
         ),
         actions: [
+          // Configurar Datas do Fechamento e Pagamento do Vendedor (fixo no topo)
+          InkWell(
+            onTap: _showClosingDatesDialog,
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFA855F7).withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFA855F7)),
+              ),
+              child: Row(
+                children: const [
+                  Icon(
+                    Icons.edit_calendar_rounded,
+                    size: 13,
+                    color: Color(0xFFD8B4FE),
+                  ),
+                  SizedBox(width: 4),
+                  Text(
+                    'Datas Fechamento',
+                    style: TextStyle(
+                      color: Color(0xFFD8B4FE),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           // Modo Asaas
           InkWell(
             onTap: () async {
@@ -2989,6 +3021,25 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         ],
       ),
     );
+  }
+
+  void _showClosingDatesDialog() {
+    final now = DateTime.now();
+    final defaultStart = DateTime(now.year, now.month, 1);
+    final defaultEnd = DateTime(now.year, now.month + 1, 0);
+    final defaultPayout = DateTime(now.year, now.month + 1, 5);
+
+    final startDate = _closingConfig?['startDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['startDate'].toString()) ?? defaultStart)
+        : defaultStart;
+    final endDate = _closingConfig?['endDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['endDate'].toString()) ?? defaultEnd)
+        : defaultEnd;
+    final payoutDate = _closingConfig?['payoutDate'] != null
+        ? (DateTime.tryParse(_closingConfig!['payoutDate'].toString()) ?? defaultPayout)
+        : defaultPayout;
+
+    _showConfigureClosingDatesDialog(startDate, endDate, payoutDate);
   }
 
   void _showConfigureClosingDatesDialog(DateTime initialStart, DateTime initialEnd, DateTime initialPayout) {
