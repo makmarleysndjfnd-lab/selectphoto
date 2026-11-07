@@ -1,6 +1,11 @@
 import express, { Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import {
+  ADMIN_COVER_ROLES,
+  reconcileCompanyCoverStock,
+  reconcilePendingSellerCoverDeductions,
+} from '../services/coverStockService';
 
 const router = express.Router();
 
@@ -197,13 +202,17 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Get total stock info (Admin hand vs Seller hand)
+// Get total stock info (Admin hand vs Seller hand + Sold covers write-off)
 router.get('/info', authMiddleware, async (req: AuthRequest, res: Response) => {
     try {
         const companyId = req.user?.companyId;
         if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
           res.status(403).json({ error: 'Empresa obrigatória' });
           return;
+        }
+
+        if (companyId) {
+            await reconcileCompanyCoverStock(companyId);
         }
         
         // Sum all current valid stock from admin batches
@@ -230,23 +239,56 @@ router.get('/info', authMiddleware, async (req: AuthRequest, res: Response) => {
             }
         });
 
+        const sellerIds = sellers.map(s => s.id);
+
         const sellersBalance = await prisma.sellerCoverBalance.findMany({
-            where: { seller: { companyId } },
+            where: {
+                sellerId: { in: sellerIds },
+                seller: { companyId }
+            },
         });
 
-        const totalWithSellers = sellersBalance.reduce((acc, curr) => acc + curr.balance, 0);
+        // Contabilizar baixas de capas por vendas confirmadas (hasCover = true e status = 'PRONTO')
+        let soldCountBySeller: Record<string, number> = {};
+        let totalSoldCovers = 0;
+        try {
+            if ((prisma as any).sale?.findMany) {
+                const confirmedSalesWithCover = await prisma.sale.findMany({
+                    where: {
+                        companyId,
+                        hasCover: true,
+                        status: 'PRONTO',
+                    },
+                    select: { sellerId: true },
+                });
+                if (Array.isArray(confirmedSalesWithCover)) {
+                    for (const s of confirmedSalesWithCover) {
+                        if (s?.sellerId) {
+                            soldCountBySeller[s.sellerId] = (soldCountBySeller[s.sellerId] || 0) + 1;
+                            totalSoldCovers += 1;
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
 
         const sellersWithBalance = sellers.map(seller => {
             const balanceRecord = sellersBalance.find(b => b.sellerId === seller.id);
+            const rawBalance = balanceRecord ? balanceRecord.balance : 0;
+            const safeBalance = Math.max(0, rawBalance);
             return {
                 seller: seller,
-                balance: balanceRecord ? balanceRecord.balance : 0
+                balance: safeBalance,
+                soldCovers: soldCountBySeller[seller.id] || 0,
             };
         });
+
+        const totalWithSellers = sellersWithBalance.reduce((acc, curr) => acc + curr.balance, 0);
 
         res.json({
             totalInAdmin: Math.max(0, totalInAdmin),
             totalWithSellers: Math.max(0, totalWithSellers),
+            totalSoldCovers,
             totalGeneral: Math.max(0, totalInAdmin) + Math.max(0, totalWithSellers),
             sellers: sellersWithBalance
         });
@@ -411,6 +453,8 @@ router.post('/transfer', authMiddleware, requireAdminOrSupervisor, async (req: A
                     });
                 }
 
+                await reconcilePendingSellerCoverDeductions(tx, sellerId);
+
                 return { success: true, operation: 'SEND', quantity: parsedQty, transferId: transfer.id };
             } else {
                 // DEVOLUÇÃO: Vendedor -> Admin
@@ -467,12 +511,208 @@ router.post('/transfer', authMiddleware, requireAdminOrSupervisor, async (req: A
     }
 });
 
-// Transfer covers between sellers (Seller -> Seller in same company)
+// Transfer covers between sellers or between seller and admin (in same company)
 router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const callerId = req.user?.id;
+    const callerRole = req.user?.role || '';
+    const companyId = req.user?.companyId;
+    const { senderId: bodySenderId, recipientId, quantity } = req.body;
+
+    if (!companyId && callerRole !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa obrigatória' });
+      return;
+    }
+
+    if (!callerId) {
+      res.status(401).json({ error: 'Não autenticado' });
+      return;
+    }
+
+    const isCallerAdminOrManager = ADMIN_COVER_ROLES.includes(callerRole) || callerRole === 'SELLER_MANAGER';
+    const effectiveSenderId =
+      isCallerAdminOrManager && typeof bodySenderId === 'string' && bodySenderId.trim().length > 0
+        ? bodySenderId.trim()
+        : callerId;
+
+    const qtyCheck = parseStrictInteger(quantity);
+    if (!qtyCheck.valid || !qtyCheck.value || qtyCheck.value <= 0) {
+      res.status(400).json({ error: qtyCheck.error || 'Quantidade inválida para transferência' });
+      return;
+    }
+    const parsedQty = qtyCheck.value;
+
+    if (!recipientId || typeof recipientId !== 'string' || recipientId.trim().length === 0) {
+      res.status(400).json({ error: 'Destinatário é obrigatório' });
+      return;
+    }
+
+    if (effectiveSenderId === recipientId.trim()) {
+      res.status(400).json({ error: 'Não é permitido transferir capas para o próprio usuário' });
+      return;
+    }
+
+    const [sender, recipient] = await Promise.all([
+      prisma.user.findFirst({ where: { id: effectiveSenderId, companyId } }),
+      prisma.user.findFirst({ where: { id: recipientId.trim(), companyId } }),
+    ]);
+
+    if (!sender) {
+      res.status(404).json({ error: 'Remetente não encontrado na sua empresa' });
+      return;
+    }
+
+    if (!recipient) {
+      res.status(404).json({ error: 'Destinatário não encontrado na sua empresa' });
+      return;
+    }
+
+    const isSenderAdmin = ADMIN_COVER_ROLES.includes(sender.role);
+    const isRecipientAdmin = ADMIN_COVER_ROLES.includes(recipient.role);
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Caso 1: Vendedor devolvendo capas para Admin / Supervisor (Vendedor -> Admin)
+      if (!isSenderAdmin && isRecipientAdmin) {
+        const senderBalance = await tx.sellerCoverBalance.findUnique({
+          where: { sellerId: effectiveSenderId },
+        });
+
+        if (!senderBalance || senderBalance.balance < parsedQty) {
+          throw new Error('Saldo insuficiente para transferência');
+        }
+
+        await tx.sellerCoverBalance.update({
+          where: { sellerId: effectiveSenderId },
+          data: { balance: senderBalance.balance - parsedQty },
+        });
+
+        // Registra transferência negativa para recompor o estoque central do Admin (totalInAdmin)
+        const transfer = await tx.sellerCoverTransfer.create({
+          data: {
+            sellerId: effectiveSenderId,
+            adminId: recipient.id,
+            quantity: -parsedQty,
+            companyId: companyId!,
+          },
+        });
+
+        return {
+          success: true,
+          transferred: parsedQty,
+          operation: 'RETURN_TO_ADMIN',
+          transferId: transfer.id,
+        };
+      }
+
+      // Caso 2: Admin / Supervisor enviando capas do estoque central para Vendedor (Admin -> Vendedor)
+      if (isSenderAdmin && !isRecipientAdmin) {
+        const adminBatches = await tx.coverStockBatch.aggregate({
+          where: { companyId },
+          _sum: { quantity: true },
+        });
+        const sellerTransfers = await tx.sellerCoverTransfer.aggregate({
+          where: { companyId },
+          _sum: { quantity: true },
+        });
+
+        const totalInAdmin = (adminBatches._sum.quantity || 0) - (sellerTransfers._sum.quantity || 0);
+        if (totalInAdmin < parsedQty) {
+          throw new Error('Saldo insuficiente no estoque central da empresa');
+        }
+
+        const transfer = await tx.sellerCoverTransfer.create({
+          data: {
+            sellerId: recipient.id,
+            adminId: effectiveSenderId,
+            quantity: parsedQty,
+            companyId: companyId!,
+          },
+        });
+
+        const recipientBalance = await tx.sellerCoverBalance.findUnique({
+          where: { sellerId: recipient.id },
+        });
+
+        if (recipientBalance) {
+          await tx.sellerCoverBalance.update({
+            where: { sellerId: recipient.id },
+            data: { balance: recipientBalance.balance + parsedQty },
+          });
+        } else {
+          await tx.sellerCoverBalance.create({
+            data: { sellerId: recipient.id, balance: parsedQty },
+          });
+        }
+
+        await reconcilePendingSellerCoverDeductions(tx, recipient.id);
+
+        return {
+          success: true,
+          transferred: parsedQty,
+          operation: 'SEND_FROM_ADMIN',
+          transferId: transfer.id,
+        };
+      }
+
+      // Caso 3: Vendedor -> Vendedor
+      const senderBalance = await tx.sellerCoverBalance.findUnique({
+        where: { sellerId: effectiveSenderId },
+      });
+
+      if (!senderBalance || senderBalance.balance < parsedQty) {
+        throw new Error('Saldo insuficiente para transferência');
+      }
+
+      // Decrement sender
+      await tx.sellerCoverBalance.update({
+        where: { sellerId: effectiveSenderId },
+        data: { balance: senderBalance.balance - parsedQty },
+      });
+
+      // Increment recipient
+      const recipientBalance = await tx.sellerCoverBalance.findUnique({
+        where: { sellerId: recipient.id },
+      });
+
+      if (recipientBalance) {
+        await tx.sellerCoverBalance.update({
+          where: { sellerId: recipient.id },
+          data: { balance: recipientBalance.balance + parsedQty },
+        });
+      } else {
+        await tx.sellerCoverBalance.create({
+          data: { sellerId: recipient.id, balance: parsedQty },
+        });
+      }
+
+      await reconcilePendingSellerCoverDeductions(tx, recipient.id);
+
+      return {
+        success: true,
+        transferred: parsedQty,
+        operation: 'SELLER_TO_SELLER',
+      };
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    if (
+      error.message === 'Saldo insuficiente para transferência' ||
+      error.message === 'Saldo insuficiente no estoque central da empresa'
+    ) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error.message || 'Erro ao transferir capas entre vendedores' });
+  }
+});
+
+// Solicitação/transferência de estoque (capas ou books) pelo app
+router.post('/request-transfer', authMiddleware, async (req: AuthRequest, res: Response) => {
   try {
     const senderId = req.user?.id;
     const companyId = req.user?.companyId;
-    const { recipientId, quantity, notes } = req.body;
+    const { recipientId, itemType, quantity } = req.body;
 
     if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
       res.status(403).json({ error: 'Empresa obrigatória' });
@@ -485,62 +725,44 @@ router.post('/transfer-between-sellers', authMiddleware, async (req: AuthRequest
     }
 
     const parsedQty = parseInt(quantity, 10);
-    if (isNaN(parsedQty) || parsedQty <= 0) {
-      res.status(400).json({ error: 'Quantidade inválida para transferência' });
+    if (!recipientId || isNaN(parsedQty) || parsedQty <= 0) {
+      res.status(400).json({ error: 'Destinatário e quantidade válida são obrigatórios' });
       return;
     }
 
-    // Verify recipient belongs to same company
     const recipient = await prisma.user.findFirst({
-      where: { id: recipientId, companyId }
+      where: { id: String(recipientId).trim(), companyId },
     });
 
     if (!recipient) {
-      res.status(404).json({ error: 'Vendedor destinatário não encontrado na sua empresa' });
+      res.status(404).json({ error: 'Destinatário não encontrado na sua empresa' });
       return;
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const senderBalance = await tx.sellerCoverBalance.findUnique({
-        where: { sellerId: senderId }
-      });
+    const normalizedType = String(itemType || 'COVER').toUpperCase();
+    const notifType = normalizedType === 'BOOK' ? 'STOCK_TRANSFER_BOOK' : 'STOCK_TRANSFER_COVER';
 
-      if (!senderBalance || senderBalance.balance < parsedQty) {
-        throw new Error('Saldo insuficiente para transferência');
-      }
-
-      // Decrement sender
-      await tx.sellerCoverBalance.update({
-        where: { sellerId: senderId },
-        data: { balance: senderBalance.balance - parsedQty }
-      });
-
-      // Increment recipient
-      const recipientBalance = await tx.sellerCoverBalance.findUnique({
-        where: { sellerId: recipientId }
-      });
-
-      if (recipientBalance) {
-        await tx.sellerCoverBalance.update({
-          where: { sellerId: recipientId },
-          data: { balance: recipientBalance.balance + parsedQty }
-        });
-      } else {
-        await tx.sellerCoverBalance.create({
-          data: { sellerId: recipientId, balance: parsedQty }
-        });
-      }
-
-      return { success: true, transferred: parsedQty };
+    const notification = await prisma.notification.create({
+      data: {
+        title: normalizedType === 'BOOK' ? 'Transferência de Books' : 'Transferência de Capas',
+        message: `${req.user?.name || 'Vendedor'} solicitou transferência de ${parsedQty} ${normalizedType === 'BOOK' ? 'book(s)' : 'capa(s)'}.`,
+        type: notifType,
+        status: 'UNREAD',
+        senderId,
+        recipientId: recipient.id,
+        companyId,
+        actionData: {
+          senderId,
+          recipientId: recipient.id,
+          itemType: normalizedType,
+          quantity: parsedQty,
+        },
+      },
     });
 
-    res.json(result);
+    res.status(201).json({ success: true, notificationId: notification.id });
   } catch (error: any) {
-    if (error.message === 'Saldo insuficiente para transferência') {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.status(500).json({ error: error.message || 'Erro ao transferir capas entre vendedores' });
+    res.status(500).json({ error: error.message || 'Erro ao registrar solicitação de transferência' });
   }
 });
 
@@ -844,6 +1066,11 @@ router.get('/balance/:sellerId', authMiddleware, async (req: AuthRequest, res: R
             return;
         }
 
+        // Reconciliar eventuais vendas com capa pendentes de baixa antes de retornar o saldo
+        await prisma.$transaction(async (tx) => {
+            await reconcilePendingSellerCoverDeductions(tx, sellerId);
+        }).catch(() => undefined);
+
         const balance = await prisma.sellerCoverBalance.findFirst({
             where: { 
               sellerId,
@@ -851,7 +1078,7 @@ router.get('/balance/:sellerId', authMiddleware, async (req: AuthRequest, res: R
             }
         });
 
-        res.json({ balance: balance ? balance.balance : 0 });
+        res.json({ balance: balance ? Math.max(0, balance.balance) : 0 });
     } catch (error: any) {
         res.status(500).json({ error: error.message || 'Erro ao buscar saldo do vendedor' });
     }

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Sale" ADD COLUMN IF NOT EXISTS "coverDeducted" BOOLEAN NOT NULL DEFAULT false;
+

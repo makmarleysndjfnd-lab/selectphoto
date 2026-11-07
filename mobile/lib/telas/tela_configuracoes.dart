@@ -463,7 +463,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final api = ApiService();
       final users = await api.getCompanyUsers();
-      recipients = users;
+      if (itemType == 'COVER') {
+        recipients = users.where((u) {
+          final role = (u['role'] ?? '').toString().toUpperCase();
+          return role != 'PHOTOGRAPHER';
+        }).toList();
+      } else {
+        recipients = users;
+      }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
@@ -513,9 +520,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       hint: const Text('Selecione o destinatário',
                           style: TextStyle(color: Colors.white54)),
                       items: recipients.map((u) {
+                        final rawRole = (u['role'] ?? '').toString().toUpperCase();
+                        final isAdminRole = [
+                          'ADMIN',
+                          'COMPANY_ADMIN',
+                          'SUPERVISOR',
+                          'SUPER_ADMIN'
+                        ].contains(rawRole);
+                        final roleLabel = itemType == 'COVER'
+                            ? (isAdminRole ? 'Devolver p/ Admin' : 'Vendedor')
+                            : rawRole;
                         return DropdownMenuItem<String>(
                           value: u['id'].toString(),
-                          child: Text('${u['name']} (${u['role']})',
+                          child: Text('${u['name']} ($roleLabel)',
                               style: const TextStyle(color: Colors.white),
                               overflow: TextOverflow.ellipsis),
                         );

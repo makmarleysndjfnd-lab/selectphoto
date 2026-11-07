@@ -18,6 +18,7 @@ class VisaoEstoqueAdmin extends StatefulWidget {
 class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
   int _totalAdminCapas = 0;
   int _totalSellerCapas = 0;
+  int _totalSoldCapas = 0;
   List<dynamic> _sellers = [];
   bool _isLoading = true;
 
@@ -34,6 +35,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
         setState(() {
           _totalAdminCapas = info['totalInAdmin'] ?? 0;
           _totalSellerCapas = info['totalWithSellers'] ?? 0;
+          _totalSoldCapas = info['totalSoldCovers'] ?? 0;
           _sellers = info['sellers'] ?? [];
           _isLoading = false;
         });
@@ -88,9 +90,10 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
 
   Future<void> _showTransferDialog(Map<String, dynamic>? seller) async {
     final TextEditingController quantityController = TextEditingController();
-    int transferType = 0; // 0 = Admin -> Vend, 1 = Vend -> Admin, 2 = Defeituosa
+    int transferType = 0; // 0 = Admin -> Vend, 1 = Vend -> Admin, 2 = Defeituosa, 3 = Vend -> Vend
     final sellerInfo = seller != null && seller['seller'] is Map ? seller['seller'] as Map : null;
     String? dialogSellerId = sellerInfo != null ? sellerInfo['id']?.toString() : null;
+    String? destSellerId;
     bool isSubmitting = false;
 
     await showDialog(
@@ -150,8 +153,41 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                           if (val) setDialogState(() => transferType = 1);
                         },
                       ),
+                      LedChoiceChip(
+                        label: 'Entre Vendedores',
+                        selected: transferType == 3,
+                        color: const Color(0xFF4FC3F7),
+                        onSelected: (val) {
+                          if (val) setDialogState(() => transferType = 3);
+                        },
+                      ),
                     ],
                   ),
+                  if (transferType == 3) ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: destSellerId,
+                      dropdownColor: const Color(0xFF2A2A3C),
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Vendedor de Destino',
+                        labelStyle: TextStyle(color: Colors.white54),
+                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF4FC3F7))),
+                      ),
+                      items: _sellers
+                          .where((s) => s['seller']?['id']?.toString() != (sellerInfo != null ? sellerInfo['id']?.toString() : dialogSellerId))
+                          .map((s) {
+                        return DropdownMenuItem<String>(
+                          value: s['seller']?['id']?.toString(),
+                          child: Text('${s['seller']?['name'] ?? 'Sem Nome'} (${s['balance'] ?? 0})'),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        setDialogState(() => destSellerId = val);
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   LedChoiceChip(
                     label: 'Descartar Defeituosas',
@@ -202,6 +238,14 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                             return;
                           }
 
+                          if (transferType == 3 && (destSellerId == null || destSellerId == targetId)) {
+                            ScaffoldMessenger.of(context).clearSnackBars();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Selecione o vendedor de destino'), backgroundColor: Colors.orange),
+                            );
+                            return;
+                          }
+
                           final qty = int.tryParse(quantityController.text) ?? 0;
                           if (qty <= 0) {
                             ScaffoldMessenger.of(context).clearSnackBars();
@@ -211,44 +255,51 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                             return;
                           }
 
-                          final opString = transferType == 2 ? 'DEFECTIVE' : (transferType == 1 ? 'RETURN' : 'SEND');
-                          final originString = transferType == 2 ? 'SELLER' : 'ADMIN';
-
                           setDialogState(() => isSubmitting = true);
                           final messenger = ScaffoldMessenger.of(context);
 
                           try {
-                            final movementKey = await _resolveMovementId(
-                              sellerId: targetId,
-                              quantity: qty,
-                              operation: opString,
-                              origin: originString,
-                            );
-
-                            if (transferType == 2) {
-                              await ApiService().returnDefectiveCovers(
-                                targetId,
+                            if (transferType == 3) {
+                              await ApiService().transferBetweenSellers(
+                                destSellerId!,
                                 qty,
-                                origin: 'SELLER',
-                                idempotencyKey: movementKey,
-                              );
-                            } else if (transferType == 1) {
-                              await ApiService().transferCovers(
-                                targetId,
-                                qty,
-                                operation: 'RETURN',
-                                idempotencyKey: movementKey,
+                                senderId: targetId,
                               );
                             } else {
-                              await ApiService().transferCovers(
-                                targetId,
-                                qty,
-                                operation: 'SEND',
-                                idempotencyKey: movementKey,
+                              final opString = transferType == 2 ? 'DEFECTIVE' : (transferType == 1 ? 'RETURN' : 'SEND');
+                              final originString = transferType == 2 ? 'SELLER' : 'ADMIN';
+                              final movementKey = await _resolveMovementId(
+                                sellerId: targetId,
+                                quantity: qty,
+                                operation: opString,
+                                origin: originString,
                               );
-                            }
 
-                            await _clearPendingMovement();
+                              if (transferType == 2) {
+                                await ApiService().returnDefectiveCovers(
+                                  targetId,
+                                  qty,
+                                  origin: 'SELLER',
+                                  idempotencyKey: movementKey,
+                                );
+                              } else if (transferType == 1) {
+                                await ApiService().transferCovers(
+                                  targetId,
+                                  qty,
+                                  operation: 'RETURN',
+                                  idempotencyKey: movementKey,
+                                );
+                              } else {
+                                await ApiService().transferCovers(
+                                  targetId,
+                                  qty,
+                                  operation: 'SEND',
+                                  idempotencyKey: movementKey,
+                                );
+                              }
+
+                              await _clearPendingMovement();
+                            }
 
                             if (mounted) {
                               Navigator.pop(context);
@@ -420,12 +471,15 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
         children: [
           const Text('Resumo de Capas', style: TextStyle(color: Color(0xFFCE93D8), fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+          Wrap(
+            spacing: 16,
+            runSpacing: 16,
+            alignment: WrapAlignment.spaceAround,
             children: [
               _infoBox('Capas no Admin', '$_totalAdminCapas', Colors.blueAccent),
               _infoBox('Com Vendedores', '$_totalSellerCapas', Colors.orangeAccent),
-              _infoBox('Total Geral', '${_totalAdminCapas + _totalSellerCapas}', Colors.greenAccent),
+              _infoBox('Baixa (Vendidas)', '$_totalSoldCapas', const Color(0xFFCE93D8)),
+              _infoBox('Total em Estoque', '${_totalAdminCapas + _totalSellerCapas}', Colors.greenAccent),
             ],
           ),
           const SizedBox(height: 20),
@@ -591,6 +645,7 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
             final name = sellerData['name'] ?? 'Sem Nome';
             final email = sellerData['email'] ?? '';
             final covers = s['balance'] ?? 0;
+            final soldCovers = s['soldCovers'] ?? 0;
             final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : 'V';
 
             return LedCard(
@@ -622,6 +677,10 @@ class _VisaoEstoqueAdminState extends State<VisaoEstoqueAdmin> {
                               overflow: TextOverflow.ellipsis,
                               maxLines: 1,
                             ),
+                          Text(
+                            'Baixa em vendas: $soldCovers capa(s)',
+                            style: const TextStyle(color: Color(0xFFCE93D8), fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
                         ],
                       ),
                     ),

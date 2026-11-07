@@ -6,6 +6,11 @@ import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../m
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
 import { resolveSellerCommissionRate } from '../utils/commission';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import {
+  resolveSaleHasCover,
+  deductCoverForSellerSale,
+  restoreCoverForCanceledSale,
+} from '../services/coverStockService';
 
 const router = Router();
 
@@ -307,11 +312,15 @@ function parseSaleInput(body: any) {
     return Number.isFinite(num) ? Math.round(num) : null;
   };
 
+  const effectiveProduct = product ? String(product).trim() : 'Mídias fotográficas';
+  const effectiveHasCover = resolveSaleHasCover(body.hasCover, effectiveProduct);
+
   return {
     clientId: String(clientId),
     value: parsedValue,
     city: String(city).trim(),
-    product: product ? String(product).trim() : 'Mídias fotográficas',
+    product: effectiveProduct,
+    hasCover: effectiveHasCover,
     fichaNumber: fichaNumber ? String(fichaNumber).trim() : null,
     paymentMethod: effectivePaymentMethod,
     payments: parsedPayments,
@@ -483,11 +492,12 @@ async function finalizeSaleWithReceipt(params: {
       }
 
       // Pertence ao mesmo vendedor e dados são equivalentes: anexar o comprovante à venda existente de forma atômica
-      const updatedSale = await tx.sale.update({
+      let updatedSale = await tx.sale.update({
         where: { id: existingSingle.id },
         data: {
           paymentStatus: 'PAID',
           status: 'PRONTO',
+          hasCover: input.hasCover,
           receiptUrl: params.receiptUrl,
           ...(params.sheetPhotoUrl ? { sheetPhotoUrl: params.sheetPhotoUrl } : {}),
           ...(input.reportNotes ? { reportNotes: input.reportNotes } : {}),
@@ -496,6 +506,17 @@ async function finalizeSaleWithReceipt(params: {
           ...(input.contactRating !== null ? { contactRating: input.contactRating } : {}),
         },
       });
+
+      if (!existingSingle.coverDeducted && updatedSale.hasCover) {
+        const deducted = await deductCoverForSellerSale(tx, {
+          saleId: updatedSale.id,
+          sellerId: params.sellerId,
+          hasCover: updatedSale.hasCover,
+        });
+        if (deducted) {
+          updatedSale = { ...updatedSale, coverDeducted: true };
+        }
+      }
 
       if (client.outcomeStatus === 'NON_SALE') {
         await tx.nonSale.updateMany({
@@ -550,7 +571,7 @@ async function finalizeSaleWithReceipt(params: {
     }
 
       const { payments: paymentsList, credit: creditInput, ...saleData } = input;
-      const sale = await tx.sale.create({
+      let sale = await tx.sale.create({
         data: {
           ...saleData,
           sellerId: params.sellerId,
@@ -566,6 +587,17 @@ async function finalizeSaleWithReceipt(params: {
           isLegacy: false,
         },
       });
+
+      if (sale.hasCover) {
+        const deducted = await deductCoverForSellerSale(tx, {
+          saleId: sale.id,
+          sellerId: params.sellerId,
+          hasCover: sale.hasCover,
+        });
+        if (deducted) {
+          sale = { ...sale, coverDeducted: true };
+        }
+      }
 
       if (paymentsList && paymentsList.length > 0) {
         await tx.salePayment.createMany({
@@ -809,15 +841,27 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       // 4. Criar a venda (com comprovante se fornecido, ou pendente)
       const { payments: postPayments, credit: postCredit, ...postSaleData } = input;
       const hasReceipt = Boolean(postSaleData.receiptUrl);
-      const sale = await tx.sale.create({
+      const isConfirmedSale = hasReceipt || Boolean(postCredit);
+      let sale = await tx.sale.create({
         data: {
           ...postSaleData,
           sellerId,
-          status: hasReceipt ? 'PRONTO' : 'PENDING_RECEIPT',
+          status: isConfirmedSale ? 'PRONTO' : 'PENDING_RECEIPT',
           paymentStatus: postCredit ? 'PARTIALLY_PAID' : (hasReceipt ? 'PAID' : 'PENDING_RECEIPT'),
           companyId,
         },
       });
+
+      if (isConfirmedSale && sale.hasCover) {
+        const deducted = await deductCoverForSellerSale(tx, {
+          saleId: sale.id,
+          sellerId,
+          hasCover: sale.hasCover,
+        });
+        if (deducted) {
+          sale = { ...sale, coverDeducted: true };
+        }
+      }
 
       if (postPayments && postPayments.length > 0) {
         await tx.salePayment.createMany({
@@ -1110,11 +1154,17 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
       }
     }
 
-    const updated = await prisma.sale.update({
+    const nextHasCover =
+      req.body.hasCover !== undefined || product !== undefined
+        ? resolveSaleHasCover(req.body.hasCover ?? existing.hasCover, product !== undefined ? String(product).trim() : existing.product)
+        : undefined;
+
+    let updated = await prisma.sale.update({
       where: { id },
       data: {
         ...(parsedValue !== undefined && { value: parsedValue }),
         ...(product !== undefined && { product: String(product).trim() }),
+        ...(nextHasCover !== undefined && { hasCover: nextHasCover }),
         ...(status !== undefined && { status: status as string }),
         ...(paymentStatus !== undefined && { paymentStatus: paymentStatus as string }),
         ...(fichaNumber !== undefined && { fichaNumber: String(fichaNumber).trim() }),
@@ -1234,6 +1284,17 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
           !canceledStates.has(String(existing.paymentStatus).toUpperCase()));
 
       if (becameCanceled) {
+        if (existing.coverDeducted) {
+          await prisma.$transaction(async (tx) => {
+            await restoreCoverForCanceledSale(tx, {
+              saleId: updated.id,
+              sellerId: existing.sellerId,
+              wasDeducted: existing.coverDeducted,
+            });
+          });
+          updated = { ...updated, coverDeducted: false };
+        }
+
         await recordOperationalAuditEvent({
           companyId,
           category: 'REVERSAL',
@@ -1317,10 +1378,20 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
           ? 'REBOLO_SOLD'
           : 'SOLD';
 
-      const updated = await tx.sale.update({
+      let updated = await tx.sale.update({
         where: { id },
         data: { receiptUrl, status: 'PRONTO', paymentStatus: 'PAID' },
       });
+      if (!sale.coverDeducted && updated.hasCover) {
+        const deducted = await deductCoverForSellerSale(tx, {
+          saleId: updated.id,
+          sellerId: sale.sellerId,
+          hasCover: updated.hasCover,
+        });
+        if (deducted) {
+          updated = { ...updated, coverDeducted: true };
+        }
+      }
       await tx.client.update({
         where: { id: sale.clientId },
         data: {

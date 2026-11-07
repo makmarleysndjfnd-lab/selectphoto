@@ -870,10 +870,20 @@ class ApiService {
     }
   }
 
-  Future<void> transferBetweenSellers(String recipientId, int quantity) async {
+  Future<void> transferBetweenSellers(
+    String recipientId,
+    int quantity, {
+    String? senderId,
+  }) async {
     try {
-      await _dio.post('/stock/transfer-between-sellers',
-          data: {'recipientId': recipientId, 'quantity': quantity});
+      final Map<String, dynamic> data = {
+        'recipientId': recipientId,
+        'quantity': quantity,
+      };
+      if (senderId != null && senderId.trim().isNotEmpty) {
+        data['senderId'] = senderId.trim();
+      }
+      await _dio.post('/stock/transfer-between-sellers', data: data);
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??

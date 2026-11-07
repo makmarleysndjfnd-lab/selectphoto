@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +13,10 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    final dir = Directory('${Directory.systemTemp.path}${Platform.pathSeparator}pending_receipts');
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
   });
 
   Widget buildTestableWidget({required Widget child, SyncService? syncService}) {
@@ -24,10 +29,10 @@ void main() {
   }
 
   group('Escopo 5 e 6: Ciclo de Vida das Fichas e Agenda Mobile (1.0.9+17)', () {
-    test('1. Versão compilada e build number do AppConfig estão alinhados com a release atual (1.0.31+45)', () {
+    test('1. Versão compilada e build number do AppConfig estão alinhados com a release atual (1.0.31+46)', () {
       expect(AppConfig.appVersion, equals('1.0.31'));
-      expect(AppConfig.buildNumber, equals(45));
-      expect(AppConfig.fullVersion, equals('1.0.31+45'));
+      expect(AppConfig.buildNumber, equals(46));
+      expect(AppConfig.fullVersion, equals('1.0.31+46'));
     });
 
     testWidgets('2. SellerDashboard renderiza cabeçalhos de grupos de fichas (Pendentes e Atendidas)', (tester) async {
@@ -84,6 +89,8 @@ void main() {
 
       final fechamentoBtn = find.text('Fechamento de Cidade');
       expect(fechamentoBtn, findsOneWidget);
+      await tester.ensureVisible(fechamentoBtn);
+      await tester.pump(const Duration(milliseconds: 100));
       await tester.tap(fechamentoBtn);
       await tester.pump(const Duration(milliseconds: 500));
 

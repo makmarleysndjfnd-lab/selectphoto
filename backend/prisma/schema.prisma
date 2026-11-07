@@ -305,6 +305,7 @@ model Sale {
   product       String   @default("Books")
   status        String   @default("PRONTO")
   hasCover      Boolean  @default(true)
+  coverDeducted Boolean  @default(false)
   receiptUrl    String?
   sheetPhotoUrl String?
   reportNotes   String?

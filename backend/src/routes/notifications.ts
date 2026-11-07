@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { sendPushNotification } from '../utils/firebaseConfig';
+import { ADMIN_COVER_ROLES, reconcilePendingSellerCoverDeductions } from '../services/coverStockService';
 
 const router = Router();
 
@@ -259,6 +260,87 @@ router.post('/:id/action', authenticateToken, async (req: AuthRequest, res: Resp
       } else {
         res.status(400).json({ error: 'Invalid notification type for EDIT_REQUEST action' });
         return;
+      }
+    } else if (actionType === 'ACCEPT' || actionType === 'REJECT') {
+      if (
+        (notification.type === 'STOCK_TRANSFER_COVER' || notification.type === 'COVER_TRANSFER_REQUEST') &&
+        actionType === 'ACCEPT' &&
+        actionData
+      ) {
+        const senderId = String(actionData.senderId || notification.senderId || '').trim();
+        const recipientId = String(actionData.recipientId || notification.recipientId || '').trim();
+        const qty = parseInt(String(actionData.quantity || 0), 10);
+
+        if (senderId && recipientId && qty > 0 && senderId !== recipientId) {
+          const [sender, recipient] = await Promise.all([
+            prisma.user.findFirst({ where: { id: senderId, companyId: userCompanyId || undefined } }),
+            prisma.user.findFirst({ where: { id: recipientId, companyId: userCompanyId || undefined } }),
+          ]);
+
+          if (sender && recipient) {
+            const isSenderAdmin = ADMIN_COVER_ROLES.includes(sender.role);
+            const isRecipientAdmin = ADMIN_COVER_ROLES.includes(recipient.role);
+
+            await prisma.$transaction(async (tx) => {
+              if (!isSenderAdmin && isRecipientAdmin) {
+                const sb = await tx.sellerCoverBalance.findUnique({ where: { sellerId: sender.id } });
+                if (!sb || sb.balance < qty) throw new Error('Saldo insuficiente para devolução de capas');
+                await tx.sellerCoverBalance.update({
+                  where: { sellerId: sender.id },
+                  data: { balance: sb.balance - qty },
+                });
+                await tx.sellerCoverTransfer.create({
+                  data: {
+                    sellerId: sender.id,
+                    adminId: recipient.id,
+                    quantity: -qty,
+                    companyId: userCompanyId!,
+                  },
+                });
+              } else if (isSenderAdmin && !isRecipientAdmin) {
+                await tx.sellerCoverTransfer.create({
+                  data: {
+                    sellerId: recipient.id,
+                    adminId: sender.id,
+                    quantity: qty,
+                    companyId: userCompanyId!,
+                  },
+                });
+                const rb = await tx.sellerCoverBalance.findUnique({ where: { sellerId: recipient.id } });
+                if (rb) {
+                  await tx.sellerCoverBalance.update({
+                    where: { sellerId: recipient.id },
+                    data: { balance: rb.balance + qty },
+                  });
+                } else {
+                  await tx.sellerCoverBalance.create({
+                    data: { sellerId: recipient.id, balance: qty },
+                  });
+                }
+                await reconcilePendingSellerCoverDeductions(tx, recipient.id);
+              } else {
+                const sb = await tx.sellerCoverBalance.findUnique({ where: { sellerId: sender.id } });
+                if (!sb || sb.balance < qty) throw new Error('Saldo insuficiente para transferência de capas');
+                await tx.sellerCoverBalance.update({
+                  where: { sellerId: sender.id },
+                  data: { balance: sb.balance - qty },
+                });
+                const rb = await tx.sellerCoverBalance.findUnique({ where: { sellerId: recipient.id } });
+                if (rb) {
+                  await tx.sellerCoverBalance.update({
+                    where: { sellerId: recipient.id },
+                    data: { balance: rb.balance + qty },
+                  });
+                } else {
+                  await tx.sellerCoverBalance.create({
+                    data: { sellerId: recipient.id, balance: qty },
+                  });
+                }
+                await reconcilePendingSellerCoverDeductions(tx, recipient.id);
+              }
+            });
+          }
+        }
       }
     } else if (actionType === 'DISMISS') {
       // Just mark resolved

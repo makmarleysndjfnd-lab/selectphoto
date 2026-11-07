@@ -1268,6 +1268,7 @@ class _SaleTabState extends State<_SaleTab> {
         'city': widget.client['city'] ?? '',
         'value': valor,
         'product': _product,
+        'hasCover': _hasCover,
         'status': 'PRONTO',
         'paymentStatus': _isCrediario ? 'PARTIALLY_PAID' : 'PAID',
         'fichaNumber': _numeroFichaController.text,

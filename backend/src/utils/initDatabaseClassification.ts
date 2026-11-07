@@ -37,6 +37,9 @@ export async function initDatabaseClassification(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `ALTER TABLE "MonthlyCreditClosing" ADD COLUMN IF NOT EXISTS "payoutDate" TIMESTAMP(3);`
     );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "Sale" ADD COLUMN IF NOT EXISTS "coverDeducted" BOOLEAN NOT NULL DEFAULT false;`
+    );
 
     // 2. Classificar os 51 registros de teste catalogados
     if (CONFIRMED_TEST_COMPANY_IDS.length > 0) {
