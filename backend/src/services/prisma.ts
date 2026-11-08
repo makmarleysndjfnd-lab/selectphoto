@@ -1,4 +1,31 @@
 import { PrismaClient, Prisma } from '@prisma/client';
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
+
+const isTestRuntime =
+  process.env.NODE_ENV === 'test' ||
+  Boolean(process.env.NODE_TEST_CONTEXT) ||
+  process.argv.some((a) => a.includes('--test') || a.endsWith('.test.ts') || a.endsWith('.spec.ts'));
+
+if (isTestRuntime) {
+  process.env.NODE_ENV = 'test';
+  process.env.DISABLE_CRON = 'true';
+  process.env.EXTERNAL_SERVICES_DISABLED = process.env.EXTERNAL_SERVICES_DISABLED || 'true';
+  const testEnvPath = path.resolve(__dirname, '../../.env.test.local');
+  if (fs.existsSync(testEnvPath)) {
+    const parsed = dotenv.parse(fs.readFileSync(testEnvPath));
+    if (
+      parsed.DATABASE_URL &&
+      (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('render.com'))
+    ) {
+      process.env.DATABASE_URL = parsed.DATABASE_URL;
+    }
+    if (parsed.JWT_SECRET && !process.env.JWT_SECRET) {
+      process.env.JWT_SECRET = parsed.JWT_SECRET;
+    }
+  }
+}
 
 export type PrismaTransaction = Prisma.TransactionClient;
 

@@ -791,12 +791,12 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
         SELECT id
         FROM "AsaasSyncQueue"
         WHERE status = 'PENDING' AND attempts < 5
-        ORDER BY "createdAt" ASC
+        ORDER BY "createdAt" ASC, id ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
       )
       UPDATE "AsaasSyncQueue" q
-      SET status = 'PROCESSING', "updatedAt" = NOW()
+      SET status = 'PROCESSING', "updatedAt" = (NOW() AT TIME ZONE 'UTC')
       FROM selected
       WHERE q.id = selected.id
       RETURNING q.*;

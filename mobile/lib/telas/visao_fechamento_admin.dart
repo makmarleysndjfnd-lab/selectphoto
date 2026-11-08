@@ -128,12 +128,14 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
             children: [
               Icon(Icons.local_shipping_rounded, color: Color(0xFFFFB74D), size: 22),
               SizedBox(width: 8),
-              Text(
-                'Rotas e Chegada da Gráfica',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+              Expanded(
+                child: Text(
+                  'Rotas e Chegada da Gráfica',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
                 ),
               ),
             ],

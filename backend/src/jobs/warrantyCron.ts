@@ -280,7 +280,7 @@ export const cleanOldCostPhotos = async () => {
 
     const oldCosts = await prisma.cost.findMany({
       where: {
-        createdAt: { lt: ninetyDaysAgo },
+        date: { lt: ninetyDaysAgo },
         receiptUrl: { not: null }
       }
     });

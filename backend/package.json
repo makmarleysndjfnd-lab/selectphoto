@@ -3,7 +3,7 @@
   "version": "1.0.8",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test --test-concurrency=1 test/**/*.test.ts",
+    "test": "node scripts/run-tests.js",
     "dev": "tsx watch src/index.ts",
     "build": "npx prisma generate && npx tsc && node scripts/verify-dist-sync.js",
     "check-dist": "node scripts/verify-dist-sync.js",

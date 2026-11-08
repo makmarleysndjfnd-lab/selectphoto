@@ -163,7 +163,8 @@ describe('SCRIPT DE AUDITORIA DE VENDAS LEGADAS (HOTFIX 1.0.8)', () => {
     );
 
     const scriptPath = path.resolve(__dirname, '../scripts/reconcile-legacy-sales.ts');
-    const output = execSync(`npx tsx "${scriptPath}"`, {
+    const tsxCli = path.resolve(__dirname, '../node_modules/tsx/dist/cli.mjs');
+    const output = execSync(`"${process.execPath}" "${tsxCli}" "${scriptPath}"`, {
       encoding: 'utf-8',
       cwd: path.resolve(__dirname, '..'),
       env: {
@@ -172,7 +173,11 @@ describe('SCRIPT DE AUDITORIA DE VENDAS LEGADAS (HOTFIX 1.0.8)', () => {
       },
     });
 
-    assert.ok(output.includes('Conectando com segurança em: Host=127.0.0.1:5432, Banco=selectphoto_staging_local'));
+    assert.ok(
+      output.includes(
+        `Conectando com segurança em: Host=${localDbInfo.host}:${localDbInfo.port}, Banco=${localDbInfo.database}`
+      )
+    );
     assert.ok(output.includes('MODO SOMENTE LEITURA'), 'Deve informar modo somente leitura');
     assert.ok(output.includes('CENÁRIOS POSSÍVEIS DE RECONCILIAÇÃO'), 'Deve apresentar cenários');
     assert.ok(output.includes('Auditoria somente leitura concluída'), 'Deve confirmar conclusão segura');

@@ -942,12 +942,14 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           entityId: payment.id,
           previousValues: {
             remainingPrincipalCents: agreement.remainingPrincipalCents,
+            buyerCpf: agreement.buyerCpf,
           },
           newValues: {
             amountCents: paymentAmountCents,
             paymentMethod,
             remainingPrincipalCents: newRemainingCents,
             lumoraAdditionalFeeCents: 0,
+            buyerCpf: agreement.buyerCpf,
           },
           reason: notes ? String(notes).trim() : `Amortização de parcela (${paymentMethod})`,
           authorUserId: currentUserId,
@@ -1154,7 +1156,7 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
               isReversed: true,
               reversedAt: new Date(),
               reversalReason: String(reason).trim(),
-              status: 'REVERSED',
+              status: commission.status === 'PAID' ? 'PAID' : 'REVERSED',
             },
           });
         } else {
@@ -1165,7 +1167,7 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
               isReversed: true,
               reversedAt: new Date(),
               reversalReason: String(reason).trim(),
-              status: 'REVERSED',
+              status: commission.status === 'PAID' ? 'PAID' : 'REVERSED',
             },
           });
         }
@@ -1304,7 +1306,7 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
       }
 
       // Regra de autorização estrita: Admin e Supervisor podem renegociar qualquer contrato; Vendedor apenas da sua carteira
-      if (userRole !== 'ADMIN' && userRole !== 'SUPERVISOR' && agreement.sellerId !== authorId) {
+      if (!isUserAdmin(req) && agreement.sellerId !== authorId) {
         throw { status: 403, message: 'Não autorizado a renegociar contratos de outra carteira' };
       }
 
@@ -2958,8 +2960,8 @@ router.patch(
         entityType: 'CREDIT_AGREEMENT',
         entityReference: ref,
         entityId: agreement.id,
-        previousValues: { phone1: prevPhone1, phone2: prevPhone2 },
-        newValues: { phone1: updatedClient.phone1, phone2: updatedClient.phone2 },
+        previousValues: { phone1: prevPhone1, phone2: prevPhone2, buyerCpf: agreement.buyerCpf },
+        newValues: { phone1: updatedClient.phone1, phone2: updatedClient.phone2, buyerCpf: agreement.buyerCpf },
         reason: String(reason).trim(),
         authorUserId: authorId,
         authorName: req.user?.name || 'Administrador',

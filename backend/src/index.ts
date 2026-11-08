@@ -3,6 +3,25 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 
+import fs from 'fs';
+
+const isTestRuntime =
+  process.env.NODE_ENV === 'test' ||
+  Boolean(process.env.NODE_TEST_CONTEXT) ||
+  process.argv.some((arg) => arg.includes('--test') || arg.endsWith('.test.ts') || arg.endsWith('.spec.ts'));
+
+if (isTestRuntime) {
+  process.env.NODE_ENV = 'test';
+  process.env.DISABLE_CRON = 'true';
+  if (!process.env.EXTERNAL_SERVICES_DISABLED) {
+    process.env.EXTERNAL_SERVICES_DISABLED = 'true';
+  }
+  const envTestLocalPath = path.resolve(__dirname, '../.env.test.local');
+  if (fs.existsSync(envTestLocalPath)) {
+    dotenv.config({ path: envTestLocalPath, override: true });
+  }
+}
+
 dotenv.config();
 
 function assertRequiredEnv() {

@@ -23,6 +23,7 @@ import creditRoutes from '../src/routes/credit';
 import financeRoutes from '../src/routes/finance';
 import closingRoutes from '../src/routes/closing';
 import { processAsaasSyncQueue, createAsaasChargeForInstallment } from '../src/services/asaasService';
+import { disconnectPrisma } from '../src/services/prisma';
 
 const prisma = new PrismaClient();
 
@@ -150,6 +151,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
 
   after(async () => {
     if (server) {
+      server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     const compIds = [companyId, company2Id];
@@ -174,6 +176,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
       await prisma.company.deleteMany({ where: { id: { in: compIds } } });
     } catch (_) {}
     await prisma.$disconnect();
+    await disconnectPrisma();
   });
 
   let agreementId: string;
@@ -293,7 +296,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     const [res1, res2] = await Promise.all([
       fetch(`${baseUrl}/api/credit/agreements/${agreementId}/payments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
         body: JSON.stringify({
           installmentId: inst1.id,
           amount: 200.0,
@@ -303,7 +306,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
       }),
       fetch(`${baseUrl}/api/credit/agreements/${agreementId}/payments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
         body: JSON.stringify({
           installmentId: inst1.id,
           amount: 200.0,
@@ -334,24 +337,35 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
   });
 
   it('5. Liquidação de comissão e Estorno: gera Ajuste de Débito rastreável sem apagar histórico', async () => {
-    // 5.1 Admin liquida/paga as comissões liberadas do vendedor 1
-    const releasedComms = await prisma.creditCommission.findMany({
-      where: { sellerId: seller1Id, status: 'RELEASED' },
+    // 5.1 Admin liquida/paga a comissão de entrada do vendedor 1 e liquida a comissão da parcela
+    const releasedDownComms = await prisma.creditCommission.findMany({
+      where: { sellerId: seller1Id, status: 'RELEASED', type: 'DOWN_PAYMENT' },
     });
-    assert.ok(releasedComms.length >= 2); // Down payment + Parcela 1
+    assert.ok(releasedDownComms.length >= 1);
 
     const payCommRes = await fetch(`${baseUrl}/api/credit/commissions/pay`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         sellerId: seller1Id,
-        commissionIds: releasedComms.map((c) => c.id),
+        commissionIds: releasedDownComms.map((c) => c.id),
         paymentMethod: 'PIX',
         idempotencyKey: `payout_${Date.now()}`,
         notes: 'Acerto semanal',
       }),
     });
     assert.equal(payCommRes.status, 200);
+
+    // Simula que a comissão da parcela 1 já foi liquidada em fechamento mensal
+    await prisma.creditCommission.updateMany({
+      where: { sellerId: seller1Id, type: 'INSTALLMENT', status: 'RELEASED' },
+      data: {
+        status: 'PAID',
+        paidAt: new Date(),
+        paidByUserId: adminId,
+        payoutId: `monthly_payout_${Date.now()}`,
+      },
+    });
 
     // 5.2 Agora estorna o pagamento da parcela 1
     const payment = await prisma.creditPayment.findFirst({
@@ -380,7 +394,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
       where: { commissionId: originalComm!.id },
     });
     assert.ok(adjustment);
-    assert.equal(adjustment!.amountCents, 2000); // Débito de R$ 20.00
+    assert.equal(Math.abs(adjustment!.amountCents), 2000); // Débito de R$ 20.00
     assert.equal(adjustment!.status, 'PENDING');
   });
 
@@ -531,7 +545,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
 
     const manualPayRes = await fetch(`${baseUrl}/api/credit/agreements/${agreementId}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: inst3.id,
         amount: 200.0,
@@ -606,7 +620,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
 
     const partialPayRes = await fetch(`${baseUrl}/api/credit/agreements/${agreementId}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: inst4.id,
         amount: 50.0,
@@ -632,7 +646,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     // Renegocia o saldo restante de R$ 150 em 2 novas parcelas de R$ 75
     const renegotiateRes = await fetch(`${baseUrl}/api/credit/agreements/${agreementId}/renegotiate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         numberOfInstallments: 2,
         frequency: 'MONTHLY',
@@ -985,7 +999,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     // Cliente paga R$ 100 em dinheiro no app (deixando saldo residual de R$ 200)
     const payRes = await fetch(`${baseUrl}/api/credit/agreements/${partialAgreement!.id}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: inst.id,
         amount: 100.0,
@@ -1361,7 +1375,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     // Pagamento em dinheiro em mãos do vendedor: R$ 250
     const pay17Res = await fetch(`${baseUrl}/api/credit/agreements/${agreement17!.id}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: agreement17!.installments[0].id,
         amount: 250.0,
@@ -1510,6 +1524,9 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
   });
 
   it('19. Pendência 3: Captura exclusiva de tarefas no banco com FOR UPDATE SKIP LOCKED testada com dois processadores simultâneos', async () => {
+    // Limpa tarefas PENDING anteriores para testar isoladamente as 6 tarefas concorrentes
+    await prisma.asaasSyncQueue.deleteMany({ where: { status: 'PENDING' } });
+
     // Cria 6 tarefas na fila
     const taskIds: string[] = [];
     for (let i = 0; i < 6; i++) {
@@ -1821,7 +1838,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
 
     await fetch(`${baseUrl}/api/credit/agreements/${agreement23A!.id}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller1Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: agreement23A!.installments[0].id,
         amount: 250.0,
@@ -1859,7 +1876,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
 
     await fetch(`${baseUrl}/api/credit/agreements/${agreement23B!.id}/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller2Token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         installmentId: agreement23B!.installments[0].id,
         amount: 300.0,

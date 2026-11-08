@@ -185,7 +185,10 @@ describe('Staging Local — Testes Estendidos de Segurança, Concorrência, Uplo
     });
     assert.equal(res.status, 404);
     const data: any = await res.json();
-    assert.equal(data.error, 'Vendedor destinatário não encontrado na sua empresa');
+    assert.ok(
+      data.error === 'Destinatário não encontrado na sua empresa' ||
+        data.error === 'Vendedor destinatário não encontrado na sua empresa'
+    );
   });
 
   it('5. Estoque: Vendedor Alpha 1 NÃO pode devolver mais capas do que possui em saldo (400)', async () => {

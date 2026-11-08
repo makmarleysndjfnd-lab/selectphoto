@@ -123,7 +123,7 @@ class SyncService extends ChangeNotifier {
             '${supportDir.path}${Platform.pathSeparator}pending_receipts');
       }
       if (!dir.existsSync()) {
-        await dir.create(recursive: true);
+        dir.createSync(recursive: true);
       }
       try {
         _controlledDirectoryCanonical = p.canonicalize(dir.resolveSymbolicLinksSync());
