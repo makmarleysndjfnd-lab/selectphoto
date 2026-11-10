@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS "CompanyApiTariff" (
     "notes" TEXT,
     "confirmedByUserId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "CompanyApiTariff_pkey" PRIMARY KEY ("id")
 );

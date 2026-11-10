@@ -45,8 +45,16 @@ class FakeEtapa2ApiService extends ApiService {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> getCompanyIntegrations(String companyId) async {
-    return List<Map<String, dynamic>>.from(storedIntegrations);
+  Future<Map<String, dynamic>> getCompanyIntegrationsPayload(String companyId) async {
+    return {
+      'integrations': List<Map<String, dynamic>>.from(storedIntegrations),
+      'sharedServices': <Map<String, dynamic>>[],
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> getPlatformIntegrationsOverview() async {
+    return {};
   }
 
   @override

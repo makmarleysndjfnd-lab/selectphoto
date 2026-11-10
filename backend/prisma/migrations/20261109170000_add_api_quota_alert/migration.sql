@@ -19,7 +19,7 @@ CREATE TABLE "ApiQuotaAlert" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ApiQuotaAlert_companyId_category_environment_periodKey_limitType_threshold_key" ON "ApiQuotaAlert"("companyId", "category", "environment", "periodKey", "limitType", "threshold");
+CREATE UNIQUE INDEX "ApiQuotaAlert_companyId_category_environment_periodKey_limi_key" ON "ApiQuotaAlert"("companyId", "category", "environment", "periodKey", "limitType", "threshold");
 
 -- CreateIndex
 CREATE INDEX "ApiQuotaAlert_companyId_periodKey_idx" ON "ApiQuotaAlert"("companyId", "periodKey");
