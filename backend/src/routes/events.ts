@@ -9,8 +9,28 @@ import {
   recordApiUsage,
   checkCompanyApiBudget,
 } from '../services/integrationResolver';
+import { authorizeCompanyAdmin } from './companyIntegrations';
+import {
+  reserveApiQuota,
+  confirmApiReservation,
+  releaseApiReservation,
+  markReservationPendingConfirmation,
+  resolvePendingReservation,
+  handleLateProviderResponse,
+} from '../services/apiQuotaService';
 
 const router = Router();
+
+// Cache volátil em memória para Scout de Eventos por cidade (TTL: 24h)
+export const cityScoutCache = new Map<string, { data: any; expiresAt: number }>();
+
+export function clearCityScoutCache(city?: string): void {
+  if (city) {
+    cityScoutCache.delete(city.toLowerCase().trim());
+  } else {
+    cityScoutCache.clear();
+  }
+}
 
 
 // Instanciação direta por chamada com resolução dinâmica por empresa
@@ -105,6 +125,12 @@ function checkAiRateLimit(key: string, maxPerHour: number = 60): boolean {
 
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
+  const callStart = Date.now();
+  let reservationId: string | undefined;
+  let providerDispatched = false;
+  let providerResponded = false;
+  let sanitizedCity = '';
+
   try {
     const { city } = req.body;
     const companyId = req.user?.companyId;
@@ -114,7 +140,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       return;
     }
 
-    const sanitizedCity = String(city || '').replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
+    sanitizedCity = String(city || '').replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
     if (!sanitizedCity) {
       res.status(400).json({ error: 'Cidade não fornecida ou inválida.' });
       return;
@@ -126,25 +152,19 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       return;
     }
 
+    const environment = String(
+      req.headers['x-environment'] || req.query.environment || req.body?.environment || 'PRODUCTION'
+    ).toUpperCase();
+    const lowerCity = sanitizedCity.toLowerCase();
+    const forceRefresh = req.query.force === 'true' || req.body?.force === true;
+
     // Resolução dinâmica de integração por empresa em tempo de execução
     let activeAiClient: GoogleGenAI | null = null;
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
 
     if (companyId) {
-      // 1. Verifica teto/orçamento mensal de IA da empresa
-      const budgetCheck = await checkCompanyApiBudget(companyId, 'AI_RESEARCH');
-      if (!budgetCheck.withinBudget) {
-        res.status(429).json({
-          error: 'Limite de orçamento mensal interno de IA atingido para esta empresa.',
-          spentCents: budgetCheck.currentSpentCents,
-          limitCents: budgetCheck.limitCents,
-        });
-        return;
-      }
-
-      // 2. Resolve credencial dinâmica da empresa
-      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
+      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
       if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
         if (!isExternalServicesDisabled()) {
           res.status(403).json({
@@ -169,8 +189,153 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
     }
 
+    // ── 1. Verificação de Cache do Scout por Cidade ───────────────────────────
+    const cachedEntry = cityScoutCache.get(lowerCity);
+    if (cachedEntry && cachedEntry.expiresAt > Date.now() && !forceRefresh) {
+      if (companyId) {
+        await recordApiUsage({
+          companyId,
+          integrationId: resolvedIntegrationId,
+          category: 'AI_RESEARCH',
+          provider: providerName,
+          environment,
+          operation: 'SCOUT_CITY_CACHE',
+          unitsUsed: 1,
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
+      return res.json({
+        ...cachedEntry.data,
+        source: 'CACHE',
+        cached: true,
+      });
+    }
+
+    // ── 2. Reserva atômica de cota antes de chamar o provedor externo ─────────
+    if (companyId) {
+      const reservation = await reserveApiQuota({
+        companyId,
+        category: 'AI_RESEARCH',
+        provider: providerName,
+        environment,
+        integrationId: resolvedIntegrationId,
+        operation: 'SCOUT_CITY_EXTERNAL',
+        unitsRequested: 1,
+        date: new Date(),
+      });
+
+      if (!reservation.allowed) {
+        return res.status(429).json({
+          error: reservation.message,
+          limitType: reservation.limitType,
+          currentUnits: reservation.currentUnits,
+          unitsLimit: reservation.unitsLimit,
+          currentSpentCents: reservation.currentSpentCents,
+          budgetLimitCents: reservation.budgetLimitCents,
+        });
+      }
+      reservationId = reservation.reservationId;
+    }
+
     // Retorno mockado quando serviços externos estão desabilitados ou sem chave
     if (isExternalServicesDisabled() || !activeAiClient) {
+      providerDispatched = true;
+
+      const simulateTimeout =
+        req.headers['x-mock-simulated-timeout'] === 'true' ||
+        req.query.mockTimeout === 'true' ||
+        req.body?.mockTimeout === true;
+
+      const simulateInvalidContent =
+        req.headers['x-mock-invalid-content'] === 'true' ||
+        req.query.mockInvalidContent === 'true' ||
+        req.body?.mockInvalidContent === true;
+
+      if (simulateTimeout) {
+        if (reservationId) {
+          const currentResId = reservationId;
+          const lateMs = Number(
+            req.headers['x-mock-late-response-ms'] ||
+            req.query.mockLateResponseMs ||
+            req.body?.mockLateResponseMs ||
+            0
+          );
+          const lateOutcome = String(
+            req.headers['x-mock-late-outcome'] ||
+            req.query.mockLateOutcome ||
+            req.body?.mockLateOutcome ||
+            'CONFIRMED'
+          );
+          const timeoutDelayMs = Number(
+            req.headers['x-mock-timeout-delay-ms'] ||
+            req.query.mockTimeoutDelayMs ||
+            req.body?.mockTimeoutDelayMs ||
+            0
+          );
+          const rawLateMeasuredCost =
+            req.headers['x-mock-late-measured-cost-cents'] ??
+            req.query.mockLateMeasuredCostCents ??
+            req.body?.mockLateMeasuredCostCents;
+          const lateMeasuredCostCents =
+            rawLateMeasuredCost !== undefined && rawLateMeasuredCost !== ''
+              ? Number(rawLateMeasuredCost)
+              : undefined;
+
+          if (lateMs > 0) {
+            setTimeout(async () => {
+              await handleLateProviderResponse({
+                reservationId: currentResId,
+                outcome: lateOutcome as any,
+                measuredCostCents: lateMeasuredCostCents,
+                reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+                resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+                resolvedByName: 'Provedor Simulado (Retorno Tardio Automático)',
+              });
+            }, lateMs);
+          }
+
+          // Gravação condicional do timeout: passa de RESERVED para PENDING_CONFIRMATION apenas se a reserva ainda estiver aberta
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: 'TIMEOUT_AFTER_DISPATCH',
+            delayMs: timeoutDelayMs,
+          });
+        }
+        res.status(504).json({
+          error:
+            'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          status: 'PENDING_CONFIRMATION',
+          reservationId,
+        });
+        return;
+      }
+
+      // O provedor respondeu à chamada!
+      providerResponded = true;
+
+      if (reservationId) {
+        await confirmApiReservation(reservationId, {
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
+
+      if (simulateInvalidContent) {
+        // Se o provedor respondeu e houve erro ao ler o conteúdo ou salvar o cache, preserve a unidade consumida
+        return res.status(200).json({
+          cityInfo: {
+            name: sanitizedCity,
+            warning: 'Resposta do provedor recebida, porém com formatação degradada.',
+          },
+          events: [],
+          source: 'EXTERNAL',
+          cached: false,
+          preservedUnit: true,
+          reservationId,
+        });
+      }
+
       const mockResult = {
         cityInfo: {
           name: sanitizedCity,
@@ -198,8 +363,17 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           }
         ]
       };
-      res.json(mockResult);
-      return;
+
+      cityScoutCache.set(lowerCity, {
+        data: mockResult,
+        expiresAt: Date.now() + 24 * 3600 * 1000,
+      });
+
+      return res.json({
+        ...mockResult,
+        source: 'EXTERNAL',
+        cached: false,
+      });
     }
 
     const currentDate = new Date();
@@ -245,11 +419,13 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }`.slice(0, 4000);
 
     let text = '';
-    let aiSource = '';
-    const callStart = Date.now();
+    providerDispatched = true;
+    let hasTimedOut = false;
+    const currentResId = reservationId;
+
     try {
       const response: any = await executeWithTimeout(async (signal) => {
-        return await activeAiClient!.models.generateContent({
+        const genPromise = activeAiClient!.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: prompt,
           config: { 
@@ -257,42 +433,60 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
             tools: [{ googleSearch: {} }] 
           }
         });
+
+        // Liga o retorno tardio do provedor à confirmação automática da reserva usando a mesma rotina unificada:
+        genPromise.then(async () => {
+          if (hasTimedOut && currentResId) {
+            await handleLateProviderResponse({
+              reservationId: currentResId,
+              outcome: 'CONFIRMED',
+              reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+              resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+              resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
+            });
+          }
+        }).catch((lateErr) => {
+          // Quando o consumo continuar incerto, mantenha a reserva pendente para revisão!
+          console.warn('[API-QUOTA] Resposta tardia com erro; consumo incerto. Mantendo PENDING_CONFIRMATION:', lateErr?.message);
+        });
+
+        return await genPromise;
       }, 25000);
 
+      // O provedor respondeu com sucesso
+      providerResponded = true;
       text = (response.text || '').slice(0, 50000);
-      aiSource = `${providerName} (Search Grounding)`;
 
-      // Registra consumo de API sem dados pessoais de prompts
-      if (companyId) {
-        await recordApiUsage({
-          companyId,
-          integrationId: resolvedIntegrationId,
-          category: 'AI_RESEARCH',
-          provider: providerName,
-          operation: 'SEARCH_EVENTS',
-          unitsUsed: 1,
-          estimatedCostCents: 2, // ~R$ 0,02 estimado
+      if (reservationId) {
+        await confirmApiReservation(reservationId, {
           status: 'SUCCESS',
           latencyMs: Date.now() - callStart,
         });
       }
     } catch (err: any) {
-      if (companyId) {
-        await recordApiUsage({
-          companyId,
-          integrationId: resolvedIntegrationId,
-          category: 'AI_RESEARCH',
-          provider: providerName,
-          operation: 'SEARCH_EVENTS',
-          unitsUsed: 1,
-          status: 'FAILED',
-          latencyMs: Date.now() - callStart,
-          errorMessage: err.message,
-        });
+      hasTimedOut = true;
+      const isTimeout = err.name === 'AbortError' || err.message === 'AI_TIMEOUT' || err.code === 'ETIMEDOUT';
+      if (reservationId && !providerResponded) {
+        if (isTimeout || providerDispatched) {
+          // Se a chamada já foi enviada e terminar em timeout ou perda de conexão, deixa o consumo pendente de confirmação
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: 'TIMEOUT_AFTER_DISPATCH',
+          });
+        } else {
+          // Libera a reserva quando comprovado que a operação não consumiu cota
+          await releaseApiReservation(reservationId, {
+            reason: err.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
+          });
+        }
       }
 
-      if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
-        res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
+      if (isTimeout) {
+        res.status(504).json({
+          error: 'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          status: 'PENDING_CONFIRMATION',
+          reservationId,
+        });
         return;
       }
       if (err.status === 429 || (err.message && err.message.includes('429'))) {
@@ -307,7 +501,6 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     try {
       result = JSON.parse(cleanJson);
       if (result && Array.isArray(result.events)) {
-        // Limita a quantidade máxima para evitar estouro de memória
         result.events = result.events.slice(0, 30);
         for (let ev of result.events) {
           ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
@@ -316,15 +509,54 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         result = { cityInfo: { name: sanitizedCity }, events: [] };
       }
     } catch (parseError) {
-      result = { cityInfo: { name: sanitizedCity }, events: [] };
+      // Se o provedor respondeu mas o JSON é malformado, preserva a unidade consumida
+      result = { cityInfo: { name: sanitizedCity, warning: 'Resposta do provedor com formatação degradada' }, events: [] };
     }
 
-    if (result.cityInfo) {
-      result.cityInfo.aiSource = aiSource;
+    try {
+      cityScoutCache.set(lowerCity, {
+        data: result,
+        expiresAt: Date.now() + 24 * 3600 * 1000,
+      });
+    } catch (cacheErr: any) {
+      console.warn('[EVENTS] Erro ao gravar cache do Scout:', cacheErr?.message);
     }
 
-    res.json(result);
+    res.json({
+      ...result,
+      source: 'EXTERNAL',
+      cached: false,
+    });
   } catch (error: any) {
+    if (reservationId) {
+      if (!providerResponded) {
+        if (providerDispatched) {
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: error?.message || 'DISPATCHED_UNKNOWN_ERROR',
+          });
+        } else {
+          await releaseApiReservation(reservationId, {
+            reason: error?.message || 'PRE_DISPATCH_FAILURE',
+          });
+        }
+      } else {
+        // Se o provedor respondeu e houve erro ao ler o conteúdo ou salvar o cache, preserve a unidade consumida
+        await confirmApiReservation(reservationId, {
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+          errorMessage: `DOWNSTREAM_ERROR: ${error?.message || error}`,
+        });
+        return res.status(200).json({
+          cityInfo: { name: sanitizedCity, warning: 'Operação concluída com degradação' },
+          events: [],
+          source: 'EXTERNAL',
+          cached: false,
+          preservedUnit: true,
+          reservationId,
+        });
+      }
+    }
     console.error('Erro na IA de Eventos:', error?.message || error);
     res.status(503).json({ 
       error: 'Servidor das IAs sobrecarregado ou indisponível. Aguarde um momento e tente novamente.' 
@@ -334,6 +566,11 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
 // GET /api/events/state-radar
 router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Response) => {
+  const callStart = Date.now();
+  let reservationId: string | undefined;
+  let providerDispatched = false;
+  let providerResponded = false;
+
   try {
     const { state } = req.query;
     const companyId = req.user?.companyId;
@@ -349,10 +586,45 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     }
 
     const stateUF = state.toUpperCase().trim().slice(0, 2);
+    const environment = String(
+      req.headers['x-environment'] || req.query.environment || 'PRODUCTION'
+    ).toUpperCase();
 
     let resultData: any = null;
     const forceRefresh = req.query.force === 'true';
 
+    // Resolução dinâmica de integração por empresa
+    let resolvedIntegrationId: string | undefined = undefined;
+    let providerName = 'GEMINI';
+    let activeAiClient: GoogleGenAI | null = null;
+
+    if (companyId) {
+      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
+      if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
+        if (!isExternalServicesDisabled()) {
+          res.status(403).json({
+            error: 'Pesquisa de radar por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
+          });
+          return;
+        }
+      } else {
+        providerName = resolved.provider;
+        resolvedIntegrationId = resolved.integration?.id;
+        if (providerName === 'GROK') {
+          res.status(501).json({
+            error: 'Provedor Grok (xAI) configurado, mas o radar de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
+          });
+          return;
+        }
+        activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+      }
+    } else if (req.user?.role === 'SUPER_ADMIN') {
+      if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
+        activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      }
+    }
+
+    // ── 1. Verificação de Cache do Radar Estadual ────────────────────────────
     if (!forceRefresh) {
       const cached = await prisma.stateRadarCache.findUnique({
         where: { state: stateUF }
@@ -365,98 +637,249 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       }
     }
 
-    if (!resultData) {
-      let activeAiClient: GoogleGenAI | null = null;
+    if (resultData) {
       if (companyId) {
-        const budgetCheck = await checkCompanyApiBudget(companyId, 'AI_RESEARCH');
-        if (!budgetCheck.withinBudget) {
-          res.status(429).json({
-            error: 'Limite de orçamento mensal interno de IA atingido para esta empresa.',
-            spentCents: budgetCheck.currentSpentCents,
-            limitCents: budgetCheck.limitCents,
-          });
-          return;
-        }
+        await recordApiUsage({
+          companyId,
+          integrationId: resolvedIntegrationId,
+          category: 'AI_RESEARCH',
+          provider: providerName,
+          environment,
+          operation: 'STATE_RADAR_CACHE',
+          unitsUsed: 1,
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
+      return res.json({
+        ...resultData,
+        source: 'CACHE',
+        cached: true,
+      });
+    }
 
-        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH');
-        if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
-          if (!isExternalServicesDisabled()) {
-            res.status(403).json({
-              error: 'Pesquisa de radar por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
-            });
-            return;
+    // ── 2. Reserva atômica de cota antes de chamar o provedor externo ─────────
+    if (companyId) {
+      const reservation = await reserveApiQuota({
+        companyId,
+        category: 'AI_RESEARCH',
+        provider: providerName,
+        environment,
+        integrationId: resolvedIntegrationId,
+        operation: 'STATE_RADAR_EXTERNAL',
+        unitsRequested: 1,
+        date: new Date(),
+      });
+
+      if (!reservation.allowed) {
+        return res.status(429).json({
+          error: reservation.message,
+          limitType: reservation.limitType,
+          currentUnits: reservation.currentUnits,
+          unitsLimit: reservation.unitsLimit,
+          currentSpentCents: reservation.currentSpentCents,
+          budgetLimitCents: reservation.budgetLimitCents,
+        });
+      }
+      reservationId = reservation.reservationId;
+    }
+
+    let providerDispatched = false;
+    let providerResponded = false;
+
+    if (isExternalServicesDisabled() || !activeAiClient) {
+      providerDispatched = true;
+
+      const simulateTimeout =
+        req.headers['x-mock-simulated-timeout'] === 'true' ||
+        req.query.mockTimeout === 'true' ||
+        req.body?.mockTimeout === true;
+
+      const simulateInvalidContent =
+        req.headers['x-mock-invalid-content'] === 'true' ||
+        req.query.mockInvalidContent === 'true' ||
+        req.body?.mockInvalidContent === true;
+
+      if (simulateTimeout) {
+        if (reservationId) {
+          const currentResId = reservationId;
+          const lateMs = Number(
+            req.headers['x-mock-late-response-ms'] ||
+            req.query.mockLateResponseMs ||
+            req.body?.mockLateResponseMs ||
+            0
+          );
+          const lateOutcome = String(
+            req.headers['x-mock-late-outcome'] ||
+            req.query.mockLateOutcome ||
+            req.body?.mockLateOutcome ||
+            'CONFIRMED'
+          );
+          const timeoutDelayMs = Number(
+            req.headers['x-mock-timeout-delay-ms'] ||
+            req.query.mockTimeoutDelayMs ||
+            req.body?.mockTimeoutDelayMs ||
+            0
+          );
+          const rawLateMeasuredCost =
+            req.headers['x-mock-late-measured-cost-cents'] ??
+            req.query.mockLateMeasuredCostCents ??
+            req.body?.mockLateMeasuredCostCents;
+          const lateMeasuredCostCents =
+            rawLateMeasuredCost !== undefined && rawLateMeasuredCost !== ''
+              ? Number(rawLateMeasuredCost)
+              : undefined;
+
+          if (lateMs > 0) {
+            setTimeout(async () => {
+              await handleLateProviderResponse({
+                reservationId: currentResId,
+                outcome: lateOutcome as any,
+                measuredCostCents: lateMeasuredCostCents,
+                reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+                resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+                resolvedByName: 'Provedor Simulado (Retorno Tardio Automático)',
+              });
+            }, lateMs);
           }
-        } else {
-          if (resolved.provider === 'GROK') {
-            res.status(501).json({
-              error: 'Provedor Grok (xAI) configurado, mas o radar de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
-            });
-            return;
+
+          // Gravação condicional do timeout: passa de RESERVED para PENDING_CONFIRMATION apenas se a reserva ainda estiver aberta
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: 'TIMEOUT_AFTER_DISPATCH',
+            delayMs: timeoutDelayMs,
+          });
+        }
+        if (!forceRefresh) {
+          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+          if (fallbackCache) {
+            return res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
           }
-          activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
         }
-      } else if (req.user?.role === 'SUPER_ADMIN') {
-        if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
-          activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        }
+        return res.status(504).json({
+          error:
+            'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          status: 'PENDING_CONFIRMATION',
+          reservationId,
+        });
       }
 
-      if (isExternalServicesDisabled() || !activeAiClient) {
-        const mockRadar = {
+      providerResponded = true;
+
+      if (reservationId) {
+        await confirmApiReservation(reservationId, {
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
+
+      if (simulateInvalidContent) {
+        return res.status(200).json({
           state: stateUF,
-          updatedAt: new Date().toISOString(),
-          cities: [
-            {
-              city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
-              eventsCount: 3,
-              events: [
-                {
-                  name: `Festa Regional de ${stateUF}`,
-                  category: 'Festival Cultural',
-                  startDate: '2026-09-15',
-                  endDate: '2026-09-18',
-                  durationDays: 4,
-                  city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
-                  score: 'HIGH'
-                }
-              ]
-            }
-          ]
-        };
-        res.json(mockRadar);
-        return;
+          cities: [],
+          source: 'EXTERNAL',
+          cached: false,
+          preservedUnit: true,
+          reservationId,
+        });
       }
 
-      const currentDate = new Date();
-      const targetDate = new Date();
-      targetDate.setDate(currentDate.getDate());
-      const maxDate = new Date();
-      maxDate.setDate(currentDate.getDate() + 380);
-      
-      const currentDateStr = currentDate.toISOString().split('T')[0];
-      const targetDateStr = targetDate.toISOString().split('T')[0];
-      const maxDateStr = maxDate.toISOString().split('T')[0];
+      const mockRadar = {
+        state: stateUF,
+        updatedAt: new Date().toISOString(),
+        cities: [
+          {
+            city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
+            eventsCount: 3,
+            events: [
+              {
+                name: `Festa Regional de ${stateUF}`,
+                category: 'Festival Cultural',
+                startDate: '2026-09-15',
+                endDate: '2026-09-18',
+                durationDays: 4,
+                city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
+                score: 'HIGH'
+              }
+            ]
+          }
+        ]
+      };
 
-      const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos entre ${targetDateStr} e ${maxDateStr}.
-      Retorne APENAS JSON válido com o radar de cidades e eventos.`.slice(0, 4000);
+      await prisma.stateRadarCache.upsert({
+        where: { state: stateUF },
+        update: { data: mockRadar, updatedAt: new Date() },
+        create: { state: stateUF, data: mockRadar }
+      });
 
+      return res.json({
+        ...mockRadar,
+        source: 'EXTERNAL',
+        cached: false,
+      });
+    }
+
+    const currentDate = new Date();
+    const targetDate = new Date();
+    targetDate.setDate(currentDate.getDate());
+    const maxDate = new Date();
+    maxDate.setDate(currentDate.getDate() + 380);
+    
+    const currentDateStr = currentDate.toISOString().split('T')[0];
+    const targetDateStr = targetDate.toISOString().split('T')[0];
+    const maxDateStr = maxDate.toISOString().split('T')[0];
+
+    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos entre ${targetDateStr} e ${maxDateStr}.
+    Retorne APENAS JSON válido com o radar de cidades e eventos.`.slice(0, 4000);
+
+    providerDispatched = true;
+    let hasTimedOut = false;
+    const currentResId = reservationId;
+
+    try {
+      const response: any = await executeWithTimeout(async (signal) => {
+        const genPromise = activeAiClient!.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+          config: { 
+            temperature: 0.1,
+            tools: [{ googleSearch: {} }] 
+          }
+        });
+
+        // Liga o retorno tardio do provedor à confirmação automática da reserva usando a mesma rotina unificada:
+        genPromise.then(async () => {
+          if (hasTimedOut && currentResId) {
+            await handleLateProviderResponse({
+              reservationId: currentResId,
+              outcome: 'CONFIRMED',
+              reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+              resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+              resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
+            });
+          }
+        }).catch((lateErr) => {
+          console.warn('[API-QUOTA] Resposta tardia com erro no Radar; consumo incerto:', lateErr?.message);
+        });
+
+        return await genPromise;
+      }, 25000);
+
+      providerResponded = true;
+
+      // Confirme a unidade assim que o provedor responder com sucesso, antes de ler o conteúdo ou salvar o cache
+      if (reservationId) {
+        await confirmApiReservation(reservationId, {
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+        });
+      }
+
+      const text = (response.text || '').slice(0, 50000);
       try {
-        const response: any = await executeWithTimeout(async (signal) => {
-          return await activeAiClient!.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: { 
-              temperature: 0.1,
-              tools: [{ googleSearch: {} }] 
-            }
-          });
-        }, 25000);
-
-        const text = (response.text || '').slice(0, 50000);
         const cleanJson = extractCleanJson(text);
         resultData = JSON.parse(cleanJson);
 
-        // Salva cache apenas se o payload for estruturalmente válido e contiver dados reais
         if (resultData && typeof resultData === 'object' && (Array.isArray(resultData.cities) || Array.isArray(resultData.events))) {
           await prisma.stateRadarCache.upsert({
             where: { state: stateUF },
@@ -464,29 +887,75 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
             create: { state: stateUF, data: resultData }
           });
         }
-      } catch (err: any) {
-        if (err.name === 'AbortError' || err.message === 'AI_TIMEOUT') {
-          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
-          if (fallbackCache) {
-            res.json(fallbackCache.data);
-            return;
-          }
-          res.status(504).json({ error: 'Tempo limite excedido na pesquisa de IA (25s).' });
-          return;
+      } catch (downstreamErr) {
+        // Falha ao ler conteúdo ou salvar cache downstream não anula consumo confirmado
+        resultData = { state: stateUF, cities: [], warning: 'Falha downstream ao processar resposta do provedor' };
+      }
+    } catch (err: any) {
+      hasTimedOut = true;
+      const isTimeout = err.name === 'AbortError' || err.message === 'AI_TIMEOUT' || err.code === 'ETIMEDOUT';
+      if (reservationId && !providerResponded) {
+        if (isTimeout || providerDispatched) {
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: 'TIMEOUT_AFTER_DISPATCH',
+          });
+        } else {
+          await releaseApiReservation(reservationId, {
+            reason: err.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
+          });
         }
-        // Não substituir cache bom existente por erro
+      }
+
+      if (isTimeout) {
         const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
         if (fallbackCache) {
-          res.json(fallbackCache.data);
+          res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
           return;
         }
-        res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });
+        res.status(504).json({
+          error: 'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          status: 'PENDING_CONFIRMATION',
+          reservationId,
+        });
         return;
       }
+      const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+      if (fallbackCache) {
+        res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
+        return;
+      }
+      res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });
+      return;
     }
 
-    res.json(resultData || { state: stateUF, cities: [] });
+    res.json({
+      ...((resultData as Record<string, any>) || { state: stateUF, cities: [] }),
+      source: 'EXTERNAL',
+      cached: false,
+    });
   } catch (error: any) {
+    if (reservationId) {
+      if (!providerResponded) {
+        if (providerDispatched) {
+          await markReservationPendingConfirmation(reservationId, {
+            latencyMs: Date.now() - callStart,
+            reason: error?.message || 'DISPATCHED_UNKNOWN_ERROR',
+          });
+        } else {
+          await releaseApiReservation(reservationId, {
+            reason: error?.message || 'PRE_DISPATCH_FAILURE',
+          });
+        }
+      } else {
+        // Se o provedor respondeu, preserve a unidade consumida!
+        await confirmApiReservation(reservationId, {
+          status: 'SUCCESS',
+          latencyMs: Date.now() - callStart,
+          errorMessage: `DOWNSTREAM_ERROR: ${error?.message || error}`,
+        });
+      }
+    }
     console.error('Erro no radar estadual:', error?.message || error);
     res.status(500).json({ error: 'Erro interno ao processar radar de eventos' });
   }
@@ -794,6 +1263,52 @@ router.patch('/:id/approve-roi', authenticateToken, async (req: AuthRequest, res
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Erro ao processar aprovação de ROI' });
+  }
+});
+
+// POST /api/events/reservations/:id/resolve
+// Trata resposta tardia de provedor externo para resolver status pendente (PENDING_CONFIRMATION ou RESERVED)
+router.post('/reservations/:id/resolve', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
+
+    const { id } = req.params;
+    const { outcome, measuredCostCents, evidence, reason, simulateAuditFailure } = req.body || {};
+
+    if (!outcome || !['CONFIRMED', 'RELEASED'].includes(outcome)) {
+      res.status(400).json({ error: 'Parâmetro outcome deve ser "CONFIRMED" ou "RELEASED".' });
+      return;
+    }
+
+    const reservation = await prisma.apiUsageRecord.findUnique({
+      where: { id: id as string },
+    });
+    if (!reservation) {
+      res.status(404).json({ error: 'Reserva não encontrada.' });
+      return;
+    }
+
+    if (auth.role !== 'SUPER_ADMIN' && auth.companyId !== reservation.companyId) {
+      res.status(403).json({ error: 'Acesso negado à reserva desta empresa.' });
+      return;
+    }
+
+    const result = await resolvePendingReservation({
+      reservationId: id as string,
+      outcome,
+      measuredCostCents,
+      evidence,
+      reason,
+      resolvedByUserId: auth.userId,
+      resolvedByName: auth.userName,
+      simulateAuditFailure: simulateAuditFailure || req.headers['x-mock-simulate-audit-failure'] === 'true',
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    const status = err.statusCode || err.status || 400;
+    res.status(status).json({ error: err.message || 'Erro ao resolver reserva pendente.', code: err.code });
   }
 });
 

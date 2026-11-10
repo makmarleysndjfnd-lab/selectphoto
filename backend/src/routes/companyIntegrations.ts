@@ -16,6 +16,8 @@ import {
   testMetaWhatsAppConnection,
 } from '../services/integrationAdapters';
 import { isProductionSafetyLocked } from '../services/asaasService';
+import { getCompanyEnrichedIntegrations } from '../services/integrationResolver';
+import { resolvePendingReservation } from '../services/apiQuotaService';
 
 const router = Router();
 
@@ -27,7 +29,7 @@ export const COMPANY_SELF_SERVICE_CATALOG = [
     label: 'Inteligência Artificial (Pesquisa Comercial de Eventos)',
     supportedProviders: ['GEMINI'],
     supportedScopes: ['EXCLUSIVE_OWN_KEY'],
-    environments: ['PRODUCTION'],
+    environments: ['SANDBOX', 'PRODUCTION'],
     costPayer: 'COMPANY',
     description:
       'Chave própria do Google Gemini para pesquisa inteligente e radar de eventos em cidades de atuação.',
@@ -66,14 +68,14 @@ export const COMPANY_SHARED_SERVICES = [
   },
 ];
 
-const ALLOWED_ADMIN_ROLES = ['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
+export const ALLOWED_ADMIN_ROLES = ['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'];
 
 /**
  * Validação centralizada de autorização administrativa e contexto de empresa.
  * Vendedores, fotógrafos e demais papéis recebem 403.
  * SUPER_ADMIN requer a capacidade INTEGRATION_CONFIG para gerenciar integrações.
  */
-async function authorizeCompanyAdmin(
+export async function authorizeCompanyAdmin(
   req: AuthRequest,
   res: Response
 ): Promise<{ companyId: string; userId: string; userName: string; role: string } | null> {
@@ -144,7 +146,8 @@ function extractWebhookSummary(metadata: any): {
 
 /**
  * GET /api/company/integrations
- * Lista integrações configuradas da empresa autenticada e o catálogo de provedores disponíveis.
+ * Lista integrações configuradas da empresa autenticada, enriquecidas com métricas reais de consumo,
+ * situação operacional comprovada, limites do Lumora e cotas do provedor.
  * Restrito exclusivamente a administradores autorizados.
  */
 router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -153,34 +156,9 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     if (!auth) return;
 
     const { companyId } = auth;
+    const enrichedData = await getCompanyEnrichedIntegrations(companyId);
 
-    const integrations = await prisma.companyIntegration.findMany({
-      where: { companyId },
-      orderBy: [{ category: 'asc' }, { environment: 'asc' }],
-      select: {
-        id: true,
-        companyId: true,
-        category: true,
-        provider: true,
-        scope: true,
-        status: true,
-        environment: true,
-        accountName: true,
-        costPayer: true,
-        changeApplicability: true,
-        credentialSource: true,
-        secretMasked: true,
-        configMetadata: true,
-        version: true,
-        lastValidatedAt: true,
-        lastValidationStatus: true,
-        lastValidationError: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    const sanitizedIntegrations = integrations.map((i) => {
+    const sanitizedIntegrations = enrichedData.integrations.map((i: any) => {
       const wh = extractWebhookSummary(i.configMetadata);
       return {
         ...i,
@@ -192,9 +170,12 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
     const prodSafety = await isProductionSafetyLocked(companyId);
     res.json({
+      period: enrichedData.period,
       integrations: sanitizedIntegrations,
       catalog: COMPANY_SELF_SERVICE_CATALOG,
-      sharedServices: COMPANY_SHARED_SERVICES,
+      sharedServices: enrichedData.sharedServices,
+      unlinkedUsage: enrichedData.unlinkedUsage,
+      overview: enrichedData.overview,
       globalLiveGateLocked: prodSafety.locked,
     });
   } catch (err: any) {
@@ -205,7 +186,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
 
 /**
  * POST /api/company/integrations
- * Cadastra ou substitui uma credencial de integração para a própria empresa.
+ * Cadastra ou substitui uma credencial de integração ou ajusta limites para a própria empresa.
  * Exige confirmação de senha do administrador autenticado e persiste auditoria transacional.
  */
 router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -224,10 +205,12 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       accountName,
       passwordConfirmation,
       removeWebhookToken,
+      monthlyBudgetLimitCents,
+      monthlyUnitsLimit,
     } = req.body;
 
-    if (!category || !provider || !secret || typeof secret !== 'string' || !secret.trim()) {
-      res.status(400).json({ error: 'Campos obrigatórios: category, provider e secret.' });
+    if (!category || !provider) {
+      res.status(400).json({ error: 'Campos obrigatórios: category e provider.' });
       return;
     }
 
@@ -265,15 +248,6 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Impor regras de isolamento no servidor
-    const scope = catalogItem.supportedScopes[0]; // EXCLUSIVE_OWN_KEY ou COMPANY_EXCLUSIVE
-    const costPayer = 'COMPANY';
-    const credentialSource = 'VAULT_ENCRYPTED';
-
-    // Criptografar segredo no cofre AES-256-GCM
-    const encrypted = encryptSecret(secret.trim());
-    const secretMasked = maskSecret(secret.trim());
-
     // Verificar se já existe integração para esta empresa / categoria / ambiente
     const existing = await prisma.companyIntegration.findUnique({
       where: {
@@ -285,12 +259,53 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       },
     });
 
+    // Se é criação nova, secret é obrigatório
+    if (!existing && (!secret || typeof secret !== 'string' || !secret.trim())) {
+      res.status(400).json({ error: 'Chave / secret é obrigatório para cadastrar uma nova integração.' });
+      return;
+    }
+
+    // Parse de limites
+    const parsedBudgetCents =
+      monthlyBudgetLimitCents !== undefined
+        ? (monthlyBudgetLimitCents !== null && String(monthlyBudgetLimitCents).trim() !== ''
+            ? Number(monthlyBudgetLimitCents)
+            : null)
+        : existing?.monthlyBudgetLimitCents ?? null;
+
+    const parsedUnitsLimit =
+      monthlyUnitsLimit !== undefined
+        ? (monthlyUnitsLimit !== null && String(monthlyUnitsLimit).trim() !== ''
+            ? Number(monthlyUnitsLimit)
+            : null)
+        : existing?.monthlyUnitsLimit ?? null;
+
+    const parsedAllowPaidOverage =
+      req.body.allowPaidOverage !== undefined
+        ? Boolean(req.body.allowPaidOverage)
+        : existing?.allowPaidOverage ?? false;
+
+    const parsedAuthorizedOverageUnits =
+      req.body.authorizedOverageUnits !== undefined
+        ? (req.body.authorizedOverageUnits !== null && String(req.body.authorizedOverageUnits).trim() !== ''
+            ? Number(req.body.authorizedOverageUnits)
+            : null)
+        : existing?.authorizedOverageUnits ?? null;
+
+    // Impor regras de isolamento no servidor
+    const scope = catalogItem.supportedScopes[0]; // EXCLUSIVE_OWN_KEY ou COMPANY_EXCLUSIVE
+    const costPayer = 'COMPANY';
+    const credentialSource = 'VAULT_ENCRYPTED';
+
+    const hasNewSecret = Boolean(secret && typeof secret === 'string' && secret.trim());
+    const encrypted = hasNewSecret ? encryptSecret(secret.trim()) : null;
+    const secretMasked = hasNewSecret ? maskSecret(secret.trim()) : existing?.secretMasked || null;
+
     // Metadados seguros e tratamento de webhook:
-    // Se não fornecido novo token e não solicitado remoção, PRESERVA webhook existente
     const configMetadata: Record<string, any> = {
-      accountName: accountName ? String(accountName).trim() : existing?.accountName || undefined,
+      accountName: accountName !== undefined ? (accountName ? String(accountName).trim() : undefined) : existing?.accountName || undefined,
       registeredByUserId: currentUserId,
-      registeredAt: new Date().toISOString(),
+      registeredAt: existing ? (existing.configMetadata as any)?.registeredAt || new Date().toISOString() : new Date().toISOString(),
       financialLiveAuthorized: false,
     };
 
@@ -327,25 +342,34 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const { saved } = await prisma.$transaction(async (tx) => {
       let record;
       if (existing) {
+        const updateData: any = {
+          provider,
+          scope,
+          costPayer,
+          status: 'ACTIVE',
+          accountName: accountName !== undefined ? (accountName ? String(accountName).trim() : null) : existing.accountName,
+          configMetadata,
+          version: existing.version + 1,
+          updatedByUserId: currentUserId,
+          monthlyBudgetLimitCents: parsedBudgetCents,
+          monthlyUnitsLimit: parsedUnitsLimit,
+          allowPaidOverage: parsedAllowPaidOverage,
+          authorizedOverageUnits: parsedAuthorizedOverageUnits,
+        };
+
+        if (hasNewSecret && encrypted) {
+          updateData.credentialSource = credentialSource;
+          updateData.encryptedSecret = encrypted.encryptedSecret;
+          updateData.secretIv = encrypted.secretIv;
+          updateData.secretTag = encrypted.secretTag;
+          updateData.secretMasked = secretMasked;
+          updateData.lastValidationStatus = null;
+          updateData.lastValidationError = null;
+        }
+
         record = await tx.companyIntegration.update({
           where: { id: existing.id },
-          data: {
-            provider,
-            scope,
-            costPayer,
-            credentialSource,
-            encryptedSecret: encrypted.encryptedSecret,
-            secretIv: encrypted.secretIv,
-            secretTag: encrypted.secretTag,
-            secretMasked,
-            status: 'ACTIVE',
-            accountName: accountName ? String(accountName).trim() : existing.accountName,
-            configMetadata,
-            version: existing.version + 1,
-            updatedByUserId: currentUserId,
-            lastValidationStatus: null,
-            lastValidationError: null,
-          },
+          data: updateData,
         });
       } else {
         record = await tx.companyIntegration.create({
@@ -357,15 +381,19 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
             scope,
             costPayer,
             credentialSource,
-            encryptedSecret: encrypted.encryptedSecret,
-            secretIv: encrypted.secretIv,
-            secretTag: encrypted.secretTag,
+            encryptedSecret: encrypted!.encryptedSecret,
+            secretIv: encrypted!.secretIv,
+            secretTag: encrypted!.secretTag,
             secretMasked,
             status: 'ACTIVE',
             accountName: accountName ? String(accountName).trim() : null,
             configMetadata,
             createdByUserId: currentUserId,
             version: 1,
+            monthlyBudgetLimitCents: parsedBudgetCents,
+            monthlyUnitsLimit: parsedUnitsLimit,
+            allowPaidOverage: parsedAllowPaidOverage,
+            authorizedOverageUnits: parsedAuthorizedOverageUnits,
           },
         });
       }
@@ -384,6 +412,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
             scope,
             costPayer,
             version: record.version,
+            monthlyBudgetLimitCents: parsedBudgetCents,
+            monthlyUnitsLimit: parsedUnitsLimit,
+            hasNewSecret,
             hasWebhookToken: Boolean(configMetadata.encryptedWebhookToken),
           }),
           result: 'SUCCESS',
@@ -413,6 +444,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         webhookMasked: whSummary.webhookMasked,
         accountName: saved.accountName,
         version: saved.version,
+        monthlyBudgetLimitCents: saved.monthlyBudgetLimitCents,
+        monthlyUnitsLimit: saved.monthlyUnitsLimit,
         updatedAt: saved.updatedAt,
       },
       liveProtected: (await isProductionSafetyLocked(companyId)).locked,
@@ -422,6 +455,123 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: `Erro ao salvar integração: ${err.message}` });
   }
 });
+
+/**
+ * PATCH / PUT /api/company/integrations/:id/limits
+ * Atualiza exclusivamente limites de requisições, orçamento em reais e autorização de excedente.
+ */
+const updateIntegrationLimitsHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
+
+    const { companyId, userId: currentUserId, userName: currentUserName } = auth;
+    const id = String(req.params.id);
+    const { monthlyBudgetLimitCents, monthlyUnitsLimit, passwordConfirmation } = req.body;
+
+    if (!passwordConfirmation || typeof passwordConfirmation !== 'string' || !passwordConfirmation.trim()) {
+      res.status(401).json({ error: 'Senha de confirmação do administrador é obrigatória.' });
+      return;
+    }
+
+    const userRecord = await prisma.user.findUnique({
+      where: { id: currentUserId },
+      select: { password: true },
+    });
+    if (!userRecord || !userRecord.password || !bcrypt.compareSync(passwordConfirmation.trim(), userRecord.password)) {
+      res.status(401).json({ error: 'Senha de confirmação inválida.' });
+      return;
+    }
+
+    const existing = await prisma.companyIntegration.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Integração não encontrada para esta empresa.' });
+      return;
+    }
+
+    const parsedBudgetCents =
+      monthlyBudgetLimitCents !== undefined
+        ? (monthlyBudgetLimitCents !== null && String(monthlyBudgetLimitCents).trim() !== ''
+            ? Number(monthlyBudgetLimitCents)
+            : null)
+        : existing.monthlyBudgetLimitCents;
+
+    const parsedUnitsLimit =
+      monthlyUnitsLimit !== undefined
+        ? (monthlyUnitsLimit !== null && String(monthlyUnitsLimit).trim() !== ''
+            ? Number(monthlyUnitsLimit)
+            : null)
+        : existing.monthlyUnitsLimit;
+
+    const parsedAllowPaidOverage =
+      req.body.allowPaidOverage !== undefined
+        ? Boolean(req.body.allowPaidOverage)
+        : existing.allowPaidOverage;
+
+    const parsedAuthorizedOverageUnits =
+      req.body.authorizedOverageUnits !== undefined
+        ? (req.body.authorizedOverageUnits !== null && String(req.body.authorizedOverageUnits).trim() !== ''
+            ? Number(req.body.authorizedOverageUnits)
+            : null)
+        : existing.authorizedOverageUnits;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const rec = await tx.companyIntegration.update({
+        where: { id: existing.id },
+        data: {
+          monthlyBudgetLimitCents: parsedBudgetCents,
+          monthlyUnitsLimit: parsedUnitsLimit,
+          allowPaidOverage: parsedAllowPaidOverage,
+          authorizedOverageUnits: parsedAuthorizedOverageUnits,
+          updatedByUserId: currentUserId,
+          version: existing.version + 1,
+        },
+      });
+
+      await tx.integrationAuditEvent.create({
+        data: {
+          companyId,
+          integrationId: rec.id,
+          action: 'COMPANY_INTEGRATION_LIMITS_UPDATE',
+          authorUserId: currentUserId,
+          authorName: currentUserName,
+          details: JSON.stringify({
+            monthlyBudgetLimitCents: parsedBudgetCents,
+            monthlyUnitsLimit: parsedUnitsLimit,
+            allowPaidOverage: parsedAllowPaidOverage,
+            authorizedOverageUnits: parsedAuthorizedOverageUnits,
+            previousBudgetCents: existing.monthlyBudgetLimitCents,
+            previousUnitsLimit: existing.monthlyUnitsLimit,
+            previousAllowPaidOverage: existing.allowPaidOverage,
+            previousAuthorizedOverageUnits: existing.authorizedOverageUnits,
+          }),
+          result: 'SUCCESS',
+          ipAddress: (req.ip || req.socket.remoteAddress || 'unknown').substring(0, 45),
+          userAgent: (req.headers['user-agent'] || 'unknown').substring(0, 255),
+        },
+      });
+
+      return rec;
+    });
+
+    res.json({
+      success: true,
+      message: 'Limites atualizados com sucesso.',
+      monthlyBudgetLimitCents: updated.monthlyBudgetLimitCents,
+      monthlyUnitsLimit: updated.monthlyUnitsLimit,
+      allowPaidOverage: updated.allowPaidOverage,
+      authorizedOverageUnits: updated.authorizedOverageUnits,
+    });
+  } catch (err: any) {
+    console.error('Error updating company integration limits:', err);
+    res.status(500).json({ error: `Erro ao atualizar limites: ${err.message}` });
+  }
+};
+
+router.patch('/:id/limits', authenticateToken, updateIntegrationLimitsHandler);
+router.put('/:id/limits', authenticateToken, updateIntegrationLimitsHandler);
 
 /**
  * DELETE /api/company/integrations/:id
@@ -600,6 +750,54 @@ router.post('/:id/test', authenticateToken, async (req: AuthRequest, res: Respon
   } catch (err: any) {
     console.error('Error testing company integration:', err);
     res.status(500).json({ error: `Erro ao testar integração: ${err.message}` });
+  }
+});
+
+/**
+ * POST /api/company/integrations/reservations/:id/resolve
+ * Trata resposta tardia para resolver status pendente de reserva (PENDING_CONFIRMATION ou RESERVED).
+ */
+router.post('/reservations/:id/resolve', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const auth = await authorizeCompanyAdmin(req, res);
+    if (!auth) return;
+
+    const { id } = req.params;
+    const { outcome, measuredCostCents, evidence, reason, simulateAuditFailure } = req.body || {};
+
+    if (!outcome || !['CONFIRMED', 'RELEASED'].includes(outcome)) {
+      res.status(400).json({ error: 'Parâmetro outcome deve ser "CONFIRMED" ou "RELEASED".' });
+      return;
+    }
+
+    const reservation = await prisma.apiUsageRecord.findUnique({
+      where: { id: String(id) },
+    });
+    if (!reservation) {
+      res.status(404).json({ error: 'Reserva não encontrada.' });
+      return;
+    }
+
+    if (auth.role !== 'SUPER_ADMIN' && auth.companyId !== reservation.companyId) {
+      res.status(403).json({ error: 'Acesso negado à reserva desta empresa.' });
+      return;
+    }
+
+    const result = await resolvePendingReservation({
+      reservationId: String(id),
+      outcome,
+      measuredCostCents,
+      evidence,
+      reason,
+      resolvedByUserId: auth.userId,
+      resolvedByName: auth.userName,
+      simulateAuditFailure: simulateAuditFailure || req.headers['x-mock-simulate-audit-failure'] === 'true',
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    const status = err.statusCode || err.status || 400;
+    res.status(status).json({ error: err.message || 'Erro ao resolver reserva pendente.', code: err.code });
   }
 });
 

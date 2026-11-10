@@ -23,7 +23,13 @@ import {
   runAsaasSandboxHarness,
   checkHomologationTargetSafety,
 } from '../services/asaasSandboxHarness';
-import { lookupViaCep } from '../services/integrationResolver';
+import {
+  lookupViaCep,
+  recordApiUsage,
+  getCompanyEnrichedIntegrations,
+  getPlatformIntegrationsOverview,
+} from '../services/integrationResolver';
+import { formatCurrencyAmount } from '../services/apiQuotaService';
 import { isProductionSafetyLocked } from '../services/asaasService';
 import { createOrUpdateInternalAlert } from '../services/internalAlertService';
 
@@ -157,23 +163,66 @@ router.get('/catalogs', authenticateToken, async (_req: AuthRequest, res: Respon
 
 /**
  * GET /api/owner/integrations/cep/:cep
- * Consulta ViaCEP com cache centralizado
+ * Consulta ViaCEP com cache centralizado, medição de consumo por empresa e timeout seguro
  */
 router.get('/cep/:cep', authenticateToken, async (req: AuthRequest, res: Response) => {
   const cleanCep = String(req.params.cep || '');
+  const companyId = req.user?.companyId || 'PLATFORM';
+
+  const startTime = Date.now();
   const result = await lookupViaCep(cleanCep);
+  const latencyMs = Date.now() - startTime;
+
+  // Registrar consumo de API vinculado à empresa autenticada
+  await recordApiUsage({
+    companyId,
+    category: 'GEO_LOCATION',
+    provider: 'VIACEP',
+    operation: result.cached ? 'LOOKUP_CEP_CACHE' : 'LOOKUP_CEP_EXTERNAL',
+    unitsUsed: 1,
+    estimatedCostCents: 0,
+    measuredCostCents: 0,
+    status: result.success ? 'SUCCESS' : 'FAILED',
+    latencyMs: result.responseTimeMs ?? latencyMs,
+    errorMessage: result.error,
+  });
+
   if (!result.success) {
-    res.status(400).json({ error: result.error });
+    res.status(400).json({ error: result.error, success: false });
     return;
   }
-  res.json(result);
+  res.json({
+    success: true,
+    data: result.data,
+    cached: result.cached ?? false,
+    source: result.source || (result.cached ? 'CACHE' : 'EXTERNAL'),
+    responseTimeMs: result.responseTimeMs ?? latencyMs,
+  });
 });
 
 // ── Rotas do Painel do Proprietário (Requer INTEGRATION_CONFIG) ───────────────
 
 /**
+ * GET /api/owner/integrations/overview
+ * Retorna visão geral consolidada das APIs de todas as empresas
+ */
+router.get(
+  '/overview',
+  authenticateToken,
+  requireCapability('INTEGRATION_CONFIG'),
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const overview = await getPlatformIntegrationsOverview();
+      res.json(overview);
+    } catch (err: any) {
+      res.status(500).json({ error: `Erro ao buscar visão geral: ${err.message}` });
+    }
+  }
+);
+
+/**
  * GET /api/owner/integrations/companies/:companyId
- * Lista integrações de uma empresa específica
+ * Lista integrações de uma empresa específica enriquecidas com métricas de consumo e limites
  */
 router.get(
   '/companies/:companyId',
@@ -182,36 +231,9 @@ router.get(
   async (req: AuthRequest, res: Response) => {
     try {
       const companyId = String(req.params.companyId);
-      const integrations = await prisma.companyIntegration.findMany({
-        where: { companyId },
-        orderBy: [{ category: 'asc' }, { environment: 'asc' }],
-        select: {
-          id: true,
-          companyId: true,
-          category: true,
-          provider: true,
-          scope: true,
-          status: true,
-          environment: true,
-          accountName: true,
-          costPayer: true,
-          changeApplicability: true,
-          credentialSource: true,
-          secretMasked: true,
-          envVarName: true,
-          configMetadata: true,
-          version: true,
-          monthlyBudgetLimitCents: true,
-          monthlyUnitsLimit: true,
-          lastValidatedAt: true,
-          lastValidationStatus: true,
-          lastValidationError: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+      const enrichedData = await getCompanyEnrichedIntegrations(companyId);
 
-      const sanitizedIntegrations = integrations.map((i) => {
+      const sanitizedIntegrations = enrichedData.integrations.map((i: any) => {
         const wh = extractWebhookSummary(i.configMetadata);
         return {
           ...i,
@@ -221,9 +243,149 @@ router.get(
         };
       });
 
-      res.json({ integrations: sanitizedIntegrations });
+      res.json({
+        period: enrichedData.period,
+        integrations: sanitizedIntegrations,
+        sharedServices: enrichedData.sharedServices,
+        unlinkedUsage: enrichedData.unlinkedUsage,
+        overview: enrichedData.overview,
+      });
     } catch (err: any) {
       res.status(500).json({ error: `Erro ao buscar integrações: ${err.message}` });
+    }
+  }
+);
+
+/**
+ * GET /api/owner/integrations/tariffs/:companyId
+ * Lista todas as tarifas cadastradas para a empresa (ativas e histórico).
+ */
+router.get(
+  '/tariffs/:companyId',
+  authenticateToken,
+  requireCapability('INTEGRATION_CONFIG'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const companyId = String(req.params.companyId);
+      const tariffs = await prisma.companyApiTariff.findMany({
+        where: { companyId },
+        include: {
+          confirmedByUser: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+        orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+      });
+      res.json({ tariffs });
+    } catch (err: any) {
+      res.status(500).json({ error: `Erro ao buscar tarifas: ${err.message}` });
+    }
+  }
+);
+
+/**
+ * POST /api/owner/integrations/tariffs
+ * Cadastra/confirma tarifa negociada para uma empresa, encerrando a vigência da anterior e preservando o histórico.
+ */
+router.post(
+  '/tariffs',
+  authenticateToken,
+  requireCapability('INTEGRATION_CONFIG'),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const {
+        companyId,
+        category,
+        provider,
+        environment = 'ALL',
+        companyIntegrationId,
+        includedUnits = 0,
+        monthlyFeeCents = 0,
+        overageUnitPriceCents = 0,
+        overageUnitType = 'REQUEST',
+        currency = 'BRL',
+        costPayer = 'COMPANY',
+        pricingSource = 'CONFIRMED_CONTRACT',
+        effectiveFrom,
+        notes,
+      } = req.body;
+
+      if (!companyId || !category || !provider) {
+        res.status(400).json({ error: 'companyId, category e provider são obrigatórios.' });
+        return;
+      }
+
+      const company = await prisma.company.findUnique({ where: { id: companyId } });
+      if (!company) {
+        res.status(404).json({ error: 'Empresa não encontrada.' });
+        return;
+      }
+
+      const now = new Date();
+      const effectiveFromDate = effectiveFrom ? new Date(effectiveFrom) : now;
+
+      // ── Gravação da troca de tarifa e histórico em UMA ÚNICA TRANSAÇÃO ─────────
+      const { newTariff } = await prisma.$transaction(async (tx) => {
+        // 1. Encerra vigência de tarifas ativas prévias que iniciaram antes ou na data da nova tarifa
+        await tx.companyApiTariff.updateMany({
+          where: {
+            companyId,
+            category,
+            provider,
+            environment,
+            effectiveTo: null,
+            effectiveFrom: { lte: effectiveFromDate },
+          },
+          data: {
+            effectiveTo: effectiveFromDate,
+          },
+        });
+
+        // 2. Cria nova tarifa ativa com histórico preservado
+        const createdTariff = await tx.companyApiTariff.create({
+          data: {
+            companyId,
+            companyIntegrationId: companyIntegrationId || null,
+            category,
+            provider,
+            environment,
+            includedUnits: Number(includedUnits) || 0,
+            monthlyFeeCents: Number(monthlyFeeCents) || 0,
+            overageUnitPriceCents: Number(overageUnitPriceCents) || 0,
+            overageUnitType: String(overageUnitType || 'REQUEST'),
+            currency: String(currency || 'BRL'),
+            costPayer: String(costPayer || 'COMPANY'),
+            pricingSource: String(pricingSource || 'CONFIRMED_CONTRACT'),
+            effectiveFrom: effectiveFromDate,
+            effectiveTo: null,
+            notes: notes ? String(notes) : null,
+            confirmedByUserId: req.user?.id || null,
+          },
+        });
+
+        // 3. Auditoria
+        await tx.integrationAuditEvent.create({
+          data: {
+            companyId,
+            integrationId: companyIntegrationId || null,
+            action: 'CONFIRM_TARIFF',
+            authorUserId: req.user!.id,
+            authorName: req.user!.name || 'Super Admin',
+            details: `Tarifa confirmada para ${provider} (${environment}): Franquia ${includedUnits} un., Mensalidade ${formatCurrencyAmount(Number(monthlyFeeCents), currency)}, Excedente ${formatCurrencyAmount(Number(overageUnitPriceCents), currency)}/${overageUnitType}, Moeda: ${currency}, Fonte: ${pricingSource}.`,
+          },
+        });
+
+        return { newTariff: createdTariff };
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Tarifa confirmada e registrada com sucesso em transação atômica.',
+        tariff: newTariff,
+      });
+    } catch (err: any) {
+      console.error('Erro ao registrar tarifa de API:', err);
+      res.status(500).json({ error: `Erro ao registrar tarifa: ${err.message}` });
     }
   }
 );

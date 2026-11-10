@@ -32,6 +32,11 @@ class _PainelProprietarioIntegracoesState
 
   List<Map<String, dynamic>> _integracoes = [];
   List<Map<String, dynamic>> _catalogos = [];
+  List<Map<String, dynamic>> _companySharedServices = [];
+  Map<String, dynamic>? _platformOverview;
+  Map<String, dynamic>? _companyOverview;
+  Map<String, dynamic>? _companyUnlinkedUsage;
+  String? _period;
   Map<String, dynamic>? _harnessReport;
   Map<String, dynamic>? _liveReadinessReport;
 
@@ -66,6 +71,11 @@ class _PainelProprietarioIntegracoesState
     try {
       final empresas = await _api.getOwnerCompanies(classification: 'OPERATIONAL');
       final cats = await _api.getIntegrationCatalogs();
+      Map<String, dynamic>? platformOverview;
+      try {
+        platformOverview = await _api.getPlatformIntegrationsOverview();
+      } catch (_) {}
+
       Map<String, dynamic>? selected = _empresaSelecionada;
       if (selected == null && empresas.isNotEmpty) {
         selected = empresas.firstWhere(
@@ -80,6 +90,7 @@ class _PainelProprietarioIntegracoesState
       setState(() {
         _empresas = empresas;
         _catalogos = cats;
+        _platformOverview = platformOverview;
         _empresaSelecionada = selected;
         _liveReadinessReport = readiness;
       });
@@ -96,11 +107,21 @@ class _PainelProprietarioIntegracoesState
 
   Future<void> _carregarIntegracoesEmpresa(String companyId) async {
     try {
-      final list = await _api.getCompanyIntegrations(companyId);
+      final payload = await _api.getCompanyIntegrationsPayload(companyId);
+      final list = (payload['integrations'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
+      final shared = (payload['sharedServices'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
+      final overview = payload['overview'] as Map<String, dynamic>?;
+      final unlinked = payload['unlinkedUsage'] as Map<String, dynamic>?;
+      final period = payload['period']?.toString();
       final readiness = await _api.getAsaasLiveReadinessReport(companyId: companyId);
+
       if (mounted) {
         setState(() {
           _integracoes = list;
+          _companySharedServices = shared;
+          _companyOverview = overview;
+          _companyUnlinkedUsage = unlinked;
+          _period = period;
           _liveReadinessReport = readiness;
         });
       }
@@ -1256,9 +1277,1012 @@ class _PainelProprietarioIntegracoesState
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        _buildPlatformOverviewCard(),
+        _buildCompanyConsumptionSummary(),
+        if (_companyUnlinkedUsage != null && _companyUnlinkedUsage!['hasUnlinkedRecords'] == true)
+          _buildUnlinkedUsageCard(_companyUnlinkedUsage!),
         ..._catalogos.map((cat) => _buildCategoriaCard(cat)),
       ],
     );
+  }
+
+  Widget _buildCompanyConsumptionSummary() {
+    if (_companyOverview == null) return const SizedBox.shrink();
+    final units = _companyOverview!['totalUnitsUsed'] ?? 0;
+    final spent = _companyOverview!['totalSpentFormatted'] ?? r'R$ 0,00';
+    final active = _companyOverview!['activeIntegrationsCount'] ?? 0;
+    final compName = _empresaSelecionada?['name'] ?? 'Empresa';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.4)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Consumo de $compName',
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Requisições no mês: $units un. • Gastos: $spent',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0284C7).withOpacity(0.2),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              '$active Ativas',
+              style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlatformOverviewCard() {
+    final totalComp = _platformOverview?['totalCompanies'] ?? _empresas.length;
+    final totalUnits = _platformOverview?['totalUnitsUsedThisMonth'] ?? 0;
+    final totalSpentFormatted = _platformOverview?['totalSpentFormatted'] ?? r'R$ 0,00';
+    final periodStr = _platformOverview?['period'] ?? _period ?? 'Mês Atual';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.public_rounded, color: Color(0xFF38BDF8), size: 18),
+                  SizedBox(width: 8),
+                  Text(
+                    'Visão Geral das APIs (Plataforma)',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF38BDF8).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  periodStr,
+                  style: const TextStyle(
+                    color: Color(0xFF38BDF8),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Empresas', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$totalComp',
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Requisições Mês', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$totalUnits un.',
+                        style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E293B),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Gasto Total', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                      const SizedBox(height: 2),
+                      Text(
+                        totalSpentFormatted,
+                        style: const TextStyle(color: Color(0xFF10B981), fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRealServiceStatusBadge(String level, String label) {
+    Color bg;
+    Color fg;
+    IconData icon;
+
+    switch (level) {
+      case 'OPERATIONAL':
+        bg = const Color(0xFF10B981).withOpacity(0.2);
+        fg = const Color(0xFF10B981);
+        icon = Icons.verified_rounded;
+        break;
+      case 'TESTED':
+        bg = const Color(0xFF38BDF8).withOpacity(0.2);
+        fg = const Color(0xFF38BDF8);
+        icon = Icons.check_circle_outline_rounded;
+        break;
+      case 'CONFIGURED':
+        bg = Colors.amber.withOpacity(0.2);
+        fg = Colors.amber;
+        icon = Icons.vpn_key_rounded;
+        break;
+      case 'FAILED':
+        bg = Colors.redAccent.withOpacity(0.2);
+        fg = Colors.redAccent;
+        icon = Icons.error_outline_rounded;
+        break;
+      case 'DISABLED':
+      default:
+        bg = Colors.white12;
+        fg = Colors.white60;
+        icon = Icons.pause_circle_outline_rounded;
+        break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fg.withOpacity(0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: fg, size: 12),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(color: fg, fontSize: 10, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConsumptionProgressBar(Map<String, dynamic> consumption) {
+    final unitsUsed = consumption['unitsUsed'] ?? 0;
+    final externalUnitsUsed = consumption['externalUnitsUsed'] ?? unitsUsed;
+    final cachedUnitsUsed = consumption['cachedUnitsUsed'] ?? 0;
+    final usedIncludedUnits = consumption['usedIncludedUnits'] ?? 0;
+    final remainingIncludedUnits = consumption['remainingIncludedUnits'] ?? 0;
+    final overageUnits = consumption['overageUnits'] ?? 0;
+    final overageUnitsUsed = consumption['overageUnitsUsed'] ?? overageUnits;
+    final overageAuthorizedLabel = consumption['overageAuthorizedLabel']?.toString() ?? 'Não autorizado';
+    final overageCostStatusLabel = consumption['overageCostStatusLabel']?.toString() ?? 'Custo ainda não pode ser calculado';
+
+    final unitsPercent = consumption['unitsPercent'];
+    final unitsLimitLabel = consumption['unitsLimitLabel'] ?? 'Sem limite configurado';
+    final hasUnitsLimit = consumption['hasUnitsLimit'] == true;
+
+    final costSpentCents = consumption['costSpentCents'] ?? 0;
+    final costSpentFormatted = consumption['costSpentFormatted']?.toString() ??
+        'R\$ ${(costSpentCents / 100).toStringAsFixed(2).replaceAll('.', ',')}';
+    final budgetLabel = consumption['budgetLabel'] ?? 'Sem limite configurado';
+    final hasBudget = consumption['hasBudget'] == true;
+    final costPercent = consumption['costPercent'];
+    final isEstimated = consumption['isEstimatedCost'] == true;
+
+    final lumoraLimitLabel = consumption['lumoraLimitLabel'] ?? 'Sem limite configurado';
+    final providerQuotaLabel = consumption['providerQuotaLabel'] ?? 'Não informada';
+    final missingNotice = consumption['missingNotice']?.toString();
+    final hasMeasurement = consumption['hasMeasurement'] == true && (unitsUsed > 0 || costSpentCents > 0);
+
+    final double? fillPercent = unitsPercent != null
+        ? (unitsPercent as num).toDouble()
+        : (costPercent != null ? (costPercent as num).toDouble() : null);
+
+    final double clampedFraction = fillPercent != null ? (fillPercent / 100.0).clamp(0.0, 1.0) : 0.0;
+
+    Color barColor = const Color(0xFF10B981);
+    if (fillPercent != null && fillPercent >= 90) {
+      barColor = Colors.redAccent;
+    } else if (fillPercent != null && fillPercent >= 70) {
+      barColor = Colors.amber;
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF334155)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.bar_chart_rounded, color: Color(0xFF38BDF8), size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Consumo (${consumption['period'] ?? 'Mês Atual'})',
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              if (fillPercent != null)
+                Text(
+                  '${fillPercent.toStringAsFixed(0)}%',
+                  style: TextStyle(color: barColor, fontSize: 11, fontWeight: FontWeight.bold),
+                )
+              else
+                const Text(
+                  'Sem limite fixado',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: hasUnitsLimit || hasBudget ? clampedFraction : 0.05,
+              backgroundColor: Colors.white12,
+              valueColor: AlwaysStoppedAnimation<Color>(hasUnitsLimit || hasBudget ? barColor : const Color(0xFF38BDF8)),
+              minHeight: 6,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Usado: $unitsUsed un. (Ext: $externalUnitsUsed)',
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+              ),
+              Text(
+                'Limite: $unitsLimitLabel',
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Franquia: $usedIncludedUnits un. usada(s) • Saldo: $remainingIncludedUnits un.',
+                      style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      'Cache: $cachedUnitsUsed un.',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(Icons.monetization_on_outlined, color: Colors.amberAccent, size: 12),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Excedente: $overageUnitsUsed un. usado(s) • Autorizado: $overageAuthorizedLabel • Custo: $overageCostStatusLabel',
+                        style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 10),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (hasBudget || costSpentCents > 0) ...[
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Gasto: $costSpentFormatted',
+                      style: const TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: isEstimated ? Colors.amber.withOpacity(0.15) : Colors.blue.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        isEstimated ? 'Estimado' : 'Medido',
+                        style: TextStyle(
+                          color: isEstimated ? Colors.amber : const Color(0xFF90CAF9),
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  'Orçamento: $budgetLabel',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                ),
+              ],
+            ),
+          ],
+          if (!hasMeasurement) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'Consumo ainda não medido',
+              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontStyle: FontStyle.italic),
+            ),
+          ],
+          const SizedBox(height: 6),
+          const Divider(color: Color(0xFF334155), height: 8),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.tune_rounded, color: Color(0xFF94A3B8), size: 12),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Limite Lumora: $lumoraLimitLabel',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.cloud_queue_rounded, color: Color(0xFF94A3B8), size: 12),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Cota Provedor: $providerQuotaLabel',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                ),
+              ),
+            ],
+          ),
+          if (missingNotice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Colors.amber, size: 12),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      missingNotice,
+                      style: const TextStyle(color: Colors.amber, fontSize: 10),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTariffCard(
+    Map<String, dynamic>? tariff, {
+    VoidCallback? onConfigureTariff,
+    VoidCallback? onViewHistory,
+  }) {
+    final hasTariff = tariff != null && tariff['hasConfirmedTariff'] == true;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF131D2A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: hasTariff
+              ? const Color(0xFF38BDF8).withOpacity(0.3)
+              : Colors.amber.withOpacity(0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    hasTariff ? Icons.receipt_long_rounded : Icons.sell_outlined,
+                    color: hasTariff ? const Color(0xFF38BDF8) : Colors.amber,
+                    size: 14,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    hasTariff ? 'Tarifa do Plano' : 'Tarifa do Plano',
+                    style: TextStyle(
+                      color: hasTariff ? const Color(0xFF38BDF8) : Colors.amber,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  if (onViewHistory != null)
+                    InkWell(
+                      onTap: onViewHistory,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                        child: Text(
+                          'Histórico',
+                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10, decoration: TextDecoration.underline),
+                        ),
+                      ),
+                    ),
+                  if (onConfigureTariff != null) ...[
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: onConfigureTariff,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF38BDF8).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'Definir Tarifa',
+                          style: TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (!hasTariff) ...[
+            Text(
+              tariff?['statusLabel'] ?? 'Tarifa ainda não informada',
+              style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+            if (tariff?['missingPriceReason'] != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                tariff!['missingPriceReason'].toString(),
+                style: const TextStyle(color: Colors.white54, fontSize: 10),
+              ),
+            ] else ...[
+              const SizedBox(height: 2),
+              Text(
+                tariff?['notes'] ?? 'Clique em "Definir Tarifa" para registrar a tabela negociada.',
+                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+              ),
+            ],
+          ] else ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Franquia: ${tariff['includedUnitsLabel'] ?? 'Sem franquia'}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+                Text(
+                  'Mensalidade: ${tariff['monthlyFeeLabel'] ?? 'Isento'}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Text(
+              'Excedente: ${tariff['overagePriceLabel'] ?? 'Sem custo'}',
+              style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 11, fontWeight: FontWeight.w500),
+            ),
+            if (tariff['conversionNotice'] != null) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.amberAccent, size: 12),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      tariff['conversionNotice'].toString(),
+                      style: const TextStyle(color: Colors.amberAccent, fontSize: 10),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 4),
+            const Divider(color: Color(0xFF334155), height: 6),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Pagador: ${tariff['costPayerLabel'] ?? 'Empresa'} • Fonte: ${tariff['pricingSourceLabel'] ?? 'Contrato'}',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9),
+                ),
+                Text(
+                  tariff['effectivePeriodLabel'] ?? 'Vigente',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnlinkedUsageCard(Map<String, dynamic> unlinked) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF241818),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.withOpacity(0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_toggle_off_rounded, color: Colors.amber, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  unlinked['label'] ?? 'Registros antigos sem vínculo seguro',
+                  style: const TextStyle(
+                    color: Colors.amber,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              Text(
+                '${unlinked['recordsCount']} registros',
+                style: const TextStyle(color: Colors.white60, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            unlinked['description'] ?? '',
+            style: const TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Consumo: ${unlinked['unitsUsed']} un.',
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+              Text(
+                'Total: ${unlinked['totalSpentFormatted']}',
+                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openTariffConfigDialog(Map<String, dynamic> integracao) async {
+    final companyId = _empresaSelecionada?['id']?.toString();
+    if (companyId == null) return;
+
+    final existingTariff = integracao['tariff'];
+    final includedUnitsCtrl = TextEditingController(
+      text: existingTariff?['hasConfirmedTariff'] == true
+          ? '${existingTariff['includedUnits'] ?? 0}'
+          : '0',
+    );
+    final monthlyFeeCtrl = TextEditingController(
+      text: existingTariff?['hasConfirmedTariff'] == true && existingTariff['monthlyFeeCents'] != null
+          ? (existingTariff['monthlyFeeCents'] / 100.0).toStringAsFixed(2)
+          : '0.00',
+    );
+    final overageUnitPriceCtrl = TextEditingController(
+      text: existingTariff?['hasConfirmedTariff'] == true && existingTariff['overageUnitPriceCents'] != null
+          ? (existingTariff['overageUnitPriceCents'] / 100.0).toStringAsFixed(2)
+          : '0.00',
+    );
+    final overageUnitTypeCtrl = TextEditingController(
+      text: existingTariff?['overageUnitType']?.toString() ?? 'transação',
+    );
+    final notesCtrl = TextEditingController(
+      text: existingTariff?['notes']?.toString() ?? '',
+    );
+    String costPayer = existingTariff?['costPayer']?.toString() ?? 'COMPANY';
+    String pricingSource = existingTariff?['pricingSource']?.toString() ?? 'CONTRATO_CUSTOMIZADO';
+    String currency = existingTariff?['currency']?.toString() ?? 'BRL';
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E293B),
+              title: Row(
+                children: [
+                  const Icon(Icons.receipt_long_rounded, color: Color(0xFF38BDF8), size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Definir Tarifa: ${integracao['provider']} (${integracao['environment'] ?? 'PRODUCTION'})',
+                      style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Ao confirmar uma nova tarifa, a vigência anterior é encerrada e o histórico fica preservado.',
+                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: includedUnitsCtrl,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Franquia Inclusa (unidades/mês)',
+                        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: monthlyFeeCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Mensalidade Fixa (R\$)',
+                        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: overageUnitPriceCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            decoration: const InputDecoration(
+                              labelText: 'Preço Excedente (R\$)',
+                              labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: overageUnitTypeCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            decoration: const InputDecoration(
+                              labelText: 'Unidade (ex: transação)',
+                              labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: costPayer,
+                      dropdownColor: const Color(0xFF1E293B),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Pagador do Custo',
+                        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'COMPANY', child: Text('Empresa')),
+                        DropdownMenuItem(value: 'PLATFORM', child: Text('Plataforma Lumora')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setDialogState(() => costPayer = val);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: pricingSource,
+                      dropdownColor: const Color(0xFF1E293B),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Fonte do Preço',
+                        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'CONTRATO_CUSTOMIZADO', child: Text('Contrato Customizado')),
+                        DropdownMenuItem(value: 'TABELA_OFICIAL', child: Text('Tabela Oficial do Provedor')),
+                        DropdownMenuItem(value: 'MANUAL', child: Text('Negociação Manual')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setDialogState(() => pricingSource = val);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: notesCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Observações / Motivo',
+                        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: Colors.black),
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    try {
+                      setState(() => _carregando = true);
+                      await _api.confirmCompanyTariff({
+                        'companyId': companyId,
+                        'category': integracao['category'],
+                        'provider': integracao['provider'],
+                        'environment': integracao['environment'] ?? 'PRODUCTION',
+                        'companyIntegrationId': integracao['id'],
+                        'includedUnits': int.tryParse(includedUnitsCtrl.text.trim()) ?? 0,
+                        'monthlyFeeCents': ((double.tryParse(monthlyFeeCtrl.text.replaceAll(',', '.').trim()) ?? 0) * 100).round(),
+                        'overageUnitPriceCents': ((double.tryParse(overageUnitPriceCtrl.text.replaceAll(',', '.').trim()) ?? 0) * 100).round(),
+                        'overageUnitType': overageUnitTypeCtrl.text.trim().isEmpty ? 'REQUEST' : overageUnitTypeCtrl.text.trim(),
+                        'currency': currency,
+                        'costPayer': costPayer,
+                        'pricingSource': pricingSource,
+                        'notes': notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim(),
+                      });
+                      await _carregarIntegracoesEmpresa(companyId);
+                      _mostrarSucesso('Tarifa confirmada com sucesso!');
+                    } catch (e) {
+                      _mostrarErro('Erro ao registrar tarifa: $e');
+                    } finally {
+                      if (mounted) setState(() => _carregando = false);
+                    }
+                  },
+                  child: const Text('Salvar Tarifa'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _openTariffHistoryDialog(Map<String, dynamic> integracao) async {
+    final companyId = _empresaSelecionada?['id']?.toString();
+    if (companyId == null) return;
+
+    try {
+      setState(() => _carregando = true);
+      final allTariffs = await _api.getCompanyTariffs(companyId);
+      final filtered = allTariffs.where((t) {
+        return t['category'] == integracao['category'] &&
+            t['provider'] == integracao['provider'];
+      }).toList();
+
+      if (!mounted) return;
+      setState(() => _carregando = false);
+
+      await showDialog(
+        context: context,
+        builder: (ctx) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E293B),
+            title: Row(
+              children: [
+                const Icon(Icons.history_rounded, color: Color(0xFF38BDF8), size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Histórico de Tarifas: ${integracao['provider']}',
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 450,
+              child: filtered.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'Nenhuma tarifa registrada anteriormente.',
+                        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, __) => const Divider(color: Color(0xFF334155), height: 16),
+                      itemBuilder: (context, idx) {
+                        final t = filtered[idx];
+                        final bool isCurrent = t['effectiveTo'] == null;
+                        final included = t['includedUnits'] ?? 0;
+                        final monthlyFee = ((t['monthlyFeeCents'] ?? 0) / 100.0).toStringAsFixed(2);
+                        final overage = ((t['overageUnitPriceCents'] ?? 0) / 100.0).toStringAsFixed(2);
+                        final unitType = t['overageUnitType'] ?? 'un.';
+                        final effectiveFrom = t['effectiveFrom'] != null ? t['effectiveFrom'].toString().split('T').first : '-';
+                        final effectiveTo = t['effectiveTo'] != null ? t['effectiveTo'].toString().split('T').first : 'Vigente';
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  '$effectiveFrom até $effectiveTo',
+                                  style: TextStyle(
+                                    color: isCurrent ? const Color(0xFF10B981) : const Color(0xFF94A3B8),
+                                    fontSize: 12,
+                                    fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                                if (isCurrent)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10B981).withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text('VIGENTE', style: TextStyle(color: Color(0xFF10B981), fontSize: 9, fontWeight: FontWeight.bold)),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Franquia: $included un. • Mensalidade: R\$ $monthlyFee',
+                              style: const TextStyle(color: Colors.white70, fontSize: 11),
+                            ),
+                            Text(
+                              'Excedente: R\$ $overage / $unitType • Pagador: ${t['costPayer'] ?? 'COMPANY'}',
+                              style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 11),
+                            ),
+                            if (t['notes'] != null && t['notes'].toString().isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text('Obs: ${t['notes']}', style: const TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic)),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Fechar', style: TextStyle(color: Color(0xFF38BDF8))),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (e) {
+      _mostrarErro('Erro ao carregar histórico: $e');
+    } finally {
+      if (mounted) setState(() => _carregando = false);
+    }
   }
 
   Widget _buildCategoriaCard(Map<String, dynamic> cat) {
@@ -1345,25 +2369,49 @@ class _PainelProprietarioIntegracoesState
                 ),
               ],
             ] else if (categoryCode == 'GEO_LOCATION') ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.35)),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.check_circle_outline_rounded, color: Color(0xFF38BDF8), size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Serviço compartilhado ativo: O ViaCEP está habilitado de fábrica na plataforma e não exige cadastro ou chaves individuais para consulta de endereços.',
-                        style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 12),
-                      ),
+              Builder(
+                builder: (context) {
+                  final sharedSvc = _companySharedServices.isNotEmpty ? _companySharedServices.first : null;
+                  final consumption = sharedSvc?['consumption'] as Map<String, dynamic>?;
+                  final statusLevel = sharedSvc?['serviceStatusLevel']?.toString() ?? 'OPERATIONAL';
+                  final statusLabel = sharedSvc?['serviceStatusLabel']?.toString() ?? 'Disponível (Compartilhado)';
+
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.35)),
                     ),
-                  ],
-                ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle_outline_rounded, color: Color(0xFF38BDF8), size: 20),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Serviço compartilhado ativo: O ViaCEP está habilitado de fábrica na plataforma e não exige cadastro ou chaves individuais para consulta de endereços.',
+                                style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 12),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            _buildRealServiceStatusBadge(statusLevel, statusLabel),
+                          ],
+                        ),
+                        if (consumption != null) ...[
+                          const SizedBox(height: 8),
+                          _buildConsumptionProgressBar(consumption),
+                        ],
+                        if (sharedSvc?['tariff'] != null) ...[
+                          const SizedBox(height: 8),
+                          _buildTariffCard(sharedSvc?['tariff']),
+                        ],
+                      ],
+                    ),
+                  );
+                },
               ),
             ] else ...[
               Row(
@@ -1409,6 +2457,17 @@ class _PainelProprietarioIntegracoesState
             ? int.tryParse(integracao['monthlyBudgetLimitCents'].toString())
             : null);
 
+    final serviceStatusLevel = integracao['serviceStatusLevel']?.toString() ??
+        (integracao['lastValidationStatus'] == 'SUCCESS' ? 'TESTED' : (isAtivo ? 'CONFIGURED' : 'DISABLED'));
+    final serviceStatusLabel = integracao['serviceStatusLabel']?.toString() ??
+        (serviceStatusLevel == 'OPERATIONAL'
+            ? 'Operação comprovada'
+            : (serviceStatusLevel == 'TESTED'
+                ? 'Conexão testada'
+                : (serviceStatusLevel == 'CONFIGURED' ? 'Configuração cadastrada' : 'Desativado')));
+    final serviceStatusDesc = integracao['serviceStatusDescription']?.toString() ?? '';
+    final consumption = integracao['consumption'] as Map<String, dynamic>?;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -1430,10 +2489,31 @@ class _PainelProprietarioIntegracoesState
                   fontWeight: FontWeight.bold,
                 ),
               ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  (integracao['costPayer'] ?? 'COMPANY') == 'COMPANY' ? 'EMPRESA' : 'PLATAFORMA',
+                  style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 9, fontWeight: FontWeight.bold),
+                ),
+              ),
               const Spacer(),
+              _buildRealServiceStatusBadge(serviceStatusLevel, serviceStatusLabel),
+              const SizedBox(width: 6),
               _buildStatusBadge(status),
             ],
           ),
+          if (serviceStatusDesc.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              serviceStatusDesc,
+              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+            ),
+          ],
           const SizedBox(height: 8),
           _buildMetaRow('Escopo:', integracao['scope'] ?? 'N/A'),
           _buildMetaRow('Titularidade Custo:', integracao['costPayer'] ?? 'COMPANY'),
@@ -1462,6 +2542,17 @@ class _PainelProprietarioIntegracoesState
               '${_dateFormat.format(DateTime.parse(integracao['lastValidatedAt']))} (${integracao['lastValidationStatus'] ?? 'PENDING'})',
             ),
           const SizedBox(height: 6),
+
+          if (consumption != null) ...[
+            _buildConsumptionProgressBar(consumption),
+            const SizedBox(height: 8),
+          ],
+          _buildTariffCard(
+            integracao['tariff'],
+            onConfigureTariff: () => _openTariffConfigDialog(integracao),
+            onViewHistory: () => _openTariffHistoryDialog(integracao),
+          ),
+          const SizedBox(height: 8),
 
           // Explicações de prontidão real por provedor
           if (integracao['provider'] == 'GROK')

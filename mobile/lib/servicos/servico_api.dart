@@ -1032,10 +1032,9 @@ class ApiService {
 
       return responseData;
     } on DioException catch (e) {
-      print('=== DIO ERROR IN SEARCH ===');
-      print(e.message);
-      final errorMsg =
-          (e.response?.data is Map) ? e.response?.data['error'] : null;
+      final errorMsg = (e.response?.data is Map)
+          ? (e.response?.data['error'] ?? e.response?.data['message'])?.toString()
+          : null;
       throw Exception(errorMsg ??
           'Erro ao buscar eventos na IA (tempo limite excedido). Tente novamente.');
     }
@@ -1050,8 +1049,9 @@ class ApiService {
       );
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
-      final errorMsg =
-          (e.response?.data is Map) ? e.response?.data['error'] : null;
+      final errorMsg = (e.response?.data is Map)
+          ? (e.response?.data['error'] ?? e.response?.data['message'])?.toString()
+          : null;
       throw Exception(errorMsg ??
           'Erro ao buscar radar por estado. O servidor demorou para responder. Tente novamente.');
     }
@@ -2069,6 +2069,43 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> updateCompanyIntegrationLimits(
+    String id, {
+    int? monthlyBudgetLimitCents,
+    int? monthlyUnitsLimit,
+    required String passwordConfirmation,
+  }) async {
+    try {
+      final resp = await _dio.patch(
+        '/company/integrations/' + id + '/limits',
+        data: {
+          'monthlyBudgetLimitCents': monthlyBudgetLimitCents,
+          'monthlyUnitsLimit': monthlyUnitsLimit,
+          'passwordConfirmation': passwordConfirmation,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> lookupCep(String cep) async {
+    final clean = cep.replaceAll(RegExp(r'\D'), '');
+    try {
+      final resp = await _dio.get(
+        '/integrations/cep/' + clean,
+        options: Options(
+          sendTimeout: const Duration(seconds: 5),
+          receiveTimeout: const Duration(seconds: 5),
+        ),
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> getSellerCreditPortfolio({String? sellerId, String? competence}) async {
     try {
       final params = <String>[];
@@ -2474,6 +2511,47 @@ class ApiService {
       final resp = await _dio.get('/owner/integrations/companies/$companyId');
       final list = resp.data['integrations'] as List? ?? [];
       return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Retorna payload completo das integrações da empresa (inclui sharedServices, consumo e overview)
+  Future<Map<String, dynamic>> getCompanyIntegrationsPayload(String companyId) async {
+    try {
+      final resp = await _dio.get('/owner/integrations/companies/$companyId');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Visão geral consolidada de todas as empresas e consumo de APIs
+  Future<Map<String, dynamic>> getPlatformIntegrationsOverview() async {
+    try {
+      final resp = await _dio.get('/owner/integrations/overview');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Busca histórico e tarifas confirmadas para uma empresa (Super Admin)
+  Future<List<Map<String, dynamic>>> getCompanyTariffs(String companyId) async {
+    try {
+      final resp = await _dio.get('/owner/integrations/tariffs/$companyId');
+      final list = (resp.data['tariffs'] as List?) ?? [];
+      return list.map((e) => Map<String, dynamic>.from(e)).toList();
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Cadastra ou confirma tarifa para uma empresa (Super Admin)
+  Future<Map<String, dynamic>> confirmCompanyTariff(Map<String, dynamic> data) async {
+    try {
+      final resp = await _dio.post('/owner/integrations/tariffs', data: data);
+      return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

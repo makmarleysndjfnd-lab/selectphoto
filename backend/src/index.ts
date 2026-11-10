@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
-
 import fs from 'fs';
 
 const isTestRuntime =
@@ -177,20 +176,55 @@ app.use('/legal', express.static(path.join(__dirname, '../public/legal')));
 
 app.use(centralErrorHandler);
 
-// Desativar cron jobs em modo de teste ou quando serviços externos estiverem desabilitados
-if (
-  process.env.DISABLE_CRON !== 'true' &&
-  process.env.NODE_ENV !== 'test' &&
-  !isExternalServicesDisabled()
-) {
+let server: any = null;
+let isShuttingDown = false;
+let schedulersStarted = false;
+
+export function startBackgroundSchedulers() {
+  if (schedulersStarted) return;
+  if (
+    process.env.DISABLE_CRON === 'true' ||
+    process.env.NODE_ENV === 'test' ||
+    isTestRuntime ||
+    isExternalServicesDisabled()
+  ) {
+    return;
+  }
+  schedulersStarted = true;
   initWarrantyCron();
   initBackupCron();
   initAsaasQueueCron();
   initMonthlyCreditClosingCron();
 }
 
-let server: any = null;
-let isShuttingDown = false;
+export function startHttpServer() {
+  if (server) return server;
+  const host = isExternalServicesDisabled() ? '127.0.0.1' : (process.env.HOST || '0.0.0.0');
+  server = app.listen(Number(port), host, () => {
+    console.log(`Server running on http://${host}:${port}`);
+    initDatabaseClassification().catch((err) => {
+      console.warn('⚠️ Falha ao inicializar classificação de empresas:', err);
+    });
+  });
+  return server;
+}
+
+export async function closeHttpServerAndConnections() {
+  if (server) {
+    await new Promise<void>((resolve) => {
+      try {
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections();
+        }
+        server.close(() => resolve());
+      } catch (_) {
+        resolve();
+      }
+    });
+    server = null;
+  }
+  await disconnectPrisma();
+}
 
 export async function gracefulShutdown(signal: string) {
   if (isShuttingDown) return;
@@ -235,9 +269,11 @@ export async function gracefulShutdown(signal: string) {
   }
 }
 
-if (process.env.NODE_ENV !== 'test') {
+if (require.main === module && !isTestRuntime && process.env.NODE_ENV !== 'test') {
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  startBackgroundSchedulers();
+  startHttpServer();
 }
 
 process.on('beforeExit', async () => {
@@ -246,16 +282,5 @@ process.on('beforeExit', async () => {
   } catch (_) {}
 });
 
-// Bind exclusivo em 127.0.0.1 quando em staging/testes ou host padrão
-const host = isExternalServicesDisabled() ? '127.0.0.1' : (process.env.HOST || '0.0.0.0');
-
-if (process.env.NODE_ENV !== 'test') {
-  server = app.listen(Number(port), host, () => {
-    console.log(`Server running on http://${host}:${port}`);
-    initDatabaseClassification().catch((err) => {
-      console.warn('⚠️ Falha ao inicializar classificação de empresas:', err);
-    });
-  });
-}
-
+export { app };
 export default app;

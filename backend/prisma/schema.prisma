@@ -62,6 +62,8 @@ model Company {
   contractAuditEvents         ContractAuditEvent[]
   integrations                CompanyIntegration[]
   apiUsageRecords             ApiUsageRecord[]
+  apiTariffs                  CompanyApiTariff[]
+  quotaAlerts                 ApiQuotaAlert[]
   integrationAuditEvents      IntegrationAuditEvent[]
   platformStatements           PlatformMonthlyStatement[]
   platformStatementItems       PlatformStatementItem[]
@@ -158,6 +160,7 @@ model User {
   integrationsCreated         CompanyIntegration[]          @relation("IntegrationsCreated")
   integrationsUpdated         CompanyIntegration[]          @relation("IntegrationsUpdated")
   integrationAuditEvents      IntegrationAuditEvent[]        @relation("IntegrationAuditAuthor")
+  tariffsConfirmed            CompanyApiTariff[]            @relation("TariffConfirmedBy")
   platformStatementsClosed    PlatformMonthlyStatement[]     @relation("PlatformStatementCloser")
   platformAdjustmentsCreated  PlatformStatementAdjustment[]  @relation("PlatformAdjustmentAuthor")
   platformPaymentsRecorded    PlatformStatementPayment[]     @relation("PlatformPaymentAuthor")
@@ -172,6 +175,8 @@ model User {
   supportGrantsRevoked        SupportAccessGrant[]           @relation("SupportAccessRevoker")
   deviceTelemetries           DeviceTelemetry[]
 }
+
+
 
 model Client {
   id                   String    @id @default(uuid())
@@ -1104,6 +1109,8 @@ model CompanyIntegration {
   version                 Int       @default(1)
   monthlyBudgetLimitCents  Int?
   monthlyUnitsLimit       Int?
+  allowPaidOverage        Boolean   @default(false)
+  authorizedOverageUnits  Int?
   lastValidatedAt         DateTime?
   lastValidationStatus    String?   // SUCCESS | FAILED | PENDING
   lastValidationError     String?
@@ -1116,6 +1123,7 @@ model CompanyIntegration {
   createdByUser           User      @relation("IntegrationsCreated", fields: [createdByUserId], references: [id])
   updatedByUser           User?     @relation("IntegrationsUpdated", fields: [updatedByUserId], references: [id])
   usageRecords            ApiUsageRecord[]
+  tariffs                 CompanyApiTariff[]
   auditEvents             IntegrationAuditEvent[]
 
   @@unique([companyId, category, environment])
@@ -1124,25 +1132,86 @@ model CompanyIntegration {
 }
 
 model ApiUsageRecord {
-  id                 String              @id @default(uuid())
-  companyId          String
-  integrationId      String?
-  category           String
-  provider           String
-  operation          String
-  unitsUsed          Int                 @default(1)
-  estimatedCostCents Int?
-  measuredCostCents  Int?
-  status             String              @default("SUCCESS")
-  latencyMs          Int?
-  errorMessage       String?
-  timestamp          DateTime            @default(now())
+  id                          String              @id @default(uuid())
+  companyId                   String
+  integrationId               String?
+  tariffId                    String?
+  category                    String
+  provider                    String
+  environment                 String              @default("PRODUCTION") // PRODUCTION | SANDBOX
+  operation                   String
+  unitsUsed                   Int                 @default(1)
+  estimatedCostCents          Int?
+  measuredCostCents           Int?
+  appliedTariffUnitPriceCents Int?
+  currency                    String?             @default("BRL")
+  status                      String              @default("SUCCESS")
+  latencyMs                   Int?
+  errorMessage                String?
+  resolvedByUserId            String?
+  evidence                    String?
+  timestamp                   DateTime            @default(now())
 
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  integration        CompanyIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  company                     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration                 CompanyIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  tariff                      CompanyApiTariff?   @relation(fields: [tariffId], references: [id], onDelete: SetNull)
 
   @@index([companyId, category, timestamp])
+  @@index([companyId, category, environment, timestamp])
   @@index([integrationId, timestamp])
+  @@index([tariffId])
+}
+
+model CompanyApiTariff {
+  id                    String              @id @default(uuid())
+  companyId             String
+  companyIntegrationId  String?
+  category              String              // AI_RESEARCH | PAYMENT_GATEWAY | MESSAGING | GEO_LOCATION
+  provider              String              // GEMINI | GROK | ASAAS | META_WHATSAPP | VIACEP
+  environment           String              @default("ALL") // ALL | PRODUCTION | SANDBOX
+  includedUnits         Int                 @default(0)     // Franquia incluída
+  monthlyFeeCents       Int                 @default(0)     // Mensalidade quando houver
+  overageUnitPriceCents Int                 @default(0)     // Preço unitário do excedente em centavos
+  overageUnitType       String              @default("REQUEST") // REQUEST | LOOKUP | TRANSACTION | TOKEN_1K
+  currency              String              @default("BRL")
+  costPayer             String              @default("COMPANY") // COMPANY | PLATFORM
+  pricingSource         String              @default("CONFIRMED_CONTRACT") // TABELA_OFICIAL | CONTRATO_CUSTOMIZADO | MANUAL
+  effectiveFrom         DateTime            @default(now())
+  effectiveTo           DateTime?
+  notes                 String?
+  confirmedByUserId     String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  company               Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  confirmedByUser       User?               @relation("TariffConfirmedBy", fields: [confirmedByUserId], references: [id])
+  integration           CompanyIntegration? @relation(fields: [companyIntegrationId], references: [id], onDelete: SetNull)
+  usageRecords          ApiUsageRecord[]
+
+  @@index([companyId, category, environment])
+  @@index([companyId, effectiveTo])
+}
+
+model ApiQuotaAlert {
+  id            String   @id @default(uuid())
+  companyId     String
+  integrationId String?
+  category      String
+  environment   String   @default("PRODUCTION") // PRODUCTION | SANDBOX
+  periodKey     String   // "YYYY-MM", ex: "2026-11"
+  limitType     String   // "UNITS" | "BUDGET"
+  threshold     Int      // 80 | 100
+  currentValue  Int
+  limitValue    Int
+  currency      String?  @default("BRL")
+  message       String?
+  channel       String   @default("SIMULATED_CHANNEL")
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, category, environment, periodKey, limitType, threshold])
+  @@index([companyId, periodKey])
 }
 
 model IntegrationAuditEvent {
@@ -1567,6 +1636,9 @@ model DeviceTelemetry {
   @@index([companyId, lastReportedAt])
   @@index([userId, lastReportedAt])
 }
+
+
+
 
 
 

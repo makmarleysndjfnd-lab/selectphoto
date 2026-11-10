@@ -6,7 +6,7 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { recordDeviceTelemetry } from '../services/operationalMetricsService';
 
 export const CURRENT_APP_VERSION = '1.0.31';
-export const CURRENT_BUILD_NUMBER = 46;
+export const CURRENT_BUILD_NUMBER = 47;
 
 export interface ApkReleaseDescriptor {
   version: string;
@@ -23,8 +23,8 @@ export interface ApkReleaseDescriptor {
  */
 export const RELEASE_APK: Readonly<ApkReleaseDescriptor> = Object.freeze({
   version: '1.0.31',
-  buildNumber: 46,
-  sha256: 'A04C85AAB5B43060EBE7DC3F4A48C2AEDA0335AF3140FD00CAE63FC6665D6F30',
+  buildNumber: 47,
+  sha256: 'C4662453B021C0AD76E436032977C0330099EB8265F2D438FF648F6EF8415E92',
   packageName: 'com.example.mobile',
 });
 

@@ -6,12 +6,10 @@ import 'tela_configuracoes.dart';
 import 'package:signature/signature.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
 
 import 'lista_fichas_fotografo.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
-import 'tela_sincronizacao.dart' as tela_sincronizacao;
 
 import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -108,6 +106,8 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   bool _hasNoGate = false;
   final _gateObservationController = TextEditingController();
   TimeOfDay? _visitTime;
+  int _cepQuerySeq = 0;
+  bool _addressManuallyEdited = false;
 
   // Children Inline
   final List<_ChildFormItem> _childFormItems = [];
@@ -547,6 +547,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
   @override
   void dispose() {
+    _cepQuerySeq++;
     try {
       final syncService = Provider.of<SyncService>(context, listen: false);
       syncService.removeListener(_onSyncUpdate);
@@ -762,16 +763,36 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   Future<void> _onCepChanged(String value) async {
     final cleanCep = value.replaceAll(RegExp(r'[^0-9]'), '');
     if (cleanCep.length == 8) {
+      _addressManuallyEdited = false;
+      final int currentSeq = ++_cepQuerySeq;
+      final String queriedCep = cleanCep;
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Buscando CEP...'),
             duration: Duration(milliseconds: 1000)));
       }
       try {
-        final response = await http
-            .get(Uri.parse('https://viacep.com.br/ws/$cleanCep/json/'));
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
+        final res = await ApiService()
+            .lookupCep(cleanCep)
+            .timeout(const Duration(seconds: 5));
+
+        if (!mounted) return;
+        if (currentSeq != _cepQuerySeq) return;
+        final currentInputCep =
+            _cepController.text.replaceAll(RegExp(r'[^0-9]'), '');
+        if (currentInputCep != queriedCep) return;
+
+        if (_addressManuallyEdited) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Endereço mantido conforme sua edição manual.'),
+              backgroundColor: Colors.blueGrey,
+              duration: Duration(milliseconds: 1800)));
+          return;
+        }
+
+        if (res['success'] == true && res['data'] != null) {
+          final data = res['data'];
           if (data['erro'] != true) {
             setState(() {
               _streetController.text = data['logradouro'] ?? '';
@@ -786,29 +807,35 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               }
             });
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Endereço preenchido com sucesso!'),
+              final isCache = res['source'] == 'CACHE' || res['cached'] == true;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(isCache
+                      ? 'Endereço carregado do cache local (resposta imediata)!'
+                      : 'Endereço preenchido via consulta externa (ViaCEP)!'),
                   backgroundColor: Colors.green,
-                  duration: Duration(milliseconds: 1500)));
+                  duration: const Duration(milliseconds: 1500)));
             }
-          } else {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text(
-                      'CEP não encontrado. Preencha o endereço manualmente.'),
-                  backgroundColor: Colors.orange,
-                  duration: Duration(seconds: 3)));
-            }
+            return;
           }
         }
-      } catch (e) {
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text(
-                  'Não foi possível consultar o CEP online. Você pode preencher manualmente.'),
-              backgroundColor: Colors.blueGrey,
-              duration: Duration(seconds: 2)));
+                  'CEP não encontrado. Preencha o endereço manualmente.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3)));
         }
+      } catch (e) {
+        if (!mounted) return;
+        if (currentSeq != _cepQuerySeq) return;
+        if (_addressManuallyEdited) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Não foi possível consultar o CEP no prazo. Preencha manualmente.'),
+            backgroundColor: Colors.blueGrey,
+            duration: Duration(seconds: 3)));
       }
     }
   }
@@ -1798,6 +1825,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               'Rua / Logradouro',
               Icons.location_on,
               textCapitalization: TextCapitalization.words,
+              onChanged: (v) {
+                _addressManuallyEdited = true;
+              },
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Rua / Logradouro é obrigatório'
                   : null,
@@ -1895,6 +1925,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               'Bairro',
               Icons.holiday_village,
               textCapitalization: TextCapitalization.words,
+              onChanged: (v) {
+                _addressManuallyEdited = true;
+              },
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Bairro é obrigatório'
                   : null,
@@ -1909,6 +1942,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     'Cidade',
                     Icons.location_city,
                     textCapitalization: TextCapitalization.words,
+                    onChanged: (v) {
+                      _addressManuallyEdited = true;
+                    },
                     validator: (v) => (v == null || v.trim().isEmpty)
                         ? 'Cidade é obrigatória'
                         : null,
@@ -1922,6 +1958,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     'UF',
                     Icons.flag,
                     textCapitalization: TextCapitalization.characters,
+                    onChanged: (v) {
+                      _addressManuallyEdited = true;
+                    },
                     inputFormatters: [
                       LengthLimitingTextInputFormatter(2),
                       FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z]')),
