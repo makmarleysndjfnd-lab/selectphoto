@@ -76,6 +76,7 @@ model Company {
   supportAccessGrants          SupportAccessGrant[]
   internalOperationalAlerts    InternalOperationalAlert[]
   deviceTelemetries            DeviceTelemetry[]
+  buyerConfirmations           BuyerPurchaseConfirmation[]
 }
 
 model Team {
@@ -327,6 +328,7 @@ model Sale {
   creditAgreement    CreditAgreement?
   platformStatementItem        PlatformStatementItem?
   platformStatementAdjustments PlatformStatementAdjustment[] @relation("OriginSaleAdjustments")
+  buyerConfirmations           BuyerPurchaseConfirmation[]
 }
 
 model SalePayment {
@@ -1636,6 +1638,65 @@ model DeviceTelemetry {
   @@index([companyId, lastReportedAt])
   @@index([userId, lastReportedAt])
 }
+
+model BuyerPurchaseConfirmation {
+  id                        String    @id @default(uuid())
+  companyId                 String
+  saleId                    String
+  clientId                  String
+  sellerId                  String
+  tokenHash                 String    @unique
+  conditionsVersion         Int       @default(1)
+  conditionsSnapshot        Json
+  status                    String    @default("PENDING") // PENDING, CONFIRMED, UNDER_REVIEW, INVALIDATED, EXPIRED, ADMIN_EXCEPTION
+  expectedPhoneLast4        String?
+  verifiedPhoneLast4        String?
+  identityVerifiedBy        String?
+  verificationAttempts      Int       @default(0)
+  sellerTotalCents          Int
+  sellerPaidCents           Int
+  sellerPaymentMethod       String
+  reportedTotalCents        Int?
+  reportedPaidCents         Int?
+  reportedPaymentMethod     String?
+  reportedRemainingCents    Int?
+  reportedInstallmentsCount Int?
+  reportedInstallmentCents  Int?
+  reportedPayments          Json?
+  reportedNotes             String?
+  hasDivergence             Boolean   @default(false)
+  divergenceDetails         Json?
+  divergenceReasons         Json?
+  isSkipped                 Boolean   @default(false)
+  skippedReason             String?
+  skippedAt                 DateTime?
+  skippedByUserId           String?
+  skippedByName             String?
+  expiresAt                 DateTime
+  usedAt                    DateTime?
+  respondedIp               String?
+  respondedUserAgent        String?
+  invalidatedAt             DateTime?
+  invalidationReason        String?
+  exceptionByUserId         String?
+  exceptionByName           String?
+  exceptionReason           String?
+  exceptionAt               DateTime?
+  reviewResolvedByUserId    String?
+  reviewResolvedByName      String?
+  reviewResolutionNotes     String?
+  reviewResolvedAt          DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([saleId, conditionsVersion])
+  @@index([sellerId, status])
+}
+
 
 
 

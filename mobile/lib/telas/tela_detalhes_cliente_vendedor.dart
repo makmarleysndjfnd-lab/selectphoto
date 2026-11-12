@@ -3,6 +3,8 @@ import 'dart:convert';
 import '../utils/ui_helpers.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:signature/signature.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -1281,8 +1283,13 @@ class _SaleTabState extends State<_SaleTab> {
         if (creditPayload != null) 'credit': creditPayload,
       };
 
+      String? saleId;
       try {
-        await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path);
+        if (_receiptPhoto != null) {
+          saleId = await apiService.registerSaleWithReceipt(payload, _receiptPhoto!.path);
+        } else {
+          saleId = await apiService.registerSale(payload);
+        }
       } on ApiRequestException catch (e) {
         if (!e.retryable) rethrow;
         final storageDir = await getApplicationSupportDirectory();
@@ -1336,10 +1343,21 @@ class _SaleTabState extends State<_SaleTab> {
       _valorVendaController.clear();
       _numeroFichaController.clear();
       _reportNotesController.clear();
-      Navigator.of(context).pop({
-        'saleSuccess': true,
-        'message': 'Venda registrada com sucesso',
-      });
+
+      if (saleId != null && saleId.isNotEmpty) {
+        await _showBuyerConfirmationSheet(
+          context,
+          saleId,
+          clientName: widget.client['name']?.toString() ?? 'Cliente',
+        );
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop({
+          'saleSuccess': true,
+          'message': 'Venda registrada com sucesso',
+        });
+      }
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -1553,6 +1571,10 @@ class _SaleTabState extends State<_SaleTab> {
                   ),
                 ),
               ],
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 12),
+              _buildBuyerConfirmationSection(activeSale['id'].toString()),
             ],
           ),
         ),
@@ -2817,6 +2839,545 @@ class _SaleTabState extends State<_SaleTab> {
               value: i, child: Text(i, overflow: TextOverflow.ellipsis)))
           .toList(),
       onChanged: onChanged,
+    );
+  }
+
+  String _formatSkippedReason(String reason) {
+    switch (reason) {
+      case 'CLIENT_REFUSED':
+        return 'Cliente recusou no momento';
+      case 'NO_SIGNAL':
+        return 'Sem sinal de internet no local';
+      case 'CLIENT_HURRIED':
+        return 'Cliente com pressa / sem tempo';
+      case 'OTHER':
+        return 'Outro motivo';
+      default:
+        return reason;
+    }
+  }
+
+  Future<String?> _showSkipReasonDialog(BuildContext context) async {
+    String selectedReason = 'CLIENT_REFUSED';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF111C2D),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+              ),
+              title: Row(
+                children: const [
+                  Icon(Icons.skip_next_rounded, color: Colors.amberAccent, size: 22),
+                  SizedBox(width: 8),
+                  Text('Pular Apresentação',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Selecione o motivo pelo qual o QR Code não foi apresentado agora. O link continuará ativo para conferência posterior pelo cliente.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 14),
+                  ...[
+                    {'id': 'CLIENT_REFUSED', 'label': 'Cliente recusou no momento'},
+                    {'id': 'NO_SIGNAL', 'label': 'Sem sinal de internet no local'},
+                    {'id': 'CLIENT_HURRIED', 'label': 'Cliente com pressa / sem tempo'},
+                    {'id': 'OTHER', 'label': 'Outro motivo'},
+                  ].map((opt) {
+                    final isChecked = selectedReason == opt['id'];
+                    return InkWell(
+                      onTap: () => setDialogState(() => selectedReason = opt['id']!),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Radio<String>(
+                              value: opt['id']!,
+                              groupValue: selectedReason,
+                              activeColor: const Color(0xFF38BDF8),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  setDialogState(() => selectedReason = val);
+                                }
+                              },
+                            ),
+                            Expanded(
+                              child: Text(
+                                opt['label']!,
+                                style: TextStyle(
+                                  color: isChecked ? Colors.white : Colors.white70,
+                                  fontSize: 13,
+                                  fontWeight:
+                                      isChecked ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(null),
+                  child:
+                      const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () => Navigator.of(ctx).pop(selectedReason),
+                  child: const Text('Confirmar Motivo',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _promptSkipConfirmation(
+      BuildContext context, String saleId) async {
+    final reason = await _showSkipReasonDialog(context);
+    if (reason == null) return;
+
+    try {
+      final api = Provider.of<ApiService>(context, listen: false);
+      await api.skipBuyerConfirmation(saleId, reason: reason);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Convite pulado registrado com sucesso. O link permanece válido.'),
+            backgroundColor: Colors.amber,
+          ),
+        );
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Erro ao registrar motivo: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Widget _buildBuyerConfirmationSection(String saleId) {
+    final api = Provider.of<ApiService>(context, listen: false);
+
+    return FutureBuilder<Map<String, dynamic>>(
+      future: api.getBuyerConfirmation(saleId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF111C2D),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Row(
+              children: const [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Color(0xFF38BDF8)),
+                ),
+                SizedBox(width: 10),
+                Text('Consultando conferência do cliente...',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+              ],
+            ),
+          );
+        }
+
+        if (snapshot.hasError || !snapshot.hasData) {
+          // Mantém compatibilidade com backend em produção ou vendas antigas sem registro
+          return const SizedBox.shrink();
+        }
+
+        final data = snapshot.data!;
+        final status = data['status']?.toString() ?? 'PENDING';
+        final isSkipped = data['isSkipped'] == true;
+        final skippedReason = data['skippedReason']?.toString();
+
+        String statusLabel = 'Aguardando cliente';
+        IconData statusIcon = Icons.hourglass_top_rounded;
+        Color statusColor = const Color(0xFF38BDF8);
+
+        if (status == 'CONFIRMED' || status == 'UNDER_REVIEW') {
+          statusLabel = 'Resposta recebida';
+          statusIcon = Icons.check_circle_outline_rounded;
+          statusColor = const Color(0xFF00E676);
+        } else if (isSkipped) {
+          statusLabel = 'Convite pulado — aguardando confirmação';
+          statusIcon = Icons.forward_to_inbox_rounded;
+          statusColor = Colors.amberAccent;
+        } else if (status == 'EXPIRED') {
+          statusLabel = 'Link expirado';
+          statusIcon = Icons.timer_off_outlined;
+          statusColor = Colors.white38;
+        }
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF111C2D),
+            borderRadius: BorderRadius.circular(12),
+            border:
+                Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: const [
+                  Icon(Icons.qr_code_2_rounded,
+                      color: Color(0xFF38BDF8), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Conferência do Pedido pelo Cliente',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: statusColor.withOpacity(0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(statusIcon, color: statusColor, size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      statusLabel,
+                      style: TextStyle(
+                        color: statusColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isSkipped && skippedReason != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Motivo do pulo: ${_formatSkippedReason(skippedReason)}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+              ],
+              if (status == 'PENDING' && !isSkipped) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        _promptSkipConfirmation(context, saleId),
+                    icon: const Icon(Icons.skip_next_rounded,
+                        color: Colors.amberAccent, size: 16),
+                    label: const Text(
+                      'Pular Apresentação',
+                      style:
+                          TextStyle(color: Colors.amberAccent, fontSize: 12),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.amberAccent),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showBuyerConfirmationSheet(
+    BuildContext context,
+    String saleId, {
+    String? clientName,
+  }) async {
+    final api = Provider.of<ApiService>(context, listen: false);
+    final conf = api.lastBuyerConfirmation;
+    final confirmationUrl = conf?['confirmationUrl']?.toString();
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0B131E),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(24)),
+            border:
+                Border.all(color: const Color(0xFF38BDF8).withOpacity(0.35)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: const [
+                  Icon(Icons.qr_code_2_rounded,
+                      color: Color(0xFF00E5FF), size: 26),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Conferência de Compra pelo Cliente',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Apresente o QR Code ao cliente ${clientName != null ? "($clientName) " : ""}ou envie o link para conferência independente das condições combinadas.',
+                style: const TextStyle(
+                    color: Colors.white70, fontSize: 12, height: 1.4),
+              ),
+              const SizedBox(height: 18),
+              if (confirmationUrl != null && confirmationUrl.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00E5FF).withOpacity(0.25),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: QrImageView(
+                    data: confirmationUrl,
+                    version: QrVersions.auto,
+                    size: 180,
+                    backgroundColor: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  confirmationUrl,
+                  style: const TextStyle(
+                      color: Color(0xFF38BDF8),
+                      fontSize: 11,
+                      decoration: TextDecoration.underline),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Clipboard.setData(
+                              ClipboardData(text: confirmationUrl));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Link copiado com sucesso!'),
+                              backgroundColor: Color(0xFF10B981),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy_rounded,
+                            color: Color(0xFF38BDF8), size: 16),
+                        label: const Text('Copiar Link',
+                            style: TextStyle(
+                                color: Color(0xFF38BDF8), fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Color(0xFF38BDF8)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () async {
+                          final shareText =
+                              'Olá! Por favor, confira e confirme as condições da sua compra na Lumora pelo link seguro: $confirmationUrl';
+                          final waUri = Uri.parse(
+                              'whatsapp://send?text=${Uri.encodeComponent(shareText)}');
+                          if (await canLaunchUrl(waUri)) {
+                            await launchUrl(waUri);
+                          } else {
+                            Clipboard.setData(ClipboardData(text: shareText));
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Texto copiado! Envie ao cliente pelo seu app de mensagens.'),
+                                  backgroundColor: Color(0xFF38BDF8),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.share_rounded,
+                            color: Color(0xFF00E5FF), size: 16),
+                        label: const Text('Compartilhar',
+                            style: TextStyle(
+                                color: Color(0xFF00E5FF), fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Color(0xFF00E5FF)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.info_outline_rounded,
+                          color: Color(0xFF38BDF8), size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'A conferência foi gerada e poderá ser acompanhada na consulta da venda.',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      final reason = await _showSkipReasonDialog(context);
+                      if (reason != null) {
+                        try {
+                          await api.skipBuyerConfirmation(saleId,
+                              reason: reason);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    'Convite pulado. O link permanece válido para confirmação posterior.'),
+                                backgroundColor: Colors.amber,
+                              ),
+                            );
+                            Navigator.of(sheetContext).pop();
+                          }
+                        } catch (err) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content:
+                                      Text('Erro ao registrar motivo: $err'),
+                                  backgroundColor: Colors.red),
+                            );
+                            Navigator.of(sheetContext).pop();
+                          }
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.skip_next_rounded,
+                        color: Colors.amberAccent, size: 18),
+                    label: const Text(
+                      'Pular Apresentação',
+                      style:
+                          TextStyle(color: Colors.amberAccent, fontSize: 12),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00E5FF),
+                      foregroundColor: const Color(0xFF0B131E),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 10),
+                    ),
+                    child: const Text('Concluir',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

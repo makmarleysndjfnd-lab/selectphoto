@@ -52,6 +52,11 @@ import { securityHeaders, generalApiLimiter, centralErrorHandler } from './middl
 import { isExternalServicesDisabled } from './utils/externalServices';
 import { initDatabaseClassification } from './utils/initDatabaseClassification';
 import { disconnectPrisma } from './services/prisma';
+import {
+  getPublicBuyerConfirmationPrompt,
+  submitPublicBuyerConfirmation,
+  renderPublicBuyerConfirmationHtml,
+} from './services/buyerConfirmationService';
 
 app.use(securityHeaders);
 app.use(requestLogger);
@@ -173,6 +178,43 @@ app.get('/privacy-policy', (_req, res) => {
 
 // Servir páginas estáticas de conformidade jurídica para lojas (Google Play & App Store)
 app.use('/legal', express.static(path.join(__dirname, '../public/legal')));
+
+// Página pública web de conferência de compra pelo cliente (Etapa 1 QR Code)
+app.get('/confirmar-compra/:token', async (req, res) => {
+  const token = req.params.token;
+  try {
+    const prompt = await getPublicBuyerConfirmationPrompt(token);
+    const html = renderPublicBuyerConfirmationHtml({ token, prompt });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err: any) {
+    const html = renderPublicBuyerConfirmationHtml({
+      token,
+      errorMessage: err.message || 'Link inválido ou expirado.',
+      errorCode: err.code || 'INVALID_LINK',
+    });
+    res.status(err.status || 400).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
+  }
+});
+
+// Envio web direto de conferência de compra pelo cliente
+app.post('/confirmar-compra/:token', async (req, res) => {
+  const token = req.params.token;
+  try {
+    const result = await submitPublicBuyerConfirmation({
+      rawToken: token,
+      ...req.body,
+      ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      userAgent: req.get('user-agent') || null,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.status || 400).json({
+      error: err.message || 'Erro ao processar confirmação',
+      code: err.code,
+    });
+  }
+});
 
 app.use(centralErrorHandler);
 

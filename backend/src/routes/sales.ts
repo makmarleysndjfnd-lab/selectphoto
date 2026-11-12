@@ -11,6 +11,15 @@ import {
   deductCoverForSellerSale,
   restoreCoverForCanceledSale,
 } from '../services/coverStockService';
+import {
+  issueBuyerConfirmationLink,
+  recordBuyerConfirmationSkipped,
+  invalidateAndReissueConfirmationOnSaleChange,
+  getPublicBuyerConfirmationPrompt,
+  submitPublicBuyerConfirmation,
+  resolveBuyerConfirmationReview,
+  formatBuyerConfirmationForRole,
+} from '../services/buyerConfirmationService';
 
 const router = Router();
 
@@ -1017,7 +1026,28 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     if (result.created) {
       await emitSaleCreationOperationalAudit(req, result.sale, req.body);
     }
-    res.status(result.created ? 201 : 200).json(result.sale);
+    let buyerConfirmationInfo: any = null;
+    try {
+      const issued = await issueBuyerConfirmationLink({
+        saleId: result.sale.id,
+        companyId,
+      });
+      buyerConfirmationInfo = {
+        id: issued.confirmation.id,
+        confirmationUrl: issued.confirmationUrl,
+        qrCodePayload: issued.qrCodePayload,
+        status: issued.status,
+        statusProgress: issued.statusProgress,
+        conditionsVersion: issued.conditionsVersion,
+        expiresAt: issued.expiresAt,
+      };
+    } catch (confErr) {
+      console.warn('[SALES] Falha não-bloqueante ao emitir link de confirmação do comprador:', confErr);
+    }
+    res.status(result.created ? 201 : 200).json({
+      ...result.sale,
+      ...(buyerConfirmationInfo ? { buyerConfirmation: buyerConfirmationInfo } : {}),
+    });
   } catch (error: any) {
     if (error && error.status && error.message) {
       return res.status(error.status).json({
@@ -1089,7 +1119,28 @@ router.post(
       if (result.created) {
         await emitSaleCreationOperationalAudit(req, result.sale, req.body);
       }
-      return res.status(result.created ? 201 : 200).json(result.sale);
+      let buyerConfirmationInfo: any = null;
+      try {
+        const issued = await issueBuyerConfirmationLink({
+          saleId: result.sale.id,
+          companyId,
+        });
+        buyerConfirmationInfo = {
+          id: issued.confirmation.id,
+          confirmationUrl: issued.confirmationUrl,
+          qrCodePayload: issued.qrCodePayload,
+          status: issued.status,
+          statusProgress: issued.statusProgress,
+          conditionsVersion: issued.conditionsVersion,
+          expiresAt: issued.expiresAt,
+        };
+      } catch (confErr) {
+        console.warn('[SALES] Falha não-bloqueante ao emitir link de confirmação do comprador:', confErr);
+      }
+      return res.status(result.created ? 201 : 200).json({
+        ...result.sale,
+        ...(buyerConfirmationInfo ? { buyerConfirmation: buyerConfirmationInfo } : {}),
+      });
     } catch (error: any) {
       if (receiptFile) await removeUploadedFile(req, receiptFile).catch(() => undefined);
       if (sheetPhotoFile) await removeUploadedFile(req, sheetPhotoFile).catch(() => undefined);
@@ -1265,6 +1316,22 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res: any) => {
           authorRole,
           ipAddress,
         });
+      }
+
+      const valueChanged = parsedValue !== undefined && parsedValue !== existing.value;
+      const methodChanged = paymentMethod !== undefined && paymentMethod !== existing.paymentMethod;
+      if (valueChanged || methodChanged) {
+        await invalidateAndReissueConfirmationOnSaleChange({
+          saleId: updated.id,
+          companyId,
+          reason: editReason || 'Condições comerciais ou valor da venda alterados no sistema.',
+          authorUserId: req.user?.id || null,
+          authorName,
+          authorRole,
+          ipAddress,
+        }).catch((err) =>
+          console.warn('[SALES] Falha ao rotacionar confirmação pós-edição:', err)
+        );
       }
 
       const canceledStates = new Set([
@@ -1842,6 +1909,284 @@ router.post('/photos', authenticateToken, async (req: AuthRequest, res: any) => 
   } catch (error) {
     console.error('Upload photo error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =======================================================================
+// CONFERÊNCIA INDEPENDENTE DE COMPRA PELO CLIENTE (QR CODE / LINK PÚBLICO)
+// =======================================================================
+
+// Obter dados mínimos públicos para preenchimento no celular do comprador (sem valores do vendedor)
+router.get('/public/prompt/:token', async (req, res: any) => {
+  try {
+    const prompt = await getPublicBuyerConfirmationPrompt(req.params.token);
+    res.json(prompt);
+  } catch (err: any) {
+    res.status(err.status || 400).json({
+      error: err.message || 'Link inválido ou expirado',
+      code: err.code || 'INVALID_LINK',
+    });
+  }
+});
+
+// Envio da resposta de conferência pelo cliente
+router.post('/public/confirm/:token', async (req, res: any) => {
+  try {
+    const result = await submitPublicBuyerConfirmation({
+      rawToken: req.params.token,
+      ...req.body,
+      ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      userAgent: req.get('user-agent') || null,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(err.status || 400).json({
+      error: err.message || 'Erro ao processar confirmação',
+      code: err.code,
+    });
+  }
+});
+
+// Listagem e revisão de conferências para o Admin da própria empresa (com agrupamento por lote BookBatch)
+router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const isManager = SALE_MANAGER_ROLES.includes(req.user?.role || '');
+  if (!isManager) {
+    return res.status(403).json({ error: 'Acesso restrito à administração da empresa' });
+  }
+
+  const { status, batchId, hasDivergence, isSkipped, groupBy } = req.query as Record<string, string | undefined>;
+
+  try {
+    const whereClause: Prisma.BuyerPurchaseConfirmationWhereInput = {
+      companyId,
+    };
+
+    if (status) {
+      whereClause.status = status;
+    }
+    if (hasDivergence !== undefined) {
+      whereClause.hasDivergence = hasDivergence === 'true';
+    }
+    if (isSkipped !== undefined) {
+      whereClause.isSkipped = isSkipped === 'true';
+    }
+    if (batchId) {
+      whereClause.sale = {
+        client: {
+          batchId,
+        },
+      };
+    }
+
+    const records = await prisma.buyerPurchaseConfirmation.findMany({
+      where: whereClause,
+      include: {
+        sale: {
+          include: {
+            client: {
+              include: {
+                batch: {
+                  include: {
+                    photographer: {
+                      select: { id: true, name: true },
+                    },
+                  },
+                },
+              },
+            },
+            seller: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+      },
+      orderBy: [{ createdAt: 'desc' }],
+    });
+
+    const formattedList = records.map((rec) =>
+      formatBuyerConfirmationForRole(
+        rec,
+        true,
+        undefined,
+        rec.sale?.client?.batch
+      )
+    );
+
+    if (groupBy === 'batch') {
+      const groupsMap: Record<string, { batch: any; confirmations: any[] }> = {};
+      for (const item of formattedList) {
+        const opBatch = (item as any).operationalBatch;
+        const bId = opBatch?.batchId || 'SEM_LOTE';
+        if (!groupsMap[bId]) {
+          groupsMap[bId] = {
+            batch: opBatch || {
+              batchId: null,
+              batchName: 'Sem lote associado',
+              city: null,
+            },
+            confirmations: [],
+          };
+        }
+        groupsMap[bId].confirmations.push(item);
+      }
+      return res.json({
+        total: formattedList.length,
+        groups: Object.values(groupsMap),
+      });
+    }
+
+    res.json({
+      total: formattedList.length,
+      confirmations: formattedList,
+    });
+  } catch (error: any) {
+    console.error('[SALES] Erro ao listar revisões de conferência:', error);
+    res.status(500).json({ error: 'Erro ao listar conferências' });
+  }
+});
+
+// Consulta do status da conferência de uma venda específica
+// (Vendedor vê apenas progressão: "Aguardando cliente", "Resposta recebida"; Admin vê tudo)
+router.get('/:id/buyer-confirmation', authenticateToken, async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const saleId = req.params.id as string;
+  try {
+    const sale = await prisma.sale.findFirst({
+      where: { id: saleId, companyId },
+      include: {
+        client: {
+          include: {
+            batch: {
+              include: {
+                photographer: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Venda não encontrada' });
+    }
+
+    const isManager = SALE_MANAGER_ROLES.includes(req.user?.role || '');
+    if (!isManager && sale.sellerId !== req.user?.id) {
+      return res.status(403).json({ error: 'Acesso negado a esta venda' });
+    }
+
+    const records = await prisma.buyerPurchaseConfirmation.findMany({
+      where: { saleId: sale.id, companyId },
+      orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    if (records.length === 0) {
+      return res.status(404).json({ error: 'Nenhuma conferência encontrada para esta venda' });
+    }
+
+    const latest = records[0];
+    const formatted = formatBuyerConfirmationForRole(
+      latest,
+      isManager,
+      isManager ? records.slice(1) : undefined,
+      isManager ? sale.client?.batch : undefined
+    );
+
+    res.json(formatted);
+  } catch (error: any) {
+    console.error('[SALES] Erro ao buscar conferência da venda:', error);
+    res.status(500).json({ error: 'Erro ao buscar conferência' });
+  }
+});
+
+// Vendedor pula a apresentação do QR code no momento da venda (cliente recusou / sem sinal)
+router.post('/:id/buyer-confirmation/skip', authenticateToken, async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const saleId = req.params.id as string;
+  try {
+    const sale = await prisma.sale.findFirst({
+      where: { id: saleId, companyId },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Venda não encontrada' });
+    }
+
+    const isManager = SALE_MANAGER_ROLES.includes(req.user?.role || '');
+    if (!isManager && sale.sellerId !== req.user?.id) {
+      return res.status(403).json({ error: 'Acesso negado a esta venda' });
+    }
+
+    const result = await recordBuyerConfirmationSkipped({
+      saleId: sale.id,
+      companyId,
+      reason: req.body.reason || 'CLIENT_REFUSED',
+      notes: req.body.notes,
+      sellerUserId: req.user?.id || sale.sellerId,
+      sellerName: req.user?.name || 'Vendedor',
+      ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[SALES] Erro ao registrar pulo de convite:', error);
+    res.status(500).json({ error: 'Erro ao registrar convite pulado' });
+  }
+});
+
+// Conclusão e justificativa da revisão pelo Admin da própria empresa
+router.post('/:id/buyer-confirmation/resolve', authenticateToken, async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const isManager = SALE_MANAGER_ROLES.includes(req.user?.role || '');
+  if (!isManager) {
+    return res.status(403).json({ error: 'Acesso restrito à administração da empresa' });
+  }
+
+  const saleId = req.params.id as string;
+  const resolutionNotes = req.body.resolutionNotes || req.body.justification;
+
+  try {
+    const sale = await prisma.sale.findFirst({
+      where: { id: saleId, companyId },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Venda não encontrada' });
+    }
+
+    const updated = await resolveBuyerConfirmationReview({
+      saleId: sale.id,
+      companyId,
+      adminUserId: req.user?.id!,
+      adminUserName: req.user?.name || 'Administrador',
+      adminRole: req.user?.role || 'ADMIN',
+      resolutionNotes,
+      ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+    });
+
+    res.json({
+      success: true,
+      message: 'Revisão concluída com sucesso',
+      confirmation: updated,
+    });
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[SALES] Erro ao concluir revisão da conferência:', error);
+    res.status(500).json({ error: 'Erro ao concluir revisão' });
   }
 });
 

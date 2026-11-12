@@ -48,6 +48,7 @@ class ApiService {
   String _baseUrl = AppConfig.serverUrl;
   String? _token;
   bool _isIsolatedSession = false;
+  Map<String, dynamic>? lastBuyerConfirmation;
 
   static ApiService? _mockInstance;
   static void Function(String message)? onSessionReplacedByOtherDevice;
@@ -610,11 +611,84 @@ class ApiService {
   Future<String> registerSale(Map<String, dynamic> saleData) async {
     try {
       final response = await _dio.post('/sales', data: saleData);
+      if (response.data is Map && response.data['buyerConfirmation'] != null) {
+        lastBuyerConfirmation =
+            Map<String, dynamic>.from(response.data['buyerConfirmation']);
+      } else {
+        lastBuyerConfirmation = null;
+      }
       return response.data['id'];
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
               'Erro ao registrar venda');
+    }
+  }
+
+  Future<Map<String, dynamic>> getBuyerConfirmation(String saleId) async {
+    try {
+      final response = await _dio.get('/sales/$saleId/buyer-confirmation');
+      return Map<String, dynamic>.from(response.data);
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao consultar conferência');
+    }
+  }
+
+  Future<Map<String, dynamic>> skipBuyerConfirmation(
+    String saleId, {
+    String reason = 'CLIENT_REFUSED',
+    String? notes,
+  }) async {
+    try {
+      final response = await _dio.post('/sales/$saleId/buyer-confirmation/skip',
+          data: {'reason': reason, if (notes != null) 'notes': notes});
+      return Map<String, dynamic>.from(response.data);
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao pular convite de conferência');
+    }
+  }
+
+  Future<Map<String, dynamic>> resolveBuyerConfirmationReview(
+    String saleId, {
+    required String resolutionNotes,
+  }) async {
+    try {
+      final response = await _dio.post(
+          '/sales/$saleId/buyer-confirmation/resolve',
+          data: {'resolutionNotes': resolutionNotes});
+      return Map<String, dynamic>.from(response.data);
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao concluir revisão');
+    }
+  }
+
+  Future<Map<String, dynamic>> listBuyerConfirmationsReview({
+    String? status,
+    String? batchId,
+    bool? hasDivergence,
+    bool? isSkipped,
+    String? groupBy,
+  }) async {
+    try {
+      final response = await _dio.get('/sales/buyer-confirmations/review',
+          queryParameters: {
+            if (status != null) 'status': status,
+            if (batchId != null) 'batchId': batchId,
+            if (hasDivergence != null) 'hasDivergence': hasDivergence.toString(),
+            if (isSkipped != null) 'isSkipped': isSkipped.toString(),
+            if (groupBy != null) 'groupBy': groupBy,
+          });
+      return Map<String, dynamic>.from(response.data);
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao listar revisões');
     }
   }
 
@@ -639,6 +713,12 @@ class ApiService {
       }
       final response = await _dio.post('/sales/with-receipt',
           data: FormData.fromMap(fields));
+      if (response.data is Map && response.data['buyerConfirmation'] != null) {
+        lastBuyerConfirmation =
+            Map<String, dynamic>.from(response.data['buyerConfirmation']);
+      } else {
+        lastBuyerConfirmation = null;
+      }
       return response.data['id'].toString();
     } on DioException catch (e) {
       throw ApiRequestException(
