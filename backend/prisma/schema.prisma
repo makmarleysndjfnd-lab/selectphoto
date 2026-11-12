@@ -77,6 +77,7 @@ model Company {
   internalOperationalAlerts    InternalOperationalAlert[]
   deviceTelemetries            DeviceTelemetry[]
   buyerConfirmations           BuyerPurchaseConfirmation[]
+  batchCommissionAdjustments   BatchCommissionAdjustment[]
 }
 
 model Team {
@@ -175,6 +176,10 @@ model User {
   supportGrantsApproved       SupportAccessGrant[]           @relation("SupportAccessApprover")
   supportGrantsRevoked        SupportAccessGrant[]           @relation("SupportAccessRevoker")
   deviceTelemetries           DeviceTelemetry[]
+  sellerBlocked               Boolean                        @default(false)
+  sellerBlockedReason         String?
+  sellerBlockedAt             DateTime?
+  sellerBlockedByUserId       String?
 }
 
 
@@ -560,6 +565,7 @@ model BookBatch {
   photographer   User     @relation("PhotographerBookBatches", fields: [photographerId], references: [id])
   company        Company? @relation(fields: [companyId], references: [id])
   clients        Client[]
+  commissionAdjustments BatchCommissionAdjustment[]
 }
 
 model StateRadarCache {
@@ -1686,6 +1692,16 @@ model BuyerPurchaseConfirmation {
   reviewResolvedByName      String?
   reviewResolutionNotes     String?
   reviewResolvedAt          DateTime?
+  deviceFingerprintHash     String?
+  suspectedSelfScan         Boolean   @default(false)
+  selfScanReason            String?
+  operationalBatchId        String?
+  reviewResolutionAction    String?
+  commissionDeductedCents   Int?
+  auditedReferenceCents     Int?
+  commissionDeductionApplied Boolean  @default(false)
+  commissionDeductionBatchId String?
+  sellerBlockedAtResolution Boolean   @default(false)
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -1695,6 +1711,31 @@ model BuyerPurchaseConfirmation {
   @@index([companyId, status])
   @@index([saleId, conditionsVersion])
   @@index([sellerId, status])
+  @@index([deviceFingerprintHash])
+  @@index([suspectedSelfScan])
+}
+
+model BatchCommissionAdjustment {
+  id                         String    @id @default(uuid())
+  companyId                  String
+  batchId                    String
+  saleId                     String
+  confirmationId             String    @unique
+  sellerId                   String
+  divergenceCents            Int
+  deductionCents             Int
+  originalSellerTotalCents   Int
+  auditedReferenceTotalCents Int
+  reason                     String
+  appliedByUserId            String
+  appliedByName              String
+  createdAt                  DateTime  @default(now())
+
+  company Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  batch   BookBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, batchId])
+  @@index([sellerId, batchId])
 }
 
 

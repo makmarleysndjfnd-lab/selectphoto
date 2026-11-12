@@ -777,6 +777,20 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
     }
 
     if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
+
+    const sellerUser = await prisma.user.findUnique({
+      where: { id: sellerId },
+      select: { sellerBlocked: true, sellerBlockedReason: true },
+    });
+    if (sellerUser?.sellerBlocked) {
+      return res.status(403).json({
+        error: `Vendedor bloqueado preventivamente para novos lotes e vendas (${
+          sellerUser.sellerBlockedReason || 'bloqueio administrativo ativo'
+        }).`,
+        code: 'SELLER_PREVENTIVELY_BLOCKED',
+      });
+    }
+
     const input = parseSaleInput(req.body);
 
     const result = await runSerializableTransaction(async (tx) => {
@@ -1086,6 +1100,20 @@ router.post(
     try {
       if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
       if (!sellerId) return res.status(401).json({ error: 'Usuário não identificado' });
+
+      const sellerUser = await prisma.user.findUnique({
+        where: { id: sellerId },
+        select: { sellerBlocked: true, sellerBlockedReason: true },
+      });
+      if (sellerUser?.sellerBlocked) {
+        return res.status(403).json({
+          error: `Vendedor bloqueado preventivamente para novos lotes e vendas (${
+            sellerUser.sellerBlockedReason || 'bloqueio administrativo ativo'
+          }).`,
+          code: 'SELLER_PREVENTIVELY_BLOCKED',
+        });
+      }
+
       if (!receiptFile) {
         return res.status(400).json({ error: 'O comprovante é obrigatório para concluir a venda' });
       }
@@ -1935,8 +1963,10 @@ router.post('/public/confirm/:token', async (req, res: any) => {
     const result = await submitPublicBuyerConfirmation({
       rawToken: req.params.token,
       ...req.body,
+      deviceFingerprint: req.body.deviceFingerprint || req.body.fingerprint,
       ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
       userAgent: req.get('user-agent') || null,
+      acceptLanguage: req.get('accept-language') || null,
     });
     res.json(result);
   } catch (err: any) {
@@ -2173,6 +2203,10 @@ router.post('/:id/buyer-confirmation/resolve', authenticateToken, async (req: Au
       adminUserName: req.user?.name || 'Administrador',
       adminRole: req.user?.role || 'ADMIN',
       resolutionNotes,
+      action: req.body.action,
+      divergenceDeductionCents: req.body.divergenceDeductionCents,
+      sellerBlocked: req.body.sellerBlocked,
+      sellerBlockedReason: req.body.sellerBlockedReason,
       ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
     });
 
@@ -2180,6 +2214,13 @@ router.post('/:id/buyer-confirmation/resolve', authenticateToken, async (req: Au
       success: true,
       message: 'Revisão concluída com sucesso',
       confirmation: updated,
+      ...updated,
+      commissionDeductedBrl: updated.commissionDeductedCents
+        ? updated.commissionDeductedCents / 100
+        : null,
+      auditedReferenceBrl: updated.auditedReferenceCents
+        ? updated.auditedReferenceCents / 100
+        : null,
     });
   } catch (error: any) {
     if (error?.status) {

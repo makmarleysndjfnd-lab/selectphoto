@@ -23,6 +23,8 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   // Controladores de justificativa por ID de venda
   final Map<String, TextEditingController> _resolutionControllers = {};
   final Set<String> _resolvingSales = {};
+  final Map<String, String> _selectedActions = {};
+  final Map<String, bool> _selectedSellerBlock = {};
 
   @override
   void initState() {
@@ -79,7 +81,7 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     }
   }
 
-  Future<void> _concluirRevisao(String saleId) async {
+  Future<void> _concluirRevisao(String saleId, {int? divergenceCents}) async {
     final controller = _resolutionControllers[saleId];
     final notes = controller?.text.trim() ?? '';
     if (notes.length < 5) {
@@ -93,22 +95,36 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
       return;
     }
 
+    final action = _selectedActions[saleId] ?? 'RESOLVED_NOTES_ONLY';
+    final sellerBlocked = _selectedSellerBlock[saleId] ?? false;
+
     setState(() => _resolvingSales.add(saleId));
 
     try {
       await _api.resolveBuyerConfirmationReview(
         saleId,
         resolutionNotes: notes,
+        action: action,
+        divergenceDeductionCents:
+            action == 'DEDUCT_COMMISSION' ? divergenceCents : null,
+        sellerBlocked: sellerBlocked,
+        sellerBlockedReason: sellerBlocked ? notes : null,
       );
       controller?.clear();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Revisão concluída com sucesso!'),
-          backgroundColor: Color(0xFF10B981),
+        SnackBar(
+          content: Text(
+            action == 'DEDUCT_COMMISSION'
+                ? 'Revisão concluída! Abatimento de comissão registrado no lote.'
+                : 'Revisão concluída com sucesso!',
+          ),
+          backgroundColor: const Color(0xFF10B981),
         ),
       );
       _carregarConferencias();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Erro ao concluir revisão: $e'),
@@ -216,10 +232,10 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   }
 
   Widget _buildEmptyView() {
-    return Center(
+    return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
+        children: [
           Icon(Icons.verified_outlined, size: 54, color: Colors.white24),
           SizedBox(height: 12),
           Text(
@@ -287,10 +303,10 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
               // Cabeçalho do Lote Operacional (BookBatch)
               Container(
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF221638),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF221638),
                   borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(15)),
+                      BorderRadius.vertical(top: Radius.circular(15)),
                 ),
                 child: Row(
                   children: [
@@ -388,6 +404,26 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
         : 'Não informado';
     final buyerMethod = buyer?['paymentMethod']?.toString() ?? '---';
 
+    final suspectedSelfScan = item['suspectedSelfScan'] == true;
+    final selfScanReason = item['selfScanReason']?.toString();
+
+    int? calculatedDivergenceCents;
+    if (item['differences'] != null &&
+        item['differences']['totalDifferenceCents'] != null) {
+      calculatedDivergenceCents =
+          (item['differences']['totalDifferenceCents'] as num).abs().toInt();
+    } else if (seller?['totalBrl'] != null && buyer?['totalBrl'] != null) {
+      final diff =
+          ((seller!['totalBrl'] as num) - (buyer!['totalBrl'] as num)).abs();
+      calculatedDivergenceCents = (diff * 100).round();
+    }
+    final divergenceBrlFormatted = calculatedDivergenceCents != null
+        ? _currencyFormat.format(calculatedDivergenceCents / 100)
+        : null;
+
+    final currentAction = _selectedActions[saleId] ?? 'RESOLVED_NOTES_ONLY';
+    final currentSellerBlocked = _selectedSellerBlock[saleId] ?? false;
+
     // Status badge
     Widget statusBadge;
     if (status == 'CONFIRMED') {
@@ -428,8 +464,11 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
             children: [
               Text(
                 'Venda: ${saleId.length > 8 ? saleId.substring(0, 8).toUpperCase() : saleId}',
@@ -439,22 +478,74 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                   fontSize: 13,
                 ),
               ),
-              statusBadge,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (suspectedSelfScan) ...[
+                    _badge('Auto-scan suspeito', const Color(0xFFF59E0B),
+                        Icons.fingerprint),
+                    const SizedBox(width: 6),
+                  ],
+                  statusBadge,
+                ],
+              ),
             ],
           ),
+          if (suspectedSelfScan) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+                border:
+                    Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.fingerprint,
+                      color: Color(0xFFF59E0B), size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ALERTA: Suspeita de Auto-escaneamento',
+                          style: TextStyle(
+                            color: Color(0xFFFBBF24),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          selfScanReason ??
+                              'O mesmo dispositivo/IP validou compras de múltiplos clientes deste vendedor ou lote.',
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
 
           // Tabela Lado a Lado (Vendedor vs Cliente)
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF160D24),
-              borderRadius: BorderRadius.circular(10),
+            decoration: const BoxDecoration(
+              color: Color(0xFF160D24),
+              borderRadius: BorderRadius.all(Radius.circular(10)),
             ),
             child: Column(
               children: [
-                Row(
-                  children: const [
+                const Row(
+                  children: [
                     Expanded(
                         flex: 3,
                         child: Text('Item',
@@ -551,15 +642,81 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                       const Icon(Icons.check_circle_outline,
                           color: Color(0xFF10B981), size: 16),
                       const SizedBox(width: 6),
-                      Text(
-                        'Revisão Concluída por ${resolution['resolvedByName'] ?? 'Admin'}',
-                        style: const TextStyle(
-                            color: Color(0xFF10B981),
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold),
+                      Expanded(
+                        child: Text(
+                          'Revisão Concluída por ${resolution['resolvedByName'] ?? 'Admin'}${resolution['resolvedAt'] != null ? ' em ${_dateFormat.format(DateTime.tryParse(resolution['resolvedAt'].toString()) ?? DateTime.now())}' : ''}',
+                          style: const TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold),
+                        ),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 6),
+                  if (item['commissionDeductionApplied'] == true) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEF4444).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.money_off,
+                              size: 13, color: Color(0xFFFCA5A5)),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Abatimento no Lote: ${item['commissionDeductedBrl'] != null ? _currencyFormat.format(item['commissionDeductedBrl']) : '---'}',
+                            style: const TextStyle(
+                                color: Color(0xFFFCA5A5),
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (item['auditedReferenceBrl'] != null)
+                      Text(
+                        'Valor de Referência Auditado: ${_currencyFormat.format(item['auditedReferenceBrl'])}',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 11),
+                      ),
+                  ] else ...[
+                    const Text(
+                      'Desfecho: Encerrado apenas com observações',
+                      style: TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ],
+                  if (item['sellerBlockedAtResolution'] == true ||
+                      item['sellerBlocked'] == true) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEF4444).withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.block, size: 13, color: Color(0xFFEF4444)),
+                          SizedBox(width: 4),
+                          Text(
+                            'Vendedor Bloqueado Preventivamente',
+                            style: TextStyle(
+                                color: Color(0xFFEF4444),
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 4),
                   Text(
                     'Justificativa: ${resolution['resolutionNotes'] ?? '---'}',
@@ -570,16 +727,174 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
               ),
             ),
           ] else if (hasDivergence) ...[
-            // Formulário para registrar conclusão da revisão
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const Text(
+                  'Desfecho Operacional da Revisão:',
+                  style: TextStyle(
+                    color: Color(0xFFA855F7),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedActions[saleId] = 'RESOLVED_NOTES_ONLY';
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: currentAction == 'RESOLVED_NOTES_ONLY'
+                          ? const Color(0xFFA855F7).withOpacity(0.18)
+                          : const Color(0xFF160D24),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: currentAction == 'RESOLVED_NOTES_ONLY'
+                            ? const Color(0xFFA855F7)
+                            : Colors.white12,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          currentAction == 'RESOLVED_NOTES_ONLY'
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          color: currentAction == 'RESOLVED_NOTES_ONLY'
+                              ? const Color(0xFFA855F7)
+                              : Colors.white38,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Encerrar apenas com justificativa (sem abatimento)',
+                            style: TextStyle(color: Colors.white, fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedActions[saleId] = 'DEDUCT_COMMISSION';
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: currentAction == 'DEDUCT_COMMISSION'
+                          ? const Color(0xFFEF4444).withOpacity(0.18)
+                          : const Color(0xFF160D24),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: currentAction == 'DEDUCT_COMMISSION'
+                            ? const Color(0xFFEF4444)
+                            : Colors.white12,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          currentAction == 'DEDUCT_COMMISSION'
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          color: currentAction == 'DEDUCT_COMMISSION'
+                              ? const Color(0xFFEF4444)
+                              : Colors.white38,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            divergenceBrlFormatted != null
+                                ? 'Abater divergência de $divergenceBrlFormatted na comissão do lote'
+                                : 'Abater divergência na comissão do lote',
+                            style: TextStyle(
+                              color: currentAction == 'DEDUCT_COMMISSION'
+                                  ? const Color(0xFFFCA5A5)
+                                  : Colors.white,
+                              fontSize: 11,
+                              fontWeight: currentAction == 'DEDUCT_COMMISSION'
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _selectedSellerBlock[saleId] = !currentSellerBlocked;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: currentSellerBlocked
+                          ? const Color(0xFFEF4444).withOpacity(0.12)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: currentSellerBlocked
+                            ? const Color(0xFFEF4444).withOpacity(0.5)
+                            : Colors.white12,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: currentSellerBlocked,
+                          activeColor: const Color(0xFFEF4444),
+                          onChanged: (val) {
+                            setState(() {
+                              _selectedSellerBlock[saleId] = val ?? false;
+                            });
+                          },
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        const SizedBox(width: 4),
+                        const Expanded(
+                          child: Text(
+                            'Bloquear vendedor preventivamente para novas vendas/lotes',
+                            style: TextStyle(
+                              color: Color(0xFFFCA5A5),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
                 TextField(
                   controller: resolutionCtrl,
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                   decoration: InputDecoration(
-                    hintText: 'Justificativa para concluir a revisão...',
-                    hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                    hintText:
+                        'Justificativa auditada (mínimo 5 caracteres)...',
+                    hintStyle:
+                        const TextStyle(color: Colors.white38, fontSize: 12),
                     filled: true,
                     fillColor: const Color(0xFF160D24),
                     contentPadding: const EdgeInsets.symmetric(
@@ -597,8 +912,12 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
-                  onPressed:
-                      isResolving ? null : () => _concluirRevisao(saleId),
+                  onPressed: isResolving
+                      ? null
+                      : () => _concluirRevisao(
+                            saleId,
+                            divergenceCents: calculatedDivergenceCents,
+                          ),
                   icon: isResolving
                       ? const SizedBox(
                           width: 14,
@@ -608,7 +927,8 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                         )
                       : const Icon(Icons.check, size: 16),
                   label: const Text('Concluir Revisão (Admin)',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFA855F7),
                     foregroundColor: Colors.white,

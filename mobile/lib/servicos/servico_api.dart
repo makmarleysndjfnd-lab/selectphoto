@@ -655,11 +655,23 @@ class ApiService {
   Future<Map<String, dynamic>> resolveBuyerConfirmationReview(
     String saleId, {
     required String resolutionNotes,
+    String action = 'RESOLVED_NOTES_ONLY',
+    int? divergenceDeductionCents,
+    bool? sellerBlocked,
+    String? sellerBlockedReason,
   }) async {
     try {
       final response = await _dio.post(
           '/sales/$saleId/buyer-confirmation/resolve',
-          data: {'resolutionNotes': resolutionNotes});
+          data: {
+            'resolutionNotes': resolutionNotes,
+            'action': action,
+            if (divergenceDeductionCents != null)
+              'divergenceDeductionCents': divergenceDeductionCents,
+            if (sellerBlocked != null) 'sellerBlocked': sellerBlocked,
+            if (sellerBlockedReason != null)
+              'sellerBlockedReason': sellerBlockedReason,
+          });
       return Map<String, dynamic>.from(response.data);
     } on DioException catch (e) {
       throw Exception(

@@ -91,11 +91,19 @@ after(async () => {
 
   // Limpeza dos dados criados na suíte
   if (createdSaleIds.length > 0) {
+    await (prisma as any).batchCommissionAdjustment.deleteMany({
+      where: { saleId: { in: createdSaleIds } },
+    });
     await prisma.buyerPurchaseConfirmation.deleteMany({
       where: { saleId: { in: createdSaleIds } },
     });
     await prisma.operationalAuditEvent.deleteMany({
-      where: { entityId: { in: createdSaleIds } },
+      where: {
+        OR: [
+          { entityId: { in: createdSaleIds } },
+          { entityId: { in: createdUserIds } },
+        ],
+      },
     });
     await prisma.creditInstallment.deleteMany({
       where: { agreement: { saleId: { in: createdSaleIds } } },
@@ -138,7 +146,7 @@ after(async () => {
   await disconnectPrisma();
 });
 
-test('Lumora — Suíte Completa de Conferência de Vendas por QR (Etapa 1)', async (t) => {
+test('Lumora — Suíte Completa de Conferência de Vendas por QR (Etapas 1 e 2)', async (t) => {
   const baseUrl = await getBaseUrl;
 
   // Criação de fixtures básicas: Empresa A e Empresa B
@@ -858,6 +866,402 @@ test('Lumora — Suíte Completa de Conferência de Vendas por QR (Etapa 1)', as
     assert.equal(resListB.status, 200);
     const listB = await resListB.json();
     assert.equal(listB.total, 0, 'Empresa B não deve ver nenhuma conferência da Empresa A');
+  });
+
+  // --------------------------------------------------------------------------
+  // CENÁRIO 10: Prevenção silenciosa de auto-escaneamento (device fingerprinting)
+  // --------------------------------------------------------------------------
+  await t.test('10. Prevenção silenciosa de auto-escaneamento: detecção multi-cliente do mesmo dispositivo com neutralidade absoluta para comprador e vendedor', async () => {
+    // Cliente 1 do lote 1
+    const client10a = await prisma.client.create({
+      data: {
+        id: `client-10a-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-10A-${randomUUID().slice(0, 8)}`,
+        name: 'Cliente AutoScan 1',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        batchId: batch1.id,
+      },
+    });
+    createdClientIds.push(client10a.id);
+
+    const sale10a = await prisma.sale.create({
+      data: {
+        id: `sale-10a-${randomUUID().slice(0, 8)}`,
+        value: 500.0,
+        paymentMethod: 'PIX',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        clientId: client10a.id,
+        sellerId: sellerA.id,
+      },
+    });
+    createdSaleIds.push(sale10a.id);
+
+    // Cliente 2 do lote 1 (distinto)
+    const client10b = await prisma.client.create({
+      data: {
+        id: `client-10b-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-10B-${randomUUID().slice(0, 8)}`,
+        name: 'Cliente AutoScan 2',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        batchId: batch1.id,
+      },
+    });
+    createdClientIds.push(client10b.id);
+
+    const sale10b = await prisma.sale.create({
+      data: {
+        id: `sale-10b-${randomUUID().slice(0, 8)}`,
+        value: 600.0,
+        paymentMethod: 'PIX',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        clientId: client10b.id,
+        sellerId: sellerA.id,
+      },
+    });
+    createdSaleIds.push(sale10b.id);
+
+    const issued10a = await issueBuyerConfirmationLink({ saleId: sale10a.id, companyId: compA.id });
+    const issued10b = await issueBuyerConfirmationLink({ saleId: sale10b.id, companyId: compA.id });
+
+    const sharedDeviceFingerprint = 'device-fingerprint-seller-samsung-galaxy-xyz-9988';
+
+    // 1ª Confirmação (Venda A): primeiro uso do dispositivo
+    const resConfirmA = await fetch(`${baseUrl}/confirmar-compra/${issued10a.rawToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reportedTotalValue: '500.00',
+        reportedPaidValue: '500.00',
+        reportedPaymentMethod: 'PIX',
+        deviceFingerprint: sharedDeviceFingerprint,
+      }),
+    });
+    assert.equal(resConfirmA.status, 200);
+    const bodyConfirmA = await resConfirmA.json();
+    assert.equal(bodyConfirmA.received, true);
+
+    const checkA = await prisma.buyerPurchaseConfirmation.findUnique({
+      where: { id: issued10a.confirmation.id },
+    });
+    assert.equal(checkA?.suspectedSelfScan, false, 'Primeira confirmação não deve disparar alerta de auto-escaneamento');
+
+    // 2ª Confirmação (Venda B - cliente diferente, mesmo vendedor/lote, mesmo device):
+    const resConfirmB = await fetch(`${baseUrl}/confirmar-compra/${issued10b.rawToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reportedTotalValue: '600.00',
+        reportedPaidValue: '600.00',
+        reportedPaymentMethod: 'PIX',
+        deviceFingerprint: sharedDeviceFingerprint,
+      }),
+    });
+    assert.equal(resConfirmB.status, 200, 'Página pública do cliente NUNCA deve acusar erro ou bloqueio');
+    const bodyConfirmB = await resConfirmB.json();
+    assert.equal(bodyConfirmB.received, true);
+    assert.equal(bodyConfirmB.message, 'Sua confirmação de compra foi registrada com sucesso!');
+    assert.ok(bodyConfirmB.receipt, 'Recibo sem valor fiscal deve ser emitido normalmente');
+    assert.equal(bodyConfirmB.error, undefined);
+
+    // Consulta pelo vendedor: 100% neutra
+    const resSellerViewB = await fetch(`${baseUrl}/api/sales/${sale10b.id}/buyer-confirmation`, {
+      headers: { Authorization: `Bearer ${sellerTokenA}` },
+    });
+    assert.equal(resSellerViewB.status, 200);
+    const sellerViewB = await resSellerViewB.json();
+    assert.equal(sellerViewB.statusProgress, 'Resposta recebida');
+    assert.equal(sellerViewB.suspectedSelfScan, undefined, 'Vendedor JAMAIS recebe menção de auto-escaneamento');
+    assert.equal(sellerViewB.selfScanReason, undefined);
+
+    // Consulta pelo Admin da Empresa: exibe alerta de auto-escaneamento
+    const resAdminViewB = await fetch(`${baseUrl}/api/sales/${sale10b.id}/buyer-confirmation`, {
+      headers: { Authorization: `Bearer ${adminTokenA}` },
+    });
+    assert.equal(resAdminViewB.status, 200);
+    const adminViewB = await resAdminViewB.json();
+    assert.equal(adminViewB.suspectedSelfScan, true, 'Admin deve ver suspeita de auto-escaneamento');
+    assert.ok(adminViewB.selfScanReason?.includes('cliente(s) distinto(s)'), 'Motivo da suspeita deve ser detalhado');
+
+    // Evento de auditoria registrado
+    const auditEvents = await prisma.operationalAuditEvent.findMany({
+      where: {
+        companyId: compA.id,
+        action: 'BUYER_CONFIRMATION_SELF_SCAN_SUSPECTED',
+        entityId: sale10b.id,
+      },
+    });
+    assert.ok(auditEvents.length >= 1, 'Auditoria operacional deve registrar BUYER_CONFIRMATION_SELF_SCAN_SUSPECTED');
+  });
+
+  // --------------------------------------------------------------------------
+  // CENÁRIO 11: Desfecho operacional no lote — Abatimento de comissão exato em centavos
+  // --------------------------------------------------------------------------
+  await t.test('11. Desfecho operacional no lote: abatimento exato da divergência na comissão do lote preservando valor lançado pelo vendedor', async () => {
+    const client11 = await prisma.client.create({
+      data: {
+        id: `client-11-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-11-${randomUUID().slice(0, 8)}`,
+        name: 'Cliente Divergente Lote',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        batchId: batch1.id,
+      },
+    });
+    createdClientIds.push(client11.id);
+
+    const sale11 = await prisma.sale.create({
+      data: {
+        id: `sale-11-${randomUUID().slice(0, 8)}`,
+        value: 900.0,
+        paymentMethod: 'PIX',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        clientId: client11.id,
+        sellerId: sellerA.id,
+      },
+    });
+    createdSaleIds.push(sale11.id);
+
+    const issued11 = await issueBuyerConfirmationLink({ saleId: sale11.id, companyId: compA.id });
+
+    // Cliente relata R$ 600.00 (divergência de R$ 300.00 = 30000 centavos)
+    const resConfirm11 = await fetch(`${baseUrl}/confirmar-compra/${issued11.rawToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reportedTotalValue: '600.00',
+        reportedPaidValue: '600.00',
+        reportedPaymentMethod: 'PIX',
+      }),
+    });
+    assert.equal(resConfirm11.status, 200);
+
+    // Admin resolve com abatimento de comissão no lote
+    const resResolve11 = await fetch(`${baseUrl}/api/sales/${sale11.id}/buyer-confirmation/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminTokenA}`,
+      },
+      body: JSON.stringify({
+        action: 'DEDUCT_COMMISSION',
+        resolutionNotes: 'Divergência confirmada com cliente e vendedor; comissão abatida no fechamento do lote.',
+      }),
+    });
+    assert.equal(resResolve11.status, 200);
+    const resolveBody11 = await resResolve11.json();
+    assert.equal(resolveBody11.commissionDeductionApplied, true);
+    assert.equal(resolveBody11.commissionDeductedCents, 30000);
+    assert.equal(resolveBody11.commissionDeductedBrl, 300);
+    assert.equal(resolveBody11.auditedReferenceCents, 60000);
+    assert.equal(resolveBody11.auditedReferenceBrl, 600);
+
+    // Verifica no banco: registro em BatchCommissionAdjustment
+    const adj11 = await (prisma as any).batchCommissionAdjustment.findUnique({
+      where: { confirmationId: issued11.confirmation.id },
+    });
+    assert.ok(adj11, 'BatchCommissionAdjustment deve ser criado');
+    assert.equal(adj11.batchId, batch1.id);
+    assert.equal(adj11.sellerId, sellerA.id);
+    assert.equal(adj11.divergenceCents, 30000);
+    assert.equal(adj11.deductionCents, 30000);
+    assert.equal(adj11.originalSellerTotalCents, 90000);
+    assert.equal(adj11.auditedReferenceTotalCents, 60000);
+
+    // Verifica que o valor original do vendedor foi preservado intacto
+    const confRecord11 = await prisma.buyerPurchaseConfirmation.findUnique({
+      where: { id: issued11.confirmation.id },
+    });
+    assert.equal(confRecord11?.sellerTotalCents, 90000, 'sellerTotalCents original deve ser preservado');
+    assert.equal(confRecord11?.commissionDeductionApplied, true);
+  });
+
+  // --------------------------------------------------------------------------
+  // CENÁRIO 12: Idempotência transacional contra duplo abatimento de comissão
+  // --------------------------------------------------------------------------
+  await t.test('12. Idempotência transacional: chamadas repetidas de resolução com abatimento não duplicam dedução nem ajustes no lote', async () => {
+    // Reexecuta resolução da mesma venda 11 com DEDUCT_COMMISSION
+    const sales = await prisma.sale.findMany({ where: { clientId: createdClientIds[createdClientIds.length - 1] } });
+    const targetSaleId = sales[0].id;
+
+    const resRepeat = await fetch(`${baseUrl}/api/sales/${targetSaleId}/buyer-confirmation/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminTokenA}`,
+      },
+      body: JSON.stringify({
+        action: 'DEDUCT_COMMISSION',
+        resolutionNotes: 'Segunda chamada de teste para conferir idempotência estrita.',
+      }),
+    });
+    assert.equal(resRepeat.status, 200);
+
+    // Confere que existe EXATAMENTE 1 registro de BatchCommissionAdjustment para essa venda
+    const allAdjs = await (prisma as any).batchCommissionAdjustment.findMany({
+      where: { saleId: targetSaleId },
+    });
+    assert.equal(allAdjs.length, 1, 'Não pode haver mais de um ajuste para a mesma confirmação/venda');
+  });
+
+  // --------------------------------------------------------------------------
+  // CENÁRIO 13: Bloqueio preventivo do vendedor e impedimento de novas vendas
+  // --------------------------------------------------------------------------
+  await t.test('13. Bloqueio preventivo de vendedor: Admin bloqueia vendedor na revisão e vendedor tem novas vendas rejeitadas com 403', async () => {
+    const client13 = await prisma.client.create({
+      data: {
+        id: `client-13-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-13-${randomUUID().slice(0, 8)}`,
+        name: 'Cliente Bloqueio Vendedor',
+        city: 'Florianópolis',
+        companyId: compA.id,
+      },
+    });
+    createdClientIds.push(client13.id);
+
+    const sale13 = await prisma.sale.create({
+      data: {
+        id: `sale-13-${randomUUID().slice(0, 8)}`,
+        value: 750.0,
+        paymentMethod: 'PIX',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        clientId: client13.id,
+        sellerId: sellerA.id,
+      },
+    });
+    createdSaleIds.push(sale13.id);
+
+    const issued13 = await issueBuyerConfirmationLink({ saleId: sale13.id, companyId: compA.id });
+
+    // Cliente relata divergência
+    await fetch(`${baseUrl}/confirmar-compra/${issued13.rawToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reportedTotalValue: '400.00',
+        reportedPaidValue: '400.00',
+        reportedPaymentMethod: 'PIX',
+      }),
+    });
+
+    // Admin resolve com bloqueio preventivo do vendedor
+    const resResolve13 = await fetch(`${baseUrl}/api/sales/${sale13.id}/buyer-confirmation/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminTokenA}`,
+      },
+      body: JSON.stringify({
+        action: 'RESOLVED_NOTES_ONLY',
+        resolutionNotes: 'Revisão concluída com bloqueio do vendedor por reincidência de divergência.',
+        sellerBlocked: true,
+        sellerBlockedReason: 'Fraude reiterada na cobrança de clientes.',
+      }),
+    });
+    assert.equal(resResolve13.status, 200);
+
+    // Confere no banco que sellerA está bloqueado
+    const sellerAfterBlock = await prisma.user.findUnique({ where: { id: sellerA.id } });
+    assert.equal(sellerAfterBlock?.sellerBlocked, true);
+    assert.equal(sellerAfterBlock?.sellerBlockedReason, 'Fraude reiterada na cobrança de clientes.');
+
+    // Vendedor tenta cadastrar nova venda comum: deve receber 403
+    const newClient13 = await prisma.client.create({
+      data: {
+        id: `client-13-new-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-13-NEW-${randomUUID().slice(0, 8)}`,
+        name: 'Tentativa Nova Venda Bloqueado',
+        city: 'Florianópolis',
+        companyId: compA.id,
+      },
+    });
+    createdClientIds.push(newClient13.id);
+
+    const resSaleBlocked = await fetch(`${baseUrl}/api/sales`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${sellerTokenA}`,
+      },
+      body: JSON.stringify({
+        clientId: newClient13.id,
+        value: 300,
+        city: 'Florianópolis',
+        product: 'Álbum',
+        paymentMethod: 'CASH',
+      }),
+    });
+    assert.equal(resSaleBlocked.status, 403);
+    const bodyBlocked = await resSaleBlocked.json();
+    assert.equal(bodyBlocked.code, 'SELLER_PREVENTIVELY_BLOCKED');
+
+    // Desbloqueia o vendedor para restaurar o estado limpo
+    await prisma.user.update({
+      where: { id: sellerA.id },
+      data: { sellerBlocked: false, sellerBlockedReason: null, sellerBlockedAt: null },
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // CENÁRIO 14: Isolamento multi-tenant no bloqueio e ajuste de comissão
+  // --------------------------------------------------------------------------
+  await t.test('14. Isolamento multi-tenant: Admin da Empresa B não pode aplicar dedução de lote nem bloquear vendedor da Empresa A', async () => {
+    const client14 = await prisma.client.create({
+      data: {
+        id: `client-14-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `SEQ-14-${randomUUID().slice(0, 8)}`,
+        name: 'Cliente Isolamento Etapa 2',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        batchId: batch1.id,
+      },
+    });
+    createdClientIds.push(client14.id);
+
+    const sale14 = await prisma.sale.create({
+      data: {
+        id: `sale-14-${randomUUID().slice(0, 8)}`,
+        value: 800.0,
+        paymentMethod: 'PIX',
+        city: 'Florianópolis',
+        companyId: compA.id,
+        clientId: client14.id,
+        sellerId: sellerA.id,
+      },
+    });
+    createdSaleIds.push(sale14.id);
+
+    const issued14 = await issueBuyerConfirmationLink({ saleId: sale14.id, companyId: compA.id });
+
+    // Admin da Empresa B tenta resolver venda da Empresa A aplicando abatimento e bloqueio
+    const resResolveB = await fetch(`${baseUrl}/api/sales/${sale14.id}/buyer-confirmation/resolve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminTokenB}`,
+      },
+      body: JSON.stringify({
+        action: 'DEDUCT_COMMISSION',
+        resolutionNotes: 'Tentativa indevida de dedução de comissão por outra empresa.',
+        sellerBlocked: true,
+      }),
+    });
+    assert.equal(resResolveB.status, 404, 'Empresa B não pode resolver venda da Empresa A');
+
+    // Confere que nenhum ajuste foi criado
+    const adjCheck = await (prisma as any).batchCommissionAdjustment.findUnique({
+      where: { confirmationId: issued14.confirmation.id },
+    });
+    assert.equal(adjCheck, null);
+
+    // Confere que sellerA NÃO foi bloqueado
+    const sellerCheck = await prisma.user.findUnique({ where: { id: sellerA.id } });
+    assert.equal(sellerCheck?.sellerBlocked, false);
   });
 });
 

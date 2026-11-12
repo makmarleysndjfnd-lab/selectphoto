@@ -768,6 +768,8 @@ export async function submitPublicBuyerConfirmation(
     buyerChannel?: string;
     ipAddress?: string | null;
     userAgent?: string | null;
+    deviceFingerprint?: string;
+    acceptLanguage?: string;
   },
   dbClient: PrismaClient = defaultPrisma
 ) {
@@ -1196,6 +1198,46 @@ export async function submitPublicBuyerConfirmation(
         }
       : null;
 
+    // ── Prevenção silenciosa de auto-escaneamento por fingerprint / IP ───────────
+    const rawFp =
+      params.deviceFingerprint ||
+      `${params.ipAddress || ''}|${params.userAgent || ''}|${params.acceptLanguage || ''}`;
+    const deviceFingerprintHash = crypto
+      .createHash('sha256')
+      .update(rawFp)
+      .digest('hex');
+
+    const operationalWindowStart = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const batchId =
+      record.sale?.client?.batchId ||
+      (record.sale?.client as any)?.batch?.id ||
+      record.operationalBatchId ||
+      null;
+
+    const suspiciousPriorConfirmations = await tx.buyerPurchaseConfirmation.findMany({
+      where: {
+        companyId: record.companyId,
+        id: { not: record.id },
+        clientId: { not: record.clientId },
+        status: { in: ['CONFIRMED', 'UNDER_REVIEW'] },
+        usedAt: { gte: operationalWindowStart },
+        deviceFingerprintHash,
+        OR: [
+          { sellerId: record.sellerId },
+          ...(batchId ? [{ operationalBatchId: batchId }] : []),
+          ...(batchId ? [{ sale: { client: { batchId } } }] : []),
+        ],
+      },
+      select: { id: true, clientId: true, saleId: true, usedAt: true },
+    });
+
+    const suspectedSelfScan = suspiciousPriorConfirmations.length > 0;
+    const selfScanReason = suspectedSelfScan
+      ? `Dispositivo (fingerprint ${deviceFingerprintHash.slice(0, 8)}) confirmou fichas de ${
+          suspiciousPriorConfirmations.length
+        } cliente(s) distinto(s) do mesmo vendedor ou lote dentro da janela operacional.`
+      : null;
+
     const updated = await tx.buyerPurchaseConfirmation.update({
       where: { id: record.id },
       data: {
@@ -1216,8 +1258,47 @@ export async function submitPublicBuyerConfirmation(
         usedAt: now,
         respondedIp: params.ipAddress || null,
         respondedUserAgent: params.userAgent ? String(params.userAgent).slice(0, 255) : null,
+        deviceFingerprintHash,
+        suspectedSelfScan,
+        selfScanReason,
+        operationalBatchId: batchId,
       },
     });
+
+    if (suspectedSelfScan) {
+      await recordOperationalAuditEvent(
+        {
+          companyId: record.companyId,
+          category: 'CONDITIONS',
+          action: 'BUYER_CONFIRMATION_SELF_SCAN_SUSPECTED',
+          entityType: 'SALE',
+          entityReference: ref,
+          entityId: record.saleId,
+          previousValues: { suspectedSelfScan: false },
+          newValues: {
+            suspectedSelfScan: true,
+            deviceFingerprintHash,
+            selfScanReason,
+            matchedPriorCount: suspiciousPriorConfirmations.length,
+          },
+          reason: selfScanReason || 'Suspeita de auto-escaneamento pelo mesmo dispositivo em clientes distintos.',
+          authorUserId: null,
+          authorName: 'Sistema de Segurança Lumora',
+          authorRole: 'SYSTEM',
+          ipAddress: params.ipAddress || null,
+          reviewAlert: {
+            alertType: 'BUYER_CONFIRMATION_SELF_SCAN_SUSPECTED',
+            severity: 'HIGH',
+            summary: `Alerta de auto-escaneamento na venda ${ref}: mesmo dispositivo confirmou múltiplos clientes do mesmo vendedor/lote.`,
+            details: {
+              deviceFingerprintHash,
+              matchedConfirmations: suspiciousPriorConfirmations,
+            },
+          },
+        },
+        tx
+      );
+    }
 
     await recordOperationalAuditEvent(
       {
@@ -1311,6 +1392,10 @@ export async function resolveBuyerConfirmationReview(
     adminUserName: string;
     adminRole?: string;
     resolutionNotes: string;
+    action?: 'RESOLVED_NOTES_ONLY' | 'DEDUCT_COMMISSION' | 'NONE';
+    divergenceDeductionCents?: number;
+    sellerBlocked?: boolean;
+    sellerBlockedReason?: string;
     ipAddress?: string | null;
   },
   dbClient: PrismaClient = defaultPrisma
@@ -1324,63 +1409,236 @@ export async function resolveBuyerConfirmationReview(
     throw err;
   }
 
-  const latest = await dbClient.buyerPurchaseConfirmation.findFirst({
-    where: { saleId: params.saleId, companyId: params.companyId },
-    orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
-    include: {
-      sale: true,
-    },
-  });
-
-  if (!latest) {
-    const err: any = new Error('Confirmação de compra não encontrada.');
-    err.status = 404;
-    throw err;
-  }
-
-  const now = new Date();
-  const updated = await dbClient.buyerPurchaseConfirmation.update({
-    where: { id: latest.id },
-    data: {
-      reviewResolvedByUserId: params.adminUserId,
-      reviewResolvedByName: params.adminUserName,
-      reviewResolutionNotes: cleanNotes,
-      reviewResolvedAt: now,
-    },
-  });
-
-  const ref =
-    latest.sale?.fichaNumber || `VND-${latest.saleId.slice(0, 8).toUpperCase()}`;
-
-  await recordOperationalAuditEvent(
-    {
-      companyId: params.companyId,
-      category: 'CONDITIONS',
-      action: 'BUYER_CONFIRMATION_REVIEW_RESOLVED',
-      entityType: 'SALE',
-      entityReference: ref,
-      entityId: latest.saleId,
-      previousValues: {
-        reviewResolvedAt: latest.reviewResolvedAt,
-        status: latest.status,
+  return await (dbClient as any).$transaction(async (tx: any) => {
+    // 1. Localiza a conferência mais recente
+    const candidate = await tx.buyerPurchaseConfirmation.findFirst({
+      where: { saleId: params.saleId, companyId: params.companyId },
+      orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        sale: {
+          include: {
+            client: {
+              include: {
+                batch: true,
+              },
+            },
+            seller: true,
+          },
+        },
       },
-      newValues: {
+    });
+
+    if (!candidate) {
+      const err: any = new Error('Confirmação de compra não encontrada.');
+      err.status = 404;
+      throw err;
+    }
+
+    // 2. Trava transacional (FOR UPDATE) para prevenir concorrência e duplo abatimento
+    await tx.$executeRawUnsafe(
+      'SELECT id FROM "BuyerPurchaseConfirmation" WHERE id = $1 FOR UPDATE',
+      candidate.id
+    );
+
+    const latest = await tx.buyerPurchaseConfirmation.findUnique({
+      where: { id: candidate.id },
+      include: {
+        sale: {
+          include: {
+            client: {
+              include: {
+                batch: true,
+              },
+            },
+            seller: true,
+          },
+        },
+      },
+    });
+
+    if (!latest) {
+      const err: any = new Error('Confirmação de compra não encontrada.');
+      err.status = 404;
+      throw err;
+    }
+
+    const now = new Date();
+    const action = params.action || 'RESOLVED_NOTES_ONLY';
+    let commissionDeductionApplied = latest.commissionDeductionApplied;
+    let commissionDeductedCents = latest.commissionDeductedCents;
+    let auditedReferenceCents = latest.auditedReferenceCents;
+    let commissionDeductionBatchId = latest.commissionDeductionBatchId;
+    let batchAdjustmentCreated: any = null;
+
+    const divergenceCents = Math.abs(
+      (latest.sellerTotalCents || 0) - (latest.reportedTotalCents || 0)
+    );
+    const deductionTargetCents =
+      params.divergenceDeductionCents !== undefined &&
+      params.divergenceDeductionCents !== null
+        ? Math.round(Number(params.divergenceDeductionCents))
+        : divergenceCents;
+
+    const batchId =
+      latest.sale?.client?.batchId ||
+      latest.operationalBatchId ||
+      null;
+
+    // (b) Abater divergência na comissão do lote de forma transacional e idempotente
+    if (action === 'DEDUCT_COMMISSION') {
+      if (latest.commissionDeductionApplied) {
+        console.log(
+          `[REVIEW] Abatimento de comissão já aplicado anteriormente na confirmação ${latest.id}`
+        );
+      } else {
+        auditedReferenceCents =
+          latest.reportedTotalCents ??
+          Math.max(0, (latest.sellerTotalCents || 0) - deductionTargetCents);
+
+        if (deductionTargetCents > 0 && batchId) {
+          const existingAdj = await tx.batchCommissionAdjustment.findUnique({
+            where: { confirmationId: latest.id },
+          });
+
+          if (!existingAdj) {
+            batchAdjustmentCreated = await tx.batchCommissionAdjustment.create({
+              data: {
+                companyId: params.companyId,
+                batchId,
+                saleId: latest.saleId,
+                confirmationId: latest.id,
+                sellerId: latest.sellerId,
+                divergenceCents,
+                deductionCents: deductionTargetCents,
+                originalSellerTotalCents: latest.sellerTotalCents,
+                auditedReferenceTotalCents: auditedReferenceCents,
+                reason: cleanNotes,
+                appliedByUserId: params.adminUserId,
+                appliedByName: params.adminUserName,
+              },
+            });
+          } else {
+            batchAdjustmentCreated = existingAdj;
+          }
+        }
+
+        commissionDeductionApplied = true;
+        commissionDeductedCents = deductionTargetCents;
+        commissionDeductionBatchId = batchId;
+      }
+    }
+
+    // (c) Bloqueio preventivo do vendedor para novos lotes e vendas
+    let sellerBlockedAtResolution = latest.sellerBlockedAtResolution;
+    if (params.sellerBlocked !== undefined && latest.sellerId) {
+      const isBlocking = Boolean(params.sellerBlocked);
+      await tx.user.update({
+        where: { id: latest.sellerId },
+        data: {
+          sellerBlocked: isBlocking,
+          sellerBlockedReason: isBlocking
+            ? params.sellerBlockedReason ||
+              cleanNotes ||
+              'Bloqueio preventivo por divergência na conferência de vendas'
+            : null,
+          sellerBlockedAt: isBlocking ? now : null,
+          sellerBlockedByUserId: isBlocking ? params.adminUserId : null,
+        },
+      });
+      sellerBlockedAtResolution = isBlocking;
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: params.companyId,
+          category: 'CONDITIONS',
+          action: isBlocking
+            ? 'SELLER_PREVENTIVE_BLOCK_APPLIED'
+            : 'SELLER_PREVENTIVE_BLOCK_REMOVED',
+          entityType: 'SELLER',
+          entityReference: latest.sellerId,
+          entityId: latest.sellerId,
+          previousValues: {
+            sellerBlocked: !isBlocking,
+          },
+          newValues: {
+            sellerBlocked: isBlocking,
+            reason: params.sellerBlockedReason || cleanNotes,
+            resolvedBy: params.adminUserName,
+          },
+          reason: isBlocking
+            ? `Bloqueio preventivo aplicado pelo Admin ao vendedor: ${cleanNotes}`
+            : `Bloqueio preventivo removido pelo Admin: ${cleanNotes}`,
+          authorUserId: params.adminUserId,
+          authorName: params.adminUserName,
+          authorRole: params.adminRole || 'ADMIN',
+          ipAddress: params.ipAddress || null,
+        },
+        tx
+      );
+    }
+
+    const updated = await tx.buyerPurchaseConfirmation.update({
+      where: { id: latest.id },
+      data: {
         reviewResolvedByUserId: params.adminUserId,
         reviewResolvedByName: params.adminUserName,
-        reviewResolvedAt: now,
         reviewResolutionNotes: cleanNotes,
-        status: latest.status,
+        reviewResolvedAt: now,
+        reviewResolutionAction: action,
+        commissionDeductionApplied,
+        commissionDeductedCents,
+        auditedReferenceCents,
+        commissionDeductionBatchId,
+        sellerBlockedAtResolution,
       },
-      reason: `Revisão de conferência concluída pelo Admin: ${cleanNotes}`,
-      authorUserId: params.adminUserId,
-      authorName: params.adminUserName,
-      authorRole: params.adminRole || 'ADMIN',
-      ipAddress: params.ipAddress || null,
-    },
-    dbClient
-  );
+    });
 
-  return updated;
+    const ref =
+      latest.sale?.fichaNumber || `VND-${latest.saleId.slice(0, 8).toUpperCase()}`;
+
+    await recordOperationalAuditEvent(
+      {
+        companyId: params.companyId,
+        category: 'CONDITIONS',
+        action: 'BUYER_CONFIRMATION_REVIEW_RESOLVED',
+        entityType: 'SALE',
+        entityReference: ref,
+        entityId: latest.saleId,
+        previousValues: {
+          reviewResolvedAt: latest.reviewResolvedAt,
+          status: latest.status,
+          commissionDeductionApplied: latest.commissionDeductionApplied,
+        },
+        newValues: {
+          reviewResolvedByUserId: params.adminUserId,
+          reviewResolvedByName: params.adminUserName,
+          reviewResolvedAt: now,
+          reviewResolutionNotes: cleanNotes,
+          reviewResolutionAction: action,
+          commissionDeductionApplied,
+          commissionDeductedCents,
+          auditedReferenceCents,
+          sellerBlockedAtResolution,
+          status: latest.status,
+        },
+        reason: `Revisão de conferência concluída pelo Admin: ${cleanNotes}${
+          action === 'DEDUCT_COMMISSION'
+            ? ` (Abatimento de comissão: R$ ${((commissionDeductedCents || 0) / 100).toFixed(2)})`
+            : ''
+        }`,
+        authorUserId: params.adminUserId,
+        authorName: params.adminUserName,
+        authorRole: params.adminRole || 'ADMIN',
+        ipAddress: params.ipAddress || null,
+      },
+      tx
+    );
+
+    return {
+      ...updated,
+      batchAdjustment: batchAdjustmentCreated,
+    };
+  });
 }
 
 /**
@@ -1527,8 +1785,35 @@ export function formatBuyerConfirmationForRole(
           resolvedByName: record.reviewResolvedByName,
           resolutionNotes: record.reviewResolutionNotes,
           resolvedAt: record.reviewResolvedAt,
+          action: record.reviewResolutionAction || 'RESOLVED_NOTES_ONLY',
+          commissionDeductionApplied: Boolean(record.commissionDeductionApplied),
+          commissionDeductedCents: record.commissionDeductedCents || 0,
+          commissionDeductedBrl: record.commissionDeductedCents
+            ? Number((record.commissionDeductedCents / 100).toFixed(2))
+            : 0,
+          auditedReferenceCents: record.auditedReferenceCents || null,
+          auditedReferenceBrl: record.auditedReferenceCents
+            ? Number((record.auditedReferenceCents / 100).toFixed(2))
+            : null,
+          commissionDeductionBatchId: record.commissionDeductionBatchId || null,
+          sellerBlockedAtResolution: Boolean(record.sellerBlockedAtResolution),
         }
       : null,
+    suspectedSelfScan: Boolean(record.suspectedSelfScan),
+    selfScanReason: record.selfScanReason || null,
+    deviceFingerprintHash: record.deviceFingerprintHash || null,
+    commissionDeductionApplied: Boolean(record.commissionDeductionApplied),
+    commissionDeductedCents: record.commissionDeductedCents || 0,
+    commissionDeductedBrl: record.commissionDeductedCents
+      ? Number((record.commissionDeductedCents / 100).toFixed(2))
+      : 0,
+    auditedReferenceCents: record.auditedReferenceCents || null,
+    auditedReferenceBrl: record.auditedReferenceCents
+      ? Number((record.auditedReferenceCents / 100).toFixed(2))
+      : null,
+    sellerBlocked: Boolean(
+      (record.sale?.seller as any)?.sellerBlocked ?? record.sellerBlockedAtResolution
+    ),
     operationalBatch: operationalBatch
       ? {
           batchId: operationalBatch.id,
@@ -1757,7 +2042,20 @@ export function renderPublicBuyerConfirmationHtml(
       msg.style.color = '#38bdf8';
       msg.textContent = 'Enviando conferência...';
 
+      let deviceFingerprint = '';
+      try {
+        let storedFp = localStorage.getItem('lumora_dev_fp');
+        if (!storedFp) {
+          storedFp = 'fp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+          localStorage.setItem('lumora_dev_fp', storedFp);
+        }
+        deviceFingerprint = [storedFp, navigator.userAgent, screen.width + 'x' + screen.height, navigator.language].join('::');
+      } catch (err) {
+        deviceFingerprint = navigator.userAgent || '';
+      }
+
       const payload = {
+        deviceFingerprint,
         phoneLast4: document.getElementById('phoneLast4') ? document.getElementById('phoneLast4').value.trim() : undefined,
         reportedTotalValue: document.getElementById('reportedTotalValue').value,
         reportedPaidValue: document.getElementById('reportedPaidValue').value,

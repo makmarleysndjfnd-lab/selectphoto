@@ -204,8 +204,10 @@ app.post('/confirmar-compra/:token', async (req, res) => {
     const result = await submitPublicBuyerConfirmation({
       rawToken: token,
       ...req.body,
+      deviceFingerprint: req.body.deviceFingerprint || req.body.fingerprint,
       ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
       userAgent: req.get('user-agent') || null,
+      acceptLanguage: req.get('accept-language') || null,
     });
     res.json(result);
   } catch (err: any) {
