@@ -116,9 +116,14 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
         status: { not: 'CANCELLED' },
       },
-      _sum: { remainingPrincipalCents: true },
+      _sum: {
+        remainingPrincipalCents: true,
+        remainingChargesCents: true,
+      },
     });
     const receivableBalanceCents = openReceivableAggregate._sum.remainingPrincipalCents || 0;
+    const receivableChargesCents = openReceivableAggregate._sum.remainingChargesCents || 0;
+    const totalReceivableWithChargesCents = receivableBalanceCents + receivableChargesCents;
 
     // 2. Recebimentos Efetivos de parcelas de Crediário (CreditPayment não estornados) no período
     const creditPayments = await prisma.creditPayment.findMany({
@@ -136,6 +141,8 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     });
 
     let installmentsReceivedCents = 0;
+    let installmentPrincipalReceivedCents = 0;
+    let renegotiationChargesReceivedCents = 0;
     let bankFeesCents = 0;
     let asaasConfirmedCents = 0;
     let asaasAvailableCents = 0;
@@ -146,7 +153,11 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     for (const cp of creditPayments) {
       const amtCents = cp.amountCents || 0;
       const feeCents = cp.bankFeeCents || 0;
+      const cpChargesCents = Math.min(amtCents, cp.chargesPaidCents || 0);
+      const cpPrincipalCents = cp.principalPaidCents ?? Math.max(0, amtCents - cpChargesCents);
       installmentsReceivedCents += amtCents;
+      installmentPrincipalReceivedCents += cpPrincipalCents;
+      renegotiationChargesReceivedCents += cpChargesCents;
       bankFeesCents += feeCents;
 
       const netAmountCents = Math.max(0, amtCents - feeCents);
@@ -365,7 +376,12 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       cashSalesReceivedCents,
       downPaymentsReceivedCents,
       installmentsReceivedCents,
+      installmentPrincipalReceivedCents,
+      renegotiationChargesReceivedCents,
+      renegotiationChargesReceived: centsToBrl(renegotiationChargesReceivedCents),
       receivableBalanceCents,
+      receivableChargesCents,
+      totalReceivableWithChargesCents,
       saldoAReceberCents: receivableBalanceCents,
 
       grossCommissionsCents,

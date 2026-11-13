@@ -23,6 +23,7 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   // Controladores de justificativa por ID de venda
   final Map<String, TextEditingController> _resolutionControllers = {};
   final Set<String> _resolvingSales = {};
+  final Set<String> _unblockingSellers = {};
   final Map<String, String> _selectedActions = {};
   final Map<String, bool> _selectedSellerBlock = {};
 
@@ -136,6 +137,129 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
         setState(() => _resolvingSales.remove(saleId));
       }
     }
+  }
+
+  Future<void> _showUnblockSellerDialog(
+      String sellerId, String sellerName) async {
+    final reasonController = TextEditingController();
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFA855F7), width: 1.2),
+          ),
+          title: Text(
+            'Desbloquear $sellerName',
+            style: const TextStyle(
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Libera novamente o vendedor para realizar vendas após a conferência administrativa. A justificativa fica gravada na auditoria.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonController,
+                maxLines: 3,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'Justificativa de desbloqueio *',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  hintText: 'Ex.: Divergência esclarecida com o cliente e lote ajustado...',
+                  hintStyle: TextStyle(color: Colors.white30, fontSize: 12),
+                  filled: true,
+                  fillColor: Color(0xFF0D0714),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Colors.white24),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFA855F7)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final reason = reasonController.text.trim();
+                      if (reason.length < 5) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Informe uma justificativa com pelo menos 5 caracteres.'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+                      setDialogState(() => isSubmitting = true);
+                      setState(() => _unblockingSellers.add(sellerId));
+                      try {
+                        await _api.unblockSeller(sellerId, reason: reason);
+                        if (ctx.mounted) {
+                          Navigator.pop(ctx);
+                        }
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  'Vendedor desbloqueado e trilha auditada!'),
+                              backgroundColor: Color(0xFF10B981),
+                            ),
+                          );
+                          await _carregarConferencias();
+                        }
+                      } catch (e) {
+                        setDialogState(() => isSubmitting = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Erro ao desbloquear: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      } finally {
+                        if (mounted) {
+                          setState(() => _unblockingSellers.remove(sellerId));
+                        }
+                      }
+                    },
+              icon: isSubmitting
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.lock_open_rounded, size: 16),
+              label: Text(isSubmitting ? 'Liberando...' : 'Desbloquear'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -701,21 +825,71 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                         color: const Color(0xFFEF4444).withOpacity(0.25),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.block, size: 13, color: Color(0xFFEF4444)),
-                          SizedBox(width: 4),
+                          Icon(
+                            item['sellerBlocked'] == true
+                                ? Icons.block
+                                : Icons.verified_user_rounded,
+                            size: 13,
+                            color: item['sellerBlocked'] == true
+                                ? const Color(0xFFEF4444)
+                                : const Color(0xFF10B981),
+                          ),
+                          const SizedBox(width: 4),
                           Text(
-                            'Vendedor Bloqueado Preventivamente',
+                            item['sellerBlocked'] == true
+                                ? 'Vendedor Bloqueado Preventivamente'
+                                : 'Vendedor Desbloqueado após Auditoria',
                             style: TextStyle(
-                                color: Color(0xFFEF4444),
+                                color: item['sellerBlocked'] == true
+                                    ? const Color(0xFFEF4444)
+                                    : const Color(0xFF10B981),
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold),
                           ),
                         ],
                       ),
                     ),
+                    if (item['sellerBlocked'] == true &&
+                        (item['sellerId'] ?? item['sale']?['sellerId']) != null) ...[
+                      const SizedBox(height: 6),
+                      Builder(
+                        builder: (context) {
+                          final sellerId = (item['sellerId'] ?? item['sale']?['sellerId']).toString();
+                          final sellerName = (item['sellerName'] ?? item['sale']?['seller']?['name'] ?? 'Vendedor').toString();
+                          final isUnblocking = _unblockingSellers.contains(sellerId);
+                          return Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              onPressed: isUnblocking
+                                  ? null
+                                  : () => _showUnblockSellerDialog(sellerId, sellerName),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFE9D5FF),
+                                side: const BorderSide(color: Color(0xFFA855F7)),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              icon: isUnblocking
+                                  ? const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Color(0xFFA855F7)),
+                                    )
+                                  : const Icon(Icons.lock_open_rounded,
+                                      size: 14, color: Color(0xFFA855F7)),
+                              label: Text(
+                                isUnblocking ? 'Liberando...' : 'Desbloquear Vendedor',
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 4),
                   Text(

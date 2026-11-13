@@ -2079,7 +2079,7 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
               },
             },
             seller: {
-              select: { id: true, name: true },
+              select: { id: true, name: true, sellerBlocked: true, sellerBlockedReason: true },
             },
           },
         },

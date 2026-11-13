@@ -664,6 +664,8 @@ model CreditAgreement {
   financedPrincipalCents    Int
   remainingPrincipalCents   Int
   paidPrincipalCents        Int      @default(0)
+  renegotiationChargesCents Int      @default(0)
+  remainingChargesCents     Int      @default(0)
   installmentsCount         Int
   periodicity               String   @default("MONTHLY")
   firstDueDate              DateTime
@@ -698,7 +700,10 @@ model CreditInstallment {
   installmentNumber Int
   dueDate           DateTime
   amountCents       Int
+  principalCents    Int?
+  chargesCents      Int       @default(0)
   paidCents         Int       @default(0)
+  paidChargesCents  Int       @default(0)
   status            String    @default("PENDING")
   paidAt            DateTime?
   createdAt         DateTime  @default(now())
@@ -714,11 +719,13 @@ model CreditInstallment {
 }
 
 model CreditPayment {
-  id               String    @id @default(uuid())
-  agreementId      String
-  companyId        String
-  amountCents      Int
-  paymentMethod    String
+  id                 String    @id @default(uuid())
+  agreementId        String
+  companyId          String
+  amountCents        Int
+  principalPaidCents Int?
+  chargesPaidCents   Int       @default(0)
+  paymentMethod      String
   receivedByRole   String    @default("SELLER")
   receiverUserId   String
   destination      String    @default("SELLER_HANDS")
@@ -750,10 +757,12 @@ model CreditPayment {
 }
 
 model CreditPaymentAllocation {
-  id             String @id @default(uuid())
-  paymentId      String
-  installmentId  String
-  allocatedCents Int
+  id                      String @id @default(uuid())
+  paymentId               String
+  installmentId           String
+  allocatedCents          Int
+  principalAllocatedCents Int?
+  chargesAllocatedCents   Int    @default(0)
 
   payment     CreditPayment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   installment CreditInstallment @relation(fields: [installmentId], references: [id], onDelete: Cascade)
@@ -804,6 +813,8 @@ model CreditAgreementRenegotiation {
   authorId               String
   previousRemainingCents Int
   newRemainingCents      Int
+  chargesCents           Int      @default(0)
+  totalRenegotiatedCents Int?
   reason                 String
   previousSchedule       Json
   newSchedule            Json

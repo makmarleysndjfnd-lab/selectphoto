@@ -2063,8 +2063,26 @@ class ApiService {
   Future<Map<String, dynamic>> renegotiateCreditAgreement(
       String agreementId, Map<String, dynamic> data) async {
     try {
+      final payload = Map<String, dynamic>.from(data);
+      final rawKey = payload['idempotencyKey']?.toString().trim() ?? '';
+      if (rawKey.isEmpty) {
+        payload['idempotencyKey'] =
+            'reneg_${agreementId}_${DateTime.now().microsecondsSinceEpoch}';
+      }
       final resp = await _dio
-          .post('/credit/agreements/$agreementId/renegotiate', data: data);
+          .post('/credit/agreements/$agreementId/renegotiate', data: payload);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> unblockSeller(String userId,
+      {required String reason}) async {
+    try {
+      final resp = await _dio.post('/users/$userId/unblock', data: {
+        'reason': reason,
+      });
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));

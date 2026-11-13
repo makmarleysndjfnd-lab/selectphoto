@@ -1811,9 +1811,11 @@ export function formatBuyerConfirmationForRole(
     auditedReferenceBrl: record.auditedReferenceCents
       ? Number((record.auditedReferenceCents / 100).toFixed(2))
       : null,
-    sellerBlocked: Boolean(
-      (record.sale?.seller as any)?.sellerBlocked ?? record.sellerBlockedAtResolution
-    ),
+    sellerId: record.sellerId,
+    sellerName: (record.sale?.seller as any)?.name || null,
+    sellerBlocked: Boolean((record.sale?.seller as any)?.sellerBlocked),
+    sellerBlockedReason: (record.sale?.seller as any)?.sellerBlockedReason || null,
+    sellerBlockedAtResolution: Boolean(record.sellerBlockedAtResolution),
     operationalBatch: operationalBatch
       ? {
           batchId: operationalBatch.id,

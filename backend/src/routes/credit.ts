@@ -13,6 +13,7 @@ import {
 } from '../services/asaasService';
 import { processAsaasWebhookEvent } from '../services/asaasWebhookProcessor';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import { invalidateAndReissueConfirmationOnSaleChange } from '../services/buyerConfirmationService';
 import {
   getCompetenceRange,
   getCompetenceForDate,
@@ -350,6 +351,8 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
         id: true,
         name: true,
         active: true,
+        sellerBlocked: true,
+        sellerBlockedReason: true,
         creditAgreementsSeller: {
           where: companyId ? { companyId } : undefined,
           select: {
@@ -414,6 +417,8 @@ router.get('/sellers-summary', authenticateToken, requireAdminOrSupervisor, asyn
         sellerName: s.name,
         active: s.active,
         isActive: s.active,
+        sellerBlocked: Boolean(s.sellerBlocked),
+        sellerBlockedReason: s.sellerBlockedReason || null,
         totalAgreements: s.creditAgreementsSeller.length,
         saldoAReceberCents,
         valorVencidoCents,
@@ -620,6 +625,10 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
         financedPrincipal: Number((a.financedPrincipalCents / 100).toFixed(2)),
         remainingPrincipal: Number((a.remainingPrincipalCents / 100).toFixed(2)),
         paidPrincipal: Number((a.paidPrincipalCents / 100).toFixed(2)),
+        remainingCharges: Number(((a.remainingChargesCents || 0) / 100).toFixed(2)),
+        remainingChargesCents: a.remainingChargesCents || 0,
+        renegotiationCharges: Number(((a.renegotiationChargesCents || 0) / 100).toFixed(2)),
+        renegotiationChargesCents: a.renegotiationChargesCents || 0,
         installmentsCount: a.installmentsCount,
         periodicity: a.periodicity,
         firstDueDate: a.firstDueDate,
@@ -636,6 +645,10 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
           installmentNumber: inst.installmentNumber,
           dueDate: inst.dueDate,
           amount: Number((inst.amountCents / 100).toFixed(2)),
+          amountCents: inst.amountCents,
+          principalCents: inst.principalCents ?? Math.max(0, inst.amountCents - (inst.chargesCents || 0)),
+          chargesCents: inst.chargesCents || 0,
+          paidChargesCents: inst.paidChargesCents || 0,
           paid: Number((inst.paidCents / 100).toFixed(2)),
           remaining: Number(((inst.amountCents - inst.paidCents) / 100).toFixed(2)),
           status: inst.status,
@@ -735,6 +748,9 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
 function buildCreditPaymentReplayResponse(existing: any) {
   const commissionRecord = Array.isArray(existing.commissions) ? existing.commissions[0] : null;
   const remainingPrincipalCents = existing.agreement?.remainingPrincipalCents ?? 0;
+  const remainingChargesCents = existing.agreement?.remainingChargesCents ?? 0;
+  const chargesPaidCents = existing.chargesPaidCents || 0;
+  const principalPaidCents = existing.principalPaidCents ?? Math.max(0, existing.amountCents - chargesPaidCents);
   return {
     success: true,
     idempotentReplay: true,
@@ -742,8 +758,12 @@ function buildCreditPaymentReplayResponse(existing: any) {
     paymentId: existing.id,
     amount: Number((existing.amountCents / 100).toFixed(2)),
     amountCents: existing.amountCents,
+    principalPaidCents,
+    chargesPaidCents,
     remainingPrincipalCents,
     remainingPrincipal: Number((remainingPrincipalCents / 100).toFixed(2)),
+    remainingChargesCents,
+    remainingCharges: Number((remainingChargesCents / 100).toFixed(2)),
     isSettled: existing.agreement?.status === 'SETTLED',
     allocations: existing.allocations || [],
     allocationsCount: Array.isArray(existing.allocations) ? existing.allocations.length : 0,
@@ -816,7 +836,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       where: { idempotencyKey: normalizedIdempotencyKey },
       include: {
         allocations: true,
-        agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+        agreement: { select: { id: true, remainingPrincipalCents: true, remainingChargesCents: true, status: true } },
         commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
       },
     });
@@ -849,7 +869,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         where: { idempotencyKey: normalizedIdempotencyKey },
         include: {
           allocations: true,
-          agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+          agreement: { select: { id: true, remainingPrincipalCents: true, remainingChargesCents: true, status: true } },
           commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
         },
       });
@@ -893,22 +913,24 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       }
 
       const agreement = existing;
+      const currentRemainingChargesCents = agreement.remainingChargesCents || 0;
+      const totalCollectibleDueCents = agreement.remainingPrincipalCents + currentRemainingChargesCents;
 
-      if (agreement.status === 'SETTLED' || agreement.remainingPrincipalCents <= 0) {
+      if (agreement.status === 'SETTLED' || totalCollectibleDueCents <= 0) {
         throw { status: 400, message: 'Este contrato já foi totalmente quitado.' };
       }
 
-      if (paymentAmountCents > agreement.remainingPrincipalCents) {
+      if (paymentAmountCents > totalCollectibleDueCents) {
         throw {
           status: 400,
-          message: `Valor informado (R$ ${(paymentAmountCents / 100).toFixed(2)}) excede o saldo devedor remanescente (R$ ${(agreement.remainingPrincipalCents / 100).toFixed(2)}).`,
+          message: `Valor informado (R$ ${(paymentAmountCents / 100).toFixed(2)}) excede o saldo devedor remanescente (R$ ${(totalCollectibleDueCents / 100).toFixed(2)}).`,
         };
       }
 
       // 3. Criar registro do pagamento
       const effectiveReceiverId = destination === 'SELLER_HANDS' ? agreement.sellerId : currentUserId;
       const paymentDate = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
-      const payment = await tx.creditPayment.create({
+      let payment = await tx.creditPayment.create({
         data: {
           agreementId: agreement.id,
           companyId,
@@ -936,6 +958,8 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       }
 
       let remainingToAllocate = paymentAmountCents;
+      let totalPrincipalAllocatedCents = 0;
+      let totalChargesAllocatedCents = 0;
       const allocationsCreated: any[] = [];
       const updatedInstallmentIds: string[] = [];
       const chargesToSyncInCash: { chargeId: string; amountCents: number; residualCents: number }[] = [];
@@ -947,7 +971,31 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         if (installmentUnpaidCents <= 0) continue;
 
         const allocatedCents = Math.min(remainingToAllocate, installmentUnpaidCents);
+        const instChargesTotal = inst.chargesCents || 0;
+        const instPrincipalTotal = inst.principalCents ?? Math.max(0, inst.amountCents - instChargesTotal);
+        const instRemainingCharges = Math.max(0, instChargesTotal - (inst.paidChargesCents || 0));
+        const instPaidPrincipalBefore = Math.max(0, inst.paidCents - (inst.paidChargesCents || 0));
+        const instRemainingPrincipal = Math.max(0, instPrincipalTotal - instPaidPrincipalBefore);
+
+        let chargesAllocated = 0;
+        if (instRemainingCharges > 0) {
+          if (allocatedCents >= installmentUnpaidCents) {
+            chargesAllocated = Math.min(allocatedCents, instRemainingCharges);
+          } else {
+            chargesAllocated = Math.min(
+              instRemainingCharges,
+              allocatedCents,
+              Math.round((allocatedCents * instRemainingCharges) / installmentUnpaidCents)
+            );
+          }
+          if (allocatedCents - chargesAllocated > instRemainingPrincipal) {
+            chargesAllocated = Math.min(instRemainingCharges, allocatedCents - instRemainingPrincipal);
+          }
+        }
+        const principalAllocated = allocatedCents - chargesAllocated;
+
         const newPaidCents = inst.paidCents + allocatedCents;
+        const newPaidChargesCents = (inst.paidChargesCents || 0) + chargesAllocated;
         const isFullyPaid = newPaidCents >= inst.amountCents;
 
         const alloc = await tx.creditPaymentAllocation.create({
@@ -955,14 +1003,19 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
             paymentId: payment.id,
             installmentId: inst.id,
             allocatedCents,
+            principalAllocatedCents: principalAllocated,
+            chargesAllocatedCents: chargesAllocated,
           },
         });
         allocationsCreated.push(alloc);
+        totalPrincipalAllocatedCents += principalAllocated;
+        totalChargesAllocatedCents += chargesAllocated;
 
         await tx.creditInstallment.update({
           where: { id: inst.id },
           data: {
             paidCents: newPaidCents,
+            paidChargesCents: newPaidChargesCents,
             status: isFullyPaid ? 'PAID' : 'PARTIALLY_PAID',
             paidAt: isFullyPaid ? paymentDate : undefined,
           },
@@ -980,26 +1033,38 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         remainingToAllocate -= allocatedCents;
       }
 
-      // 5. Atualizar saldo do contrato
-      const newRemainingCents = agreement.remainingPrincipalCents - paymentAmountCents;
-      const newPaidPrincipalCents = agreement.paidPrincipalCents + paymentAmountCents;
-      const isSettled = newRemainingCents <= 0;
+      if (remainingToAllocate > 0) {
+        const residualPrincipal = Math.min(remainingToAllocate, Math.max(0, agreement.remainingPrincipalCents - totalPrincipalAllocatedCents));
+        totalPrincipalAllocatedCents += residualPrincipal;
+        totalChargesAllocatedCents += (remainingToAllocate - residualPrincipal);
+      }
+
+      payment = await tx.creditPayment.update({
+        where: { id: payment.id },
+        data: {
+          principalPaidCents: totalPrincipalAllocatedCents,
+          chargesPaidCents: totalChargesAllocatedCents,
+        },
+      });
+
+      // 5. Atualizar saldo do contrato (principal separado de encargos de renegociação)
+      const newRemainingCents = Math.max(0, agreement.remainingPrincipalCents - totalPrincipalAllocatedCents);
+      const newPaidPrincipalCents = agreement.paidPrincipalCents + totalPrincipalAllocatedCents;
+      const newRemainingChargesCents = Math.max(0, currentRemainingChargesCents - totalChargesAllocatedCents);
+      const isSettled = newRemainingCents <= 0 && newRemainingChargesCents <= 0;
 
       await tx.creditAgreement.update({
         where: { id: agreement.id },
         data: {
           remainingPrincipalCents: newRemainingCents,
           paidPrincipalCents: newPaidPrincipalCents,
+          remainingChargesCents: newRemainingChargesCents,
           status: isSettled ? 'SETTLED' : agreement.status,
         },
       });
 
-      // 6. Gerar comissão de 10% sobre o principal efetivamente alocado para o vendedor do contrato
-      const totalAllocatedPrincipalCents = allocationsCreated.reduce(
-        (acc, alloc) => acc + Number(alloc.allocatedCents || 0),
-        0
-      );
-      const commissionCents = Math.round(totalAllocatedPrincipalCents * agreement.installmentCommissionRate);
+      // 6. Gerar comissão de 10% exclusivamente sobre o PRINCIPAL efetivamente pago (nunca sobre encargos/mora)
+      const commissionCents = Math.round(totalPrincipalAllocatedCents * agreement.installmentCommissionRate);
       let createdCommission: any = null;
 
       if (commissionCents > 0) {
@@ -1027,12 +1092,16 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           entityId: payment.id,
           previousValues: {
             remainingPrincipalCents: agreement.remainingPrincipalCents,
+            remainingChargesCents: currentRemainingChargesCents,
             buyerCpf: agreement.buyerCpf,
           },
           newValues: {
             amountCents: paymentAmountCents,
+            principalPaidCents: totalPrincipalAllocatedCents,
+            chargesPaidCents: totalChargesAllocatedCents,
             paymentMethod,
             remainingPrincipalCents: newRemainingCents,
+            remainingChargesCents: newRemainingChargesCents,
             lumoraAdditionalFeeCents: 0,
             buyerCpf: agreement.buyerCpf,
           },
@@ -1054,7 +1123,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           authorId: currentUserId,
           authorRole: currentUserRole,
           action: 'CREDIT_PAYMENT_RECEIVED',
-          reason: `Baixa de R$ ${(paymentAmountCents / 100).toFixed(2)} via ${paymentMethod} (${destination}). Saldo restante: R$ ${(newRemainingCents / 100).toFixed(2)}`,
+          reason: `Baixa de R$ ${(paymentAmountCents / 100).toFixed(2)} via ${paymentMethod} (${destination}). Principal restante: R$ ${(newRemainingCents / 100).toFixed(2)}`,
         },
       });
 
@@ -1062,7 +1131,10 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         idempotentReplay: false as const,
         payment,
         allocations: allocationsCreated,
+        principalPaidCents: totalPrincipalAllocatedCents,
+        chargesPaidCents: totalChargesAllocatedCents,
         remainingPrincipalCents: newRemainingCents,
+        remainingChargesCents: newRemainingChargesCents,
         isSettled,
         commission: createdCommission,
         chargesToSyncInCash,
@@ -1117,8 +1189,12 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       paymentId: result.payment.id,
       amount: parsedAmount,
       amountCents: paymentAmountCents,
+      principalPaidCents: result.principalPaidCents,
+      chargesPaidCents: result.chargesPaidCents,
       remainingPrincipalCents: result.remainingPrincipalCents,
       remainingPrincipal: Number((result.remainingPrincipalCents / 100).toFixed(2)),
+      remainingChargesCents: result.remainingChargesCents,
+      remainingCharges: Number((result.remainingChargesCents / 100).toFixed(2)),
       isSettled: result.isSettled,
       allocations: result.allocations,
       allocationsCount: result.allocations.length,
@@ -1144,7 +1220,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           where: { idempotencyKey: normalizedIdempotencyKey },
           include: {
             allocations: true,
-            agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+            agreement: { select: { id: true, remainingPrincipalCents: true, remainingChargesCents: true, status: true } },
             commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
           },
         });
@@ -1217,16 +1293,19 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
       // Bloqueio pessimista no contrato
       await tx.$queryRawUnsafe('SELECT id FROM "CreditAgreement" WHERE id = $1 FOR UPDATE', payment.agreementId);
 
-      // Reverter cada alocação nas parcelas
+      // Reverter cada alocação nas parcelas (principal e encargos separados)
       for (const alloc of payment.allocations) {
         const inst = alloc.installment;
         const newPaidCents = Math.max(0, inst.paidCents - alloc.allocatedCents);
+        const allocCharges = alloc.chargesAllocatedCents || 0;
+        const newPaidChargesCents = Math.max(0, (inst.paidChargesCents || 0) - allocCharges);
         const newStatus = newPaidCents === 0 ? 'PENDING' : 'PARTIALLY_PAID';
 
         await tx.creditInstallment.update({
           where: { id: inst.id },
           data: {
             paidCents: newPaidCents,
+            paidChargesCents: newPaidChargesCents,
             status: newStatus,
             paidAt: null,
           },
@@ -1234,14 +1313,18 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
       }
 
       // Atualizar saldo do contrato
-      const newRemainingCents = payment.agreement.remainingPrincipalCents + payment.amountCents;
-      const newPaidPrincipalCents = Math.max(0, payment.agreement.paidPrincipalCents - payment.amountCents);
+      const reversedChargesCents = Math.min(payment.amountCents, payment.chargesPaidCents || 0);
+      const reversedPrincipalCents = payment.principalPaidCents ?? Math.max(0, payment.amountCents - reversedChargesCents);
+      const newRemainingCents = payment.agreement.remainingPrincipalCents + reversedPrincipalCents;
+      const newPaidPrincipalCents = Math.max(0, payment.agreement.paidPrincipalCents - reversedPrincipalCents);
+      const newRemainingChargesCents = (payment.agreement.remainingChargesCents || 0) + reversedChargesCents;
 
       await tx.creditAgreement.update({
         where: { id: payment.agreementId },
         data: {
           remainingPrincipalCents: newRemainingCents,
           paidPrincipalCents: newPaidPrincipalCents,
+          remainingChargesCents: newRemainingChargesCents,
           status: 'ACTIVE',
         },
       });
@@ -1366,13 +1449,35 @@ router.post('/payments/:id/reverse', authenticateToken, requireAdminOrSupervisor
  * POST /api/credit/agreements/:id/renegotiate
  * Renegociar saldo em aberto marcando parcelas anteriores como RENEGOTIATED sem duplicação de dívida
  */
-router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    const companyId = req.user?.companyId;
-    const authorId = req.user?.id;
-    const userRole = req.user?.role || 'ADMIN';
+function buildRenegotiationReplayResponse(reneg: any) {
+  const remainingChargesCents = reneg.agreement?.remainingChargesCents ?? reneg.chargesCents ?? 0;
+  return {
+    success: true,
+    idempotentReplay: true,
+    renegotiationId: reneg.id,
+    remainingPrincipalCents: reneg.newRemainingCents,
+    remainingPrincipal: Number((reneg.newRemainingCents / 100).toFixed(2)),
+    chargesCents: reneg.chargesCents || 0,
+    remainingChargesCents,
+    remainingCharges: Number((remainingChargesCents / 100).toFixed(2)),
+    totalRenegotiatedCents:
+      reneg.totalRenegotiatedCents ?? reneg.newRemainingCents + (reneg.chargesCents || 0),
+    newInstallments: Array.isArray(reneg.newSchedule) ? reneg.newSchedule : [],
+  };
+}
 
+router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const companyId = req.user?.companyId;
+  const authorId = req.user?.id;
+  const userRole = req.user?.role || 'ADMIN';
+  const rawIdempotencyKey =
+    req.body?.idempotencyKey ??
+    req.headers['idempotency-key'] ??
+    req.headers['x-idempotency-key'];
+  const normalizedIdempotencyKey = typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : '';
+
+  try {
     if (!companyId || !authorId) {
       res.status(401).json({ error: 'Usuário ou empresa não identificado' });
       return;
@@ -1385,26 +1490,116 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
       return;
     }
 
-    const installmentsCount = req.body.installmentsCount ?? req.body.numberOfInstallments;
+    const authorUser = await prisma.user.findUnique({
+      where: { id: authorId },
+      select: { id: true, name: true, sellerBlocked: true },
+    });
+    if (!authorUser || authorUser.sellerBlocked) {
+      res.status(403).json({
+        error: 'Usuário bloqueado ou não autorizado para realizar renegociações.',
+      });
+      return;
+    }
+
+    if (!normalizedIdempotencyKey) {
+      res.status(400).json({
+        error: 'Chave de idempotência (idempotencyKey) é obrigatória para renegociação de contrato.',
+        code: 'IDEMPOTENCY_KEY_REQUIRED',
+      });
+      return;
+    }
+
+    // 1. Pre-check de idempotência persistente antes de abrir transação serializável
+    const existingRenegPre = await prisma.creditAgreementRenegotiation.findUnique({
+      where: { idempotencyKey: normalizedIdempotencyKey },
+      include: {
+        agreement: {
+          select: { id: true, companyId: true, remainingChargesCents: true },
+        },
+      },
+    });
+    if (existingRenegPre) {
+      if (existingRenegPre.agreement?.companyId !== companyId || existingRenegPre.agreementId !== id) {
+        res.status(409).json({
+          error: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+          code: 'IDEMPOTENCY_KEY_CONFLICT',
+        });
+        return;
+      }
+      res.status(200).json(buildRenegotiationReplayResponse(existingRenegPre));
+      return;
+    }
+
+    const installmentsCount =
+      req.body.installmentsCount ?? req.body.newInstallmentsCount ?? req.body.numberOfInstallments;
     const periodicity = req.body.periodicity ?? req.body.frequency ?? 'MONTHLY';
     const firstDueDate = req.body.firstDueDate;
     const reason = req.body.reason ?? req.body.notes;
-    const idempotencyKey = req.body.idempotencyKey;
 
     if (!reason || !String(reason).trim()) {
       res.status(400).json({ error: 'Motivo da renegociação é obrigatório' });
       return;
     }
 
-    const parsedCount = parseInt(installmentsCount, 10);
-    if (!Number.isFinite(parsedCount) || parsedCount < 1) {
-      res.status(400).json({ error: 'Número de parcelas deve ser pelo menos 1' });
+    const parsedCount = parseInt(String(installmentsCount ?? ''), 10);
+    if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > 120) {
+      res.status(400).json({ error: 'Número de parcelas deve estar entre 1 e 120' });
       return;
     }
 
+    const rawChargesCents = req.body.chargesCents ?? req.body.interestCents ?? req.body.lateFeeCents;
+    const rawChargesBrl = req.body.charges ?? req.body.interest ?? req.body.lateFee;
+    let parsedChargesCents = 0;
+    if (rawChargesCents !== undefined && rawChargesCents !== null && rawChargesCents !== '') {
+      const n = Number(rawChargesCents);
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+        res.status(400).json({ error: 'Encargos da renegociação (chargesCents) devem ser inteiro >= 0 em centavos' });
+        return;
+      }
+      parsedChargesCents = n;
+    } else if (rawChargesBrl !== undefined && rawChargesBrl !== null && rawChargesBrl !== '') {
+      const n = Number(rawChargesBrl);
+      if (!Number.isFinite(n) || n < 0) {
+        res.status(400).json({ error: 'Encargos da renegociação devem ser maiores ou iguais a zero' });
+        return;
+      }
+      parsedChargesCents = Math.round(n * 100);
+    }
+
+    const parsedFirstDueDate = new Date(firstDueDate || Date.now() + 30 * 24 * 3600 * 1000);
+    if (Number.isNaN(parsedFirstDueDate.getTime())) {
+      res.status(400).json({ error: 'Data de primeiro vencimento inválida' });
+      return;
+    }
+
+    const trimmedReason = String(reason).trim();
+
     const result = await prisma.$transaction(async (tx) => {
       // Bloqueio pessimista no contrato
-      await tx.$queryRawUnsafe('SELECT id FROM "CreditAgreement" WHERE id = $1 FOR UPDATE', id);
+      await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${id} FOR UPDATE`;
+
+      const existingRenegInTx = await tx.creditAgreementRenegotiation.findUnique({
+        where: { idempotencyKey: normalizedIdempotencyKey },
+        include: {
+          agreement: {
+            select: { id: true, companyId: true, remainingChargesCents: true },
+          },
+        },
+      });
+      if (existingRenegInTx) {
+        if (existingRenegInTx.agreement?.companyId !== companyId || existingRenegInTx.agreementId !== id) {
+          throw {
+            status: 409,
+            code: 'IDEMPOTENCY_KEY_CONFLICT',
+            message: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+          };
+        }
+        return {
+          idempotentReplay: true as const,
+          replayPayload: buildRenegotiationReplayResponse(existingRenegInTx),
+          oldChargesToCancel: [] as string[],
+        };
+      }
 
       const agreement = await tx.creditAgreement.findFirst({
         where: { id, companyId },
@@ -1420,75 +1615,91 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
         throw { status: 404, message: 'Contrato de crediário não encontrado' };
       }
 
-      // Regra de autorização estrita: Admin e Supervisor podem renegociar qualquer contrato; Vendedor apenas da sua carteira
-      if (!isUserAdmin(req) && agreement.sellerId !== authorId) {
-        throw { status: 403, message: 'Não autorizado a renegociar contratos de outra carteira' };
+      const currentRemainingPrincipalCents = agreement.remainingPrincipalCents;
+      const currentRemainingChargesCents = agreement.remainingChargesCents || 0;
+
+      if (
+        agreement.status === 'SETTLED' ||
+        agreement.status === 'CANCELLED' ||
+        (currentRemainingPrincipalCents <= 0 && currentRemainingChargesCents <= 0)
+      ) {
+        throw { status: 400, message: 'Contrato já quitado ou cancelado não permite renegociação' };
       }
 
-      if (idempotencyKey) {
-        const existingReneg = await tx.creditAgreementRenegotiation.findFirst({
-          where: { agreementId: agreement.id, idempotencyKey: String(idempotencyKey).trim() },
-        });
-        if (existingReneg) {
-          return {
-            success: true,
-            remainingPrincipalCents: existingReneg.newRemainingCents,
-            newInstallments: existingReneg.newSchedule as any,
-            oldChargesToCancel: [],
-          };
-        }
-      }
+      const paidInstallments = agreement.installments.filter((i) => i.status === 'PAID');
+      // PROIBIDO dar delete físico, sobrescrever PAID ou deixar parcela em aberto cobrando em paralelo!
+      // Liquidar apenas parcelas não quitadas e ainda não substituídas como RENEGOTIATED.
+      const unsettledInstallments = agreement.installments.filter(
+        (i) => i.status !== 'PAID' && i.status !== 'RENEGOTIATED'
+      );
 
-      if (agreement.status === 'SETTLED' || agreement.remainingPrincipalCents <= 0) {
-        throw { status: 400, message: 'Contrato já quitado não permite renegociação' };
-      }
-
-      const previousSchedule = agreement.installments;
-
-      // PROIBIDO dar delete físico ou deixar PARTIAL aberta cobrando em paralelo!
-      // Marcar TODAS as parcelas não quitadas como RENEGOTIATED
-      const unSettledInstallments = agreement.installments.filter((i) => i.status !== 'PAID');
-      for (const inst of unSettledInstallments) {
+      for (const inst of unsettledInstallments) {
         await tx.creditInstallment.update({
           where: { id: inst.id },
           data: { status: 'RENEGOTIATED' },
         });
       }
 
-      // Calcular novo cronograma exclusivamente sobre o saldo devedor remanescente real
-      const newScheduleItems = calculateCreditSchedule({
-        totalSaleCents: agreement.remainingPrincipalCents,
-        downPaymentCents: 0,
-        installmentsCount: parsedCount,
-        periodicity,
-        firstDueDate: new Date(firstDueDate || Date.now() + 30 * 24 * 3600 * 1000),
-      });
+      // Separar estritamente principal remanescente de encargos/mora em centavos exatos
+      const totalNewChargesCents = currentRemainingChargesCents + parsedChargesCents;
+
+      const principalSchedule =
+        currentRemainingPrincipalCents > 0
+          ? calculateCreditSchedule({
+              totalSaleCents: currentRemainingPrincipalCents,
+              downPaymentCents: 0,
+              installmentsCount: parsedCount,
+              periodicity,
+              firstDueDate: parsedFirstDueDate,
+            })
+          : [];
+
+      const chargesSchedule =
+        totalNewChargesCents > 0
+          ? calculateCreditSchedule({
+              totalSaleCents: totalNewChargesCents,
+              downPaymentCents: 0,
+              installmentsCount: parsedCount,
+              periodicity,
+              firstDueDate: parsedFirstDueDate,
+            })
+          : [];
 
       const maxOldNumber = agreement.installments.reduce((max, i) => Math.max(max, i.installmentNumber), 0);
       const createdInstallments = [];
 
-      for (let i = 0; i < newScheduleItems.length; i++) {
-        const item = newScheduleItems[i];
+      for (let i = 0; i < parsedCount; i++) {
+        const pItem = principalSchedule[i];
+        const cItem = chargesSchedule[i];
+        const instPrincipalCents = pItem?.amountCents ?? 0;
+        const instChargesCents = cItem?.amountCents ?? 0;
+        const instDueDate = pItem?.dueDate ?? cItem?.dueDate ?? parsedFirstDueDate;
+
         const inst = await tx.creditInstallment.create({
           data: {
             agreementId: agreement.id,
             installmentNumber: maxOldNumber + i + 1,
-            dueDate: item.dueDate,
-            amountCents: item.amountCents,
+            dueDate: instDueDate,
+            amountCents: instPrincipalCents + instChargesCents,
+            principalCents: instPrincipalCents,
+            chargesCents: instChargesCents,
             paidCents: 0,
+            paidChargesCents: 0,
             status: 'PENDING',
           },
         });
         createdInstallments.push(inst);
       }
 
-      // Atualizar contrato
+      // Atualizar contrato SEM alterar totalSaleCents, financedPrincipalCents ou remainingPrincipalCents (evita duplicação no caixa/receita)
       await tx.creditAgreement.update({
         where: { id: agreement.id },
         data: {
-          installmentsCount: agreement.installments.filter((i) => i.status === 'PAID').length + parsedCount,
+          installmentsCount: paidInstallments.length + parsedCount,
           periodicity,
           status: 'RENEGOTIATED',
+          renegotiationChargesCents: (agreement.renegotiationChargesCents || 0) + parsedChargesCents,
+          remainingChargesCents: totalNewChargesCents,
         },
       });
 
@@ -1501,65 +1712,173 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
           entityReference: `CRD-${String(agreement.id).slice(0, 8).toUpperCase()}`,
           entityId: agreement.id,
           previousValues: {
-            remainingPrincipalCents: agreement.remainingPrincipalCents,
-            openInstallmentsCount: previousSchedule.length,
+            remainingPrincipalCents: currentRemainingPrincipalCents,
+            remainingChargesCents: currentRemainingChargesCents,
+            openInstallmentsCount: unsettledInstallments.length,
+            preservedPaidInstallmentsCount: paidInstallments.length,
             periodicity: agreement.periodicity,
           },
           newValues: {
-            remainingPrincipalCents: agreement.remainingPrincipalCents,
+            remainingPrincipalCents: currentRemainingPrincipalCents,
+            chargesAddedCents: parsedChargesCents,
+            remainingChargesCents: totalNewChargesCents,
+            totalRenegotiatedCents: currentRemainingPrincipalCents + totalNewChargesCents,
             newInstallmentsCount: createdInstallments.length,
             periodicity,
           },
-          reason: String(reason).trim(),
+          reason: trimmedReason,
           authorUserId: authorId,
-          authorName: req.user?.name || 'Administrador',
+          authorName: req.user?.name || authorUser.name || 'Administrador',
           authorRole: userRole,
           ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
         },
         tx
       );
 
-      // Registrar auditoria da renegociação
-      await tx.creditAgreementRenegotiation.create({
+      // Registrar trilha imutável da renegociação
+      const renegotiationRecord = await tx.creditAgreementRenegotiation.create({
         data: {
           agreementId: agreement.id,
           authorId,
-          previousRemainingCents: agreement.remainingPrincipalCents,
-          newRemainingCents: agreement.remainingPrincipalCents,
-          reason: String(reason).trim(),
-          previousSchedule: previousSchedule as any,
+          previousRemainingCents: currentRemainingPrincipalCents,
+          newRemainingCents: currentRemainingPrincipalCents,
+          chargesCents: parsedChargesCents,
+          totalRenegotiatedCents: currentRemainingPrincipalCents + totalNewChargesCents,
+          reason: trimmedReason,
+          previousSchedule: unsettledInstallments.map((inst) => ({
+            id: inst.id,
+            installmentNumber: inst.installmentNumber,
+            dueDate: inst.dueDate,
+            amountCents: inst.amountCents,
+            principalCents: inst.principalCents ?? Math.max(0, inst.amountCents - (inst.chargesCents || 0)),
+            chargesCents: inst.chargesCents || 0,
+            paidCents: inst.paidCents,
+            status: inst.status,
+          })) as any,
           newSchedule: createdInstallments as any,
-          idempotencyKey: idempotencyKey ? String(idempotencyKey).trim() : undefined,
+          idempotencyKey: normalizedIdempotencyKey,
+        },
+      });
+
+      await tx.clientTimeline.create({
+        data: {
+          clientId: agreement.clientId,
+          previousStatus: 'EM_ABERTO',
+          newStatus: 'RENEGOCIADO',
+          authorId,
+          authorRole: userRole,
+          action: 'CREDIT_AGREEMENT_RENEGOTIATED',
+          reason: `Renegociação em ${parsedCount}x (${periodicity}). Principal preservado: R$ ${(currentRemainingPrincipalCents / 100).toFixed(2)}${parsedChargesCents > 0 ? ` + encargos R$ ${(parsedChargesCents / 100).toFixed(2)}` : ''}. Motivo: ${trimmedReason}`,
         },
       });
 
       return {
-        success: true,
-        remainingPrincipalCents: agreement.remainingPrincipalCents,
+        idempotentReplay: false as const,
+        renegotiationId: renegotiationRecord.id,
+        saleId: agreement.saleId,
+        remainingPrincipalCents: currentRemainingPrincipalCents,
+        chargesCents: parsedChargesCents,
+        remainingChargesCents: totalNewChargesCents,
         newInstallments: createdInstallments,
-        oldChargesToCancel: unSettledInstallments
-          .filter((i) => i.asaasCharge && i.asaasCharge.status !== 'RECEIVED')
+        supersededInstallmentsCount: unsettledInstallments.length,
+        preservedPaidInstallmentsCount: paidInstallments.length,
+        oldChargesToCancel: unsettledInstallments
+          .filter((i) => i.asaasCharge && i.asaasCharge.status !== 'RECEIVED' && i.asaasCharge.status !== 'RECEIVED_IN_CASH')
           .map((i) => i.asaasCharge!.externalId),
       };
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      timeout: 20000,
+      maxWait: 10000,
     });
 
-    // Cancelar boletos antigos no Asaas de forma assíncrona
+    if (result.idempotentReplay) {
+      res.status(200).json(result.replayPayload);
+      return;
+    }
+
+    // Cancelar boletos antigos no Asaas de forma assíncrona não-bloqueante
     for (const extId of result.oldChargesToCancel) {
       cancelAsaasPayment(companyId, extId).catch((err) =>
         console.warn(`[Asaas] Aviso ao cancelar cobrança antiga ${extId}:`, err)
       );
     }
 
+    let confirmationReissued = false;
+    if (result.saleId) {
+      try {
+        await invalidateAndReissueConfirmationOnSaleChange({
+          companyId,
+          saleId: result.saleId,
+          reason: `Renegociação administrativa de crediário: ${trimmedReason}`,
+          authorUserId: authorId,
+          authorName: req.user?.name || authorUser.name || 'Administrador',
+          authorRole: userRole,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        });
+        confirmationReissued = true;
+      } catch (qrErr) {
+        console.warn('[Credit Renegotiate] Aviso ao invalidar/reemitir QR pós-renegociação:', qrErr);
+      }
+    }
+
     res.json({
       success: true,
+      idempotentReplay: false,
+      renegotiationId: result.renegotiationId,
+      remainingPrincipalCents: result.remainingPrincipalCents,
       remainingPrincipal: Number((result.remainingPrincipalCents / 100).toFixed(2)),
+      chargesCents: result.chargesCents,
+      remainingChargesCents: result.remainingChargesCents,
+      remainingCharges: Number((result.remainingChargesCents / 100).toFixed(2)),
+      totalRenegotiatedCents: result.remainingPrincipalCents + result.remainingChargesCents,
       newInstallments: result.newInstallments,
+      supersededInstallmentsCount: result.supersededInstallmentsCount,
+      preservedPaidInstallmentsCount: result.preservedPaidInstallmentsCount,
+      confirmationReissued,
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
-      res.status(error.status).json({ error: error.message });
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
       return;
     }
+
+    const isP2002Idempotency =
+      error?.code === 'P2002' &&
+      (String(error?.message).includes('idempotencyKey') || error?.meta?.target?.includes('idempotencyKey'));
+
+    if (isP2002Idempotency || isConcurrencyConflictError(error)) {
+      if (normalizedIdempotencyKey) {
+        const existingConcurrent = await prisma.creditAgreementRenegotiation.findUnique({
+          where: { idempotencyKey: normalizedIdempotencyKey },
+          include: {
+            agreement: {
+              select: { id: true, companyId: true, remainingChargesCents: true },
+            },
+          },
+        });
+        if (existingConcurrent) {
+          if (existingConcurrent.agreement?.companyId !== companyId || existingConcurrent.agreementId !== id) {
+            res.status(409).json({
+              error: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+              code: 'IDEMPOTENCY_KEY_CONFLICT',
+            });
+            return;
+          }
+          res.status(200).json(buildRenegotiationReplayResponse(existingConcurrent));
+          return;
+        }
+      }
+      res.status(409).json({
+        error: 'Conflito de concorrência detectado ao renegociar contrato. Tente novamente.',
+        code: 'CONCURRENCY_CONFLICT',
+      });
+      return;
+    }
+
     console.error('Error renegotiating credit agreement:', error);
     res.status(500).json({ error: error.message || 'Erro ao renegociar contrato' });
   }

@@ -769,7 +769,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           )
         else
           SizedBox(
-            height: 110,
+            height: 128,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
@@ -777,39 +777,41 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                 _buildSellerCard(
                   sellerId: null,
                   sellerName: 'Todos os Vendedores',
-                remaining: (_overview['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0,
-                overdue: (_overview['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0,
-                commission: (_overview['pendingCommissions'] as num?)?.toDouble() ?? 0.0,
-                isActive: true,
-                isSelected: _selectedSellerId == null,
-              ),
-              const SizedBox(width: 10),
-              // Cards individuais
-              ..._sellersSummary.map((s) {
-                final sid = s['sellerId']?.toString() ?? '';
-                final name = s['sellerName']?.toString() ?? 'Vendedor';
-                final remaining = (s['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0;
-                final overdue = (s['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0;
-                final comm = (s['netCommissionPayable'] as num?)?.toDouble() ?? 0.0;
-                final isActive = s['isActive'] != false;
-                final isSelected = _selectedSellerId == sid;
+                  remaining: (_overview['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0,
+                  overdue: (_overview['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0,
+                  commission: (_overview['pendingCommissions'] as num?)?.toDouble() ?? 0.0,
+                  isActive: true,
+                  isSelected: _selectedSellerId == null,
+                ),
+                const SizedBox(width: 10),
+                // Cards individuais
+                ..._sellersSummary.map((s) {
+                  final sid = s['sellerId']?.toString() ?? '';
+                  final name = s['sellerName']?.toString() ?? 'Vendedor';
+                  final remaining = (s['totalRemainingPrincipal'] as num?)?.toDouble() ?? 0.0;
+                  final overdue = (s['totalOverduePrincipal'] as num?)?.toDouble() ?? 0.0;
+                  final comm = (s['netCommissionPayable'] as num?)?.toDouble() ?? 0.0;
+                  final isActive = s['isActive'] != false;
+                  final isBlocked = s['sellerBlocked'] == true;
+                  final isSelected = _selectedSellerId == sid;
 
-                return Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: _buildSellerCard(
-                    sellerId: sid,
-                    sellerName: name,
-                    remaining: remaining,
-                    overdue: overdue,
-                    commission: comm,
-                    isActive: isActive,
-                    isSelected: isSelected,
-                  ),
-                );
-              }),
-            ],
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: _buildSellerCard(
+                      sellerId: sid,
+                      sellerName: name,
+                      remaining: remaining,
+                      overdue: overdue,
+                      commission: comm,
+                      isActive: isActive,
+                      isBlocked: isBlocked,
+                      isSelected: isSelected,
+                    ),
+                  );
+                }),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
@@ -821,6 +823,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     required double overdue,
     required double commission,
     required bool isActive,
+    bool isBlocked = false,
     required bool isSelected,
   }) {
     return InkWell(
@@ -830,13 +833,15 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       },
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        width: 190,
+        width: 196,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFA855F7).withOpacity(0.18) : const Color(0xFF160D24),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFFA855F7) : const Color(0xFF2A1B3D),
+            color: isBlocked
+                ? const Color(0xFFEF4444).withOpacity(0.7)
+                : (isSelected ? const Color(0xFFA855F7) : const Color(0xFF2A1B3D)),
             width: isSelected ? 1.8 : 1.0,
           ),
         ),
@@ -858,7 +863,20 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (!isActive)
+                if (isBlocked)
+                  Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withOpacity(0.22),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'Bloqueado',
+                      style: TextStyle(color: Color(0xFFFCA5A5), fontSize: 8, fontWeight: FontWeight.bold),
+                    ),
+                  )
+                else if (!isActive)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                     decoration: BoxDecoration(
@@ -869,6 +887,32 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                   ),
               ],
             ),
+            if (isBlocked && sellerId != null) ...[
+              InkWell(
+                onTap: () => _showUnblockSellerDialog(sellerId, sellerName),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFA855F7).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.6)),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.lock_open_rounded, size: 10, color: Color(0xFFE9D5FF)),
+                      SizedBox(width: 4),
+                      Text(
+                        'Desbloquear Vendedor',
+                        style: TextStyle(color: Color(0xFFE9D5FF), fontSize: 9, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -2044,11 +2088,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     );
   }
 
-  void _showRenegotiateDialog(Map<String, dynamic> agreement) {
-    final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    int installmentsCount = 3;
-    String periodicity = 'MONTHLY';
-    DateTime firstDueDate = DateTime.now().add(const Duration(days: 30));
+  void _showUnblockSellerDialog(String sellerId, String sellerName) {
     final reasonController = TextEditingController();
     bool isSubmitting = false;
 
@@ -2056,6 +2096,133 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFA855F7), width: 1.2),
+          ),
+          title: Text(
+            'Desbloquear $sellerName',
+            style: const TextStyle(
+                color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Libera novamente o vendedor bloqueado preventivamente na conferência por QR. O desbloqueio é auditado no servidor.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonController,
+                maxLines: 3,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: 'Justificativa de desbloqueio *',
+                  labelStyle: TextStyle(color: Colors.white70),
+                  hintText: 'Ex.: Divergência regularizada pelo gestor...',
+                  hintStyle: TextStyle(color: Colors.white30, fontSize: 12),
+                  filled: true,
+                  fillColor: Color(0xFF0D0714),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFF2A1B3D)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xFFA855F7)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final reason = reasonController.text.trim();
+                      if (reason.length < 5) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Informe uma justificativa (mínimo 5 caracteres).'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        await _api.unblockSeller(sellerId, reason: reason);
+                        if (mounted) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Vendedor desbloqueado com sucesso!'),
+                              backgroundColor: Color(0xFF10B981),
+                            ),
+                          );
+                          _loadAll();
+                        }
+                      } catch (e) {
+                        setDialogState(() => isSubmitting = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro ao desbloquear: $e')),
+                          );
+                        }
+                      }
+                    },
+              icon: isSubmitting
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.lock_open_rounded, size: 16),
+              label: Text(isSubmitting ? 'Liberando...' : 'Desbloquear'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRenegotiateDialog(Map<String, dynamic> agreement) {
+    final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ??
+            (((agreement['remainingPrincipal'] as num?)?.toDouble() ?? 0.0) * 100.0)) /
+        100.0;
+    final priorCharges = ((agreement['remainingChargesCents'] as num?)?.toDouble() ??
+            (((agreement['remainingCharges'] as num?)?.toDouble() ?? 0.0) * 100.0)) /
+        100.0;
+    int installmentsCount = 3;
+    String periodicity = 'MONTHLY';
+    DateTime firstDueDate = DateTime.now().add(const Duration(days: 30));
+    final reasonController = TextEditingController();
+    final chargesController = TextEditingController();
+    final attemptIdempotencyKey =
+        'reneg_${agreement['id']}_${DateTime.now().microsecondsSinceEpoch}';
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final rawChargesText = chargesController.text.trim().replaceAll(',', '.');
+          final additionalCharges =
+              rawChargesText.isEmpty ? 0.0 : (double.tryParse(rawChargesText) ?? -1.0);
+          final safeAdditionalCharges = additionalCharges < 0 ? 0.0 : additionalCharges;
+          final totalSchedule = remaining + priorCharges + safeAdditionalCharges;
+
+          return AlertDialog(
           backgroundColor: const Color(0xFF160D24),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
@@ -2068,9 +2235,16 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Saldo a renegociar: ${currencyFormat.format(remaining)}',
+                  'Principal em aberto: ${currencyFormat.format(remaining)}',
                   style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 13),
                 ),
+                if (priorCharges > 0 || safeAdditionalCharges > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Encargos separados (sem comissão): ${currencyFormat.format(priorCharges + safeAdditionalCharges)} | Novo total: ${currencyFormat.format(totalSchedule)}',
+                    style: const TextStyle(color: Color(0xFFE9D5FF), fontSize: 11),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 DropdownButtonFormField<int>(
                   value: installmentsCount,
@@ -2133,6 +2307,21 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                 ),
                 const SizedBox(height: 14),
                 TextField(
+                  controller: chargesController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white),
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Encargos / Mora (R\$, opcional)',
+                    hintText: '0,00',
+                    hintStyle: TextStyle(color: Colors.white30),
+                    labelStyle: TextStyle(color: Colors.white70),
+                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
                   controller: reasonController,
                   style: const TextStyle(color: Colors.white),
                   decoration: const InputDecoration(
@@ -2161,14 +2350,24 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                         );
                         return;
                       }
+                      if (additionalCharges < 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Valor de encargos inválido.')),
+                        );
+                        return;
+                      }
 
+                      final chargesCents = (safeAdditionalCharges * 100).round();
                       setDialogState(() => isSubmitting = true);
                       try {
                         await _api.renegotiateCreditAgreement(agreement['id'], {
+                          'installmentsCount': installmentsCount,
                           'newInstallmentsCount': installmentsCount,
                           'periodicity': periodicity,
                           'firstDueDate': firstDueDate.toIso8601String(),
+                          'chargesCents': chargesCents,
                           'reason': reasonController.text.trim(),
+                          'idempotencyKey': attemptIdempotencyKey,
                         });
                         if (mounted) {
                           Navigator.pop(ctx);
@@ -2194,7 +2393,8 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                   : const Text('Salvar Renegociação'),
             ),
           ],
-        ),
+        );
+        },
       ),
     );
   }
