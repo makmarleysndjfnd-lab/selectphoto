@@ -437,7 +437,17 @@ class _LoginScreenState extends State<LoginScreen>
                                     _obscurePassword = !_obscurePassword),
                               ),
                             ),
-                            const SizedBox(height: 28),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _isLoading ? null : _abrirRecuperacao,
+                                child: const Text(
+                                  'Esqueci minha senha',
+                                  style: TextStyle(color: Color(0xFF90CAF9)),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
                             _buildLoginButton(),
                             const SizedBox(height: 16),
                             const Center(
@@ -500,6 +510,31 @@ class _LoginScreenState extends State<LoginScreen>
         filled: true,
         fillColor: Colors.white.withOpacity(0.06),
       ),
+    );
+  }
+
+  Future<void> _abrirRecuperacao() async {
+    try {
+      final baseUrl = context.read<ApiService>().baseUrl;
+      final base = Uri.parse(AppConfig.validateUrl(baseUrl));
+      final recoveryUrl = base.replace(
+        pathSegments: [
+          ...base.pathSegments.where((segment) => segment.isNotEmpty),
+          'auth',
+          'recuperar-senha',
+        ],
+        query: '',
+        fragment: '',
+      );
+      if (await launchUrl(recoveryUrl, mode: LaunchMode.externalApplication)) {
+        return;
+      }
+    } catch (_) {
+      // O navegador ou a configuração do servidor podem estar indisponíveis.
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Não foi possível abrir a recuperação de senha.')),
     );
   }
 

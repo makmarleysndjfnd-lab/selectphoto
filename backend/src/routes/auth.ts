@@ -5,8 +5,10 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { loginRateLimiter } from '../middleware/securityMiddleware';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import passwordRecoveryRoutes from './passwordRecovery';
 
 const router = Router();
+router.use(passwordRecoveryRoutes);
 
 router.get('/session', authenticateToken, async (req: AuthRequest, res: Response) => {
   res.json({
@@ -76,14 +78,18 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
 
     const sessionId = crypto.randomUUID();
 
-    await prisma.user.update({
-      where: { id: user.id },
+    const session = await prisma.user.updateMany({
+      where: { id: user.id, active: true, password: user.password },
       data: {
         activeSessionId: sessionId,
         activeDeviceId: normalizedDeviceId,
         sessionStartedAt: new Date(),
       },
     });
+    if (session.count !== 1) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
 
     // Token expires in 30 days for offline persistence, bound to single active sessionId
     const token = jwt.sign(
@@ -131,25 +137,21 @@ router.post('/logout', async (req: Request, res: Response) => {
     if (token && secret) {
       try {
         const decoded = jwt.verify(token, secret) as any;
-        if (decoded && decoded.id) {
-          const currentUser = await prisma.user.findUnique({
-            where: { id: decoded.id },
-            select: { activeSessionId: true },
+        if (decoded && typeof decoded.id === 'string') {
+          // Um token antigo não deve apagar uma sessão nova, inclusive depois de um reset.
+          await prisma.user.updateMany({
+            where: {
+              id: decoded.id,
+              ...(typeof decoded.sessionId === 'string'
+                ? { activeSessionId: decoded.sessionId }
+                : { activeSessionId: null, passwordResetAt: null }),
+            },
+            data: {
+              activeSessionId: null,
+              activeDeviceId: null,
+              sessionStartedAt: null,
+            },
           });
-          // Limpa a sessão ativa apenas se pertencer à sessão que solicitou logout
-          if (
-            currentUser &&
-            (!decoded.sessionId || currentUser.activeSessionId === decoded.sessionId)
-          ) {
-            await prisma.user.update({
-              where: { id: decoded.id },
-              data: {
-                activeSessionId: null,
-                activeDeviceId: null,
-                sessionStartedAt: null,
-              },
-            });
-          }
         }
       } catch (_) {
         // Ignora token já expirado/inválido no logout

@@ -248,6 +248,10 @@ export function enforceSupportSessionRestrictions(
   return false;
 }
 
+function isBeforePasswordReset(issuedAt: unknown, resetAt: Date | null): boolean {
+  return !!resetAt && (typeof issuedAt !== 'number' || issuedAt <= Math.floor(resetAt.getTime() / 1000));
+}
+
 export const authenticateToken = async (
   req: AuthRequest,
   res: Response,
@@ -351,7 +355,7 @@ export const authenticateToken = async (
         where: { id: technicianId },
       });
 
-      if (!technicianUser || !technicianUser.active) {
+      if (!technicianUser || !technicianUser.active || isBeforePasswordReset(decoded.iat, technicianUser.passwordResetAt)) {
         res.status(403).json({ error: 'Conta de técnico inativa ou não encontrada' });
         return;
       }
@@ -439,7 +443,7 @@ export const authenticateToken = async (
         where: { id: decoded.actorId },
       });
 
-      if (!actor || !actor.active || actor.role !== 'SUPER_ADMIN') {
+      if (!actor || !actor.active || actor.role !== 'SUPER_ADMIN' || isBeforePasswordReset(decoded.iat, actor.passwordResetAt)) {
         res.status(403).json({ error: 'Impersonation actor is invalid or inactive' });
         return;
       }
@@ -524,7 +528,7 @@ export const authenticateToken = async (
     // Bloqueio estrito de Login Duplo (Single Active Session):
     // Se o usuário possui activeSessionId no banco ou sessionId no token, exige correspondência exata.
     // Caso contrário, desconecta imediatamente o aparelho anterior com 401.
-    if (decoded.sessionId || user.activeSessionId) {
+    if (decoded.sessionId || user.activeSessionId || user.passwordResetAt) {
       if (!user.activeSessionId || !decoded.sessionId || user.activeSessionId !== decoded.sessionId) {
         res.status(401).json({
           error: 'Sua conta foi conectada em outro aparelho. Esta sessão foi desconectada automaticamente.',
