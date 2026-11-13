@@ -1903,6 +1903,8 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     String selectedMethod = 'CASH';
     String selectedDestination = 'SELLER_HANDS';
     bool isSubmitting = false;
+    final attemptIdempotencyKey =
+        'mob_${agreement['id']}_${DateTime.now().microsecondsSinceEpoch}';
 
     showDialog(
       context: context,
@@ -2011,6 +2013,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                           'paymentMethod': selectedMethod,
                           'destination': selectedDestination,
                           'notes': notesController.text.trim(),
+                          'idempotencyKey': attemptIdempotencyKey,
                         });
                         if (mounted) {
                           Navigator.pop(ctx);

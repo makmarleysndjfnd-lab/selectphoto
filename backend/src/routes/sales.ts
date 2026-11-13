@@ -426,14 +426,40 @@ async function finalizeSaleWithReceipt(params: {
   receiptUrl: string;
   sheetPhotoUrl?: string | null;
   correlationId?: string;
+  callerRole?: string;
 }): Promise<{ sale: any; created: boolean }> {
   const input = parseSaleInput(params.body);
 
   return runSerializableTransaction(async (tx) => {
+    const sellerUser = await tx.user.findUnique({
+      where: { id: params.sellerId },
+      select: { sellerBlocked: true, sellerBlockedReason: true },
+    });
+    if (sellerUser?.sellerBlocked) {
+      throw {
+        status: 403,
+        code: 'SELLER_PREVENTIVELY_BLOCKED',
+        message: `Vendedor bloqueado preventivamente para novos lotes e vendas (${
+          sellerUser.sellerBlockedReason || 'bloqueio administrativo ativo'
+        }).`,
+      };
+    }
+
     const client = await tx.client.findFirst({
       where: { id: input.clientId, companyId: params.companyId },
     });
     if (!client) throw { status: 404, message: 'Ficha não encontrada na sua empresa' };
+    if (
+      !SALE_MANAGER_ROLES.includes(params.callerRole || '') &&
+      client.assignedSellerId &&
+      client.assignedSellerId !== params.sellerId
+    ) {
+      throw {
+        status: 403,
+        code: 'WALLET_ACCESS_DENIED',
+        message: 'Acesso negado: esta ficha pertence à carteira de outro vendedor.',
+      };
+    }
     if (client.cityClosedAt) throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
 
     // Buscar todas as vendas existentes para esta ficha na empresa
@@ -806,6 +832,18 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         throw { status: 404, message: 'Client not found in your company' };
       }
 
+      if (
+        !SALE_MANAGER_ROLES.includes(req.user?.role || '') &&
+        client.assignedSellerId &&
+        client.assignedSellerId !== sellerId
+      ) {
+        throw {
+          status: 403,
+          code: 'WALLET_ACCESS_DENIED',
+          message: 'Acesso negado: esta ficha pertence à carteira de outro vendedor.',
+        };
+      }
+
       // 2. Confirmar que a cidade não está fechada
       if (client.cityClosedAt) {
         throw { status: 409, message: 'Cidade já foi fechada para esta ficha' };
@@ -1130,6 +1168,7 @@ router.post(
         receiptUrl,
         sheetPhotoUrl,
         correlationId,
+        callerRole: req.user?.role,
       });
 
       // Se a venda for reutilizada (repetição idêntica) ou não foi criada agora,
@@ -1550,6 +1589,18 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
 
       if (!client) {
         throw { status: 404, message: 'Client not found in your company' };
+      }
+
+      if (
+        !SALE_MANAGER_ROLES.includes(req.user?.role || '') &&
+        client.assignedSellerId &&
+        client.assignedSellerId !== sellerId
+      ) {
+        throw {
+          status: 403,
+          code: 'WALLET_ACCESS_DENIED',
+          message: 'Acesso negado: esta ficha pertence à carteira de outro vendedor.',
+        };
       }
 
       // 2. Confirmar que a cidade não está fechada

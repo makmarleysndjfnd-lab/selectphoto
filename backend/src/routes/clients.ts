@@ -7,6 +7,22 @@ import { isClientClosedForPhotographer, sanitizeClientForPhotographer } from '..
 
 const router = Router();
 
+const CLIENT_MANAGER_OR_BACKOFFICE_ROLES = new Set([
+  'ADMIN',
+  'COMPANY_ADMIN',
+  'SUPER_ADMIN',
+  'SUPERVISOR',
+  'SELLER_MANAGER',
+  'GRAPHIC',
+  'OPERATOR',
+]);
+
+function isSellerWalletRestricted(role?: string | null): boolean {
+  if (!role) return true;
+  if (role === 'PHOTOGRAPHER') return false;
+  return !CLIENT_MANAGER_OR_BACKOFFICE_ROLES.has(role);
+}
+
 
 // Allowed client fields for sync
 const ALLOWED_SYNC_CLIENT_FIELDS = [
@@ -347,10 +363,15 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Acesso restrito. Fotógrafos devem utilizar a rota de produção /clients/photographer.' });
     }
 
+    const sellerOnlyWalletFilter = isSellerWalletRestricted(req.user?.role)
+      ? { assignedSellerId: req.user?.id }
+      : {};
+
     const clients = await prisma.client.findMany({
       where: { 
         companyId,
-        bookStatus: { not: 'CREATED' }
+        bookStatus: { not: 'CREATED' },
+        ...sellerOnlyWalletFilter,
       },
       include: { 
         children: true, 
@@ -539,10 +560,14 @@ router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     const { city, bookStatus } = req.query as { city?: string; bookStatus?: string };
+    const sellerOnlyWalletFilter = isSellerWalletRestricted(req.user?.role)
+      ? { assignedSellerId: req.user?.id }
+      : {};
 
     const clients = await prisma.client.findMany({
       where: {
         companyId: userCompanyId,
+        ...sellerOnlyWalletFilter,
         ...(city ? { city: { equals: city as string, mode: 'insensitive' } } : {}),
         ...(bookStatus ? { bookStatus: bookStatus as string } : {})
       },
@@ -572,10 +597,14 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
       'REBOLO_SOLD',
       'DISCARDED'
     ];
+    const sellerOnlyWalletFilter = isSellerWalletRestricted(req.user?.role)
+      ? { assignedSellerId: req.user?.id }
+      : {};
 
     const clients = await prisma.client.findMany({
       where: { 
         companyId: userCompanyId,
+        ...sellerOnlyWalletFilter,
         OR: [
           { bookStatus: { in: reboloStatuses } },
           { nonSales: { some: {} } }
@@ -765,6 +794,17 @@ router.get('/ficha/:identifier', authenticateToken, async (req: AuthRequest, res
         return res.status(403).json({ error: 'Acesso não autorizado a esta ficha' });
       }
       return res.json(sanitizeClientForPhotographer(client));
+    }
+
+    if (isSellerWalletRestricted(req.user?.role)) {
+      const assignedOther = Boolean(client.assignedSellerId && client.assignedSellerId !== req.user?.id);
+      const soldByOther = Array.isArray(client.sales) && client.sales.some((s) => s.sellerId !== req.user?.id);
+      if (assignedOther || soldByOther) {
+        return res.status(403).json({
+          error: 'Acesso negado: esta ficha pertence à carteira de outro vendedor.',
+          code: 'WALLET_ACCESS_DENIED',
+        });
+      }
     }
 
     res.json(client);
@@ -1006,6 +1046,17 @@ router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Res
     if (req.user?.role === 'PHOTOGRAPHER') {
       if (client.photographerId !== req.user.id || isClientClosedForPhotographer(client)) {
         return res.status(403).json({ error: 'Acesso negado à linha do tempo da ficha' });
+      }
+    } else if (isSellerWalletRestricted(req.user?.role)) {
+      const hasOtherSellerSale = await prisma.sale.findFirst({
+        where: { clientId: client.id, companyId: client.companyId, sellerId: { not: req.user?.id } },
+        select: { id: true },
+      });
+      if ((client.assignedSellerId && client.assignedSellerId !== req.user?.id) || Boolean(hasOtherSellerSale)) {
+        return res.status(403).json({
+          error: 'Acesso negado: esta ficha pertence à carteira de outro vendedor.',
+          code: 'WALLET_ACCESS_DENIED',
+        });
       }
     }
 

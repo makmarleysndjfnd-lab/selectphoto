@@ -267,6 +267,7 @@ describe('REGRA COMERCIAL DE COMISSÃO — ENTRADA DO CREDIÁRIO (20% CARRO EMPR
         paymentMethod: 'CASH',
         destination: 'SELLER_HANDS',
         notes: 'Parcela 1 recebida pelo vendedor empresa',
+        idempotencyKey: `idem_emp_inst1_${Date.now()}`,
       }),
     });
     assert.equal(resEmp.status, 201);
@@ -291,6 +292,7 @@ describe('REGRA COMERCIAL DE COMISSÃO — ENTRADA DO CREDIÁRIO (20% CARRO EMPR
         paymentMethod: 'CASH',
         destination: 'SELLER_HANDS',
         notes: 'Parcela 1 recebida pelo vendedor carro próprio',
+        idempotencyKey: `idem_prop_inst1_${Date.now()}`,
       }),
     });
     assert.equal(resProp.status, 201);

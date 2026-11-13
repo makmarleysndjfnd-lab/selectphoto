@@ -1,8 +1,31 @@
 import express, { Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
+import { resolveSellerCommissionRate } from '../utils/commission';
 
 const router = express.Router();
+
+function centsToBrl(cents: number): number {
+  return Number((cents / 100).toFixed(2));
+}
+
+function brlToCents(value: number | null | undefined): number {
+  return Math.round(Number(value || 0) * 100);
+}
+
+function parseFinanceDateBound(raw: string | undefined, boundary: 'start' | 'end'): Date | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  const parsed = isDateOnly
+    ? new Date(`${trimmed}T${boundary === 'start' ? '00:00:00.000' : '23:59:59.999'}-03:00`)
+    : new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw { status: 400, message: `Data inválida: ${trimmed}` };
+  }
+  return parsed;
+}
 
 
 // Get financial overview global (Admin or Supervisor)
@@ -14,42 +37,95 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       return;
     }
 
-    const salesFilter = {
-      ...(userCompanyId ? { companyId: userCompanyId } : {}),
+    const { startDate, endDate, sellerId } = req.query as {
+      startDate?: string;
+      endDate?: string;
+      sellerId?: string;
     };
 
-    // 1. Faturamento Total Bruto (Soma nominal de todas as vendas e contratos)
-    const salesAggregate = await prisma.sale.aggregate({
+    const startBound = parseFinanceDateBound(startDate, 'start');
+    const endBound = parseFinanceDateBound(endDate, 'end');
+    const dateRangeFilter =
+      startBound || endBound
+        ? {
+            ...(startBound ? { gte: startBound } : {}),
+            ...(endBound ? { lte: endBound } : {}),
+          }
+        : undefined;
+
+    const cleanSellerId = typeof sellerId === 'string' && sellerId.trim() ? sellerId.trim() : undefined;
+
+    const salesFilter: any = {
+      ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
+      ...(dateRangeFilter ? { date: dateRangeFilter } : {}),
+    };
+
+    // 1. Vendas do período: separa Faturamento Contratado vs Entradas À Vista e Entradas de Crediário em centavos
+    const salesInPeriod = await prisma.sale.findMany({
       where: salesFilter,
-      _sum: { value: true }
-    });
-    const faturamentoBruto = salesAggregate._sum.value || 0;
-
-    // 2. Vendas À Vista (vendas que NÃO possuem contrato de crediário vinculado, independente do status)
-    const cashSalesAggregate = await prisma.sale.aggregate({
-      where: {
-        ...salesFilter,
-        creditAgreement: null,
+      orderBy: { date: 'desc' },
+      select: {
+        id: true,
+        value: true,
+        date: true,
+        sellerId: true,
+        paymentMethod: true,
+        seller: { select: { name: true, usesOwnCar: true } },
+        client: { select: { name: true } },
+        creditAgreement: {
+          select: {
+            id: true,
+            status: true,
+            totalSaleCents: true,
+            downPaymentCents: true,
+          },
+        },
       },
-      _sum: { value: true },
     });
-    const entradasAVista = cashSalesAggregate._sum.value || 0;
 
-    // 3. Entradas pagas no ato das vendas em Crediário (downPaymentCents) e Saldo a Receber
-    const credAgreementsAggregate = await prisma.creditAgreement.aggregate({
+    let contractedRevenueCents = 0;
+    let cashSalesContractedCents = 0;
+    let creditSalesContractedCents = 0;
+    let cashSalesReceivedCents = 0;
+    let downPaymentsReceivedCents = 0;
+    let cashSalesCommissionsCents = 0;
+
+    for (const s of salesInPeriod) {
+      const saleNominalCents = brlToCents(s.value);
+      if (s.creditAgreement) {
+        if (s.creditAgreement.status !== 'CANCELLED') {
+          const agreementTotalCents = s.creditAgreement.totalSaleCents || saleNominalCents;
+          contractedRevenueCents += agreementTotalCents;
+          creditSalesContractedCents += agreementTotalCents;
+          downPaymentsReceivedCents += s.creditAgreement.downPaymentCents || 0;
+        }
+      } else {
+        contractedRevenueCents += saleNominalCents;
+        cashSalesContractedCents += saleNominalCents;
+        cashSalesReceivedCents += saleNominalCents;
+        const rate = resolveSellerCommissionRate(s.seller);
+        cashSalesCommissionsCents += Math.round(saleNominalCents * rate);
+      }
+    }
+
+    // Saldo aberto de crediário (carteira ativa na empresa / vendedor)
+    const openReceivableAggregate = await prisma.creditAgreement.aggregate({
       where: {
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
         status: { not: 'CANCELLED' },
       },
-      _sum: { downPaymentCents: true, remainingPrincipalCents: true },
+      _sum: { remainingPrincipalCents: true },
     });
-    const entradasCrediarioAto = (credAgreementsAggregate._sum.downPaymentCents || 0) / 100.0;
-    const saldoAReceber = (credAgreementsAggregate._sum.remainingPrincipalCents || 0) / 100.0;
+    const receivableBalanceCents = openReceivableAggregate._sum.remainingPrincipalCents || 0;
 
-    // 4. Recebimentos Efetivos de parcelas de Crediário (CreditPayment não estornados)
+    // 2. Recebimentos Efetivos de parcelas de Crediário (CreditPayment não estornados) no período
     const creditPayments = await prisma.creditPayment.findMany({
       where: {
         ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        ...(cleanSellerId ? { agreement: { sellerId: cleanSellerId } } : {}),
+        ...(dateRangeFilter ? { paidAt: dateRangeFilter } : {}),
         isReversed: false,
       },
       include: {
@@ -59,21 +135,21 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       },
     });
 
-    let baixasParcelasCrediario = 0;
-    let tarifasBancarias = 0;
-    let saldoConfirmadoAsaas = 0;
-    let saldoDisponivelAsaas = 0;
+    let installmentsReceivedCents = 0;
+    let bankFeesCents = 0;
+    let asaasConfirmedCents = 0;
+    let asaasAvailableCents = 0;
 
-    // Rastrear recebimentos e custódia real por vendedor
-    const sellerRecebimentos: Record<string, number> = {};
+    // Rastrear recebimentos e custódia real por vendedor em centavos
+    const sellerReceiptsCents: Record<string, number> = {};
 
     for (const cp of creditPayments) {
-      const amt = cp.amountCents / 100.0;
-      const fee = (cp.bankFeeCents || 0) / 100.0;
-      baixasParcelasCrediario += amt;
-      tarifasBancarias += fee;
+      const amtCents = cp.amountCents || 0;
+      const feeCents = cp.bankFeeCents || 0;
+      installmentsReceivedCents += amtCents;
+      bankFeesCents += feeCents;
 
-      const netAmount = Math.max(0, amt - fee);
+      const netAmountCents = Math.max(0, amtCents - feeCents);
 
       const isBank =
         ['BANK', 'ASAAS'].includes((cp.receivedByRole || '').toUpperCase()) ||
@@ -88,23 +164,27 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
 
       if (isBank) {
         if (cp.isAsaasSettled) {
-          saldoDisponivelAsaas += netAmount;
+          asaasAvailableCents += netAmountCents;
         } else {
-          saldoConfirmadoAsaas += netAmount;
+          asaasConfirmedCents += netAmountCents;
         }
       } else if (isSellerCustody) {
         const sid = cp.receiverUserId || cp.agreement?.sellerId || 'unknown';
-        sellerRecebimentos[sid] = (sellerRecebimentos[sid] || 0) + amt;
+        sellerReceiptsCents[sid] = (sellerReceiptsCents[sid] || 0) + amtCents;
       }
     }
 
     // Buscar acertos e repasses efetivamente realizados pelos vendedores à empresa
     const closings = await prisma.dailyClosing.findMany({
-      where: userCompanyId ? { seller: { companyId: userCompanyId } } : {},
+      where: {
+        ...(userCompanyId ? { seller: { companyId: userCompanyId } } : {}),
+        ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
+        ...(dateRangeFilter ? { date: dateRangeFilter } : {}),
+      },
       select: { sellerId: true, repasseDebt: true, closingType: true, totalSalesValue: true, commission: true },
     });
 
-    const sellerAcertos: Record<string, number> = {};
+    const sellerSettlementsCents: Record<string, number> = {};
     for (const cl of closings) {
       // Somente acertos de repasse efetivos (não confundir com fechamento onde a empresa deve comissão ao vendedor)
       const isRepasseSettlement =
@@ -112,92 +192,203 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         (cl.totalSalesValue === 0 && cl.commission === 0 && cl.repasseDebt < 0);
 
       if (isRepasseSettlement) {
-        sellerAcertos[cl.sellerId] = (sellerAcertos[cl.sellerId] || 0) + Math.abs(cl.repasseDebt);
+        sellerSettlementsCents[cl.sellerId] =
+          (sellerSettlementsCents[cl.sellerId] || 0) + brlToCents(Math.abs(cl.repasseDebt));
       }
     }
 
     // Calcular valores em poder do vendedor por carteira individual para não compensar vendedores distintos
-    const allSellerIds = Array.from(new Set([...Object.keys(sellerRecebimentos), ...Object.keys(sellerAcertos)]));
-    let recebimentosAcumuladosVendedor = 0;
-    let acertosRealizadosVendedor = 0;
-    let valoresEmPoderDoVendedor = 0;
+    const allSellerIds = Array.from(
+      new Set([...Object.keys(sellerReceiptsCents), ...Object.keys(sellerSettlementsCents)])
+    );
+    let sellerAccumulatedReceiptsCents = 0;
+    let sellerSettlementsTotalCents = 0;
+    let sellerHeldFundsCents = 0;
 
     for (const sid of allSellerIds) {
-      const rec = sellerRecebimentos[sid] || 0;
-      const acet = sellerAcertos[sid] || 0;
-      recebimentosAcumuladosVendedor += rec;
-      acertosRealizadosVendedor += acet;
-      valoresEmPoderDoVendedor += Math.max(0, rec - acet);
+      const rec = sellerReceiptsCents[sid] || 0;
+      const acet = sellerSettlementsCents[sid] || 0;
+      sellerAccumulatedReceiptsCents += rec;
+      sellerSettlementsTotalCents += acet;
+      sellerHeldFundsCents += Math.max(0, rec - acet);
     }
 
-    const valoresNaoRepassadosVendedor = valoresEmPoderDoVendedor;
+    // 3. Caixa Real Recebido (Entradas de Caixa Reais: vendas à vista + entrada do crediário + baixas de parcelas)
+    const realCashReceivedCents =
+      cashSalesReceivedCents + downPaymentsReceivedCents + installmentsReceivedCents;
 
-    // 5. Total de Recebimentos Efetivos (Entradas de Caixa Reais / Principal Recebido)
-    // Transferências internas entre vendedor e empresa não duplicam receita
-    const principalRecebido = entradasAVista + entradasCrediarioAto + baixasParcelasCrediario;
-    const recebimentosEfetivos = principalRecebido;
-
-    // Agregação total de custos aprovados (saídas) de toda a empresa
-    const costsAggregate = await prisma.cost.aggregate({
-      where: { status: 'APPROVED', ...(userCompanyId ? { companyId: userCompanyId } : {}) },
-      _sum: { amount: true }
+    // 4. Comissões Brutas, Abatimentos de Auditoria (Etapa 2 + Estornos) e Comissão Líquida
+    const creditCommissions = await prisma.creditCommission.findMany({
+      where: {
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
+        ...(dateRangeFilter ? { createdAt: dateRangeFilter } : {}),
+        isReversed: false,
+      },
+      select: {
+        amountCents: true,
+        type: true,
+        status: true,
+      },
     });
 
-    // Agregação total de receita prevista futura de toda a empresa
-    const prospectsAggregate = await prisma.commercialEvent.aggregate({
-      where: { isProspect: true, expectedRevenue: { gt: 0 }, ...(userCompanyId ? { companyId: userCompanyId } : {}) },
-      _sum: { expectedRevenue: true }
-    });
+    let downPaymentCommissionsCents = 0;
+    let installmentCommissionsCents = 0;
+    let creditCommissionsReleasedCents = 0;
+    let creditCommissionsPaidCents = 0;
+    let creditCommissionsPendingCents = 0;
 
-    // Listas recentes limitadas a 50 itens apenas para exibição visual
-    const recentSales = await prisma.sale.findMany({
-      where: salesFilter,
-      orderBy: { date: 'desc' },
-      take: 50,
-      include: {
-        seller: { select: { name: true } },
-        client: { select: { name: true } }
-      }
-    });
+    for (const cc of creditCommissions) {
+      const amt = cc.amountCents || 0;
+      if (cc.type === 'DOWN_PAYMENT') downPaymentCommissionsCents += amt;
+      else if (cc.type === 'INSTALLMENT') installmentCommissionsCents += amt;
 
-    const recentCosts = await prisma.cost.findMany({
-      where: { status: 'APPROVED', ...(userCompanyId ? { companyId: userCompanyId } : {}) },
-      orderBy: { date: 'desc' },
-      take: 50,
-      include: {
-        user: { select: { name: true } }
-      }
-    });
+      if (cc.status === 'RELEASED') creditCommissionsReleasedCents += amt;
+      else if (cc.status === 'PAID') creditCommissionsPaidCents += amt;
+      else creditCommissionsPendingCents += amt;
+    }
 
-    const recentProspects = await prisma.commercialEvent.findMany({
-      where: { isProspect: true, expectedRevenue: { gt: 0 }, ...(userCompanyId ? { companyId: userCompanyId } : {}) },
-      orderBy: { createdAt: 'desc' },
-      take: 50
-    });
+    const creditCommissionsCents = downPaymentCommissionsCents + installmentCommissionsCents;
+    const grossCommissionsCents = cashSalesCommissionsCents + creditCommissionsCents;
 
-    const totalEntradas = recebimentosEfetivos;
-    const totalSaidas = costsAggregate._sum.amount || 0;
+    const [batchAuditAdjustments, creditCommissionAdjustments] = await Promise.all([
+      prisma.batchCommissionAdjustment.findMany({
+        where: {
+          ...(userCompanyId ? { companyId: userCompanyId } : {}),
+          ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
+          ...(dateRangeFilter ? { createdAt: dateRangeFilter } : {}),
+        },
+        select: { deductionCents: true },
+      }),
+      prisma.creditCommissionAdjustment.findMany({
+        where: {
+          ...(userCompanyId ? { companyId: userCompanyId } : {}),
+          ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
+          ...(dateRangeFilter ? { createdAt: dateRangeFilter } : {}),
+          status: { in: ['PENDING', 'APPLIED'] },
+        },
+        select: { amountCents: true },
+      }),
+    ]);
+
+    const batchAuditDeductionsCents = batchAuditAdjustments.reduce(
+      (sum, item) => sum + (item.deductionCents || 0),
+      0
+    );
+    const creditAdjustmentsCents = creditCommissionAdjustments.reduce(
+      (sum, item) => sum + (item.amountCents || 0),
+      0
+    );
+    const auditDeductionsCents = batchAuditDeductionsCents + creditAdjustmentsCents;
+    const netCommissionsCents = grossCommissionsCents - auditDeductionsCents;
+
+    // 5. Saídas / Custos aprovados e Receita prevista
+    const costsFilter: any = {
+      status: 'APPROVED',
+      ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      ...(cleanSellerId ? { userId: cleanSellerId } : {}),
+      ...(dateRangeFilter ? { date: dateRangeFilter } : {}),
+    };
+
+    const [costsAggregate, prospectsAggregate, recentCosts, recentProspects] = await Promise.all([
+      prisma.cost.aggregate({
+        where: costsFilter,
+        _sum: { amount: true },
+      }),
+      prisma.commercialEvent.aggregate({
+        where: {
+          isProspect: true,
+          expectedRevenue: { gt: 0 },
+          ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        },
+        _sum: { expectedRevenue: true },
+      }),
+      prisma.cost.findMany({
+        where: costsFilter,
+        orderBy: { date: 'desc' },
+        take: 50,
+        include: { user: { select: { name: true } } },
+      }),
+      prisma.commercialEvent.findMany({
+        where: {
+          isProspect: true,
+          expectedRevenue: { gt: 0 },
+          ...(userCompanyId ? { companyId: userCompanyId } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      }),
+    ]);
+
+    const totalOutflowsCents = brlToCents(costsAggregate._sum.amount);
+    const saldoCents = realCashReceivedCents - totalOutflowsCents;
     const totalFuturo = prospectsAggregate._sum.expectedRevenue || 0;
-    const saldo = totalEntradas - totalSaidas;
+    const recentSales = salesInPeriod.slice(0, 50);
+
+    const totalEntradas = centsToBrl(realCashReceivedCents);
+    const totalSaidas = centsToBrl(totalOutflowsCents);
+    const saldo = centsToBrl(saldoCents);
+    const faturamentoBruto = centsToBrl(contractedRevenueCents);
+    const recebimentosEfetivos = totalEntradas;
+    const principalRecebido = totalEntradas;
 
     res.json({
+      // Métricas legadas em BRL (mantidas para compatibilidade integral com o frontend/mobile)
       totalEntradas,
       totalSaidas,
       saldo,
+      totalFuturo,
       faturamentoBruto,
       recebimentosEfetivos,
       principalRecebido,
-      entradasAVista,
-      entradasCrediarioAto,
-      baixasParcelasCrediario,
-      tarifasBancarias,
-      saldoConfirmadoAsaas,
-      saldoDisponivelAsaas,
-      recebimentosAcumuladosVendedor,
-      acertosRealizadosVendedor,
-      valoresNaoRepassadosVendedor,
-      valoresEmPoderDoVendedor,
-      saldoAReceber,
+      entradasAVista: centsToBrl(cashSalesReceivedCents),
+      entradasCrediarioAto: centsToBrl(downPaymentsReceivedCents),
+      baixasParcelasCrediario: centsToBrl(installmentsReceivedCents),
+      tarifasBancarias: centsToBrl(bankFeesCents),
+      saldoConfirmadoAsaas: centsToBrl(asaasConfirmedCents),
+      saldoDisponivelAsaas: centsToBrl(asaasAvailableCents),
+      recebimentosAcumuladosVendedor: centsToBrl(sellerAccumulatedReceiptsCents),
+      acertosRealizadosVendedor: centsToBrl(sellerSettlementsTotalCents),
+      valoresNaoRepassadosVendedor: centsToBrl(sellerHeldFundsCents),
+      valoresEmPoderDoVendedor: centsToBrl(sellerHeldFundsCents),
+      saldoAReceber: centsToBrl(receivableBalanceCents),
+
+      // Métricas blindadas Etapa 3 em centavos exatos e BRL
+      contractedRevenueCents,
+      faturamentoContratadoCents: contractedRevenueCents,
+      faturamentoContratado: centsToBrl(contractedRevenueCents),
+      cashSalesContractedCents,
+      creditSalesContractedCents,
+
+      realCashReceivedCents,
+      recebimentosEfetivosCents: realCashReceivedCents,
+      cashSalesReceivedCents,
+      downPaymentsReceivedCents,
+      installmentsReceivedCents,
+      receivableBalanceCents,
+      saldoAReceberCents: receivableBalanceCents,
+
+      grossCommissionsCents,
+      comissoesBrutasCents: grossCommissionsCents,
+      comissoesBrutas: centsToBrl(grossCommissionsCents),
+      cashSalesCommissionsCents,
+      downPaymentCommissionsCents,
+      installmentCommissionsCents,
+      creditCommissionsCents,
+      creditCommissionsReleasedCents,
+      creditCommissionsPaidCents,
+      creditCommissionsPendingCents,
+
+      auditDeductionsCents,
+      batchAuditDeductionsCents,
+      creditAdjustmentsCents,
+      abatimentosAuditoriaCents: auditDeductionsCents,
+      abatimentosAuditoria: centsToBrl(auditDeductionsCents),
+
+      netCommissionsCents,
+      comissaoLiquidaCents: netCommissionsCents,
+      comissaoLiquida: centsToBrl(netCommissionsCents),
+
       recentSales: recentSales.map(s => ({
         id: s.id,
         desc: `Venda - ${s.client?.name || 'Cliente'}`,
@@ -223,7 +414,11 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         method: 'PROSPECT'
       }))
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.status && error?.message) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
     console.error('Error calculating finance overview:', error);
     res.status(500).json({ error: 'Failed to calculate finance overview' });
   }

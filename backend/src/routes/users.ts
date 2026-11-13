@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = Router();
 
@@ -630,6 +631,121 @@ router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ 
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user' });
   }
+});
+
+async function handleSellerPreventiveBlockChange(
+  req: AuthRequest,
+  res: Response,
+  shouldBlock: boolean
+) {
+  try {
+    const targetId = String(req.params.id || '').trim();
+    const companyId = req.user?.companyId;
+    const authorId = req.user?.id;
+    const rawReason = req.body?.reason ?? req.body?.sellerBlockedReason;
+    const cleanReason = typeof rawReason === 'string' ? rawReason.trim() : '';
+
+    if (!authorId || (!companyId && req.user?.role !== 'SUPER_ADMIN')) {
+      return res.status(403).json({ error: 'Empresa ou usuário administrador não identificado.' });
+    }
+
+    if (cleanReason.length < 5) {
+      return res.status(400).json({
+        error: 'Justificativa é obrigatória para alterar bloqueio preventivo (mínimo 5 caracteres).',
+        code: 'AUDIT_REASON_REQUIRED',
+      });
+    }
+
+    const targetUser = await prisma.user.findFirst({
+      where: {
+        id: targetId,
+        ...(req.user?.role !== 'SUPER_ADMIN' ? { companyId } : {}),
+      },
+      select: {
+        id: true,
+        companyId: true,
+        name: true,
+        role: true,
+        sellerBlocked: true,
+        sellerBlockedReason: true,
+      },
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Usuário não encontrado na empresa.' });
+    }
+
+    const targetCompanyId = targetUser.companyId || companyId!;
+    const now = new Date();
+
+    const updatedUser = await prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: targetUser.id },
+        data: {
+          sellerBlocked: shouldBlock,
+          sellerBlockedReason: shouldBlock ? cleanReason : null,
+          sellerBlockedAt: shouldBlock ? now : null,
+          sellerBlockedByUserId: shouldBlock ? authorId : null,
+        },
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          sellerBlocked: true,
+          sellerBlockedReason: true,
+          sellerBlockedAt: true,
+          sellerBlockedByUserId: true,
+        },
+      });
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: targetCompanyId,
+          category: 'CONDITIONS',
+          action: shouldBlock
+            ? 'SELLER_PREVENTIVE_BLOCK_APPLIED'
+            : 'SELLER_PREVENTIVE_BLOCK_REMOVED',
+          entityType: 'SELLER',
+          entityReference: targetUser.id,
+          entityId: targetUser.id,
+          previousValues: {
+            sellerBlocked: targetUser.sellerBlocked,
+            sellerBlockedReason: targetUser.sellerBlockedReason,
+          },
+          newValues: {
+            sellerBlocked: shouldBlock,
+            reason: cleanReason,
+          },
+          reason: shouldBlock
+            ? `Bloqueio preventivo administrativo aplicado: ${cleanReason}`
+            : `Desbloqueio preventivo administrativo concedido: ${cleanReason}`,
+          authorUserId: authorId,
+          authorName: req.user?.name || 'Administrador',
+          authorRole: req.user?.role || 'ADMIN',
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        },
+        tx
+      );
+
+      return updated;
+    });
+
+    return res.json({
+      success: true,
+      user: updatedUser,
+    });
+  } catch (error: any) {
+    console.error('Error toggling seller preventive block:', error);
+    return res.status(500).json({ error: 'Falha ao atualizar bloqueio preventivo do vendedor.' });
+  }
+}
+
+router.post('/:id/unblock', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  return handleSellerPreventiveBlockChange(req, res, false);
+});
+
+router.post('/:id/block', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  return handleSellerPreventiveBlockChange(req, res, true);
 });
 
 // Delete user (Admin only)

@@ -2035,8 +2035,14 @@ class ApiService {
   Future<Map<String, dynamic>> registerCreditPayment(
       String agreementId, Map<String, dynamic> data) async {
     try {
-      final resp =
-          await _dio.post('/credit/agreements/$agreementId/payments', data: data);
+      final payload = Map<String, dynamic>.from(data);
+      final rawKey = payload['idempotencyKey']?.toString().trim() ?? '';
+      if (rawKey.isEmpty) {
+        payload['idempotencyKey'] =
+            'api_${agreementId}_${DateTime.now().microsecondsSinceEpoch}';
+      }
+      final resp = await _dio.post('/credit/agreements/$agreementId/payments',
+          data: payload);
       return Map<String, dynamic>.from(resp.data);
     } on DioException catch (e) {
       throw Exception(_extractError(e));

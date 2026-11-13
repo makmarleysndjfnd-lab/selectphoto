@@ -669,6 +669,10 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
   try {
     const id = req.params.id as string;
     const companyId = req.user?.companyId;
+    if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+      res.status(403).json({ error: 'Empresa não identificada' });
+      return;
+    }
     const isAdmin = isUserAdmin(req);
     const existing = await prisma.creditAgreement.findFirst({
       where: {
@@ -728,10 +732,53 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
  * Registrar recebimento / baixa parcial ou total do principal financiado
  * Com idempotência persistente, bloqueio pessimista e sincronização manual Asaas
  */
+function buildCreditPaymentReplayResponse(existing: any) {
+  const commissionRecord = Array.isArray(existing.commissions) ? existing.commissions[0] : null;
+  const remainingPrincipalCents = existing.agreement?.remainingPrincipalCents ?? 0;
+  return {
+    success: true,
+    idempotentReplay: true,
+    payment: existing,
+    paymentId: existing.id,
+    amount: Number((existing.amountCents / 100).toFixed(2)),
+    amountCents: existing.amountCents,
+    remainingPrincipalCents,
+    remainingPrincipal: Number((remainingPrincipalCents / 100).toFixed(2)),
+    isSettled: existing.agreement?.status === 'SETTLED',
+    allocations: existing.allocations || [],
+    allocationsCount: Array.isArray(existing.allocations) ? existing.allocations.length : 0,
+    commissionGenerated: commissionRecord ? Number((commissionRecord.amountCents / 100).toFixed(2)) : 0,
+    commission: commissionRecord || null,
+  };
+}
+
+function isConcurrencyConflictError(error: any): boolean {
+  const msg = String(error?.message || '');
+  return (
+    error?.code === 'P2034' ||
+    error?.code === '40001' ||
+    error?.code === '40P01' ||
+    error?.code === '55P03' ||
+    error?.meta?.code === '40001' ||
+    error?.meta?.code === '40P01' ||
+    error?.meta?.code === '55P03' ||
+    msg.includes('could not serialize access') ||
+    msg.includes('serialization_failure') ||
+    msg.includes('deadlock detected') ||
+    msg.includes('Transaction failed due to a write conflict')
+  );
+}
+
 router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const companyId = req.user?.companyId;
+  const rawIdempotencyKey =
+    req.body?.idempotencyKey ??
+    req.headers['idempotency-key'] ??
+    req.headers['x-idempotency-key'];
+  const normalizedIdempotencyKey = typeof rawIdempotencyKey === 'string' ? rawIdempotencyKey.trim() : '';
+
   try {
-    const id = req.params.id as string;
-    const companyId = req.user?.companyId;
     const currentUserId = req.user?.id;
     const currentUserRole = req.user?.role || 'ADMIN';
     const isAdmin = isUserAdmin(req);
@@ -748,30 +795,41 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       return;
     }
 
+    if (!normalizedIdempotencyKey) {
+      res.status(400).json({
+        error: 'Chave de idempotência (idempotencyKey) é obrigatória para registrar baixa de parcela.',
+        code: 'IDEMPOTENCY_KEY_REQUIRED',
+      });
+      return;
+    }
+
     const {
       amount,
       paymentMethod = 'CASH',
       destination = 'SELLER_HANDS',
       receiptUrl,
       notes,
-      idempotencyKey,
     } = req.body;
 
-    // 1. Idempotência preventiva
-    if (idempotencyKey) {
-      const existing = await prisma.creditPayment.findUnique({
-        where: { idempotencyKey: String(idempotencyKey).trim() },
-        include: { allocations: true },
-      });
-      if (existing) {
-        return res.json({
-          success: true,
-          idempotentReplay: true,
-          paymentId: existing.id,
-          amountCents: existing.amountCents,
-          allocations: existing.allocations,
+    // 1. Idempotência preventiva persistente no banco
+    const existingPreCheck = await prisma.creditPayment.findUnique({
+      where: { idempotencyKey: normalizedIdempotencyKey },
+      include: {
+        allocations: true,
+        agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+        commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
+      },
+    });
+    if (existingPreCheck) {
+      if (existingPreCheck.companyId !== companyId || existingPreCheck.agreementId !== id) {
+        res.status(409).json({
+          error: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+          code: 'IDEMPOTENCY_KEY_CONFLICT',
         });
+        return;
       }
+      res.status(200).json(buildCreditPaymentReplayResponse(existingPreCheck));
+      return;
     }
 
     const parsedAmount = amount !== undefined ? Number(amount) : (req.body?.amountCents !== undefined ? Number(req.body.amountCents) / 100 : NaN);
@@ -782,10 +840,33 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
 
     const paymentAmountCents = Math.round(parsedAmount * 100);
 
-    // 2. Transação com bloqueio pessimista para evitar concorrência simultânea
+    // 2. Transação serializável com bloqueio pessimista FOR UPDATE para evitar concorrência simultânea
     const result = await prisma.$transaction(async (tx) => {
       // Bloqueio pessimista do contrato no PostgreSQL
       await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${id} FOR UPDATE`;
+
+      const existingInsideTx = await tx.creditPayment.findUnique({
+        where: { idempotencyKey: normalizedIdempotencyKey },
+        include: {
+          allocations: true,
+          agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+          commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
+        },
+      });
+      if (existingInsideTx) {
+        if (existingInsideTx.companyId !== companyId || existingInsideTx.agreementId !== id) {
+          throw {
+            status: 409,
+            code: 'IDEMPOTENCY_KEY_CONFLICT',
+            message: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+          };
+        }
+        return {
+          idempotentReplay: true as const,
+          replayPayload: buildCreditPaymentReplayResponse(existingInsideTx),
+          chargesToSyncInCash: [] as { chargeId: string; amountCents: number; residualCents: number }[],
+        };
+      }
 
       const existing = await tx.creditAgreement.findFirst({
         where: {
@@ -839,7 +920,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           paidAt: paymentDate,
           receiptUrl,
           notes,
-          idempotencyKey: idempotencyKey ? String(idempotencyKey).trim() : undefined,
+          idempotencyKey: normalizedIdempotencyKey,
         },
       });
 
@@ -913,8 +994,12 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         },
       });
 
-      // 6. Gerar comissão de 10% sobre o principal recebido para o vendedor do contrato
-      const commissionCents = Math.round(paymentAmountCents * agreement.installmentCommissionRate);
+      // 6. Gerar comissão de 10% sobre o principal efetivamente alocado para o vendedor do contrato
+      const totalAllocatedPrincipalCents = allocationsCreated.reduce(
+        (acc, alloc) => acc + Number(alloc.allocatedCents || 0),
+        0
+      );
+      const commissionCents = Math.round(totalAllocatedPrincipalCents * agreement.installmentCommissionRate);
       let createdCommission: any = null;
 
       if (commissionCents > 0) {
@@ -974,6 +1059,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       });
 
       return {
+        idempotentReplay: false as const,
         payment,
         allocations: allocationsCreated,
         remainingPrincipalCents: newRemainingCents,
@@ -982,9 +1068,15 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         chargesToSyncInCash,
       };
     }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       timeout: 20000,
       maxWait: 10000,
     });
+
+    if (result.idempotentReplay) {
+      res.status(200).json(result.replayPayload);
+      return;
+    }
 
     // 8. Sincronização assíncrona não-bloqueante com o Asaas se cobrança bancária existir
     for (const c of result.chargesToSyncInCash) {
@@ -1024,6 +1116,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       payment: result.payment,
       paymentId: result.payment.id,
       amount: parsedAmount,
+      amountCents: paymentAmountCents,
       remainingPrincipalCents: result.remainingPrincipalCents,
       remainingPrincipal: Number((result.remainingPrincipalCents / 100).toFixed(2)),
       isSettled: result.isSettled,
@@ -1034,27 +1127,49 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
-      res.status(error.status).json({ error: error.message });
-      return;
-    }
-    if (error?.code === 'P2002' && (String(error?.message).includes('idempotencyKey') || error?.meta?.target?.includes('idempotencyKey'))) {
-      const existing = await prisma.creditPayment.findUnique({
-        where: { idempotencyKey: String(req.body.idempotencyKey || '').trim() },
-        include: { allocations: true },
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
       });
-      if (existing) {
-        res.json({
-          success: true,
-          idempotentReplay: true,
-          paymentId: existing.id,
-          amountCents: existing.amountCents,
-          allocations: existing.allocations,
-        });
-        return;
-      }
-      res.status(409).json({ error: 'Operação já processada com esta chave de idempotência.' });
       return;
     }
+
+    const isP2002Idempotency =
+      error?.code === 'P2002' &&
+      (String(error?.message).includes('idempotencyKey') || error?.meta?.target?.includes('idempotencyKey'));
+
+    if (isP2002Idempotency || isConcurrencyConflictError(error)) {
+      if (normalizedIdempotencyKey) {
+        const existingConcurrent = await prisma.creditPayment.findUnique({
+          where: { idempotencyKey: normalizedIdempotencyKey },
+          include: {
+            allocations: true,
+            agreement: { select: { id: true, remainingPrincipalCents: true, status: true } },
+            commissions: { where: { type: 'INSTALLMENT', isReversed: false }, take: 1 },
+          },
+        });
+        if (existingConcurrent) {
+          if (existingConcurrent.companyId !== companyId || existingConcurrent.agreementId !== id) {
+            res.status(409).json({
+              error: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+              code: 'IDEMPOTENCY_KEY_CONFLICT',
+            });
+            return;
+          }
+          res.status(200).json(buildCreditPaymentReplayResponse(existingConcurrent));
+          return;
+        }
+      }
+
+      res.status(409).json({
+        error: isP2002Idempotency
+          ? 'Operação já processada com esta chave de idempotência.'
+          : 'Conflito de concorrência ao processar baixa simultânea neste contrato. Atualize os dados e tente novamente.',
+        code: isP2002Idempotency ? 'IDEMPOTENCY_KEY_CONFLICT' : 'CONCURRENCY_CONFLICT',
+      });
+      return;
+    }
+
     console.error('Error registering credit payment:', error);
     res.status(500).json({ error: error.message || 'Erro ao registrar pagamento de crediário' });
   }
@@ -1910,8 +2025,16 @@ router.post('/commissions/pay', authenticateToken, requireAdminOrSupervisor, asy
  * Rota compatível com chamada unitária do mobile
  */
 router.post('/commissions/:id/pay', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
-  const commission = await prisma.creditCommission.findUnique({
-    where: { id: req.params.id as string },
+  const companyId = req.user?.companyId;
+  if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada' });
+    return;
+  }
+  const commission = await prisma.creditCommission.findFirst({
+    where: {
+      id: req.params.id as string,
+      ...(companyId ? { companyId } : {}),
+    },
   });
   if (!commission) {
     res.status(404).json({ error: 'Comissão não encontrada' });

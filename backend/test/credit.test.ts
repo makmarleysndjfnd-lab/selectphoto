@@ -275,6 +275,7 @@ describe('MÓDULO DE CREDIÁRIO INTERNO / PARCELADO — ENTREGA 1', { concurrenc
         paymentMethod: 'CASH',
         destination: 'SELLER_HANDS',
         notes: 'Pagamento recebido em mãos pelo vendedor',
+        idempotencyKey: `idem_credit_test_${Date.now()}`,
       }),
     });
 
