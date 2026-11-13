@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from './prisma';
 import { decryptSecret } from './vaultService';
 import { isGlobalLiveGateLocked } from './asaasService';
+import { triggerAutoSerasaRemovalOnDebtChange } from './serasaNegativationService';
 
 
 
@@ -262,6 +263,7 @@ export async function processAsaasWebhookEvent(params: {
     const feeCents = Math.max(0, nominalValueCents - netValueCents);
 
     let processedPaymentId: string | undefined = undefined;
+    let settledAgreementIdViaWebhook: string | undefined = undefined;
 
     // 6. Execução atômica sob bloqueio pessimista (PAYMENT_CONFIRMED / PAYMENT_RECEIVED)
     if ((eventName === 'PAYMENT_CONFIRMED' || eventName === 'PAYMENT_RECEIVED') && charge) {
@@ -430,6 +432,9 @@ export async function processAsaasWebhookEvent(params: {
             status: newRemainingCents <= 0 ? 'SETTLED' : freshAgreement.status,
           },
         });
+        if (newRemainingCents <= 0) {
+          settledAgreementIdViaWebhook = freshAgreement.id;
+        }
 
         // Comissão do vendedor (10% sobre o principal recebido das parcelas)
         const commissionRate = freshAgreement.installmentCommissionRate || 0.1;
@@ -463,6 +468,19 @@ export async function processAsaasWebhookEvent(params: {
           },
         });
       });
+
+      if (settledAgreementIdViaWebhook) {
+        await triggerAutoSerasaRemovalOnDebtChange({
+          companyId,
+          agreementId: settledAgreementIdViaWebhook,
+          triggerType: 'SETTLEMENT',
+          actorUserId: 'SYSTEM_ASAAS_WEBHOOK',
+          actorName: 'Asaas Webhook',
+          reason: 'Quitação integral confirmada via webhook Asaas — baixa Serasa (Súmula 548 STJ).',
+        }).catch((err) =>
+          console.warn('[Asaas Webhook] Aviso ao disparar baixa automática Serasa:', err)
+        );
+      }
     }
     // 6B. EVENTO: PAYMENT_REFUNDED (Estorno bancário / Chargeback)
     else if (eventName === 'PAYMENT_REFUNDED') {

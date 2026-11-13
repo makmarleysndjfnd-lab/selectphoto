@@ -392,6 +392,62 @@ async function asaasRequest(
     if (method === 'DELETE') {
       return { deleted: true, simulated: true };
     }
+    if (endpoint.startsWith('/negativations/remove') || endpoint.startsWith('/payments/negativation/remove')) {
+      const simCtrl = (global as any).__simulatedSerasaControl || {};
+      if (simCtrl.failRemoval) {
+        throw new Error(
+          typeof simCtrl.failRemoval === 'string'
+            ? simCtrl.failRemoval
+            : 'Falha simulada na comunicação de exclusão Serasa/Asaas Sandbox.'
+        );
+      }
+      return {
+        removed: true,
+        status: 'CANCELLED',
+        removalProtocolNumber: simCtrl.removalProtocolNumber || `SER-REM-SBX-${Date.now()}`,
+        simulated: true,
+        environment: 'SANDBOX',
+      };
+    }
+    if (endpoint.startsWith('/negativations') || endpoint.startsWith('/payments/negativation')) {
+      const simCtrl = (global as any).__simulatedSerasaControl || {};
+      if (simCtrl.failRequest) {
+        throw new Error(
+          typeof simCtrl.failRequest === 'string'
+            ? simCtrl.failRequest
+            : 'Falha simulada na comunicação de inclusão Serasa/Asaas Sandbox.'
+        );
+      }
+      if (simCtrl.forceRefuseReason) {
+        return {
+          accepted: false,
+          status: 'REFUSED',
+          refusalReason: simCtrl.forceRefuseReason,
+          protocolNumber: `SER-REF-SBX-${Date.now()}`,
+          simulated: true,
+          environment: 'SANDBOX',
+        };
+      }
+      return {
+        accepted: true,
+        id: simCtrl.externalNegativationId || `neg_sbx_${Date.now()}`,
+        protocolNumber: simCtrl.protocolNumber || `SER-SBX-${Date.now()}`,
+        status: 'REQUESTED',
+        simulated: true,
+        environment: 'SANDBOX',
+      };
+    }
+    if (endpoint.startsWith('/payments/') && method === 'GET' && !endpoint.includes('?')) {
+      if ((global as any).__simulatedAsaasRemotePaymentsError) {
+        throw new Error((global as any).__simulatedAsaasRemotePaymentsError);
+      }
+      const payId = endpoint.replace('/payments/', '').split('?')[0];
+      const byId = (global as any).__simulatedAsaasRemotePayments?.[payId];
+      if (byId) {
+        return byId;
+      }
+      return { id: payId, status: 'PENDING', simulated: true };
+    }
     if (endpoint.startsWith('/payments?externalReference=')) {
       if ((global as any).__simulatedAsaasRemotePaymentsError) {
         throw new Error((global as any).__simulatedAsaasRemotePaymentsError);
@@ -950,3 +1006,441 @@ export async function processAsaasSyncQueue(limit = 10): Promise<{ processed: nu
 
   return { processed, errors };
 }
+
+// ============================================================================
+// ETAPA 5 · ADAPTADOR SEGURO SERASA / DUPLA CONFERÊNCIA EM SANDBOX (NUNCA LIVE)
+// ============================================================================
+
+const ASAAS_PAID_STATUSES = new Set([
+  'RECEIVED',
+  'CONFIRMED',
+  'RECEIVED_IN_CASH',
+  'DUNNING_RECEIVED',
+]);
+
+const ASAAS_REPLACED_OR_INVALID_STATUSES = new Set([
+  'REFUNDED',
+  'DELETED',
+  'CHARGEBACK_REQUESTED',
+  'CHARGEBACK_DISPUTE',
+  'AWAITING_CHARGEBACK_REVERSAL',
+]);
+
+/**
+ * Garante que operações de negativação Serasa NUNCA ativem Asaas LIVE/Produção.
+ */
+export function assertSerasaSandboxEnvironment(requestedEnvironment?: string | null): 'SANDBOX' {
+  const normalized = String(requestedEnvironment || 'SANDBOX').trim().toUpperCase();
+  if (normalized === 'PRODUCTION' || normalized === 'LIVE' || normalized === 'PROD') {
+    const err: any = new Error(
+      'A ativação do Serasa/Asaas em Produção permanece bloqueada por segurança neste ambiente. Utilize apenas Sandbox.'
+    );
+    err.status = 403;
+    err.code = 'SERASA_PRODUCTION_LOCKED';
+    throw err;
+  }
+  return 'SANDBOX';
+}
+
+export interface AsaasDualBalanceResult {
+  environment: 'SANDBOX';
+  mode: string;
+  asaasConfiguredInSandbox: boolean;
+  hasLocalAsaasCharges: boolean;
+  dualCheckPassed: boolean;
+  blockCode: string | null;
+  blockMessage: string | null;
+  asaasVerifiedBalanceCents: number | null;
+  checkedInstallmentsCount: number;
+  paidExternallyDetected: boolean;
+  replacedOrCancelledChargeDetected: boolean;
+  details: Array<{
+    installmentId: string;
+    externalId: string | null;
+    localStatus: string | null;
+    remoteStatus: string | null;
+    remoteValueCents: number | null;
+    lumoraOpenCents: number;
+    consistent: boolean;
+    note?: string;
+  }>;
+}
+
+/**
+ * Dupla conferência automática de cobranças no Asaas apenas em SANDBOX (nunca LIVE).
+ * Identifica cobranças já pagas no gateway (RECEIVED/CONFIRMED/RECEIVED_IN_CASH/DUNNING_RECEIVED)
+ * ou substituídas/canceladas antes de permitir envio para negativação Serasa.
+ */
+export async function checkAsaasChargesBalanceForAgreement(
+  companyId: string,
+  params: {
+    agreementId: string;
+    lumoraRemainingTotalCents: number;
+    installments: Array<{
+      id: string;
+      status: string;
+      amountCents: number;
+      paidCents: number;
+      asaasCharge?: {
+        id: string;
+        externalId: string;
+        status: string;
+        nominalValueCents: number;
+      } | null;
+    }>;
+  }
+): Promise<AsaasDualBalanceResult> {
+  assertSerasaSandboxEnvironment('SANDBOX');
+
+  // Nunca solicita 'PRODUCTION'; restringe explicitamente a 'SANDBOX'.
+  const sandboxConfig = await getCompanyAsaasConfig(companyId, 'SANDBOX');
+  const isTestSimulation =
+    process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test';
+
+  const openInstallments = params.installments.filter(
+    (i) => i.status !== 'PAID' && i.status !== 'RENEGOTIATED' && Math.max(0, i.amountCents - i.paidCents) > 0
+  );
+  const localChargesCount = openInstallments.filter((i) => Boolean(i.asaasCharge)).length;
+  const hasLocalAsaasCharges = localChargesCount > 0;
+
+  const details: AsaasDualBalanceResult['details'] = [];
+  let paidExternallyDetected = false;
+  let replacedOrCancelledChargeDetected = false;
+  let remoteCheckFailedMessage: string | null = null;
+  let aggregatedAsaasOpenCents = 0;
+  let hasRemoteOrLocalValueData = false;
+
+  const effectiveRequestConfig: AsaasConfigData | null =
+    sandboxConfig.mode === 'SANDBOX'
+      ? sandboxConfig
+      : isTestSimulation
+      ? { mode: 'SANDBOX', apiKey: null, webhookToken: null, environment: 'SANDBOX' }
+      : null;
+
+  for (const inst of openInstallments) {
+    const lumoraOpenCents = Math.max(0, inst.amountCents - inst.paidCents);
+    const localCharge = inst.asaasCharge || null;
+    const localStatus = localCharge?.status || null;
+    let remoteStatus: string | null = null;
+    let remoteValueCents: number | null = localCharge ? localCharge.nominalValueCents : null;
+    let consistent = true;
+    let note: string | undefined;
+
+    if (localStatus && ASAAS_PAID_STATUSES.has(localStatus)) {
+      paidExternallyDetected = true;
+      consistent = false;
+      note = `Cobrança local Asaas (${localCharge?.externalId}) já consta como ${localStatus}.`;
+    } else if (localStatus && ASAAS_REPLACED_OR_INVALID_STATUSES.has(localStatus)) {
+      replacedOrCancelledChargeDetected = true;
+      consistent = false;
+      note = `Cobrança local Asaas (${localCharge?.externalId}) está cancelada/estornada (${localStatus}).`;
+    }
+
+    if (consistent && effectiveRequestConfig) {
+      const shouldQueryRemote =
+        Boolean(localCharge?.externalId) ||
+        sandboxConfig.mode === 'SANDBOX' ||
+        Boolean((global as any).__simulatedAsaasRemotePayments) ||
+        Boolean((global as any).__simulatedAsaasRemotePaymentsError);
+
+      if (shouldQueryRemote) {
+        try {
+          const byRef = await asaasRequest(
+            effectiveRequestConfig,
+            `/payments?externalReference=${encodeURIComponent(`inst_${inst.id}`)}`,
+            'GET'
+          );
+          let remotePay = Array.isArray(byRef?.data) && byRef.data.length > 0 ? byRef.data[0] : null;
+
+          if (!remotePay && localCharge?.externalId) {
+            const byId = await asaasRequest(
+              effectiveRequestConfig,
+              `/payments/${encodeURIComponent(localCharge.externalId)}`,
+              'GET'
+            );
+            if (byId && byId.id) {
+              remotePay = byId;
+            }
+          }
+
+          if (remotePay && remotePay.status) {
+            remoteStatus = String(remotePay.status).toUpperCase();
+            if (remotePay.value !== undefined && remotePay.value !== null) {
+              remoteValueCents = Math.round(Number(remotePay.value) * 100);
+            }
+
+            if (ASAAS_PAID_STATUSES.has(remoteStatus)) {
+              paidExternallyDetected = true;
+              consistent = false;
+              note = `Pagamento detectado no Asaas Sandbox (${remoteStatus}) para parcela ${inst.id}.`;
+            } else if (ASAAS_REPLACED_OR_INVALID_STATUSES.has(remoteStatus)) {
+              replacedOrCancelledChargeDetected = true;
+              consistent = false;
+              note = `Cobrança no Asaas Sandbox substituída/estornada (${remoteStatus}).`;
+            } else if (remoteValueCents !== null && remoteValueCents !== lumoraOpenCents) {
+              replacedOrCancelledChargeDetected = true;
+              consistent = false;
+              note = `Divergência de saldo entre Lumora (${lumoraOpenCents}c) e Asaas Sandbox (${remoteValueCents}c).`;
+            }
+          }
+        } catch (err: any) {
+          remoteCheckFailedMessage = err?.message || 'Erro ao consultar Asaas Sandbox.';
+          consistent = false;
+          note = remoteCheckFailedMessage || undefined;
+        }
+      }
+    }
+
+    if (remoteValueCents !== null) {
+      hasRemoteOrLocalValueData = true;
+      aggregatedAsaasOpenCents += consistent && !paidExternallyDetected ? remoteValueCents : 0;
+    }
+
+    details.push({
+      installmentId: inst.id,
+      externalId: localCharge?.externalId || null,
+      localStatus,
+      remoteStatus,
+      remoteValueCents,
+      lumoraOpenCents,
+      consistent,
+      ...(note ? { note } : {}),
+    });
+  }
+
+  // Caso haja cobranças Asaas vinculadas em produção real e Sandbox esteja indisponível sem modo teste:
+  if (
+    hasLocalAsaasCharges &&
+    sandboxConfig.mode !== 'SANDBOX' &&
+    !isTestSimulation &&
+    !paidExternallyDetected &&
+    !replacedOrCancelledChargeDetected
+  ) {
+    return {
+      environment: 'SANDBOX',
+      mode: sandboxConfig.mode,
+      asaasConfiguredInSandbox: false,
+      hasLocalAsaasCharges,
+      dualCheckPassed: false,
+      blockCode: 'ASAAS_SANDBOX_NOT_CONFIGURED_FOR_CHARGED_AGREEMENT',
+      blockMessage:
+        'Contrato possui boletos/cobranças Asaas vinculadas, mas o adaptador Sandbox está desativado para dupla conferência.',
+      asaasVerifiedBalanceCents: null,
+      checkedInstallmentsCount: openInstallments.length,
+      paidExternallyDetected,
+      replacedOrCancelledChargeDetected,
+      details,
+    };
+  }
+
+  if (paidExternallyDetected) {
+    return {
+      environment: 'SANDBOX',
+      mode: sandboxConfig.mode,
+      asaasConfiguredInSandbox: sandboxConfig.mode === 'SANDBOX',
+      hasLocalAsaasCharges,
+      dualCheckPassed: false,
+      blockCode: 'EXTERNAL_OR_INTERNAL_PAYMENT_DETECTED',
+      blockMessage:
+        'Dupla conferência bloqueou a negativação: uma ou mais parcelas constam como pagas no Asaas.',
+      asaasVerifiedBalanceCents: hasRemoteOrLocalValueData ? aggregatedAsaasOpenCents : 0,
+      checkedInstallmentsCount: openInstallments.length,
+      paidExternallyDetected: true,
+      replacedOrCancelledChargeDetected,
+      details,
+    };
+  }
+
+  if (replacedOrCancelledChargeDetected) {
+    return {
+      environment: 'SANDBOX',
+      mode: sandboxConfig.mode,
+      asaasConfiguredInSandbox: sandboxConfig.mode === 'SANDBOX',
+      hasLocalAsaasCharges,
+      dualCheckPassed: false,
+      blockCode: 'ASAAS_BALANCE_OR_CHARGE_DIVERGENCE',
+      blockMessage:
+        'Dupla conferência bloqueou a negativação: há divergência de saldo ou cobrança cancelada/substituída no Asaas.',
+      asaasVerifiedBalanceCents: hasRemoteOrLocalValueData ? aggregatedAsaasOpenCents : null,
+      checkedInstallmentsCount: openInstallments.length,
+      paidExternallyDetected,
+      replacedOrCancelledChargeDetected: true,
+      details,
+    };
+  }
+
+  if (remoteCheckFailedMessage) {
+    return {
+      environment: 'SANDBOX',
+      mode: sandboxConfig.mode,
+      asaasConfiguredInSandbox: sandboxConfig.mode === 'SANDBOX',
+      hasLocalAsaasCharges,
+      dualCheckPassed: false,
+      blockCode: 'ASAAS_REMOTE_CHECK_FAILED',
+      blockMessage: `Falha na dupla conferência remota com Asaas Sandbox: ${remoteCheckFailedMessage}`,
+      asaasVerifiedBalanceCents: null,
+      checkedInstallmentsCount: openInstallments.length,
+      paidExternallyDetected: false,
+      replacedOrCancelledChargeDetected: false,
+      details,
+    };
+  }
+
+  const verifiedAsaasCents = hasRemoteOrLocalValueData
+    ? aggregatedAsaasOpenCents
+    : params.lumoraRemainingTotalCents;
+
+  return {
+    environment: 'SANDBOX',
+    mode: hasLocalAsaasCharges || sandboxConfig.mode === 'SANDBOX' ? 'SANDBOX' : 'INTERNAL_CREDIARIO_SANDBOX',
+    asaasConfiguredInSandbox: sandboxConfig.mode === 'SANDBOX',
+    hasLocalAsaasCharges,
+    dualCheckPassed: true,
+    blockCode: null,
+    blockMessage: null,
+    asaasVerifiedBalanceCents: verifiedAsaasCents,
+    checkedInstallmentsCount: openInstallments.length,
+    paidExternallyDetected: false,
+    replacedOrCancelledChargeDetected: false,
+    details,
+  };
+}
+
+/**
+ * Envia solicitação de inclusão/negativação Serasa exclusivamente via Sandbox / simulador seguro.
+ * NUNCA ativa LIVE nem expõe chaves de API.
+ */
+export async function sendAsaasSerasaNegativationRequest(
+  companyId: string,
+  payload: {
+    agreementId: string;
+    buyerCpf: string;
+    buyerName: string;
+    overdueAmountCents: number;
+    externalChargeId?: string | null;
+    idempotencyKey: string;
+    requestedEnvironment?: string | null;
+  }
+): Promise<{
+  accepted: boolean;
+  refused: boolean;
+  status: string;
+  protocolNumber: string;
+  externalNegativationId: string | null;
+  refusalReason: string | null;
+  environment: 'SANDBOX';
+  simulated: boolean;
+}> {
+  assertSerasaSandboxEnvironment(payload.requestedEnvironment);
+
+  const sandboxConfig = await getCompanyAsaasConfig(companyId, 'SANDBOX');
+  const isTestSimulation =
+    process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test';
+
+  if (sandboxConfig.mode !== 'SANDBOX' && !isTestSimulation) {
+    // Em ambiente local/homologação sem chave real do birô, registra protocolo Sandbox auditado sem nunca chamar LIVE.
+    return {
+      accepted: true,
+      refused: false,
+      status: 'REQUESTED',
+      protocolNumber: `SER-SBX-${payload.agreementId.slice(0, 8).toUpperCase()}-${Date.now()}`,
+      externalNegativationId: `sbx_${payload.agreementId.slice(0, 8)}_${Date.now()}`,
+      refusalReason: null,
+      environment: 'SANDBOX',
+      simulated: true,
+    };
+  }
+
+  const reqConfig: AsaasConfigData =
+    sandboxConfig.mode === 'SANDBOX'
+      ? sandboxConfig
+      : { mode: 'SANDBOX', apiKey: null, webhookToken: null, environment: 'SANDBOX' };
+
+  const resp = await asaasRequest(reqConfig, '/negativations', 'POST', {
+    agreementId: payload.agreementId,
+    payment: payload.externalChargeId || undefined,
+    customerCpfCnpj: payload.buyerCpf.replace(/\D/g, ''),
+    customerName: payload.buyerName,
+    value: Number((payload.overdueAmountCents / 100).toFixed(2)),
+    externalReference: `serasa_${payload.agreementId}_${payload.idempotencyKey.slice(0, 24)}`,
+  });
+
+  if (resp?.status === 'REFUSED' || resp?.accepted === false) {
+    return {
+      accepted: false,
+      refused: true,
+      status: 'REFUSED',
+      protocolNumber: String(resp?.protocolNumber || `SER-REF-SBX-${Date.now()}`),
+      externalNegativationId: resp?.id ? String(resp.id) : null,
+      refusalReason: String(resp?.refusalReason || 'Recusado na pré-validação do birô (Sandbox).'),
+      environment: 'SANDBOX',
+      simulated: Boolean(resp?.simulated ?? true),
+    };
+  }
+
+  return {
+    accepted: true,
+    refused: false,
+    status: String(resp?.status || 'REQUESTED'),
+    protocolNumber: String(resp?.protocolNumber || `SER-SBX-${Date.now()}`),
+    externalNegativationId: resp?.id ? String(resp.id) : null,
+    refusalReason: null,
+    environment: 'SANDBOX',
+    simulated: Boolean(resp?.simulated ?? true),
+  };
+}
+
+/**
+ * Solicita baixa/exclusão de negativação Serasa (Súmula 548 STJ) em Sandbox.
+ */
+export async function sendAsaasSerasaNegativationRemoval(
+  companyId: string,
+  payload: {
+    recordId: string;
+    agreementId: string;
+    externalNegativationId?: string | null;
+    reason: string;
+    idempotencyKey: string;
+  }
+): Promise<{
+  removed: boolean;
+  removalProtocolNumber: string;
+  environment: 'SANDBOX';
+  simulated: boolean;
+}> {
+  assertSerasaSandboxEnvironment('SANDBOX');
+
+  const sandboxConfig = await getCompanyAsaasConfig(companyId, 'SANDBOX');
+  const isTestSimulation =
+    process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test';
+
+  if (sandboxConfig.mode !== 'SANDBOX' && !isTestSimulation) {
+    return {
+      removed: true,
+      removalProtocolNumber: `SER-REM-SBX-${payload.recordId.slice(0, 8).toUpperCase()}-${Date.now()}`,
+      environment: 'SANDBOX',
+      simulated: true,
+    };
+  }
+
+  const reqConfig: AsaasConfigData =
+    sandboxConfig.mode === 'SANDBOX'
+      ? sandboxConfig
+      : { mode: 'SANDBOX', apiKey: null, webhookToken: null, environment: 'SANDBOX' };
+
+  const resp = await asaasRequest(reqConfig, '/negativations/remove', 'POST', {
+    recordId: payload.recordId,
+    agreementId: payload.agreementId,
+    externalNegativationId: payload.externalNegativationId || undefined,
+    reason: payload.reason,
+    idempotencyKey: payload.idempotencyKey,
+  });
+
+  return {
+    removed: Boolean(resp?.removed ?? true),
+    removalProtocolNumber: String(resp?.removalProtocolNumber || `SER-REM-SBX-${Date.now()}`),
+    environment: 'SANDBOX',
+    simulated: Boolean(resp?.simulated ?? true),
+  };
+}
+

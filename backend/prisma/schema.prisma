@@ -78,6 +78,7 @@ model Company {
   deviceTelemetries            DeviceTelemetry[]
   buyerConfirmations           BuyerPurchaseConfirmation[]
   batchCommissionAdjustments   BatchCommissionAdjustment[]
+  negativationRecords          CreditNegativationRecord[]
 }
 
 model Team {
@@ -688,6 +689,7 @@ model CreditAgreement {
   commissionAdjustments CreditCommissionAdjustment[]
   asaasCharges          AsaasCharge[]
   asaasDuplicateAlerts  AsaasDuplicatePaymentAlert[]
+  negativationRecords   CreditNegativationRecord[]
 
   @@index([companyId, sellerId])
   @@index([companyId, status])
@@ -1748,6 +1750,60 @@ model BatchCommissionAdjustment {
   @@index([companyId, batchId])
   @@index([sellerId, batchId])
 }
+
+model CreditNegativationRecord {
+  id                             String   @id @default(uuid())
+  companyId                      String
+  agreementId                    String
+  installmentId                  String?
+  environment                    String   @default("SANDBOX")
+  bureau                         String   @default("SERASA")
+  // ELEGIVEL | SOLICITACAO_ENVIADA | EM_ANDAMENTO | NEGATIVACAO_CONFIRMADA | RECUSA | CANCELAMENTO | PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE
+  status                         String   @default("SOLICITACAO_ENVIADA")
+  overdueAmountCents             Int
+  lumoraVerifiedBalanceCents     Int
+  asaasVerifiedBalanceCents      Int?
+  eligibilitySnapshot            Json?
+  balanceCheckSnapshot           Json?
+  protocolNumber                 String?
+  externalNegativationId         String?
+  requestReason                  String
+  requestedByUserId              String
+  requestedByName                String
+  requestedAt                    DateTime @default(now())
+  // Súmula 359 STJ: comunicação prévia de responsabilidade do órgão mantenedor do cadastro
+  priorNotificationResponsible   String   @default("BUREAU_MANTENEDOR")
+  priorNotificationExpectedBy    DateTime?
+  priorNotificationConfirmedAt   DateTime?
+  emAndamentoAt                  DateTime?
+  confirmedAt                    DateTime?
+  confirmedBySource              String?
+  refusalReason                  String?
+  refusedAt                      DateTime?
+  removalReason                  String?
+  removalRequestedByUserId       String?
+  removalRequestedAt             DateTime?
+  // Súmula 548 STJ: prazo legal de exclusão até 5 dias úteis após quitação/renegociação
+  legalRemovalDeadlineAt         DateTime?
+  removalConfirmedAt             DateTime?
+  removalProtocolNumber          String?
+  communicationAttempts          Int      @default(1)
+  lastCommunicationError         String?
+  lastCommunicationAttemptAt     DateTime?
+  notes                          String?
+  transitionHistory              Json?
+  idempotencyKey                 String   @unique
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  agreement CreditAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([agreementId, status])
+  @@index([agreementId, createdAt])
+}
+
 
 
 

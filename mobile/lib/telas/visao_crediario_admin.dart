@@ -37,6 +37,15 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   String? _selectedClosingSellerId;
   String _selectedClosingStatus = 'ALL';
 
+  // Serasa (Etapa 5 - Sandbox Estrito & Conformidade STJ)
+  bool _isLoadingSerasa = false;
+  String? _serasaErrorMessage;
+  String _selectedSerasaStatus = 'ALL';
+  Map<String, dynamic> _serasaCounts = {};
+  List<dynamic> _serasaItems = [];
+  String _serasaSumula359Note = '';
+  String _serasaSumula548Note = '';
+
   String _selectedStatus = 'ALL';
   String? _selectedSellerId;
   String _periodType = 'DUE_DATE';
@@ -60,10 +69,14 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
-      if (_tabController.index == 1) {
-        _loadMonthlyClosings();
+      if (!_tabController.indexIsChanging) {
+        if (_tabController.index == 1) {
+          _loadMonthlyClosings();
+        } else if (_tabController.index == 2) {
+          _loadSerasaAgreements();
+        }
       }
     });
     _loadAll();
@@ -352,11 +365,12 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         ],
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: true,
           indicatorColor: const Color(0xFFA855F7),
           indicatorWeight: 3,
           labelColor: const Color(0xFFA855F7),
           unselectedLabelColor: Colors.white60,
-          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
           tabs: const [
             Tab(
               icon: Icon(Icons.receipt_long_rounded, size: 20),
@@ -365,6 +379,10 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
             Tab(
               icon: Icon(Icons.event_repeat_rounded, size: 20),
               text: 'Fechamento Mensal (10%)',
+            ),
+            Tab(
+              icon: Icon(Icons.gavel_rounded, size: 20),
+              text: 'Serasa (STJ)',
             ),
           ],
         ),
@@ -402,6 +420,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                       ),
           ),
           _buildMonthlyClosingsTab(),
+          _buildSerasaTab(),
         ],
       ),
     );
@@ -1619,6 +1638,28 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 onPressed: () => _emitAsaasCharges(a['id']?.toString() ?? ''),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.gavel_rounded, size: 18, color: Color(0xFFA855F7)),
+                label: const Text(
+                  'Conferência e Negativação Serasa (Sandbox / STJ)',
+                  style: TextStyle(color: Color(0xFFA855F7), fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFA855F7)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () {
+                  final agId = a['id']?.toString() ?? '';
+                  if (agId.isNotEmpty) {
+                    _showSerasaControlModal(agId);
+                  }
+                },
               ),
             ),
             const SizedBox(height: 10),
@@ -4378,6 +4419,851 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
             },
           );
         },
+      ),
+    );
+  }
+
+  // ── ETAPA 5 · PAINEL SERASA (SANDBOX ESTRITO E CONFORMIDADE STJ) ───────────
+
+  Future<void> _loadSerasaAgreements() async {
+    if (_isLoadingSerasa) return;
+    setState(() {
+      _isLoadingSerasa = true;
+      _serasaErrorMessage = null;
+    });
+
+    try {
+      final resp = await _api.getSerasaAgreements(
+        status: _selectedSerasaStatus == 'ALL' ? null : _selectedSerasaStatus,
+        search: _searchController.text.trim().isEmpty ? null : _searchController.text.trim(),
+      );
+      if (mounted) {
+        setState(() {
+          _serasaCounts = Map<String, dynamic>.from(resp['counts'] ?? {});
+          _serasaItems = List<dynamic>.from(resp['items'] ?? []);
+          _serasaSumula359Note = resp['sumula359Note']?.toString() ?? '';
+          _serasaSumula548Note = resp['sumula548Note']?.toString() ?? '';
+          _isLoadingSerasa = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _serasaErrorMessage = e.toString().replaceFirst('Exception: ', '');
+          _isLoadingSerasa = false;
+        });
+      }
+    }
+  }
+
+  Color _serasaStatusColor(String status) {
+    switch (status) {
+      case 'ELEGIVEL':
+        return const Color(0xFF38BDF8);
+      case 'SOLICITACAO_ENVIADA':
+        return const Color(0xFFA855F7);
+      case 'EM_ANDAMENTO':
+        return const Color(0xFFF59E0B);
+      case 'NEGATIVACAO_CONFIRMADA':
+        return const Color(0xFFEF4444);
+      case 'RECUSA':
+        return const Color(0xFFFB7185);
+      case 'CANCELAMENTO':
+        return const Color(0xFF10B981);
+      case 'PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE':
+        return const Color(0xFFF97316);
+      default:
+        return Colors.white54;
+    }
+  }
+
+  String _serasaStatusShortLabel(String status) {
+    switch (status) {
+      case 'ALL':
+        return 'Todos';
+      case 'ELEGIVEL':
+        return 'Elegível (30d+)';
+      case 'SOLICITACAO_ENVIADA':
+        return 'Solicitação Enviada';
+      case 'EM_ANDAMENTO':
+        return 'Em Andamento';
+      case 'NEGATIVACAO_CONFIRMADA':
+        return 'Negativado';
+      case 'RECUSA':
+        return 'Recusa';
+      case 'CANCELAMENTO':
+        return 'Cancelamento / Baixa';
+      case 'PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE':
+        return 'Baixa Pendente';
+      case 'INELEGIVEL':
+        return 'Inelegível';
+      default:
+        return status;
+    }
+  }
+
+  Widget _buildSerasaTab() {
+    const filterStates = [
+      'ALL',
+      'ELEGIVEL',
+      'SOLICITACAO_ENVIADA',
+      'EM_ANDAMENTO',
+      'NEGATIVACAO_CONFIRMADA',
+      'RECUSA',
+      'CANCELAMENTO',
+      'PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE',
+    ];
+
+    return RefreshIndicator(
+      color: const Color(0xFFA855F7),
+      backgroundColor: const Color(0xFF160D24),
+      onRefresh: _loadSerasaAgreements,
+      child: _isLoadingSerasa && _serasaItems.isEmpty
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)))
+          : SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF160D24),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.55)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: const [
+                            Icon(Icons.shield_rounded, color: Color(0xFFA855F7), size: 20),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'SERASA · SANDBOX BLOQUEADO PARA PRODUÇÃO (LIVE)',
+                                style: TextStyle(
+                                  color: Color(0xFFA855F7),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _serasaSumula359Note.isNotEmpty
+                              ? _serasaSumula359Note
+                              : 'Súmula 359 STJ: comunicação prévia mantida pelo birô antes da inscrição.',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _serasaSumula548Note.isNotEmpty
+                              ? _serasaSumula548Note
+                              : 'Súmula 548 STJ: exclusão automática em até 5 dias úteis após quitação ou renegociação.',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 38,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: filterStates.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, idx) {
+                        final st = filterStates[idx];
+                        final selected = _selectedSerasaStatus == st;
+                        final count = st == 'ALL' ? _serasaItems.length : (_serasaCounts[st] ?? 0);
+                        return ChoiceChip(
+                          label: Text(
+                            st == 'ALL'
+                                ? _serasaStatusShortLabel(st)
+                                : '${_serasaStatusShortLabel(st)} ($count)',
+                            style: TextStyle(
+                              color: selected ? Colors.white : Colors.white70,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          selected: selected,
+                          selectedColor: const Color(0xFFA855F7),
+                          backgroundColor: const Color(0xFF160D24),
+                          side: BorderSide(
+                            color: selected ? const Color(0xFFA855F7) : const Color(0xFF2A1B3D),
+                          ),
+                          onSelected: (_) {
+                            setState(() => _selectedSerasaStatus = st);
+                            _loadSerasaAgreements();
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (_serasaErrorMessage != null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF160D24),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.6)),
+                      ),
+                      child: Text(
+                        _serasaErrorMessage!,
+                        style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12),
+                      ),
+                    )
+                  else if (_serasaItems.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF160D24),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF2A1B3D)),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Nenhum contrato encontrado para este filtro do Serasa.',
+                          style: TextStyle(color: Colors.white60, fontSize: 13),
+                        ),
+                      ),
+                    )
+                  else
+                    Column(
+                      children: _serasaItems.map((item) => _buildSerasaAgreementCard(item)).toList(),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  Widget _buildSerasaAgreementCard(Map<String, dynamic> item) {
+    final agreementId = item['agreementId']?.toString() ?? '';
+    final status = item['effectiveSerasaStatus']?.toString() ?? 'INELEGIVEL';
+    final statusColor = _serasaStatusColor(status);
+    final eligibility = Map<String, dynamic>.from(item['eligibility'] ?? {});
+    final latest = item['latestRecord'] != null
+        ? Map<String, dynamic>.from(item['latestRecord'])
+        : null;
+    final overdueCents = (eligibility['overdue30PlusAmountCents'] as num?)?.toInt() ?? 0;
+    final lumoraBalanceCents = (eligibility['lumoraLedgerBalanceCents'] as num?)?.toInt() ?? 0;
+    final maxOverdueDays = (eligibility['maxOverdueDays'] as num?)?.toInt() ?? 0;
+    final reasons = List<dynamic>.from(eligibility['reasons'] ?? []);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: statusColor.withOpacity(0.55)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item['buyerName']?.toString() ?? 'Comprador',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'CPF: ${item['buyerCpf'] ?? '-'} • Ficha: ${item['fichaCode'] ?? '-'}',
+                      style: const TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: statusColor.withOpacity(0.7)),
+                ),
+                child: Text(
+                  _serasaStatusShortLabel(status),
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Atraso máx: $maxOverdueDays dias',
+                  style: TextStyle(
+                    color: maxOverdueDays >= 30 ? const Color(0xFF38BDF8) : Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  'Vencido 30d+: ${currencyFormat.format(overdueCents / 100.0)}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Saldo Razão Lumora: ${currencyFormat.format(lumoraBalanceCents / 100.0)}',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          if (latest != null && latest['protocolNumber'] != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Protocolo Sandbox: ${latest['protocolNumber']}',
+              style: const TextStyle(color: Color(0xFFA855F7), fontSize: 11),
+            ),
+          ],
+          if (latest != null && latest['legalRemovalDeadlineAt'] != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Prazo Legal Baixa (Súmula 548 STJ): ${_formatIsoDate(latest['legalRemovalDeadlineAt'])}',
+              style: const TextStyle(color: Color(0xFF10B981), fontSize: 11),
+            ),
+          ],
+          if (reasons.isNotEmpty && latest == null) ...[
+            const SizedBox(height: 8),
+            Text(
+              reasons.first.toString(),
+              style: const TextStyle(color: Colors.white60, fontSize: 11),
+            ),
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.policy_rounded, size: 17),
+              label: const Text('Inspecionar Dupla Conferência / Operar Serasa'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                if (agreementId.isNotEmpty) {
+                  _showSerasaControlModal(agreementId);
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatIsoDate(dynamic raw) {
+    if (raw == null) return '-';
+    try {
+      return dateFormat.format(DateTime.parse(raw.toString()).toLocal());
+    } catch (_) {
+      return raw.toString();
+    }
+  }
+
+  Future<void> _showSerasaControlModal(String agreementId) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0D0714),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (modalCtx) {
+        return _SerasaControlSheet(
+          agreementId: agreementId,
+          api: _api,
+          currencyFormat: currencyFormat,
+          dateFormat: dateFormat,
+          statusColorBuilder: _serasaStatusColor,
+          statusLabelBuilder: _serasaStatusShortLabel,
+          onUpdated: () {
+            _loadSerasaAgreements();
+          },
+        );
+      },
+    );
+  }
+}
+
+class _SerasaControlSheet extends StatefulWidget {
+  final String agreementId;
+  final ApiService api;
+  final NumberFormat currencyFormat;
+  final DateFormat dateFormat;
+  final Color Function(String) statusColorBuilder;
+  final String Function(String) statusLabelBuilder;
+  final VoidCallback onUpdated;
+
+  const _SerasaControlSheet({
+    required this.agreementId,
+    required this.api,
+    required this.currencyFormat,
+    required this.dateFormat,
+    required this.statusColorBuilder,
+    required this.statusLabelBuilder,
+    required this.onUpdated,
+  });
+
+  @override
+  State<_SerasaControlSheet> createState() => _SerasaControlSheetState();
+}
+
+class _SerasaControlSheetState extends State<_SerasaControlSheet> {
+  bool _loading = true;
+  bool _submitting = false;
+  String? _error;
+  Map<String, dynamic>? _detail;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final resp = await widget.api.getAgreementSerasaStatus(widget.agreementId);
+      if (mounted) {
+        setState(() {
+          _detail = resp;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString().replaceFirst('Exception: ', '');
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<String?> _askReasonDialog(String title, String hint, {String defaultText = ''}) async {
+    final ctrl = TextEditingController(text: defaultText);
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF160D24),
+        title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 3,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+            filled: true,
+            fillColor: const Color(0xFF0D0714),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7)),
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.length < 5) return;
+              Navigator.pop(ctx, v);
+            },
+            child: const Text('Confirmar', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    return res;
+  }
+
+  Future<void> _requestNegativation() async {
+    final reason = await _askReasonDialog(
+      'Solicitar Negativação Serasa (Sandbox)',
+      'Descreva a justificativa auditada (mín. 5 caracteres)...',
+      defaultText: 'Inadimplência superior a 30 dias após dupla conferência de saldo.',
+    );
+    if (reason == null) return;
+
+    setState(() => _submitting = true);
+    try {
+      await widget.api.requestAgreementSerasaNegativation(
+        widget.agreementId,
+        reason: reason,
+      );
+      widget.onUpdated();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Solicitação Serasa (Sandbox) registrada com auditoria.'),
+            backgroundColor: Color(0xFFA855F7),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _transitionRecord(String recordId, String targetStatus, String title) async {
+    final reason = await _askReasonDialog(
+      title,
+      'Informe o motivo auditado desta transição (mín. 5 caracteres)...',
+      defaultText: targetStatus == 'CANCELAMENTO'
+          ? 'Solicitação de baixa/cancelamento pelo Administrador (Súmula 548 STJ).'
+          : 'Atualização administrativa de andamento no birô (Sandbox).',
+    );
+    if (reason == null) return;
+
+    setState(() => _submitting = true);
+    try {
+      await widget.api.transitionSerasaRecord(
+        widget.agreementId,
+        recordId,
+        targetStatus: targetStatus,
+        reason: reason,
+      );
+      widget.onUpdated();
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _retryRemoval(String recordId) async {
+    setState(() => _submitting = true);
+    try {
+      await widget.api.retrySerasaRemoval(
+        widget.agreementId,
+        recordId,
+        reason: 'Reprocessamento idempotente da exclusão Serasa (Súmula 548 STJ).',
+      );
+      widget.onUpdated();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Comunicação de baixa Serasa reprocessada.'),
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = _detail;
+    final eligibility = detail != null ? Map<String, dynamic>.from(detail['eligibility'] ?? {}) : {};
+    final dualBalance = detail != null ? Map<String, dynamic>.from(detail['dualBalance'] ?? {}) : {};
+    final asaasDual = dualBalance['asaas'] != null
+        ? Map<String, dynamic>.from(dualBalance['asaas'])
+        : <String, dynamic>{};
+    final latest = detail?['latestRecord'] != null
+        ? Map<String, dynamic>.from(detail!['latestRecord'])
+        : null;
+    final effectiveStatus = detail?['effectiveSerasaStatus']?.toString() ?? 'INELEGIVEL';
+    final statusColor = widget.statusColorBuilder(effectiveStatus);
+    final reasons = List<dynamic>.from(eligibility['reasons'] ?? []);
+    final bool canRequestNew = (eligibility['eligible'] == true) &&
+        (eligibility['hasActiveNegativation'] != true) &&
+        !_submitting;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
+      child: SingleChildScrollView(
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.all(40),
+                child: Center(child: CircularProgressIndicator(color: Color(0xFFA855F7))),
+              )
+            : _error != null
+                ? Text(_error!, style: const TextStyle(color: Color(0xFFEF4444)))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.gavel_rounded, color: Color(0xFFA855F7)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Serasa (Sandbox) · ${detail?['buyerName'] ?? ''}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white60),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: statusColor.withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: statusColor.withOpacity(0.6)),
+                        ),
+                        child: Text(
+                          'Estado atual: ${widget.statusLabelBuilder(effectiveStatus)} ($effectiveStatus)',
+                          style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF160D24),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF2A1B3D)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Dupla Conferência de Saldo e Critérios',
+                              style: TextStyle(
+                                color: Color(0xFFA855F7),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Livro-razão Lumora: ${widget.currencyFormat.format(((eligibility['lumoraLedgerBalanceCents'] as num?)?.toDouble() ?? 0) / 100.0)}',
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                            Text(
+                              'Asaas Sandbox (${asaasDual['mode'] ?? 'SANDBOX'}): ${asaasDual['asaasVerifiedBalanceCents'] != null ? widget.currencyFormat.format(((asaasDual['asaasVerifiedBalanceCents'] as num).toDouble()) / 100.0) : 'Indisponível / Bloqueado'}',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                            Text(
+                              'Parcelas 30d+ em aberto: ${eligibility['overdue30PlusInstallmentsCount'] ?? 0} (${widget.currencyFormat.format(((eligibility['overdue30PlusAmountCents'] as num?)?.toDouble() ?? 0) / 100.0)})',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                            if (dualBalance['passed'] != true && dualBalance['blockMessage'] != null) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Bloqueio Dupla Conferência: ${dualBalance['blockMessage']}',
+                                style: const TextStyle(color: Color(0xFFEF4444), fontSize: 11),
+                              ),
+                            ],
+                            for (final r in reasons) ...[
+                              const SizedBox(height: 4),
+                              Text('• $r', style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11)),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      if (canRequestNew && (dualBalance['passed'] == true))
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.send_rounded),
+                            label: const Text('Enviar Solicitação de Negativação (Sandbox)'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFA855F7),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            onPressed: _requestNegativation,
+                          ),
+                        ),
+                      if (latest != null) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF160D24),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: statusColor.withOpacity(0.5)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Registro #${latest['protocolNumber'] ?? latest['id']}',
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Comunicação Prévia (Súmula 359 STJ): ${latest['priorNotificationResponsible'] ?? 'BUREAU_MANTENEDOR'}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                              ),
+                              if (latest['lastCommunicationError'] != null)
+                                Text(
+                                  'Erro de comunicação: ${latest['lastCommunicationError']}',
+                                  style: const TextStyle(color: Color(0xFFF97316), fontSize: 11),
+                                ),
+                              const SizedBox(height: 10),
+                              if (latest['status'] == 'SOLICITACAO_ENVIADA' && !_submitting)
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'EM_ANDAMENTO',
+                                        'Marcar Em Andamento (Súmula 359 STJ)',
+                                      ),
+                                      child: const Text('Em Andamento', style: TextStyle(color: Color(0xFFF59E0B))),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'RECUSA',
+                                        'Registrar Recusa do Birô',
+                                      ),
+                                      child: const Text('Recusa', style: TextStyle(color: Color(0xFFFB7185))),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'CANCELAMENTO',
+                                        'Solicitar Cancelamento / Baixa (Súmula 548 STJ)',
+                                      ),
+                                      child: const Text('Cancelar / Baixar', style: TextStyle(color: Color(0xFF10B981))),
+                                    ),
+                                  ],
+                                ),
+                              if (latest['status'] == 'EM_ANDAMENTO' && !_submitting)
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'NEGATIVACAO_CONFIRMADA',
+                                        'Confirmar Negativação após Prazo Legal',
+                                      ),
+                                      child: const Text('Confirmar Negativação', style: TextStyle(color: Color(0xFFEF4444))),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'RECUSA',
+                                        'Registrar Recusa do Birô',
+                                      ),
+                                      child: const Text('Recusa', style: TextStyle(color: Color(0xFFFB7185))),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () => _transitionRecord(
+                                        latest['id'].toString(),
+                                        'CANCELAMENTO',
+                                        'Solicitar Cancelamento / Baixa (Súmula 548 STJ)',
+                                      ),
+                                      child: const Text('Cancelar / Baixar', style: TextStyle(color: Color(0xFF10B981))),
+                                    ),
+                                  ],
+                                ),
+                              if (latest['status'] == 'NEGATIVACAO_CONFIRMADA' && !_submitting)
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
+                                  onPressed: () => _transitionRecord(
+                                    latest['id'].toString(),
+                                    'CANCELAMENTO',
+                                    'Solicitar Exclusão / Baixa Serasa (Súmula 548 STJ)',
+                                  ),
+                                  child: const Text('Solicitar Baixa / Cancelamento', style: TextStyle(color: Colors.white)),
+                                ),
+                              if (latest['status'] == 'PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE' && !_submitting)
+                                ElevatedButton.icon(
+                                  icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF97316)),
+                                  onPressed: () => _retryRemoval(latest['id'].toString()),
+                                  label: const Text(
+                                    'Reprocessar Comunicação de Baixa Pendente',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
       ),
     );
   }

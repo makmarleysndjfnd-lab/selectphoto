@@ -2404,6 +2404,106 @@ class ApiService {
     }
   }
 
+  // ── Etapa 5 · Serasa (Sandbox Estrito, STJ Súmulas 359 & 548) ───────────────
+
+  Future<Map<String, dynamic>> getSerasaAgreements({
+    String? status,
+    String? search,
+  }) async {
+    try {
+      final params = <String, dynamic>{};
+      if (status != null && status.isNotEmpty && status != 'ALL') {
+        params['status'] = status;
+      }
+      if (search != null && search.trim().isNotEmpty) {
+        params['search'] = search.trim();
+      }
+      final resp = await _dio.get('/credit/serasa/agreements', queryParameters: params);
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getAgreementSerasaStatus(String agreementId) async {
+    try {
+      final resp = await _dio.get('/credit/agreements/$agreementId/serasa');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> requestAgreementSerasaNegativation(
+    String agreementId, {
+    required String reason,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+          ? idempotencyKey.trim()
+          : 'serasa_req_${agreementId}_${DateTime.now().microsecondsSinceEpoch}';
+      final resp = await _dio.post('/credit/agreements/$agreementId/serasa/request', data: {
+        'environment': 'SANDBOX',
+        'reason': reason,
+        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+        'idempotencyKey': key,
+      });
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> transitionSerasaRecord(
+    String agreementId,
+    String recordId, {
+    required String targetStatus,
+    required String reason,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+          ? idempotencyKey.trim()
+          : 'serasa_tr_${recordId}_${targetStatus}_${DateTime.now().microsecondsSinceEpoch}';
+      final resp = await _dio.post(
+        '/credit/agreements/$agreementId/serasa/$recordId/transition',
+        data: {
+          'targetStatus': targetStatus,
+          'reason': reason,
+          'idempotencyKey': key,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> retrySerasaRemoval(
+    String agreementId,
+    String recordId, {
+    String? reason,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+          ? idempotencyKey.trim()
+          : 'serasa_retry_${recordId}_${DateTime.now().microsecondsSinceEpoch}';
+      final resp = await _dio.post(
+        '/credit/agreements/$agreementId/serasa/$recordId/retry-removal',
+        data: {
+          if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+          'idempotencyKey': key,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   // ── Central do Proprietário (Bloco 1) ──────────────────────────────────────
 
   /// Reautenticação reforçada (Step-Up Auth) com senha

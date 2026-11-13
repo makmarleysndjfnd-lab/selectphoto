@@ -15,6 +15,13 @@ import { processAsaasWebhookEvent } from '../services/asaasWebhookProcessor';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import { invalidateAndReissueConfirmationOnSaleChange } from '../services/buyerConfirmationService';
 import {
+  listSerasaAgreements,
+  getAgreementSerasaDetails,
+  requestSerasaNegativation,
+  transitionSerasaNegativationRecord,
+  triggerAutoSerasaRemovalOnDebtChange,
+} from '../services/serasaNegativationService';
+import {
   getCompetenceRange,
   getCompetenceForDate,
   isCompetenceEnded,
@@ -1183,6 +1190,23 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       }
     }
 
+    let serasaAutoRemoval: any = null;
+    if (result.isSettled) {
+      try {
+        serasaAutoRemoval = await triggerAutoSerasaRemovalOnDebtChange({
+          companyId,
+          agreementId: id,
+          triggerType: 'SETTLEMENT',
+          actorUserId: req.user?.id || 'SYSTEM',
+          actorName: req.user?.name || 'Admin/Sistema',
+          reason: 'Quitação integral de saldo no crediário — exclusão Serasa (Súmula 548 STJ).',
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        });
+      } catch (serasaErr) {
+        console.warn('[Credit Payment] Aviso ao disparar baixa automática Serasa:', serasaErr);
+      }
+    }
+
     res.status(201).json({
       success: true,
       payment: result.payment,
@@ -1200,6 +1224,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       allocationsCount: result.allocations.length,
       commissionGenerated: result.commission ? Number((result.commission.amountCents / 100).toFixed(2)) : 0,
       commission: result.commission || null,
+      ...(serasaAutoRemoval ? { serasaAutoRemoval } : {}),
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
@@ -1822,6 +1847,21 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
       }
     }
 
+    let serasaAutoRemoval: any = null;
+    try {
+      serasaAutoRemoval = await triggerAutoSerasaRemovalOnDebtChange({
+        companyId,
+        agreementId: id,
+        triggerType: 'RENEGOTIATION',
+        actorUserId: authorId,
+        actorName: req.user?.name || authorUser.name || 'Administrador',
+        reason: `Renegociação de contrato (${trimmedReason}) — exclusão Serasa (Súmula 548 STJ).`,
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      });
+    } catch (serasaErr) {
+      console.warn('[Credit Renegotiate] Aviso ao disparar baixa automática Serasa:', serasaErr);
+    }
+
     res.json({
       success: true,
       idempotentReplay: false,
@@ -1836,6 +1876,7 @@ router.post('/agreements/:id/renegotiate', authenticateToken, requireCreditAcces
       supersededInstallmentsCount: result.supersededInstallmentsCount,
       preservedPaidInstallmentsCount: result.preservedPaidInstallmentsCount,
       confirmationReissued,
+      ...(serasaAutoRemoval ? { serasaAutoRemoval } : {}),
     });
   } catch (error: any) {
     if (error?.status && error?.message) {
@@ -3430,6 +3471,289 @@ router.patch(
     } catch (error) {
       console.error('Erro ao atualizar telefone em contrato de crediário:', error);
       return res.status(500).json({ error: 'Erro interno ao atualizar telefone.' });
+    }
+  }
+);
+
+// ============================================================================
+// ETAPA 5 · NEGATIVAÇÃO SERASA (SANDBOX ESTRITO, STJ SÚMULAS 359 & 548)
+// ============================================================================
+
+async function requireOwnCompanyAdminForSerasa(
+  req: AuthRequest,
+  res: Response
+): Promise<{
+  companyId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+} | null> {
+  const companyId = req.user?.companyId;
+  const userId = req.user?.id;
+  const userRole = req.user?.role || '';
+
+  if (!userId || !companyId) {
+    res.status(401).json({ error: 'Usuário ou empresa não identificado.' });
+    return null;
+  }
+
+  if (!['COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
+    res.status(403).json({
+      error:
+        'Acesso negado: operações de negativação Serasa são exclusivas do Admin da própria empresa.',
+      code: 'SERASA_ADMIN_ONLY',
+    });
+    return null;
+  }
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true, companyId: true, sellerBlocked: true, role: true },
+  });
+  if (!dbUser || dbUser.sellerBlocked) {
+    res.status(403).json({
+      error: 'Administrador bloqueado ou inativo não pode operar o módulo Serasa.',
+      code: 'ADMIN_BLOCKED',
+    });
+    return null;
+  }
+  if (dbUser.role !== 'SUPER_ADMIN' && dbUser.companyId !== companyId) {
+    res.status(403).json({ error: 'Divergência de empresa autorizada para operação Serasa.' });
+    return null;
+  }
+
+  return {
+    companyId,
+    userId: dbUser.id,
+    userName: dbUser.name || req.user?.name || 'Administrador',
+    userRole: dbUser.role,
+  };
+}
+
+/**
+ * GET /api/credit/serasa/agreements
+ * Lista contratos da empresa por estado Serasa (7 estados explícitos + INELEGIVEL) em Sandbox.
+ */
+router.get(
+  '/serasa/agreements',
+  authenticateToken,
+  requireCreditAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const adminCtx = await requireOwnCompanyAdminForSerasa(req, res);
+      if (!adminCtx) return;
+
+      const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const data = await listSerasaAgreements(adminCtx.companyId, { status, search });
+      return res.json(data);
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+      console.error('Erro ao listar contratos Serasa:', error);
+      return res.status(500).json({ error: 'Erro interno ao listar painel Serasa.' });
+    }
+  }
+);
+
+/**
+ * GET /api/credit/agreements/:id/serasa
+ * Diagnóstico detalhado de elegibilidade (30d+, venda contratada, QR), dupla conferência de saldo e histórico Serasa.
+ */
+router.get(
+  '/agreements/:id/serasa',
+  authenticateToken,
+  requireCreditAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const adminCtx = await requireOwnCompanyAdminForSerasa(req, res);
+      if (!adminCtx) return;
+
+      const agreementId = String(req.params.id);
+      const data = await getAgreementSerasaDetails(adminCtx.companyId, agreementId);
+      return res.json(data);
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+      console.error('Erro ao consultar detalhes Serasa do contrato:', error);
+      return res.status(500).json({ error: 'Erro interno ao consultar detalhes Serasa.' });
+    }
+  }
+);
+
+/**
+ * POST /api/credit/agreements/:id/serasa/request
+ * Solicita negativação Serasa exclusivamente em SANDBOX (403 em PRODUCTION) com dupla conferência e idempotência.
+ */
+router.post(
+  '/agreements/:id/serasa/request',
+  authenticateToken,
+  requireCreditAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const adminCtx = await requireOwnCompanyAdminForSerasa(req, res);
+      if (!adminCtx) return;
+
+      const agreementId = String(req.params.id);
+      const idempotencyKey =
+        req.body?.idempotencyKey || (req.headers['idempotency-key'] as string | undefined) || '';
+      const requestedEnvironment = req.body?.environment || req.body?.requestedEnvironment || 'SANDBOX';
+      const reason = req.body?.reason || req.body?.notes || '';
+      const notes = req.body?.notes || null;
+
+      const result = await requestSerasaNegativation({
+        companyId: adminCtx.companyId,
+        agreementId,
+        requestedEnvironment,
+        requestedByUserId: adminCtx.userId,
+        requestedByName: adminCtx.userName,
+        requestedByRole: adminCtx.userRole,
+        reason,
+        idempotencyKey: String(idempotencyKey),
+        notes,
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      });
+
+      return res.status(result.statusCode).json({
+        success: true,
+        idempotentReplay: result.idempotentReplay,
+        record: result.record,
+        status: result.record.status,
+        environment: result.record.environment,
+        productionLocked: true,
+      });
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+          ...(error.details ? { details: error.details } : {}),
+        });
+      }
+      console.error('Erro ao solicitar negativação Serasa:', error);
+      return res.status(500).json({ error: 'Erro interno ao processar solicitação Serasa.' });
+    }
+  }
+);
+
+/**
+ * POST /api/credit/agreements/:id/serasa/:recordId/transition
+ * Avança/atualiza o estado de uma negativação: EM_ANDAMENTO, NEGATIVACAO_CONFIRMADA, RECUSA ou CANCELAMENTO.
+ */
+router.post(
+  '/agreements/:id/serasa/:recordId/transition',
+  authenticateToken,
+  requireCreditAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const adminCtx = await requireOwnCompanyAdminForSerasa(req, res);
+      if (!adminCtx) return;
+
+      const agreementId = String(req.params.id);
+      const recordId = String(req.params.recordId);
+      const targetStatus = String(req.body?.targetStatus || '').trim().toUpperCase();
+      const allowedTargets = ['EM_ANDAMENTO', 'NEGATIVACAO_CONFIRMADA', 'RECUSA', 'CANCELAMENTO'];
+      if (!allowedTargets.includes(targetStatus)) {
+        return res.status(400).json({
+          error: `targetStatus inválido. Utilize: ${allowedTargets.join(', ')}.`,
+          code: 'INVALID_TARGET_STATUS',
+        });
+      }
+
+      const idempotencyKey =
+        req.body?.idempotencyKey || (req.headers['idempotency-key'] as string | undefined) || '';
+      const reason = req.body?.reason || '';
+
+      const result = await transitionSerasaNegativationRecord({
+        companyId: adminCtx.companyId,
+        agreementId,
+        recordId,
+        targetStatus: targetStatus as any,
+        actorUserId: adminCtx.userId,
+        actorName: adminCtx.userName,
+        actorRole: adminCtx.userRole,
+        reason,
+        idempotencyKey: String(idempotencyKey),
+        priorNotificationConfirmedAt: req.body?.priorNotificationConfirmedAt || null,
+        confirmedBySource: req.body?.confirmedBySource || null,
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      });
+
+      return res.status(result.statusCode).json({
+        success: true,
+        idempotentReplay: result.idempotentReplay,
+        communicationPending: result.communicationPending,
+        record: result.record,
+      });
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+      console.error('Erro na transição de estado Serasa:', error);
+      return res.status(500).json({ error: 'Erro interno na transição de estado Serasa.' });
+    }
+  }
+);
+
+/**
+ * POST /api/credit/agreements/:id/serasa/:recordId/retry-removal
+ * Reprocessa de forma idempotente a comunicação pendente (PAGAMENTO_REGISTRADO_COMUNICACAO_PENDENTE -> CANCELAMENTO).
+ */
+router.post(
+  '/agreements/:id/serasa/:recordId/retry-removal',
+  authenticateToken,
+  requireCreditAccess,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const adminCtx = await requireOwnCompanyAdminForSerasa(req, res);
+      if (!adminCtx) return;
+
+      const agreementId = String(req.params.id);
+      const recordId = String(req.params.recordId);
+      const idempotencyKey =
+        req.body?.idempotencyKey || (req.headers['idempotency-key'] as string | undefined) || '';
+      const reason =
+        req.body?.reason || 'Reprocessamento manual da baixa Serasa após quitação/renegociação (Súmula 548 STJ).';
+
+      const result = await transitionSerasaNegativationRecord({
+        companyId: adminCtx.companyId,
+        agreementId,
+        recordId,
+        targetStatus: 'CANCELAMENTO',
+        actorUserId: adminCtx.userId,
+        actorName: adminCtx.userName,
+        actorRole: adminCtx.userRole,
+        reason,
+        idempotencyKey: String(idempotencyKey),
+        ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+      });
+
+      return res.status(result.statusCode).json({
+        success: true,
+        idempotentReplay: result.idempotentReplay,
+        communicationPending: result.communicationPending,
+        record: result.record,
+      });
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
+      console.error('Erro ao reprocessar baixa Serasa:', error);
+      return res.status(500).json({ error: 'Erro interno ao reprocessar baixa Serasa.' });
     }
   }
 );
