@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import { randomBytes } from 'node:crypto';
-import { Request, Response, Router } from 'express';
+import { NextFunction, Request, Response, Router } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { createRateLimiter } from '../middleware/securityMiddleware';
 import { prisma } from '../services/prisma';
@@ -22,20 +22,25 @@ const unavailable = 'Recuperação por e-mail indisponível no momento. Procure 
 const invalidLink = 'Este link é inválido, expirou ou já foi usado. Solicite um novo.';
 
 router.post('/forgot-password', requestLimiter, (req: Request, res: Response) => {
-  const cpf = typeof req.body?.cpf === 'string' ? req.body.cpf.replace(/[.\s-]/g, '') : '';
-  if (!/^\d{11}$/.test(cpf)) {
-    res.status(400).json({ error: 'Informe um CPF com 11 dígitos.' });
-    return;
-  }
-  const config = recoveryMailConfig();
-  if (!config) {
+  try {
+    const cpf = typeof req.body?.cpf === 'string' ? req.body.cpf.replace(/[.\s-]/g, '') : '';
+    if (!/^\d{11}$/.test(cpf)) {
+      res.status(400).json({ error: 'Informe um CPF com 11 dígitos.' });
+      return;
+    }
+    const config = recoveryMailConfig();
+    if (!config) {
+      res.status(503).json({ error: unavailable });
+      return;
+    }
+    res.status(202).json({ message: requested });
+    void requestPasswordReset(cpf, config).catch(() =>
+      console.error('[PasswordRecovery] Falha ao processar solicitação de recuperação.')
+    );
+  } catch {
+    console.error('[PasswordRecovery] Falha inesperada ao iniciar recuperação de senha.');
     res.status(503).json({ error: unavailable });
-    return;
   }
-  res.status(202).json({ message: requested });
-  void requestPasswordReset(cpf, config).catch(() =>
-    console.error('[PasswordRecovery] Falha ao processar solicitação de recuperação.')
-  );
 });
 
 router.post('/recovery-email', requestLimiter, authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -178,8 +183,28 @@ function recoveryPage(res: Response, verifyEmail: boolean) {
 </script></html>`);
 }
 
-router.get('/recuperar-senha', (_req, res) => recoveryPage(res, false));
-router.get('/confirmar-email-recuperacao', (_req, res) => recoveryPage(res, true));
+router.get('/recuperar-senha', (_req, res) => {
+  try {
+    recoveryPage(res, false);
+  } catch {
+    res.status(503).type('text/plain').send('Serviço temporariamente indisponível. Tente novamente em alguns instantes.');
+  }
+});
+
+router.get('/confirmar-email-recuperacao', (_req, res) => {
+  try {
+    recoveryPage(res, true);
+  } catch {
+    res.status(503).type('text/plain').send('Serviço temporariamente indisponível. Tente novamente em alguns instantes.');
+  }
+});
+
+router.use((_err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[PasswordRecovery] Erro inesperado tratado na camada pública.');
+  if (!res.headersSent) {
+    res.status(503).json({ error: unavailable });
+  }
+});
 
 export default router;
 

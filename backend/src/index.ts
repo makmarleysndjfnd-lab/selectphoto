@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import { spawnSync } from 'child_process';
 
 const isTestRuntime =
   process.env.NODE_ENV === 'test' ||
@@ -56,6 +57,7 @@ import {
   getPublicBuyerConfirmationPrompt,
   submitPublicBuyerConfirmation,
   renderPublicBuyerConfirmationHtml,
+  sanitizePublicBuyerConfirmationError,
 } from './services/buyerConfirmationService';
 
 app.use(securityHeaders);
@@ -188,12 +190,13 @@ app.get('/confirmar-compra/:token', async (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
   } catch (err: any) {
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
     const html = renderPublicBuyerConfirmationHtml({
       token,
-      errorMessage: err.message || 'Link inválido ou expirado.',
-      errorCode: err.code || 'INVALID_LINK',
+      errorMessage: safeErr.message,
+      errorCode: safeErr.code,
     });
-    res.status(err.status || 400).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
+    res.status(safeErr.status).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
   }
 });
 
@@ -211,9 +214,10 @@ app.post('/confirmar-compra/:token', async (req, res) => {
     });
     res.json(result);
   } catch (err: any) {
-    res.status(err.status || 400).json({
-      error: err.message || 'Erro ao processar confirmação',
-      code: err.code,
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
+    res.status(safeErr.status).json({
+      error: safeErr.message,
+      code: safeErr.code,
     });
   }
 });
@@ -313,7 +317,49 @@ export async function gracefulShutdown(signal: string) {
   }
 }
 
+export function runProductionMigrationsOnStartup() {
+  const isProdOrRender =
+    process.env.NODE_ENV === 'production' ||
+    process.env.RENDER === 'true' ||
+    Boolean(process.env.RENDER_GIT_COMMIT);
+
+  if (
+    !isProdOrRender ||
+    process.env.npm_lifecycle_event === 'start' ||
+    process.env.SKIP_STARTUP_MIGRATIONS === 'true'
+  ) {
+    return;
+  }
+
+  const backendRoot = path.resolve(__dirname, '..');
+  const prismaCli = path.join(backendRoot, 'node_modules', 'prisma', 'build', 'index.js');
+  console.log('🔄 [STARTUP] Executando npx prisma migrate deploy antes de iniciar o servidor...');
+  const result = fs.existsSync(prismaCli)
+    ? spawnSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
+        cwd: backendRoot,
+        env: process.env,
+        stdio: 'inherit',
+        windowsHide: true,
+      })
+    : spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['prisma', 'migrate', 'deploy'], {
+        cwd: backendRoot,
+        env: process.env,
+        stdio: 'inherit',
+        windowsHide: true,
+      });
+
+  if (result.error || result.status !== 0) {
+    console.error(
+      '🛑 [FATAL STARTUP ERROR] Falha ao aplicar migrações pendentes do Prisma:',
+      result.error?.message || `exit code ${result.status}`
+    );
+    process.exit(result.status || 1);
+  }
+  console.log('✅ [STARTUP] Migrações do Prisma verificadas/aplicadas com sucesso.');
+}
+
 if (require.main === module && !isTestRuntime && process.env.NODE_ENV !== 'test') {
+  runProductionMigrationsOnStartup();
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   startBackgroundSchedulers();

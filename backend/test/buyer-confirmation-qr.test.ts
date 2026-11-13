@@ -15,6 +15,7 @@ import {
   resolveBuyerConfirmationReview,
   formatBuyerConfirmationForRole,
   renderPublicBuyerConfirmationHtml,
+  sanitizePublicBuyerConfirmationError,
 } from '../src/services/buyerConfirmationService';
 
 const jwtSecret = 'test_jwt_secret_for_buyer_confirmation_suite_123456';
@@ -31,12 +32,13 @@ app.get('/confirmar-compra/:token', async (req, res) => {
     const html = renderPublicBuyerConfirmationHtml({ token, prompt });
     res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
   } catch (err: any) {
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
     const html = renderPublicBuyerConfirmationHtml({
       token,
-      errorMessage: err.message,
-      errorCode: err.code,
+      errorMessage: safeErr.message,
+      errorCode: safeErr.code,
     });
-    res.status(err.status || 400).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
+    res.status(safeErr.status).setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
   }
 });
 
@@ -51,7 +53,8 @@ app.post('/confirmar-compra/:token', async (req, res) => {
     });
     res.json(result);
   } catch (err: any) {
-    res.status(err.status || 400).json({ error: err.message, code: err.code });
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
+    res.status(safeErr.status).json({ error: safeErr.message, code: safeErr.code });
   }
 });
 
@@ -1262,6 +1265,55 @@ test('Lumora — Suíte Completa de Conferência de Vendas por QR (Etapas 1 e 2)
     // Confere que sellerA NÃO foi bloqueado
     const sellerCheck = await prisma.user.findUnique({ where: { id: sellerA.id } });
     assert.equal(sellerCheck?.sellerBlocked, false);
+  });
+
+  await t.test('15. Rota pública /confirmar-compra/:token com token inválido ou falha Prisma não vaza detalhes técnicos', async () => {
+    const baseUrl = await getBaseUrl;
+
+    const resGetInvalid = await fetch(`${baseUrl}/confirmar-compra/token-invalido-teste`);
+    assert.equal(resGetInvalid.status, 404);
+    const htmlInvalid = await resGetInvalid.text();
+    assert.ok(htmlInvalid.includes('Link inválido ou não encontrado'));
+    assert.equal(/prisma|buyerpurchaseconfirmation|public\.|postgres|sql/i.test(htmlInvalid), false);
+
+    const resPostInvalid = await fetch(`${baseUrl}/confirmar-compra/token-invalido-teste`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reportedTotalValue: '100.00',
+        reportedPaidValue: '100.00',
+        reportedPaymentMethod: 'PIX',
+      }),
+    });
+    assert.equal(resPostInvalid.status, 404);
+    const jsonInvalid = (await resPostInvalid.json()) as any;
+    assert.equal(jsonInvalid.code, 'LINK_NOT_FOUND');
+    assert.equal(/prisma|buyerpurchaseconfirmation|public\.|postgres|sql/i.test(jsonInvalid.error), false);
+
+    // Simula erro interno do Prisma (ex.: tabela ausente P2021) e garante sanitização para 503 sem vazamento
+    const simulatedPrismaErr: any = new Error(
+      'Invalid `prisma.buyerPurchaseConfirmation.findUnique()` invocation:\nThe table `public.BuyerPurchaseConfirmation` does not exist in the current database.'
+    );
+    simulatedPrismaErr.name = 'PrismaClientKnownRequestError';
+    simulatedPrismaErr.code = 'P2021';
+
+    const sanitized = sanitizePublicBuyerConfirmationError(simulatedPrismaErr);
+    assert.equal(sanitized.status, 503);
+    assert.equal(sanitized.code, 'SERVICE_UNAVAILABLE');
+    assert.equal(
+      /prisma|buyerpurchaseconfirmation|public\.|postgres|sql|does not exist/i.test(sanitized.message),
+      false
+    );
+
+    const safeHtml = renderPublicBuyerConfirmationHtml({
+      token: 'token-invalido-teste',
+      errorMessage: simulatedPrismaErr.message,
+      errorCode: 'INTERNAL',
+    });
+    assert.equal(
+      /prisma|buyerpurchaseconfirmation|public\.|postgres|sql|does not exist/i.test(safeHtml),
+      false
+    );
   });
 });
 

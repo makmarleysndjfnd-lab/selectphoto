@@ -599,6 +599,89 @@ export async function invalidateAndReissueConfirmationOnSaleChange(
   };
 }
 
+const INTERNAL_ERROR_LEAK_PATTERN =
+  /prisma|select\s|insert\s|update\s|delete\s|public\.|postgres|\bsql\b|invocation|does not exist|column\s|relation\s|constraint\s|database|econnrefused|etimedout|\bp[12]\d{3}\b/i;
+
+function createPublicConfirmationError(
+  message: string,
+  status: number,
+  code: string
+) {
+  const err: any = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.isPublicSafe = true;
+  return err;
+}
+
+/**
+ * Garante que rotas públicas de confirmação jamais vazem erros internos do Prisma,
+ * SQL, nomes de tabelas ou stack traces para o usuário final.
+ */
+export function sanitizePublicBuyerConfirmationError(err: unknown): {
+  status: number;
+  message: string;
+  code: string;
+} {
+  const e = err as any;
+  const status = typeof e?.status === 'number' ? e.status : 0;
+  const rawMessage = typeof e?.message === 'string' ? e.message.trim() : '';
+  const code =
+    typeof e?.code === 'string' && e.code.trim() ? e.code.trim() : 'INVALID_LINK';
+
+  if (
+    e?.isPublicSafe === true &&
+    status >= 400 &&
+    status < 500 &&
+    rawMessage &&
+    !INTERNAL_ERROR_LEAK_PATTERN.test(rawMessage)
+  ) {
+    return { status, message: rawMessage, code };
+  }
+
+  if (
+    e?.isPublicSafe === true &&
+    status >= 500 &&
+    status < 600 &&
+    rawMessage &&
+    !INTERNAL_ERROR_LEAK_PATTERN.test(rawMessage)
+  ) {
+    return { status, message: rawMessage, code };
+  }
+
+  const redactedLog = rawMessage.replace(
+    /postgres(?:ql)?:\/\/[^\s]+/gi,
+    '[REDACTED_DB_URL]'
+  );
+  console.error(
+    '[BuyerConfirmationPublic] Erro interno sanitizado:',
+    e?.name || 'Error',
+    code,
+    redactedLog || e
+  );
+
+  const isInfraOrDbError =
+    (typeof e?.name === 'string' && e.name.startsWith('Prisma')) ||
+    (typeof e?.code === 'string' && /^P\d+/.test(e.code)) ||
+    /ECONNREFUSED|ETIMEDOUT|ENOTFOUND/i.test(String(e?.code || rawMessage)) ||
+    status === 503;
+
+  if (isInfraOrDbError) {
+    return {
+      status: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Serviço temporariamente indisponível. Tente novamente em alguns instantes.',
+    };
+  }
+
+  return {
+    status: 500,
+    code: 'INTERNAL_ERROR',
+    message:
+      'Não foi possível processar esta solicitação no momento. Tente novamente em alguns instantes.',
+  };
+}
+
 /**
  * Retorna os metadados públicos seguros para a página de confirmação no celular do comprador.
  * NUNCA retorna os valores lançados pelo vendedor!
@@ -607,134 +690,150 @@ export async function getPublicBuyerConfirmationPrompt(
   rawToken: string,
   dbClient: PrismaClient = defaultPrisma
 ) {
-  const tokenHash = hashConfirmationToken(rawToken);
-  const record = await dbClient.buyerPurchaseConfirmation.findUnique({
-    where: { tokenHash },
-    include: {
-      company: { select: { name: true, tradeName: true } },
-      sale: {
-        select: {
-          fichaNumber: true,
-          product: true,
-          city: true,
-          client: {
-            select: {
-              name: true,
-              visibleCode: true,
-              sequenceNumber: true,
+  if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+    throw createPublicConfirmationError(
+      'Link inválido ou não encontrado.',
+      404,
+      'LINK_NOT_FOUND'
+    );
+  }
+
+  try {
+    const tokenHash = hashConfirmationToken(rawToken);
+    const record = await dbClient.buyerPurchaseConfirmation.findUnique({
+      where: { tokenHash },
+      include: {
+        company: { select: { name: true, tradeName: true } },
+        sale: {
+          select: {
+            fichaNumber: true,
+            product: true,
+            city: true,
+            client: {
+              select: {
+                name: true,
+                visibleCode: true,
+                sequenceNumber: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  if (!record) {
-    const err: any = new Error('Link de confirmação não encontrado.');
-    err.status = 404;
-    err.code = 'LINK_NOT_FOUND';
-    throw err;
-  }
-
-  if (record.status === 'INVALIDATED') {
-    const err: any = new Error(
-      'As condições ou o valor desta venda foram alterados. Solicite o novo link atualizado.'
-    );
-    err.status = 409;
-    err.code = 'CONDITIONS_VERSION_SUPERSEDED';
-    throw err;
-  }
-
-  if (record.usedAt || record.status === 'CONFIRMED' || record.status === 'UNDER_REVIEW') {
-    const err: any = new Error(
-      'Este link de confirmação é de uso único e já foi respondido.'
-    );
-    err.status = 409;
-    err.code = 'LINK_ALREADY_USED';
-    throw err;
-  }
-
-  const now = new Date();
-  if (record.status === 'EXPIRED' || now.getTime() > new Date(record.expiresAt).getTime()) {
-    if (record.status === 'PENDING') {
-      await dbClient.buyerPurchaseConfirmation.update({
-        where: { id: record.id },
-        data: { status: 'EXPIRED' },
-      });
+    if (!record) {
+      throw createPublicConfirmationError(
+        'Link inválido ou não encontrado.',
+        404,
+        'LINK_NOT_FOUND'
+      );
     }
-    const err: any = new Error('Este link de confirmação expirou. Solicite um novo link.');
-    err.status = 410;
-    err.code = 'LINK_EXPIRED';
-    throw err;
+
+    if (record.status === 'INVALIDATED') {
+      throw createPublicConfirmationError(
+        'As condições ou o valor desta venda foram alterados. Solicite o novo link atualizado.',
+        409,
+        'CONDITIONS_VERSION_SUPERSEDED'
+      );
+    }
+
+    if (record.usedAt || record.status === 'CONFIRMED' || record.status === 'UNDER_REVIEW') {
+      throw createPublicConfirmationError(
+        'Este link de confirmação é de uso único e já foi respondido.',
+        409,
+        'LINK_ALREADY_USED'
+      );
+    }
+
+    const now = new Date();
+    if (record.status === 'EXPIRED' || now.getTime() > new Date(record.expiresAt).getTime()) {
+      if (record.status === 'PENDING') {
+        await dbClient.buyerPurchaseConfirmation.update({
+          where: { id: record.id },
+          data: { status: 'EXPIRED' },
+        });
+      }
+      throw createPublicConfirmationError(
+        'Este link de confirmação expirou. Solicite um novo link.',
+        410,
+        'LINK_EXPIRED'
+      );
+    }
+
+    const buyerFullName = record.sale?.client?.name || 'Responsável';
+    const firstName = buyerFullName.trim().split(/\s+/)[0] || 'Responsável';
+    const fichaCode =
+      record.sale?.fichaNumber ||
+      record.sale?.client?.visibleCode ||
+      record.sale?.client?.sequenceNumber ||
+      '---';
+
+    const snap = (record.conditionsSnapshot as any) || {};
+    const isCreditAgreement = Boolean(snap.hasCreditAgreement);
+
+    // ESTRITAMENTE SEM VALORES DO VENDEDOR!
+    return {
+      saleId: record.saleId,
+      companyName: record.company?.tradeName || record.company?.name || 'Lumora',
+      fichaCode,
+      buyerFirstName: firstName,
+      city: record.sale?.city || '',
+      product: record.sale?.product || 'Mídias fotográficas',
+      conditionsVersion: record.conditionsVersion,
+      requiresIdentityCheck: Boolean(record.expectedPhoneLast4),
+      isCreditAgreement,
+      identityPrompt:
+        'Para confirmar sua identidade, informe os 4 últimos dígitos do seu telefone (ou CPF) cadastrado na ficha.',
+      fieldsToFill: [
+        {
+          name: 'phoneLast4',
+          label: 'Últimos 4 dígitos do seu telefone ou CPF cadastrado',
+          required: Boolean(record.expectedPhoneLast4),
+        },
+        {
+          name: 'reportedTotalValue',
+          label: 'Valor total combinado da compra (R$)',
+          required: true,
+        },
+        {
+          name: 'reportedPaidValue',
+          label: 'Valor que você já pagou de entrada ou à vista (R$)',
+          required: true,
+        },
+        {
+          name: 'reportedPaymentMethod',
+          label: 'Forma de pagamento combinada',
+          required: true,
+        },
+        ...(isCreditAgreement
+          ? [
+              {
+                name: 'reportedRemainingValue',
+                label: 'Saldo restante a ser parcelado (R$)',
+                required: true,
+              },
+              {
+                name: 'reportedInstallmentsCount',
+                label: 'Quantidade de parcelas combinadas',
+                required: true,
+              },
+              {
+                name: 'reportedInstallmentValue',
+                label: 'Valor de cada parcela (R$)',
+                required: true,
+              },
+            ]
+          : []),
+      ],
+      expiresAt: record.expiresAt,
+    };
+  } catch (err: any) {
+    if (err?.isPublicSafe) {
+      throw err;
+    }
+    const safe = sanitizePublicBuyerConfirmationError(err);
+    throw createPublicConfirmationError(safe.message, safe.status, safe.code);
   }
-
-  const buyerFullName = record.sale?.client?.name || 'Responsável';
-  const firstName = buyerFullName.trim().split(/\s+/)[0] || 'Responsável';
-  const fichaCode =
-    record.sale?.fichaNumber ||
-    record.sale?.client?.visibleCode ||
-    record.sale?.client?.sequenceNumber ||
-    '---';
-
-  const snap = (record.conditionsSnapshot as any) || {};
-  const isCreditAgreement = Boolean(snap.hasCreditAgreement);
-
-  // ESTRITAMENTE SEM VALORES DO VENDEDOR!
-  return {
-    saleId: record.saleId,
-    companyName: record.company?.tradeName || record.company?.name || 'Lumora',
-    fichaCode,
-    buyerFirstName: firstName,
-    city: record.sale?.city || '',
-    product: record.sale?.product || 'Mídias fotográficas',
-    conditionsVersion: record.conditionsVersion,
-    requiresIdentityCheck: Boolean(record.expectedPhoneLast4),
-    isCreditAgreement,
-    identityPrompt:
-      'Para confirmar sua identidade, informe os 4 últimos dígitos do seu telefone (ou CPF) cadastrado na ficha.',
-    fieldsToFill: [
-      {
-        name: 'phoneLast4',
-        label: 'Últimos 4 dígitos do seu telefone ou CPF cadastrado',
-        required: Boolean(record.expectedPhoneLast4),
-      },
-      {
-        name: 'reportedTotalValue',
-        label: 'Valor total combinado da compra (R$)',
-        required: true,
-      },
-      {
-        name: 'reportedPaidValue',
-        label: 'Valor que você já pagou de entrada ou à vista (R$)',
-        required: true,
-      },
-      {
-        name: 'reportedPaymentMethod',
-        label: 'Forma de pagamento combinada',
-        required: true,
-      },
-      ...(isCreditAgreement
-        ? [
-            {
-              name: 'reportedRemainingValue',
-              label: 'Saldo restante a ser parcelado (R$)',
-              required: true,
-            },
-            {
-              name: 'reportedInstallmentsCount',
-              label: 'Quantidade de parcelas combinadas',
-              required: true,
-            },
-            {
-              name: 'reportedInstallmentValue',
-              label: 'Valor de cada parcela (R$)',
-              required: true,
-            },
-          ]
-        : []),
-    ],
-    expiresAt: record.expiresAt,
-  };
 }
 
 /**
@@ -773,17 +872,27 @@ export async function submitPublicBuyerConfirmation(
   },
   dbClient: PrismaClient = defaultPrisma
 ) {
+  if (!params.rawToken || typeof params.rawToken !== 'string' || !params.rawToken.trim()) {
+    throw createPublicConfirmationError(
+      'Link inválido ou não encontrado.',
+      404,
+      'LINK_NOT_FOUND'
+    );
+  }
+
   const tokenHash = hashConfirmationToken(params.rawToken);
 
-  return dbClient.$transaction(async (tx) => {
+  try {
+    return await dbClient.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM "BuyerPurchaseConfirmation" WHERE "tokenHash" = ${tokenHash} FOR UPDATE
     `;
     if (!locked || locked.length === 0) {
-      const err: any = new Error('Link de confirmação não encontrado.');
-      err.status = 404;
-      err.code = 'LINK_NOT_FOUND';
-      throw err;
+      throw createPublicConfirmationError(
+        'Link inválido ou não encontrado.',
+        404,
+        'LINK_NOT_FOUND'
+      );
     }
 
     const record = await tx.buyerPurchaseConfirmation.findUniqueOrThrow({
@@ -805,12 +914,11 @@ export async function submitPublicBuyerConfirmation(
     });
 
     if (record.status === 'INVALIDATED') {
-      const err: any = new Error(
-        'As condições ou o valor desta venda foram alterados após a emissão deste link. Solicite o novo link atualizado.'
+      throw createPublicConfirmationError(
+        'As condições ou o valor desta venda foram alterados após a emissão deste link. Solicite o novo link atualizado.',
+        409,
+        'CONDITIONS_VERSION_SUPERSEDED'
       );
-      err.status = 409;
-      err.code = 'CONDITIONS_VERSION_SUPERSEDED';
-      throw err;
     }
 
     // Parse dos valores declarados pelo comprador
@@ -876,12 +984,11 @@ export async function submitPublicBuyerConfirmation(
         };
       }
 
-      const err: any = new Error(
-        'Este link de confirmação é de uso único e já foi respondido anteriormente.'
+      throw createPublicConfirmationError(
+        'Este link de confirmação é de uso único e já foi respondido anteriormente.',
+        409,
+        'LINK_ALREADY_USED'
       );
-      err.status = 409;
-      err.code = 'LINK_ALREADY_USED';
-      throw err;
     }
 
     const now = new Date();
@@ -890,20 +997,20 @@ export async function submitPublicBuyerConfirmation(
         where: { id: record.id },
         data: { status: 'EXPIRED' },
       });
-      const err: any = new Error('Este link de confirmação expirou. Solicite um novo link.');
-      err.status = 410;
-      err.code = 'LINK_EXPIRED';
-      throw err;
+      throw createPublicConfirmationError(
+        'Este link de confirmação expirou. Solicite um novo link.',
+        410,
+        'LINK_EXPIRED'
+      );
     }
 
     // Limite de tentativas para verificação de identidade
     if (record.verificationAttempts >= 5) {
-      const err: any = new Error(
-        'Limite de tentativas de validação excedido para este link. Solicite um novo link.'
+      throw createPublicConfirmationError(
+        'Limite de tentativas de validação excedido para este link. Solicite um novo link.',
+        429,
+        'TOO_MANY_ATTEMPTS'
       );
-      err.status = 429;
-      err.code = 'TOO_MANY_ATTEMPTS';
-      throw err;
     }
 
     // Verificar se existe versão mais nova
@@ -924,12 +1031,11 @@ export async function submitPublicBuyerConfirmation(
           invalidationReason: 'SUPERSEDED_BY_NEWER_VERSION',
         },
       });
-      const err: any = new Error(
-        'As condições da venda foram atualizadas. Utilize o novo link emitido.'
+      throw createPublicConfirmationError(
+        'As condições da venda foram atualizadas. Utilize o novo link emitido.',
+        409,
+        'CONDITIONS_VERSION_SUPERSEDED'
       );
-      err.status = 409;
-      err.code = 'CONDITIONS_VERSION_SUPERSEDED';
-      throw err;
     }
 
     // Verificação de identidade pelo contato cadastrado
@@ -955,12 +1061,11 @@ export async function submitPublicBuyerConfirmation(
           where: { id: record.id },
           data: { verificationAttempts: { increment: 1 } },
         });
-        const err: any = new Error(
-          'Verificação de identidade falhou: os últimos 4 dígitos informados não conferem com o cadastro.'
+        throw createPublicConfirmationError(
+          'Verificação de identidade falhou: os últimos 4 dígitos informados não conferem com o cadastro.',
+          403,
+          'IDENTITY_VERIFICATION_FAILED'
         );
-        err.status = 403;
-        err.code = 'IDENTITY_VERIFICATION_FAILED';
-        throw err;
       }
       verifiedBy =
         cpfLast4 && candidateDigits === cpfLast4 && !p1Last4
@@ -969,26 +1074,30 @@ export async function submitPublicBuyerConfirmation(
     }
 
     if (!Number.isFinite(reportedTotalCents) || reportedTotalCents <= 0) {
-      const err: any = new Error('Informe o valor total combinado maior que zero.');
-      err.status = 400;
-      throw err;
+      throw createPublicConfirmationError(
+        'Informe o valor total combinado maior que zero.',
+        400,
+        'INVALID_TOTAL_VALUE'
+      );
     }
 
     if (!Number.isFinite(reportedPaidCents) || reportedPaidCents < 0) {
-      const err: any = new Error(
-        'Informe quanto você já pagou de entrada ou à vista (valor igual ou maior que zero).'
+      throw createPublicConfirmationError(
+        'Informe quanto você já pagou de entrada ou à vista (valor igual ou maior que zero).',
+        400,
+        'INVALID_PAID_VALUE'
       );
-      err.status = 400;
-      throw err;
     }
 
     const rawReportedMethod = String(params.reportedPaymentMethod || '')
       .trim()
       .toUpperCase();
     if (!rawReportedMethod) {
-      const err: any = new Error('Informe a forma de pagamento combinada.');
-      err.status = 400;
-      throw err;
+      throw createPublicConfirmationError(
+        'Informe a forma de pagamento combinada.',
+        400,
+        'MISSING_PAYMENT_METHOD'
+      );
     }
 
     const snap = (record.conditionsSnapshot as any) || {};
@@ -1379,6 +1488,13 @@ export async function submitPublicBuyerConfirmation(
       receipt,
     };
   });
+  } catch (err: any) {
+    if (err?.isPublicSafe) {
+      throw err;
+    }
+    const safe = sanitizePublicBuyerConfirmationError(err);
+    throw createPublicConfirmationError(safe.message, safe.status, safe.code);
+  }
 }
 
 /**
@@ -1870,6 +1986,9 @@ export function renderPublicBuyerConfirmationHtml(
       .replace(/"/g, '&quot;');
 
   if (typeof rawTokenOrObj === 'object' && rawTokenOrObj !== null && rawTokenOrObj.errorMessage) {
+    const safeErrorMessage = INTERNAL_ERROR_LEAK_PATTERN.test(rawTokenOrObj.errorMessage)
+      ? 'Link inválido ou não encontrado.'
+      : rawTokenOrObj.errorMessage;
     return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1886,7 +2005,7 @@ export function renderPublicBuyerConfirmationHtml(
 <body>
   <div class="card">
     <h1>Aviso</h1>
-    <p>${esc(rawTokenOrObj.errorMessage)}</p>
+    <p>${esc(safeErrorMessage)}</p>
   </div>
 </body>
 </html>`;

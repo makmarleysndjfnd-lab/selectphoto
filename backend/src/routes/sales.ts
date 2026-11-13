@@ -19,6 +19,7 @@ import {
   submitPublicBuyerConfirmation,
   resolveBuyerConfirmationReview,
   formatBuyerConfirmationForRole,
+  sanitizePublicBuyerConfirmationError,
 } from '../services/buyerConfirmationService';
 
 const router = Router();
@@ -2001,9 +2002,10 @@ router.get('/public/prompt/:token', async (req, res: any) => {
     const prompt = await getPublicBuyerConfirmationPrompt(req.params.token);
     res.json(prompt);
   } catch (err: any) {
-    res.status(err.status || 400).json({
-      error: err.message || 'Link inválido ou expirado',
-      code: err.code || 'INVALID_LINK',
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
+    res.status(safeErr.status).json({
+      error: safeErr.message,
+      code: safeErr.code,
     });
   }
 });
@@ -2021,9 +2023,10 @@ router.post('/public/confirm/:token', async (req, res: any) => {
     });
     res.json(result);
   } catch (err: any) {
-    res.status(err.status || 400).json({
-      error: err.message || 'Erro ao processar confirmação',
-      code: err.code,
+    const safeErr = sanitizePublicBuyerConfirmationError(err);
+    res.status(safeErr.status).json({
+      error: safeErr.message,
+      code: safeErr.code,
     });
   }
 });
