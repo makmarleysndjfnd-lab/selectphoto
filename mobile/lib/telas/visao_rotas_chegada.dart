@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
-import '../widgets/led_card.dart';
+import '../widgets/admin_ficha_actions.dart';
 
 class VisaoRotasChegada extends StatefulWidget {
   const VisaoRotasChegada({super.key});
@@ -93,25 +93,63 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
         final status = (b['status'] ?? 'CREATED').toString().toUpperCase();
 
         final rawClients = List<dynamic>.from(b['clients'] ?? []);
-        // Exclui SOLD e REBOLO_SOLD das fichas operacionais
+        // Mantém apenas fichas no fluxo primário ativo de Books (exclui vendidas, descartadas, encerradas ou enviadas ao Rebolo)
         final activeClients = rawClients
             .map((c) => Map<String, dynamic>.from(c as Map))
             .where((c) {
-              final s = (c['bookStatus'] ?? '').toString();
-              return s != 'SOLD' && s != 'REBOLO_SOLD';
+              final s = (c['bookStatus'] ?? '').toString().toUpperCase();
+              final closed = c['cityClosedAt'] != null;
+              return !closed &&
+                  (s == 'CREATED' ||
+                      s == 'AWAITING_RELEASE' ||
+                      s == 'IN_STOCK' ||
+                      s == 'DISTRIBUTED');
             })
             .toList();
 
         final counts = Map<String, dynamic>.from(b['counts'] ?? {});
         final int produced = counts['produced'] ?? b['totalProduced'] ?? activeClients.length;
         final int inStock = counts['inStock'] ??
-            activeClients.where((c) => c['bookStatus'] == 'IN_STOCK' || c['bookStatus'] == 'IN_STOCK_REBOLO').length;
+            activeClients.where((c) => c['bookStatus'] == 'IN_STOCK').length;
         final int awaitingRelease = counts['awaitingRelease'] ??
             activeClients.where((c) => c['bookStatus'] == 'AWAITING_RELEASE').length;
         final int inProduction = counts['inProduction'] ??
             activeClients.where((c) => c['bookStatus'] == 'CREATED').length;
         final int distributed = counts['distributed'] ??
-            activeClients.where((c) => c['bookStatus'] == 'DISTRIBUTED' || c['bookStatus'] == 'DISTRIBUTED_REBOLO' || c['bookStatus'] == 'AWAITING_RETURN').length;
+            activeClients.where((c) => c['bookStatus'] == 'DISTRIBUTED' && c['cityClosedAt'] == null).length;
+
+        final int activePrimaryTotal = inProduction + awaitingRelease + inStock + distributed;
+        final bool isEmptyFreshBatch = rawClients.isEmpty &&
+            produced == 0 &&
+            (status == 'CREATED' || status == 'AWAITING_RELEASE');
+        if (activePrimaryTotal == 0 && !isEmptyFreshBatch) {
+          continue;
+        }
+
+        // Lista de vendedores atribuídos a este lote
+        final List<Map<String, dynamic>> assignedSellers = [];
+        if (b['assignedSellers'] is List) {
+          for (final item in (b['assignedSellers'] as List)) {
+            if (item is Map && item['name'] != null) {
+              assignedSellers.add(Map<String, dynamic>.from(item));
+            }
+          }
+        } else {
+          final Map<String, Map<String, dynamic>> sellerMap = {};
+          for (final c in activeClients) {
+            final seller = c['assignedSeller'];
+            final sId = c['assignedSellerId']?.toString() ?? (seller is Map ? seller['id']?.toString() : null);
+            final sName = seller is Map ? seller['name']?.toString() : null;
+            if (sId != null && sName != null && sName.trim().isNotEmpty) {
+              final entry = sellerMap.putIfAbsent(
+                sId,
+                () => {'id': sId, 'name': sName.trim(), 'count': 0},
+              );
+              entry['count'] = (entry['count'] as int) + 1;
+            }
+          }
+          assignedSellers.addAll(sellerMap.values);
+        }
 
         // Cidades
         final rawCities = List<dynamic>.from(b['cities'] ?? []);
@@ -137,6 +175,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
           'inStock': inStock,
           'distributed': distributed,
           'cities': cities,
+          'assignedSellers': assignedSellers,
           'clients': activeClients,
         };
       }
@@ -536,6 +575,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
             final inProduction = data['inProduction'] ?? 0;
             final distributed = data['distributed'] ?? 0;
             final List<String> cities = List<String>.from(data['cities'] ?? []);
+            final List<Map<String, dynamic>> assignedSellers =
+                List<Map<String, dynamic>>.from(data['assignedSellers'] ?? []);
             final List<Map<String, dynamic>> clients =
                 List<Map<String, dynamic>>.from(data['clients'] ?? []);
 
@@ -543,7 +584,10 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                 .where((c) => c['bookStatus'] == 'AWAITING_RELEASE')
                 .toList();
             final inStockClients = clients
-                .where((c) => c['bookStatus'] == 'IN_STOCK' || c['bookStatus'] == 'IN_STOCK_REBOLO')
+                .where((c) => c['bookStatus'] == 'IN_STOCK')
+                .toList();
+            final distributedClients = clients
+                .where((c) => c['bookStatus'] == 'DISTRIBUTED')
                 .toList();
 
             final selectedIds = _selectedByBatch[batchId] ?? {};
@@ -559,9 +603,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
               maxChildSize: 0.95,
               builder: (_, scrollCtrl) {
                 return Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF161625),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  decoration: BoxDecoration(
+                    color: lumoraSurfaceDark,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    border: Border(
+                      top: BorderSide(color: lumoraNeonPurple.withOpacity(0.4)),
+                    ),
                   ),
                   child: Column(
                     children: [
@@ -822,6 +869,15 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                                       style: const TextStyle(
                                           color: Colors.white54, fontSize: 11),
                                     ),
+                                    trailing: _buildFichaPopupMenu(
+                                      client: client,
+                                      canDeleteIncomplete:
+                                          isClientEligibleForIncompleteDeletion(client),
+                                      onActionDone: () async {
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        await _loadData(silent: true);
+                                      },
+                                    ),
                                   ),
                                 );
                               }),
@@ -832,7 +888,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                                 child: ElevatedButton.icon(
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: selectedIds.isNotEmpty
-                                        ? const Color(0xFFCE93D8)
+                                        ? lumoraNeonPurple
                                         : Colors.white24,
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(vertical: 14),
@@ -861,6 +917,121 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                                 ),
                               ),
                             ],
+
+                            if (awaitingClients.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  const Icon(Icons.hourglass_bottom_rounded,
+                                      color: Color(0xFF4FC3F7), size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Fichas na Gráfica (${awaitingClients.length})',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ...awaitingClients.map((client) {
+                                final code = client['visibleCode'] ??
+                                    client['sequenceNumber'] ??
+                                    'S/N';
+                                final name = client['name'] ?? 'Cliente';
+                                final city = client['city'] ?? 'Sem Cidade';
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: lumoraBgDark,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: const Color(0xFF4FC3F7).withOpacity(0.25)),
+                                  ),
+                                  child: ListTile(
+                                    dense: true,
+                                    title: Text('$code · $name',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13)),
+                                    subtitle: Text('Na Gráfica · $city',
+                                        style: const TextStyle(
+                                            color: Color(0xFF4FC3F7), fontSize: 11)),
+                                    trailing: _buildFichaPopupMenu(
+                                      client: client,
+                                      canDeleteIncomplete: true,
+                                      onActionDone: () async {
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        await _loadData(silent: true);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ],
+
+                            if (distributedClients.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  const Icon(Icons.badge_outlined,
+                                      color: lumoraNeonPurple, size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Distribuídas com Vendedores (${distributedClients.length})',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                              if (assignedSellers.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                _buildAssignedSellersWrap(assignedSellers),
+                              ],
+                              const SizedBox(height: 8),
+                              ...distributedClients.map((client) {
+                                final code = client['visibleCode'] ??
+                                    client['sequenceNumber'] ??
+                                    'S/N';
+                                final name = client['name'] ?? 'Cliente';
+                                final city = client['city'] ?? 'Sem Cidade';
+                                final sellerName =
+                                    client['assignedSeller']?['name']?.toString() ??
+                                        'Vendedor';
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: lumoraBgDark,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: lumoraNeonPurple.withOpacity(0.3)),
+                                  ),
+                                  child: ListTile(
+                                    dense: true,
+                                    title: Text('$code · $name',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13)),
+                                    subtitle: Text('Com vendedor: $sellerName · $city',
+                                        style: const TextStyle(
+                                            color: Color(0xFFD8B4FE), fontSize: 11)),
+                                    trailing: _buildFichaPopupMenu(
+                                      client: client,
+                                      canDeleteIncomplete: false,
+                                      onActionDone: () async {
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        await _loadData(silent: true);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ],
                           ],
                         ),
                       ),
@@ -872,6 +1043,101 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
           },
         );
       },
+    );
+  }
+
+  Widget _buildFichaPopupMenu({
+    required Map<String, dynamic> client,
+    required bool canDeleteIncomplete,
+    required Future<void> Function() onActionDone,
+  }) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 18),
+      color: lumoraSurfaceDark,
+      onSelected: (value) async {
+        if (value == 'edit') {
+          await showAdminEditFichaDialog(context, client, () {
+            onActionDone();
+          });
+        } else if (value == 'move') {
+          await showAdminMoveFichaDialog(context, client, () {
+            onActionDone();
+          });
+        } else if (value == 'delete') {
+          await confirmAdminDeleteIncompleteFicha(context, client, () {
+            onActionDone();
+          });
+        }
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'edit',
+          child: Row(
+            children: [
+              Icon(Icons.edit_outlined, color: lumoraNeonPurple, size: 16),
+              SizedBox(width: 8),
+              Text('Editar dados', style: TextStyle(color: Colors.white, fontSize: 13)),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'move',
+          child: Row(
+            children: [
+              Icon(Icons.swap_horiz_rounded, color: Color(0xFFD8B4FE), size: 16),
+              SizedBox(width: 8),
+              Text('Mover (Lote / Vendedor)',
+                  style: TextStyle(color: Colors.white, fontSize: 13)),
+            ],
+          ),
+        ),
+        if (canDeleteIncomplete)
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
+                SizedBox(width: 8),
+                Text('Excluir incompleta',
+                    style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAssignedSellersWrap(List<Map<String, dynamic>> assignedSellers) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: assignedSellers.map((s) {
+        final name = (s['name'] ?? 'Vendedor').toString();
+        final count = s['count'] ?? 0;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: lumoraNeonPurple.withOpacity(0.14),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: lumoraNeonPurple.withOpacity(0.45)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.badge_outlined, color: Color(0xFFD8B4FE), size: 12),
+              const SizedBox(width: 4),
+              Text(
+                '$name ($count)',
+                style: const TextStyle(
+                  color: Color(0xFFE9D5FF),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -1023,6 +1289,8 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     final inStock = data['inStock'] ?? 0;
     final distributed = data['distributed'] ?? 0;
     final List<String> cities = List<String>.from(data['cities'] ?? []);
+    final List<Map<String, dynamic>> assignedSellers =
+        List<Map<String, dynamic>>.from(data['assignedSellers'] ?? []);
 
     // Formatar cidades
     String cityIndicator;
@@ -1051,9 +1319,9 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
+        color: lumoraSurfaceDark,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: lumoraNeonPurple.withOpacity(0.28)),
       ),
       child: Material(
         color: Colors.transparent,
@@ -1132,6 +1400,27 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                 // Stepper de 4 etapas
                 _buildStepper(status, totalProduced, inStock, distributed),
 
+                if (assignedSellers.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Icon(Icons.people_alt_outlined,
+                          color: lumoraNeonPurple, size: 14),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Vendedores atribuídos (${assignedSellers.length}):',
+                        style: const TextStyle(
+                          color: Color(0xFFD8B4FE),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  _buildAssignedSellersWrap(assignedSellers),
+                ],
+
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
@@ -1156,9 +1445,9 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F1A),
+      backgroundColor: lumoraBgDark,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: lumoraSurfaceDark,
         title: const Text('Rotas da Gráfica',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),

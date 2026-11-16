@@ -4,6 +4,15 @@ import { randomUUID } from 'crypto';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { getNextVisibleCode } from '../utils/visibleCode';
 import { isClientClosedForPhotographer, sanitizeClientForPhotographer } from '../utils/photographerIsolation';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import {
+  calculateReboloValidityStatus,
+  MAX_REBOLO_VALIDITY_DAYS,
+  MIN_REBOLO_VALIDITY_DAYS,
+  normalizeReboloValidityDays,
+  resolveReboloEnteredAt,
+  resolveReboloOrigin,
+} from '../services/reboloValidityService';
 
 const router = Router();
 
@@ -366,11 +375,19 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const sellerOnlyWalletFilter = isSellerWalletRestricted(req.user?.role)
       ? { assignedSellerId: req.user?.id }
       : {};
+    const activeBookOnly = req.query.activeBookOnly === 'true';
 
     const clients = await prisma.client.findMany({
       where: { 
         companyId,
-        bookStatus: { not: 'CREATED' },
+        ...(activeBookOnly
+          ? {
+              bookStatus: { in: ['AWAITING_RELEASE', 'IN_STOCK', 'DISTRIBUTED'] },
+              cityClosedAt: null,
+            }
+          : {
+              bookStatus: { not: 'CREATED' },
+            }),
         ...sellerOnlyWalletFilter,
       },
       include: { 
@@ -381,7 +398,29 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         batch: { select: { id: true, name: true, status: true } }
       }
     });
-    res.json(clients);
+
+    const enrichedClients = clients.map((c) => {
+      const sellerName = c.assignedSeller?.name || null;
+      const batchName = c.batch?.name || null;
+      const trackingLocationType = sellerName
+        ? 'SELLER'
+        : c.batchId
+        ? 'BATCH'
+        : 'UNASSIGNED';
+      const trackingLocationLabel = sellerName
+        ? `Com vendedor: ${sellerName}`
+        : batchName
+        ? `No lote: ${batchName}`
+        : 'Sem lote atribuído';
+
+      return {
+        ...c,
+        trackingLocationType,
+        trackingLocationLabel,
+      };
+    });
+
+    res.json(enrichedClients);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch clients' });
   }
@@ -580,6 +619,97 @@ router.get('/by-city', authenticateToken, async (req: AuthRequest, res: Response
   }
 });
 
+// Consultar configuração de validade do Rebolo da empresa
+router.get('/rebolo-settings', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+    const company = await prisma.company.findUnique({
+      where: { id: userCompanyId },
+      select: { id: true, reboloValidityDays: true },
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Empresa não encontrada' });
+    }
+
+    res.json({
+      reboloValidityDays: normalizeReboloValidityDays(company.reboloValidityDays),
+      minDays: MIN_REBOLO_VALIDITY_DAYS,
+      maxDays: MAX_REBOLO_VALIDITY_DAYS,
+    });
+  } catch (error) {
+    console.error('Error fetching rebolo settings:', error);
+    res.status(500).json({ error: 'Falha ao consultar prazo do Rebolo' });
+  }
+});
+
+// Atualizar configuração de validade do Rebolo (padrão 365 dias)
+router.patch('/rebolo-settings', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+    const rawDays = Number(req.body?.reboloValidityDays);
+    if (
+      !Number.isFinite(rawDays) ||
+      !Number.isInteger(rawDays) ||
+      rawDays < MIN_REBOLO_VALIDITY_DAYS ||
+      rawDays > MAX_REBOLO_VALIDITY_DAYS
+    ) {
+      return res.status(400).json({
+        error: `Prazo de validade inválido. Informe um número inteiro entre ${MIN_REBOLO_VALIDITY_DAYS} e ${MAX_REBOLO_VALIDITY_DAYS} dias.`,
+      });
+    }
+
+    const company = await prisma.company.findUnique({
+      where: { id: userCompanyId },
+      select: { id: true, name: true, tradeName: true, reboloValidityDays: true },
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Empresa não encontrada' });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const saved = await tx.company.update({
+        where: { id: userCompanyId },
+        data: { reboloValidityDays: rawDays },
+        select: { id: true, reboloValidityDays: true },
+      });
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: userCompanyId,
+          category: 'CONDITIONS',
+          action: 'REBOLO_VALIDITY_UPDATED',
+          entityType: 'Company',
+          entityId: userCompanyId,
+          entityReference: company.tradeName || company.name,
+          previousValues: { reboloValidityDays: company.reboloValidityDays },
+          newValues: { reboloValidityDays: saved.reboloValidityDays },
+          reason: req.body?.reason ? String(req.body.reason).trim() : 'Edição administrativa do prazo de validade do Rebolo',
+          authorUserId: req.user?.id || null,
+          authorName: req.user?.name || req.user?.cpf || 'Admin',
+          authorRole: req.user?.role || null,
+        },
+        tx
+      );
+
+      return saved;
+    });
+
+    res.json({
+      reboloValidityDays: updated.reboloValidityDays,
+      message: `Prazo de validade do Rebolo atualizado para ${updated.reboloValidityDays} dias.`,
+    });
+  } catch (error) {
+    console.error('Error updating rebolo settings:', error);
+    res.status(500).json({ error: 'Falha ao atualizar prazo do Rebolo' });
+  }
+});
+
 // Get rebolos (clients with rebolo status or non-sales history)
 router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -601,20 +731,59 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
       ? { assignedSellerId: req.user?.id }
       : {};
 
-    const clients = await prisma.client.findMany({
-      where: { 
-        companyId: userCompanyId,
-        ...sellerOnlyWalletFilter,
-        OR: [
-          { bookStatus: { in: reboloStatuses } },
-          { nonSales: { some: {} } }
-        ]
-      },
-      include: { children: true, appointments: true, nonSales: true, photographer: true, assignedSeller: true },
-      orderBy: { createdAt: 'desc' }
+    const [company, clients] = await Promise.all([
+      prisma.company.findUnique({
+        where: { id: userCompanyId },
+        select: { reboloValidityDays: true },
+      }),
+      prisma.client.findMany({
+        where: { 
+          companyId: userCompanyId,
+          ...sellerOnlyWalletFilter,
+          OR: [
+            { bookStatus: { in: reboloStatuses } },
+            { nonSales: { some: {} } }
+          ]
+        },
+        include: {
+          children: true,
+          appointments: true,
+          batch: { select: { id: true, name: true, city: true, date: true, status: true } },
+          nonSales: {
+            include: { seller: { select: { id: true, name: true } } },
+            orderBy: { date: 'asc' },
+          },
+          photographer: { select: { id: true, name: true } },
+          assignedSeller: { select: { id: true, name: true } },
+          timeline: {
+            orderBy: { timestamp: 'asc' },
+            take: 30,
+          },
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+    ]);
+
+    const validityDays = normalizeReboloValidityDays(company?.reboloValidityDays);
+    const now = new Date();
+
+    const enrichedRebolos = clients.map((client) => {
+      const enteredAt = resolveReboloEnteredAt(client);
+      const reboloValidity = calculateReboloValidityStatus(enteredAt, validityDays, now);
+      const reboloOrigin = resolveReboloOrigin(client);
+
+      return {
+        ...client,
+        reboloValidityDays: validityDays,
+        reboloEnteredAt: enteredAt.toISOString(),
+        reboloValidity,
+        reboloOrigin,
+      };
     });
-    res.json(clients);
+
+    res.json(enrichedRebolos);
   } catch (error) {
+    console.error('Error fetching rebolos:', error);
     res.status(500).json({ error: 'Failed to fetch rebolos' });
   }
 });
@@ -1069,6 +1238,452 @@ router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Res
   } catch (error) {
     console.error('Error fetching client timeline:', error);
     res.status(500).json({ error: 'Falha ao buscar linha do tempo da ficha' });
+  }
+});
+
+const ADMIN_EDITABLE_CLIENT_FIELDS = [
+  'name',
+  'sequenceNumber',
+  'phone1',
+  'phone2',
+  'cep',
+  'street',
+  'number',
+  'complement',
+  'neighborhood',
+  'city',
+  'state',
+  'condo',
+  'block',
+  'apartment',
+  'houseColor',
+  'gateColor',
+  'gateObservation',
+  'referencePoint',
+  'profession',
+  'visitTime',
+  'clothesColor',
+  'event',
+  'mainContact',
+] as const;
+
+// Edição administrativa direta de ficha (Admin / Supervisor da própria empresa)
+router.patch('/:id/admin-edit', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const existingClient = await prisma.client.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+      include: { children: true },
+    });
+
+    if (!existingClient) {
+      return res.status(404).json({ error: 'Ficha não encontrada na empresa' });
+    }
+
+    const updateData: Record<string, any> = {};
+    const previousValues: Record<string, any> = {};
+    const newValues: Record<string, any> = {};
+
+    for (const field of ADMIN_EDITABLE_CLIENT_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        const rawVal = req.body[field];
+        const nextVal = rawVal === null || rawVal === undefined ? null : String(rawVal).trim();
+        if (field === 'name' && !nextVal) {
+          return res.status(400).json({ error: 'O nome da ficha não pode ficar vazio.' });
+        }
+        if (field === 'sequenceNumber' && !nextVal) {
+          return res.status(400).json({ error: 'O número da ficha não pode ficar vazio.' });
+        }
+        if (existingClient[field] !== nextVal) {
+          previousValues[field] = existingClient[field];
+          newValues[field] = nextVal;
+          updateData[field] = nextVal;
+        }
+      }
+    }
+
+    const hasChildrenUpdate = Array.isArray(req.body?.children);
+    const parsedChildren = hasChildrenUpdate
+      ? req.body.children
+          .filter((c: any) => String(c?.name || '').trim().length > 0)
+          .map((c: any) => ({
+            name: String(c.name).trim(),
+            age: typeof c.age === 'string' ? parseInt(c.age, 10) || 0 : Number(c.age) || 0,
+          }))
+      : null;
+
+    if (Object.keys(updateData).length === 0 && !hasChildrenUpdate) {
+      return res.status(400).json({ error: 'Nenhum campo válido alterado.' });
+    }
+
+    const reason = req.body?.reason
+      ? String(req.body.reason).trim()
+      : 'Edição administrativa da ficha';
+
+    const updatedClient = await prisma.$transaction(async (tx) => {
+      if (parsedChildren !== null) {
+        await tx.child.deleteMany({ where: { clientId: existingClient.id } });
+        if (parsedChildren.length > 0) {
+          await tx.child.createMany({
+            data: parsedChildren.map((c: any) => ({
+              name: c.name,
+              age: c.age,
+              clientId: existingClient.id,
+            })),
+          });
+        }
+      }
+
+      const saved = await tx.client.update({
+        where: { id: existingClient.id },
+        data: updateData,
+        include: {
+          children: true,
+          batch: { select: { id: true, name: true, status: true } },
+          assignedSeller: { select: { id: true, name: true } },
+          photographer: { select: { id: true, name: true } },
+        },
+      });
+
+      await tx.clientTimeline.create({
+        data: {
+          clientId: existingClient.id,
+          cycle: existingClient.commercialCycle,
+          action: 'ADMIN_EDITED',
+          previousStatus: existingClient.bookStatus,
+          newStatus: existingClient.bookStatus,
+          authorId: req.user?.id || null,
+          authorRole: req.user?.role || null,
+          metadata: {
+            changedFields: Object.keys(newValues),
+            childrenUpdated: hasChildrenUpdate,
+            reason,
+          },
+        },
+      });
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: existingClient.companyId,
+          category: 'CONDITIONS',
+          action: 'ADMIN_CLIENT_EDITED',
+          entityType: 'Client',
+          entityId: existingClient.id,
+          entityReference: existingClient.visibleCode || existingClient.sequenceNumber,
+          previousValues: {
+            ...previousValues,
+            ...(hasChildrenUpdate ? { childrenCount: existingClient.children.length } : {}),
+          },
+          newValues: {
+            ...newValues,
+            ...(hasChildrenUpdate ? { childrenCount: parsedChildren?.length ?? 0 } : {}),
+          },
+          reason,
+          authorUserId: req.user?.id || null,
+          authorName: req.user?.name || req.user?.cpf || 'Admin',
+          authorRole: req.user?.role || null,
+        },
+        tx
+      );
+
+      return saved;
+    });
+
+    res.json({
+      message: 'Ficha atualizada com sucesso',
+      client: updatedClient,
+    });
+  } catch (error: any) {
+    console.error('Error editing client as admin:', error);
+    res.status(500).json({ error: 'Falha ao editar dados da ficha' });
+  }
+});
+
+// Mover ficha entre lotes (BookBatch) e/ou vendedores ativos da mesma empresa
+router.post('/:id/move', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const existingClient = await prisma.client.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+      include: {
+        batch: { select: { id: true, name: true } },
+        assignedSeller: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!existingClient) {
+      return res.status(404).json({ error: 'Ficha não encontrada na empresa' });
+    }
+
+    const finalizedStatuses = ['SOLD', 'REBOLO_SOLD', 'DISCARDED'];
+    if (finalizedStatuses.includes(existingClient.bookStatus)) {
+      return res.status(409).json({
+        error: `Não é permitido mover ficha com status finalizado (${existingClient.bookStatus}).`,
+      });
+    }
+
+    const hasBatchTarget = Object.prototype.hasOwnProperty.call(req.body || {}, 'targetBatchId');
+    const hasSellerTarget = Object.prototype.hasOwnProperty.call(req.body || {}, 'targetSellerId');
+
+    if (!hasBatchTarget && !hasSellerTarget) {
+      return res.status(400).json({
+        error: 'Informe o lote de destino (targetBatchId) ou o vendedor de destino (targetSellerId).',
+      });
+    }
+
+    const updateData: Record<string, any> = {};
+    let nextBatchName: string | null = existingClient.batch?.name || null;
+    let nextSellerName: string | null = existingClient.assignedSeller?.name || null;
+    let nextStatus = existingClient.bookStatus;
+
+    if (hasBatchTarget) {
+      const targetBatchId = req.body.targetBatchId ? String(req.body.targetBatchId).trim() : '';
+      if (!targetBatchId) {
+        updateData.batchId = null;
+        nextBatchName = null;
+      } else {
+        const targetBatch = await prisma.bookBatch.findFirst({
+          where: {
+            id: targetBatchId,
+            ...(existingClient.companyId ? { companyId: existingClient.companyId } : {}),
+          },
+          select: { id: true, name: true },
+        });
+        if (!targetBatch) {
+          return res.status(404).json({ error: 'Lote de destino não encontrado na mesma empresa.' });
+        }
+        updateData.batchId = targetBatch.id;
+        nextBatchName = targetBatch.name;
+      }
+    }
+
+    if (hasSellerTarget) {
+      const targetSellerId = req.body.targetSellerId ? String(req.body.targetSellerId).trim() : '';
+      if (!targetSellerId) {
+        updateData.assignedSellerId = null;
+        nextSellerName = null;
+        updateData.cityClosedAt = null;
+        if (existingClient.bookStatus === 'DISTRIBUTED') {
+          nextStatus = 'IN_STOCK';
+          updateData.bookStatus = 'IN_STOCK';
+        } else if (existingClient.bookStatus === 'DISTRIBUTED_REBOLO') {
+          nextStatus = 'IN_STOCK_REBOLO';
+          updateData.bookStatus = 'IN_STOCK_REBOLO';
+        }
+      } else {
+        const targetSeller = await prisma.user.findFirst({
+          where: {
+            id: targetSellerId,
+            ...(existingClient.companyId ? { companyId: existingClient.companyId } : {}),
+          },
+          select: { id: true, name: true, active: true, role: true },
+        });
+        if (!targetSeller) {
+          return res.status(404).json({ error: 'Vendedor de destino não encontrado na mesma empresa.' });
+        }
+        if (!targetSeller.active) {
+          return res.status(400).json({ error: 'O vendedor de destino está inativo.' });
+        }
+        const allowedSellerRoles = ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'];
+        if (!allowedSellerRoles.includes(targetSeller.role)) {
+          return res.status(400).json({ error: 'O usuário selecionado não possui perfil de vendedor.' });
+        }
+
+        const isReboloFlow = ['AWAITING_RETURN', 'IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO'].includes(
+          existingClient.bookStatus
+        );
+        nextStatus = isReboloFlow ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED';
+        updateData.assignedSellerId = targetSeller.id;
+        updateData.bookStatus = nextStatus;
+        updateData.cityClosedAt = null;
+        nextSellerName = targetSeller.name;
+      }
+    }
+
+    const reason = req.body?.reason
+      ? String(req.body.reason).trim()
+      : 'Movimentação administrativa de lote/vendedor';
+
+    const movedClient = await prisma.$transaction(async (tx) => {
+      const saved = await tx.client.update({
+        where: { id: existingClient.id },
+        data: updateData,
+        include: {
+          batch: { select: { id: true, name: true, status: true } },
+          assignedSeller: { select: { id: true, name: true } },
+          photographer: { select: { id: true, name: true } },
+        },
+      });
+
+      await tx.clientTimeline.create({
+        data: {
+          clientId: existingClient.id,
+          cycle: existingClient.commercialCycle,
+          action: 'ADMIN_MOVED',
+          previousStatus: existingClient.bookStatus,
+          newStatus: nextStatus,
+          authorId: req.user?.id || null,
+          authorRole: req.user?.role || null,
+          metadata: {
+            previousBatchId: existingClient.batchId,
+            previousBatchName: existingClient.batch?.name || null,
+            newBatchId: saved.batchId,
+            newBatchName: nextBatchName,
+            previousSellerId: existingClient.assignedSellerId,
+            previousSellerName: existingClient.assignedSeller?.name || null,
+            newSellerId: saved.assignedSellerId,
+            newSellerName: nextSellerName,
+            reason,
+          },
+        },
+      });
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: existingClient.companyId,
+          category: 'CONDITIONS',
+          action: 'ADMIN_CLIENT_MOVED',
+          entityType: 'Client',
+          entityId: existingClient.id,
+          entityReference: existingClient.visibleCode || existingClient.sequenceNumber,
+          previousValues: {
+            batchId: existingClient.batchId,
+            assignedSellerId: existingClient.assignedSellerId,
+            bookStatus: existingClient.bookStatus,
+          },
+          newValues: {
+            batchId: saved.batchId,
+            assignedSellerId: saved.assignedSellerId,
+            bookStatus: saved.bookStatus,
+          },
+          reason,
+          authorUserId: req.user?.id || null,
+          authorName: req.user?.name || req.user?.cpf || 'Admin',
+          authorRole: req.user?.role || null,
+        },
+        tx
+      );
+
+      return saved;
+    });
+
+    res.json({
+      message: 'Ficha movimentada com sucesso',
+      client: movedClient,
+    });
+  } catch (error: any) {
+    console.error('Error moving client:', error);
+    res.status(500).json({ error: 'Falha ao movimentar ficha' });
+  }
+});
+
+// Exclusão administrativa segura apenas para fichas não concluídas e sem book gerado/venda/crediário
+router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const existingClient = await prisma.client.findFirst({
+      where: {
+        id,
+        ...(userCompanyId ? { companyId: userCompanyId } : {}),
+      },
+      include: {
+        sales: { select: { id: true } },
+        creditAgreements: { select: { id: true, status: true } },
+        nonSales: { select: { id: true } },
+        batch: { select: { id: true, name: true, status: true } },
+      },
+    });
+
+    if (!existingClient) {
+      return res.status(404).json({ error: 'Ficha não encontrada na empresa' });
+    }
+
+    if (existingClient.sales.length > 0 || existingClient.creditAgreements.length > 0) {
+      return res.status(409).json({
+        error: 'Exclusão bloqueada: esta ficha possui venda ou contrato de crediário vinculado.',
+        code: 'CLIENT_HAS_FINANCIAL_RECORDS',
+      });
+    }
+
+    const deletableStatuses = ['CREATED', 'AWAITING_RELEASE'];
+    if (
+      !deletableStatuses.includes(existingClient.bookStatus) ||
+      existingClient.cityClosedAt !== null ||
+      existingClient.nonSales.length > 0
+    ) {
+      return res.status(409).json({
+        error: `Exclusão bloqueada: somente fichas não concluídas e sem book liberado/gerado podem ser excluídas (status atual: ${existingClient.bookStatus}).`,
+        code: 'CLIENT_ALREADY_GENERATED_OR_CONCLUDED',
+      });
+    }
+
+    const reason = req.body?.reason
+      ? String(req.body.reason).trim()
+      : 'Exclusão administrativa de ficha incompleta travando lote';
+
+    await prisma.$transaction(async (tx) => {
+      await recordOperationalAuditEvent(
+        {
+          companyId: existingClient.companyId,
+          category: 'REVERSAL',
+          action: 'ADMIN_CLIENT_DELETED',
+          entityType: 'Client',
+          entityId: existingClient.id,
+          entityReference: existingClient.visibleCode || existingClient.sequenceNumber,
+          previousValues: {
+            sequenceNumber: existingClient.sequenceNumber,
+            visibleCode: existingClient.visibleCode,
+            bookStatus: existingClient.bookStatus,
+            batchId: existingClient.batchId,
+            batchName: existingClient.batch?.name || null,
+          },
+          newValues: null,
+          reason,
+          authorUserId: req.user?.id || null,
+          authorName: req.user?.name || req.user?.cpf || 'Admin',
+          authorRole: req.user?.role || null,
+        },
+        tx
+      );
+
+      await tx.evaluation.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.sellerPhoto.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.clientEditRequest.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.clientTimeline.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.appointment.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.child.deleteMany({ where: { clientId: existingClient.id } });
+      await tx.client.delete({ where: { id: existingClient.id } });
+    });
+
+    res.json({
+      deleted: true,
+      id: existingClient.id,
+      message: 'Ficha não concluída excluída com sucesso e registrada na auditoria.',
+    });
+  } catch (error: any) {
+    console.error('Error deleting incomplete client:', error);
+    res.status(500).json({ error: 'Falha ao excluir ficha' });
   }
 });
 

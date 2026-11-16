@@ -525,10 +525,83 @@ class ApiService {
   }
 
   // Get All Clients
-  Future<List<dynamic>> getAllClients() async {
+  Future<List<dynamic>> getAllClients({bool activeBookOnly = false}) async {
     try {
-      final response = await _dio.get('/clients');
+      final response = await _dio.get(
+        '/clients',
+        queryParameters: activeBookOnly ? {'activeBookOnly': 'true'} : null,
+      );
       return response.data;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> adminEditClient(
+      String clientId, Map<String, dynamic> fields) async {
+    try {
+      final response =
+          await _dio.patch('/clients/$clientId/admin-edit', data: fields);
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> moveClient(
+    String clientId, {
+    String? targetBatchId,
+    bool includeBatchTarget = false,
+    String? targetSellerId,
+    bool includeSellerTarget = false,
+    String? reason,
+  }) async {
+    try {
+      final Map<String, dynamic> payload = {};
+      if (includeBatchTarget) payload['targetBatchId'] = targetBatchId;
+      if (includeSellerTarget) payload['targetSellerId'] = targetSellerId;
+      if (reason != null && reason.trim().isNotEmpty) {
+        payload['reason'] = reason.trim();
+      }
+      final response = await _dio.post('/clients/$clientId/move', data: payload);
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteIncompleteClient(String clientId,
+      {String? reason}) async {
+    try {
+      final response = await _dio.delete(
+        '/clients/$clientId',
+        data: reason != null && reason.trim().isNotEmpty
+            ? {'reason': reason.trim()}
+            : null,
+      );
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getReboloSettings() async {
+    try {
+      final response = await _dio.get('/clients/rebolo-settings');
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateReboloValidityDays(int days,
+      {String? reason}) async {
+    try {
+      final response = await _dio.patch('/clients/rebolo-settings', data: {
+        'reboloValidityDays': days,
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      });
+      return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
@@ -1044,9 +1117,12 @@ class ApiService {
     return all.where((b) => b['status'] == 'AWAITING_RELEASE').toList();
   }
 
-  Future<List<dynamic>> getBookBatches() async {
+  Future<List<dynamic>> getBookBatches({bool includeConcluded = false}) async {
     try {
-      final response = await _dio.get('/books/batch');
+      final response = await _dio.get(
+        '/books/batch',
+        queryParameters: includeConcluded ? {'includeConcluded': 'true'} : null,
+      );
       return response.data as List<dynamic>;
     } on DioException catch (e) {
       throw Exception(

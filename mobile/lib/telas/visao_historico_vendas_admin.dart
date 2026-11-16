@@ -55,7 +55,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     try {
       final results = await Future.wait([
         _api.getCompanyUsers(),
-        _api.getBookBatches(),
+        _api.getBookBatches(includeConcluded: true),
       ]);
       final users = List<dynamic>.from(results[0]);
       final batches = List<dynamic>.from(results[1]);

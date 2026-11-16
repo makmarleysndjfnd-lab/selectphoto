@@ -26,6 +26,7 @@ import '../utils/ui_helpers.dart';
 import 'visao_estatisticas_admin.dart';
 import 'visao_crediario_admin.dart';
 import 'visao_conferencia_admin.dart';
+import '../widgets/admin_ficha_actions.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _accentPurple = Color(0xFF9C27B0);
@@ -219,6 +220,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   List<Map<String, dynamic>> _rebolosInRoute = [];
   List<Map<String, dynamic>> _rebolosHistory = [];
   int _selectedReboloTab = 0; // 0 = Disponíveis, 1 = Aguardando Devolução, 2 = Em Rota, 3 = Histórico
+  int _reboloValidityDays = 365;
   // ignore: unused_field
   List<Map<String, dynamic>> _pendingReleaseBatches = [];
   List<Map<String, dynamic>> _companySellers = [];
@@ -254,12 +256,25 @@ class _AdminDashboardState extends State<AdminDashboard>
 
       // Fetch rebolos first
       final rebolos = await api.getRebolos();
+      int validityDays = _reboloValidityDays;
+      if (rebolos.isNotEmpty && rebolos.first is Map && rebolos.first['reboloValidityDays'] != null) {
+        validityDays = int.tryParse(rebolos.first['reboloValidityDays'].toString()) ?? validityDays;
+      } else {
+        try {
+          final settings = await api.getReboloSettings();
+          validityDays = int.tryParse(settings['reboloValidityDays'].toString()) ?? validityDays;
+        } catch (_) {}
+      }
+
       final Set<String> reboloIds =
           rebolos.map((r) => r['id'].toString()).toSet();
 
-      final clients = await api.getAllClients();
+      final clients = await api.getAllClients(activeBookOnly: true);
       if (mounted)
-        setState(() => _allClients = List<Map<String, dynamic>>.from(clients));
+        setState(() {
+          _allClients = List<Map<String, dynamic>>.from(clients);
+          _reboloValidityDays = validityDays;
+        });
 
       final pendingBatches = await api.getPendingBookBatches();
       if (mounted)
@@ -276,6 +291,17 @@ class _AdminDashboardState extends State<AdminDashboard>
 
       for (var client in clients) {
         if (reboloIds.contains(client['id'].toString())) continue;
+        final rawStatus = (client['bookStatus'] ?? '').toString().toUpperCase();
+        if (client['cityClosedAt'] != null ||
+            rawStatus == 'CREATED' ||
+            rawStatus == 'SOLD' ||
+            rawStatus == 'REBOLO_SOLD' ||
+            rawStatus == 'DISCARDED' ||
+            rawStatus == 'AWAITING_RETURN' ||
+            rawStatus == 'IN_STOCK_REBOLO' ||
+            rawStatus == 'DISTRIBUTED_REBOLO') {
+          continue;
+        }
 
         final visibleCode = client['visibleCode']?.toString();
         final uuid = client['uuid']?.toString();
@@ -291,6 +317,13 @@ class _AdminDashboardState extends State<AdminDashboard>
 
         final batchId = client['batchId'] ?? client['batch']?['id'];
         final batchName = client['batch']?['name'] ?? client['batchName'] ?? client['batchId'] ?? 'N/A';
+        final assignedSeller = client['assignedSeller']?['name']?.toString();
+        final trackingLocationType = assignedSeller != null
+            ? 'SELLER'
+            : (batchId != null ? 'BATCH' : 'UNASSIGNED');
+        final trackingLocationLabel = assignedSeller != null
+            ? 'Com vendedor: $assignedSeller'
+            : (batchId != null ? 'Em lote: $batchName' : 'Sem lote atribuído');
 
         final b = {
           'id': client['id'],
@@ -299,6 +332,11 @@ class _AdminDashboardState extends State<AdminDashboard>
           'ficha': displayCode,
           'lote': batchName,
           'batchId': batchId,
+          'bookStatus': rawStatus,
+          'assignedSeller': client['assignedSeller'],
+          'assignedSellerName': assignedSeller,
+          'trackingLocationType': trackingLocationType,
+          'trackingLocationLabel': trackingLocationLabel,
           'qr': (uuid != null && uuid.isNotEmpty) ? uuid : seq,
           'cliente': client['name'] ?? client['clientName'] ?? 'Cliente',
           'city': client['city'],
@@ -306,7 +344,6 @@ class _AdminDashboardState extends State<AdminDashboard>
           'rawClientData': client,
         };
 
-        final assignedSeller = client['assignedSeller']?['name'];
         if (assignedSeller != null) {
           if (!distributedBooks.containsKey(assignedSeller)) {
             distributedBooks[assignedSeller] = [];
@@ -447,6 +484,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                     ? 'PROV-${uuid.substring(0, uuid.length >= 8 ? 8 : uuid.length).toUpperCase()}'
                     : seq));
 
+        final originMap = raw['reboloOrigin'] is Map
+            ? Map<String, dynamic>.from(raw['reboloOrigin'] as Map)
+            : <String, dynamic>{};
+        final validityMap = raw['reboloValidity'] is Map
+            ? Map<String, dynamic>.from(raw['reboloValidity'] as Map)
+            : <String, dynamic>{};
+
         final b = {
           'id': raw['id']?.toString() ?? '',
           'uuid': uuid,
@@ -458,13 +502,20 @@ class _AdminDashboardState extends State<AdminDashboard>
           'ficha': displayCode,
           'qr': (uuid != null && uuid.isNotEmpty) ? uuid : seq,
           'sequenceNumber': seq,
-          'lote': raw['batch']?['name'] ?? raw['batchId'] ?? 'Rebolo',
+          'lote': originMap['batchName'] ?? raw['batch']?['name'] ?? raw['batchId'] ?? 'Rebolo',
+          'batchId': raw['batchId'] ?? raw['batch']?['id'],
           'reason': reason,
           'city': city,
           'bookStatus': bookStatus,
           'assignedSeller': raw['assignedSeller'],
           'assignedSellerId': raw['assignedSellerId'],
+          'originSellerName': originMap['originSellerName'] ?? originMap['lastSellerName'],
+          'photographerName': originMap['photographerName'] ?? raw['photographer']?['name'],
           'photographerId': raw['photographerId'],
+          'reboloEnteredAt': raw['reboloEnteredAt'] ?? validityMap['enteredAt'] ?? raw['createdAt'],
+          'reboloValidityDays': raw['reboloValidityDays'] ?? validityMap['validityDays'] ?? validityDays,
+          'reboloValidity': validityMap,
+          'reboloOrigin': originMap,
           'rawClientData': raw,
         };
 
@@ -2473,12 +2524,17 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildPhotosTab() {
-    int totalGeral = 0;
+    int totalEmLote = 0;
     for (final team in _realPhotoEvents) {
       for (final e in team['events'] as List) {
-        totalGeral += e['photos'] as int;
+        totalEmLote += e['photos'] as int;
       }
     }
+    int totalComVendedor = 0;
+    for (final list in _booksDistribuidos.values) {
+      totalComVendedor += list.length;
+    }
+    final int totalGeral = totalEmLote + totalComVendedor;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -2496,46 +2552,51 @@ class _AdminDashboardState extends State<AdminDashboard>
                   allBooksList.addAll(teamBooks.cast<Map<String, dynamic>>());
                 }
               }
-              _showBooksModal('Total de Books Criadas', allBooksList);
+              for (final sellerBooks in _booksDistribuidos.values) {
+                allBooksList.addAll(sellerBooks);
+              }
+              _showBooksModal('Rastreamento Ativo de Books', allBooksList);
             },
             borderRadius: BorderRadius.circular(18),
             child: Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFF1A0030), Color(0xFF3A0068)],
+                  colors: [lumoraBgDark, lumoraSurfaceDark],
                 ),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _accentPurple.withOpacity(0.3)),
+                border: Border.all(color: lumoraNeonPurple.withOpacity(0.45)),
               ),
               child: Row(
                 children: [
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: _accentPurple.withOpacity(0.2),
+                      color: lumoraNeonPurple.withOpacity(0.2),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: const Icon(Icons.photo_library_rounded,
-                        color: Color(0xFFCE93D8), size: 26),
+                        color: Color(0xFFD8B4FE), size: 26),
                   ),
                   const SizedBox(width: 16),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Total de books Criadas',
-                          style: TextStyle(
-                              color: Color(0xFF90CAF9), fontSize: 12)),
-                      Text('$totalGeral books',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold)),
-                      Text(
-                          '${_realPhotoEvents.length} equipes ativas (Toque p/ ver)',
-                          style: const TextStyle(
-                              color: Color(0xFFCE93D8), fontSize: 12)),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Rastreamento Ativo de Books',
+                            style: TextStyle(
+                                color: Color(0xFFD8B4FE), fontSize: 12)),
+                        Text('$totalGeral books ativos',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold)),
+                        Text(
+                            'Em Lotes: $totalEmLote · Com Vendedores: $totalComVendedor (Toque p/ abrir)',
+                            style: const TextStyle(
+                                color: lumoraNeonPurple, fontSize: 12)),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -2697,6 +2758,68 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             );
           }),
+          if (_booksDistribuidos.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text('Books em Rota com Vendedores',
+                style: TextStyle(
+                    color: lumoraNeonPurple,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            ..._booksDistribuidos.entries.map((sellerEntry) {
+              final sellerName = sellerEntry.key;
+              final sellerBooks = sellerEntry.value;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: lumoraSurfaceDark,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: lumoraNeonPurple.withOpacity(0.35)),
+                ),
+                child: ListTile(
+                  onTap: () => _showBooksModal(
+                      'Com Vendedor: $sellerName', sellerBooks),
+                  leading: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: lumoraNeonPurple.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.badge_outlined,
+                        color: lumoraNeonPurple, size: 20),
+                  ),
+                  title: Text(
+                    sellerName,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14),
+                  ),
+                  subtitle: Text(
+                    'Lotes: ${sellerBooks.map((b) => b['lote']).toSet().join(', ')}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                  trailing: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: lumoraNeonPurple.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${sellerBooks.length} book(s)',
+                      style: const TextStyle(
+                          color: Color(0xFFE9D5FF),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 20),
         ],
       ),
@@ -2798,57 +2921,98 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Resumo total interativo
-          GestureDetector(
-            onTap: _showReboloOverviewModal,
-            child: Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1A0A00), Color(0xFF3A1000)],
-                ),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFFEF5350).withOpacity(0.3)),
+          // Resumo total interativo + botão Editar Prazo (padrão 365 dias)
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [lumoraBgDark, lumoraSurfaceDark],
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEF5350).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(Icons.inventory_2_rounded,
-                        color: Color(0xFFEF9A9A), size: 26),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Estoque de Não-Vendas (Rebolo)',
-                            style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
-                        Text('$totalGeral fichas',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold)),
-                        Text('${_rebolosInStock.length} disponíveis • ${_rotasRebolo.length} cidades',
-                            style: const TextStyle(color: Color(0xFFEF9A9A), fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  const Column(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: lumoraNeonPurple.withOpacity(0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  onTap: _showReboloOverviewModal,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Row(
                     children: [
-                      Icon(Icons.touch_app_rounded, color: Color(0xFF90CAF9), size: 20),
-                      SizedBox(height: 2),
-                      Text('Toque para\nver detalhes',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0xFF90CAF9), fontSize: 10)),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: lumoraNeonPurple.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.inventory_2_rounded,
+                            color: Color(0xFFD8B4FE), size: 26),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Estoque de Não-Vendas (Rebolo)',
+                                style: TextStyle(
+                                    color: Color(0xFFD8B4FE), fontSize: 12)),
+                            Text('$totalGeral fichas',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold)),
+                            Text(
+                                '${_rebolosInStock.length} disponíveis • ${_rotasRebolo.length} cidades • Prazo: $_reboloValidityDays dias',
+                                style: const TextStyle(
+                                    color: lumoraNeonPurple, fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                      const Column(
+                        children: [
+                          Icon(Icons.touch_app_rounded,
+                              color: Color(0xFFD8B4FE), size: 20),
+                          SizedBox(height: 2),
+                          Text('Toque para\nver detalhes',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  color: Color(0xFFD8B4FE), fontSize: 10)),
+                        ],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Wrap(
+                        spacing: 10,
+                        runSpacing: 6,
+                        children: const [
+                          _ReboloLegendChip(color: Color(0xFF22C55E), label: 'Verde 1/3'),
+                          _ReboloLegendChip(color: Color(0xFFF59E0B), label: 'Amarelo 2/3'),
+                          _ReboloLegendChip(color: Color(0xFFEF4444), label: 'Vermelho 3/3+'),
+                        ],
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _showEditReboloValidityDialog,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFE9D5FF),
+                        side: BorderSide(color: lumoraNeonPurple.withOpacity(0.6)),
+                        backgroundColor: lumoraBgDark,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                      icon: const Icon(Icons.tune_rounded,
+                          size: 16, color: lumoraNeonPurple),
+                      label: const Text('Editar Prazo',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),
@@ -2962,40 +3126,327 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
+  Future<void> _showEditReboloValidityDialog() async {
+    final ctrl = TextEditingController(text: _reboloValidityDays.toString());
+    bool saving = false;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: lumoraSurfaceDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: lumoraNeonPurple.withOpacity(0.45)),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.timer_outlined, color: lumoraNeonPurple),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Editar Prazo de Validade (Rebolo)',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Defina em dias o prazo de validade das fichas no Rebolo (padrão 365 dias). O semáforo divide o período automaticamente em 3 terços proporcionais (Verde / Amarelo / Vermelho).',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white, fontSize: 15),
+                decoration: InputDecoration(
+                  labelText: 'Prazo em dias (1 a 3650)',
+                  labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                  filled: true,
+                  fillColor: lumoraBgDark,
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        BorderSide(color: lumoraNeonPurple.withOpacity(0.3)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide:
+                        const BorderSide(color: lumoraNeonPurple, width: 1.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: Colors.white60)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: lumoraNeonPurple,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: saving
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.save_rounded, size: 18),
+              label: Text(saving ? 'Salvando...' : 'Salvar Prazo'),
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final parsed = int.tryParse(ctrl.text.trim());
+                      if (parsed == null || parsed < 1 || parsed > 3650) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Informe um número inteiro entre 1 e 3650 dias.'),
+                            backgroundColor: Colors.redAccent,
+                          ),
+                        );
+                        return;
+                      }
+                      setDialogState(() => saving = true);
+                      try {
+                        await ApiService().updateReboloValidityDays(parsed);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          setState(() => _reboloValidityDays = parsed);
+                          _loadClients();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'Prazo do Rebolo atualizado para $parsed dias.'),
+                              backgroundColor: const Color(0xFF00C853),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        setDialogState(() => saving = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Erro ao atualizar prazo: $e'),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                      }
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Map<String, dynamic> _computeReboloValidityMetrics(Map<String, dynamic> b) {
+    final int validityDays = _reboloValidityDays > 0
+        ? _reboloValidityDays
+        : (int.tryParse((b['reboloValidityDays'] ?? '365').toString()) ?? 365);
+
+    final rawEnteredAt = b['reboloEnteredAt']?.toString();
+    DateTime? enteredAt =
+        rawEnteredAt != null ? DateTime.tryParse(rawEnteredAt) : null;
+    if (enteredAt == null) {
+      final serverValidity = b['reboloValidity'];
+      if (serverValidity is Map && serverValidity['enteredAt'] != null) {
+        enteredAt = DateTime.tryParse(serverValidity['enteredAt'].toString());
+      }
+    }
+    enteredAt ??= DateTime.now();
+
+    final now = DateTime.now();
+    final totalMs = validityDays * Duration.millisecondsPerDay;
+    final elapsedMs = now.difference(enteredAt).inMilliseconds.clamp(0, totalMs * 10);
+    final expiresAt = enteredAt.add(Duration(days: validityDays));
+    final remainingMs = expiresAt.difference(now).inMilliseconds;
+    final remainingDays = (remainingMs / Duration.millisecondsPerDay).ceil();
+    final isExpired = remainingMs <= 0;
+    final rawRatio = totalMs > 0 ? elapsedMs / totalMs : 1.0;
+    final double progressRatio = rawRatio.clamp(0.0, 1.0).toDouble();
+
+    Color zoneColor;
+    String zoneLabel;
+    if (isExpired || rawRatio >= 2 / 3) {
+      zoneColor = const Color(0xFFEF4444);
+      zoneLabel = isExpired ? 'Vencido' : 'Vermelho (3/3)';
+    } else if (rawRatio >= 1 / 3) {
+      zoneColor = const Color(0xFFF59E0B);
+      zoneLabel = 'Amarelo (2/3)';
+    } else {
+      zoneColor = const Color(0xFF22C55E);
+      zoneLabel = 'Verde (1/3)';
+    }
+
+    final countdownLabel = isExpired
+        ? 'Vencido há ${remainingDays.abs()}d · Prazo ${validityDays}d'
+        : 'Faltam ${remainingDays}d de ${validityDays}d';
+
+    return {
+      'zoneColor': zoneColor,
+      'zoneLabel': zoneLabel,
+      'progressRatio': progressRatio,
+      'countdownLabel': countdownLabel,
+    };
+  }
+
   Widget _buildReboloTile(Map<String, dynamic> b, Color color) {
     final clientName = (b['client'] ?? b['cliente'] ?? b['name'] ?? 'Cliente').toString();
     final seq = (b['seq'] ?? b['ficha'] ?? b['sequenceNumber'] ?? '-').toString();
     final city = (b['city'] ?? 'Sem Cidade').toString();
+    final lote = (b['lote'] ?? 'Rebolo').toString();
     final sellerName = b['assignedSeller']?['name']?.toString() ?? 'Não atribuído';
+    final originSellerName = b['originSellerName']?.toString();
     final reason = (b['reason'] ?? b['bookStatus'] ?? '').toString();
+    final rawClient = b['rawClientData'] is Map
+        ? Map<String, dynamic>.from(b['rawClientData'] as Map)
+        : b;
+
+    final validity = _computeReboloValidityMetrics(b);
+    final Color zoneColor = validity['zoneColor'] as Color;
+    final String zoneLabel = validity['zoneLabel'] as String;
+    final double progressRatio = validity['progressRatio'] as double;
+    final String countdownLabel = validity['countdownLabel'] as String;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
+        color: lumoraSurfaceDark,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: zoneColor.withOpacity(0.45)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            backgroundColor: color.withOpacity(0.15),
-            child: Text(seq, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
+          Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: color.withOpacity(0.18),
+                child: Text(seq,
+                    style: TextStyle(
+                        color: color, fontSize: 11, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(clientName,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13)),
+                    const SizedBox(height: 2),
+                    Text('Lote origem: $lote | Cidade: $city',
+                        style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 11)),
+                    Text(
+                        'Vendedor atual: $sellerName${originSellerName != null && originSellerName != sellerName ? ' · Origem: $originSellerName' : ''}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                    if (reason.isNotEmpty)
+                      Text('Motivo: $reason',
+                          style: TextStyle(color: color, fontSize: 11)),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 18),
+                color: lumoraSurfaceDark,
+                onSelected: (val) {
+                  if (val == 'details') {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SellerClientDetailScreen(
+                          clientData: rawClient,
+                          isFotografo: true,
+                        ),
+                      ),
+                    );
+                  } else if (val == 'edit') {
+                    showAdminEditFichaDialog(context, rawClient, _loadClients);
+                  } else if (val == 'move') {
+                    showAdminMoveFichaDialog(context, rawClient, _loadClients);
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'details',
+                    child: Text('Ver Ficha', style: TextStyle(color: Colors.white)),
+                  ),
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Text('Editar dados',
+                        style: TextStyle(color: Color(0xFFD8B4FE))),
+                  ),
+                  PopupMenuItem(
+                    value: 'move',
+                    child: Text('Mover (Lote / Vendedor)',
+                        style: TextStyle(color: Color(0xFFA855F7))),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(clientName,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                const SizedBox(height: 2),
-                Text('Cidade: $city | Vendedor: $sellerName',
-                    style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                if (reason.isNotEmpty)
-                  Text('Motivo: $reason', style: TextStyle(color: color, fontSize: 11)),
-              ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: zoneColor.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: zoneColor.withOpacity(0.6)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, size: 8, color: zoneColor),
+                    const SizedBox(width: 5),
+                    Text(
+                      zoneLabel,
+                      style: TextStyle(
+                          color: zoneColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  countdownLabel,
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progressRatio,
+              minHeight: 5,
+              backgroundColor: Colors.white12,
+              valueColor: AlwaysStoppedAnimation<Color>(zoneColor),
             ),
           ),
         ],
@@ -3467,13 +3918,25 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   Widget _buildBookTile(
       Map<String, dynamic> book, String? rotaId, bool isRebolo) {
+    final rawClient = book['rawClientData'] is Map
+        ? Map<String, dynamic>.from(book['rawClientData'] as Map)
+        : book;
+    final String? sellerName = book['assignedSellerName']?.toString() ??
+        rawClient['assignedSeller']?['name']?.toString();
+    final String trackingLabel = sellerName != null && sellerName.isNotEmpty
+        ? 'Com Vendedor: $sellerName'
+        : 'Em Lote: ${book['lote']}';
+    final bool isWithSeller = sellerName != null && sellerName.isNotEmpty;
+    final bool canDeleteIncomplete =
+        isClientEligibleForIncompleteDeletion(rawClient);
+
     return ListTile(
       onTap: () {
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => SellerClientDetailScreen(
-              clientData: book['rawClientData'] ?? book,
+              clientData: rawClient,
               isFotografo: true,
             ),
           ),
@@ -3489,6 +3952,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           spacing: 8,
           runSpacing: 4,
           children: [
+            _trackingChip(
+              trackingLabel,
+              isWithSeller ? lumoraNeonPurple : const Color(0xFF38BDF8),
+            ),
             _chip('Ficha: ${book['ficha']}'),
             _chip('Lote: ${book['lote']}'),
             _chip('QR: ${book['qr']}'),
@@ -3497,10 +3964,16 @@ class _AdminDashboardState extends State<AdminDashboard>
       ),
       trailing: PopupMenuButton<String>(
         icon: const Icon(Icons.more_vert, color: Colors.white70),
-        color: const Color(0xFF1E1E2C),
+        color: lumoraSurfaceDark,
         onSelected: (val) {
           if (val == 'atribuir_vendedor') {
             _atribuirBookDialog(book, rotaId, isRebolo);
+          } else if (val == 'editar_ficha') {
+            showAdminEditFichaDialog(context, rawClient, _loadClients);
+          } else if (val == 'mover_ficha') {
+            showAdminMoveFichaDialog(context, rawClient, _loadClients);
+          } else if (val == 'excluir_incompleta') {
+            confirmAdminDeleteIncompleteFicha(context, rawClient, _loadClients);
           } else if (val == 'desatribuir') {
             _moverBook(book, rotaId, null, isRebolo);
           } else {
@@ -3509,6 +3982,22 @@ class _AdminDashboardState extends State<AdminDashboard>
         },
         itemBuilder: (context) {
           List<PopupMenuEntry<String>> items = [];
+
+          items.add(const PopupMenuItem(
+              value: 'editar_ficha',
+              child: Text('Editar Dados da Ficha',
+                  style: TextStyle(color: Color(0xFFD8B4FE)))));
+          items.add(const PopupMenuItem(
+              value: 'mover_ficha',
+              child: Text('Mover entre Lote / Vendedor',
+                  style: TextStyle(color: lumoraNeonPurple))));
+          if (canDeleteIncomplete) {
+            items.add(const PopupMenuItem(
+                value: 'excluir_incompleta',
+                child: Text('Excluir Ficha Não Concluída',
+                    style: TextStyle(color: Colors.redAccent))));
+          }
+          items.add(const PopupMenuDivider());
 
           items.add(const PopupMenuItem(
               value: 'atribuir_vendedor',
@@ -3532,6 +4021,22 @@ class _AdminDashboardState extends State<AdminDashboard>
           }
           return items;
         },
+      ),
+    );
+  }
+
+  Widget _trackingChip(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.5)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+            color: color, fontSize: 10, fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -4177,6 +4682,37 @@ class _StockBottomSheet extends StatelessWidget {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReboloLegendChip extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _ReboloLegendChip({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 7, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+                color: color, fontSize: 10, fontWeight: FontWeight.w600),
           ),
         ],
       ),

@@ -1018,6 +1018,7 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
                         state: true,
                         bookStatus: true,
                         outcomeStatus: true,
+                        cityClosedAt: true,
                         assignedSellerId: true,
                         assignedSeller: { select: { id: true, name: true } }
                     }
@@ -1026,25 +1027,52 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
             orderBy: { date: 'desc' }
         });
 
+        const includeConcluded = req.query.includeConcluded === 'true';
+
         const formattedBatches = batches.map(batch => {
             const allClients = batch.clients || [];
             
-            // Fichas ativas para a operação de rotas/gráfica (exclui SOLD e REBOLO_SOLD)
-            const activeClients = allClients.filter(c => 
-                c.bookStatus !== 'SOLD' && c.bookStatus !== 'REBOLO_SOLD'
+            // Fichas ativas primárias na rota gráfica (exclui vendidas, descartadas, encerradas ou em Rebolo)
+            const activePrimaryClients = allClients.filter(c => 
+                ['CREATED', 'AWAITING_RELEASE', 'IN_STOCK', 'DISTRIBUTED'].includes(c.bookStatus) &&
+                !c.cityClosedAt
             );
 
-            // Contagens por estágio do fluxo
+            // Contagens por estágio do fluxo primário de Books
             const inProductionCount = allClients.filter(c => c.bookStatus === 'CREATED').length;
             const awaitingReleaseCount = allClients.filter(c => c.bookStatus === 'AWAITING_RELEASE').length;
-            const inStockCount = allClients.filter(c => c.bookStatus === 'IN_STOCK' || c.bookStatus === 'IN_STOCK_REBOLO').length;
-            const distributedCount = allClients.filter(c => c.bookStatus === 'DISTRIBUTED' || c.bookStatus === 'DISTRIBUTED_REBOLO' || c.bookStatus === 'AWAITING_RETURN').length;
+            const inStockCount = allClients.filter(c => c.bookStatus === 'IN_STOCK').length;
+            const distributedCount = allClients.filter(c => c.bookStatus === 'DISTRIBUTED' && !c.cityClosedAt).length;
+            const reboloCount = allClients.filter(c =>
+                ['AWAITING_RETURN', 'IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO'].includes(c.bookStatus)
+            ).length;
             const soldCount = allClients.filter(c => c.bookStatus === 'SOLD' || c.bookStatus === 'REBOLO_SOLD').length;
             
             // Marco de total produzido: totalProduced gravado ou total histórico de fichas vinculadas
             const totalProduced = batch.totalProduced && batch.totalProduced > 0 
                 ? batch.totalProduced 
-                : Math.max(allClients.length, inProductionCount + awaitingReleaseCount + inStockCount + distributedCount + soldCount);
+                : allClients.length;
+
+            // Vendedores atribuídos às fichas deste lote
+            const sellerCounts = new Map<string, { id: string; name: string; count: number }>();
+            const sellerSourceClients = includeConcluded ? allClients : activePrimaryClients;
+            for (const c of sellerSourceClients) {
+                if (c.assignedSellerId && c.assignedSeller?.name) {
+                    const prev = sellerCounts.get(c.assignedSellerId);
+                    if (prev) {
+                        prev.count++;
+                    } else {
+                        sellerCounts.set(c.assignedSellerId, {
+                            id: c.assignedSellerId,
+                            name: c.assignedSeller.name,
+                            count: 1
+                        });
+                    }
+                }
+            }
+            const assignedSellers = Array.from(sellerCounts.values()).sort(
+                (a, b) => b.count - a.count || a.name.localeCompare(b.name)
+            );
 
             // Cidades distintas (não vazias)
             const citiesSet = new Set<string>();
@@ -1057,36 +1085,43 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
             // Para preservar a privacidade de fichas cadastradas em campo aberto durante a produção,
             // não expõe identidades individuais de clientes enquanto o lote estiver com status CREATED,
             // retornando apenas os totais/contadores agregados.
-            const clientsForResponse = batch.status === 'CREATED' ? [] : activeClients;
+            const clientsForResponse = batch.status === 'CREATED'
+                ? []
+                : (includeConcluded ? allClients : activePrimaryClients);
 
             return {
                 ...batch,
                 totalProduced,
                 cities: distinctCities,
-                clients: clientsForResponse, // Somente ativas no fluxo operacional (ou vazio para privacidade em CREATED)
+                assignedSellers,
+                clients: clientsForResponse,
                 counts: {
                     produced: totalProduced,
                     inProduction: inProductionCount,
                     awaitingRelease: awaitingReleaseCount,
                     inStock: inStockCount,
                     distributed: distributedCount,
+                    rebolo: reboloCount,
                     sold: soldCount,
-                    active: activeClients.length
+                    active: activePrimaryClients.length
                 }
             };
         });
 
-        // Filtrar lotes totalmente concluídos sem estoque ativo, nem em produção, nem distribuídos
-        // Reter os lotes em exibição operacional até a conclusão operacional real
-        const includeConcluded = req.query.includeConcluded === 'true';
+        // Filtrar lotes já concluídos, inteiramente vendidos ou transferidos ao Rebolo
         const operationalBatches = includeConcluded 
             ? formattedBatches 
             : formattedBatches.filter(b => {
-                // Se está em produção (CREATED) ou na gráfica (AWAITING_RELEASE), sempre exibe
-                if (b.status === 'CREATED' || b.status === 'AWAITING_RELEASE') return true;
-                // Se tem fichas ativas (em estoque, gráfica, com vendedor ou em produção), exibe
-                if (b.counts.inStock > 0 || b.counts.awaitingRelease > 0 || b.counts.inProduction > 0 || b.counts.distributed > 0) return true;
-                // Se não sobrou nenhuma ficha ativa (todas vendidas ou concluídas), sai da lista operacional
+                const activePrimaryTotal =
+                    b.counts.inProduction +
+                    b.counts.awaitingRelease +
+                    b.counts.inStock +
+                    b.counts.distributed;
+                if (activePrimaryTotal > 0) return true;
+                // Lote recém-aberto ainda sem fichas cadastradas permanece visível
+                if ((b.clients?.length ?? 0) === 0 && (b.counts.produced ?? 0) === 0 && (b.status === 'CREATED' || b.status === 'AWAITING_RELEASE')) {
+                    return true;
+                }
                 return false;
             });
 
