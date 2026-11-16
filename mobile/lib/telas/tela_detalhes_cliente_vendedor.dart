@@ -2797,13 +2797,18 @@ class _SaleTabState extends State<_SaleTab> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            'Pelo presente instrumento particular, o(a) DEVEDOR(A) $buyerName, portador(a) do CPF nº $buyerCpf, residente em $address, confessa e reconhece dever à CREDORA (Select Photos / Central Fotográfica) a quantia líquida e certa de R\$ ${(financedCents / 100.0).toStringAsFixed(2)}, decorrente do fornecimento de material fotográfico com valor total de R\$ ${(totalCents / 100.0).toStringAsFixed(2)}, abatida a entrada paga de R\$ ${(downPaymentCents / 100.0).toStringAsFixed(2)}.\n\nO saldo financiado será pago em $count parcelas com periodicidade ${_periodicity == "BIWEEKLY" ? "quinzenal" : "mensal"}, com primeiro vencimento em ${_firstDueDate.day.toString().padLeft(2, '0')}/${_firstDueDate.month.toString().padLeft(2, '0')}/${_firstDueDate.year}, assumindo o devedor integral responsabilidade pelo adimplemento pontual das obrigações.',
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 10,
-              height: 1.45,
-            ),
+          Builder(
+            builder: (context) {
+              final credoraName = Provider.of<ApiService>(context, listen: false).companyDisplayName ?? 'Empresa Vendedora';
+              return Text(
+                'Pelo presente instrumento particular, o(a) DEVEDOR(A) $buyerName, portador(a) do CPF nº $buyerCpf, residente em $address, confessa e reconhece dever à CREDORA ($credoraName) a quantia líquida e certa de R\$ ${(financedCents / 100.0).toStringAsFixed(2)}, decorrente do fornecimento de material fotográfico com valor total de R\$ ${(totalCents / 100.0).toStringAsFixed(2)}, abatida a entrada paga de R\$ ${(downPaymentCents / 100.0).toStringAsFixed(2)}.\n\nO saldo financiado será pago em $count parcelas com periodicidade ${_periodicity == "BIWEEKLY" ? "quinzenal" : "mensal"}, com primeiro vencimento em ${_firstDueDate.day.toString().padLeft(2, '0')}/${_firstDueDate.month.toString().padLeft(2, '0')}/${_firstDueDate.year}, assumindo o devedor integral responsabilidade pelo adimplemento pontual das obrigações.',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  height: 1.45,
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -2861,6 +2866,7 @@ class _SaleTabState extends State<_SaleTab> {
     String selectedReason = 'CLIENT_REFUSED';
     return showDialog<String>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
@@ -3141,240 +3147,251 @@ class _SaleTabState extends State<_SaleTab> {
     final api = Provider.of<ApiService>(context, listen: false);
     final conf = api.lastBuyerConfirmation;
     final confirmationUrl = conf?['confirmationUrl']?.toString();
+    final companyDisplayName = api.companyDisplayName ?? 'nossa equipe';
 
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0B131E),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
-            border:
-                Border.all(color: const Color(0xFF38BDF8).withOpacity(0.35)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+        return PopScope(
+          canPop: false,
+          child: SafeArea(
+            top: false,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0B131E),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border.all(
+                    color: const Color(0xFF38BDF8).withOpacity(0.35)),
               ),
-              const SizedBox(height: 16),
-              Row(
-                children: const [
-                  Icon(Icons.qr_code_2_rounded,
-                      color: Color(0xFF00E5FF), size: 26),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Conferência de Compra pelo Cliente',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Apresente o QR Code ao cliente ${clientName != null ? "($clientName) " : ""}ou envie o link para conferência independente das condições combinadas.',
-                style: const TextStyle(
-                    color: Colors.white70, fontSize: 12, height: 1.4),
-              ),
-              const SizedBox(height: 18),
-              if (confirmationUrl != null && confirmationUrl.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF00E5FF).withOpacity(0.25),
-                        blurRadius: 18,
-                        spreadRadius: 2,
+                    const SizedBox(height: 16),
+                    Row(
+                      children: const [
+                        Icon(Icons.qr_code_2_rounded,
+                            color: Color(0xFF00E5FF), size: 26),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Conferência de Compra pelo Cliente',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Apresente o QR Code ao cliente ${clientName != null ? "($clientName) " : ""}ou escolha uma ação explícita abaixo para concluir.',
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 12, height: 1.4),
+                    ),
+                    const SizedBox(height: 18),
+                    if (confirmationUrl != null && confirmationUrl.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF00E5FF).withOpacity(0.25),
+                              blurRadius: 18,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: QrImageView(
+                          data: confirmationUrl,
+                          version: QrVersions.auto,
+                          size: 180,
+                          backgroundColor: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        confirmationUrl,
+                        style: const TextStyle(
+                            color: Color(0xFF38BDF8),
+                            fontSize: 11,
+                            decoration: TextDecoration.underline),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Clipboard.setData(
+                                    ClipboardData(text: confirmationUrl));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Link copiado com sucesso!'),
+                                    backgroundColor: Color(0xFF10B981),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.copy_rounded,
+                                  color: Color(0xFF38BDF8), size: 16),
+                              label: const Text('Copiar Link',
+                                  style: TextStyle(
+                                      color: Color(0xFF38BDF8), fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Color(0xFF38BDF8)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final shareText =
+                                    'Olá! Confira e confirme as condições da sua compra ($companyDisplayName) pelo link seguro: $confirmationUrl';
+                                final waUri = Uri.parse(
+                                    'whatsapp://send?text=${Uri.encodeComponent(shareText)}');
+                                if (await canLaunchUrl(waUri)) {
+                                  await launchUrl(waUri);
+                                } else {
+                                  Clipboard.setData(ClipboardData(text: shareText));
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Texto copiado! Envie ao cliente pelo seu app de mensagens.'),
+                                        backgroundColor: Color(0xFF38BDF8),
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                              icon: const Icon(Icons.share_rounded,
+                                  color: Color(0xFF00E5FF), size: 16),
+                              label: const Text('Compartilhar',
+                                  style: TextStyle(
+                                      color: Color(0xFF00E5FF), fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: Color(0xFF00E5FF)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.info_outline_rounded,
+                                color: Color(0xFF38BDF8), size: 20),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'A conferência foi gerada e poderá ser acompanhada na consulta da venda.',
+                                style:
+                                    TextStyle(color: Colors.white70, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
-                  ),
-                  child: QrImageView(
-                    data: confirmationUrl,
-                    version: QrVersions.auto,
-                    size: 180,
-                    backgroundColor: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  confirmationUrl,
-                  style: const TextStyle(
-                      color: Color(0xFF38BDF8),
-                      fontSize: 11,
-                      decoration: TextDecoration.underline),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Clipboard.setData(
-                              ClipboardData(text: confirmationUrl));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Link copiado com sucesso!'),
-                              backgroundColor: Color(0xFF10B981),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.copy_rounded,
-                            color: Color(0xFF38BDF8), size: 16),
-                        label: const Text('Copiar Link',
-                            style: TextStyle(
-                                color: Color(0xFF38BDF8), fontSize: 12)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0xFF38BDF8)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          final shareText =
-                              'Olá! Por favor, confira e confirme as condições da sua compra na Lumora pelo link seguro: $confirmationUrl';
-                          final waUri = Uri.parse(
-                              'whatsapp://send?text=${Uri.encodeComponent(shareText)}');
-                          if (await canLaunchUrl(waUri)) {
-                            await launchUrl(waUri);
-                          } else {
-                            Clipboard.setData(ClipboardData(text: shareText));
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                      'Texto copiado! Envie ao cliente pelo seu app de mensagens.'),
-                                  backgroundColor: Color(0xFF38BDF8),
-                                ),
-                              );
+                    const SizedBox(height: 16),
+                    const Divider(color: Colors.white12),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () async {
+                            final reason = await _showSkipReasonDialog(context);
+                            if (reason != null) {
+                              try {
+                                await api.skipBuyerConfirmation(saleId,
+                                    reason: reason);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Convite pulado. O link permanece válido para confirmação posterior.'),
+                                      backgroundColor: Colors.amber,
+                                    ),
+                                  );
+                                  Navigator.of(sheetContext).pop();
+                                }
+                              } catch (err) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                        content:
+                                            Text('Erro ao registrar motivo: $err'),
+                                        backgroundColor: Colors.red),
+                                  );
+                                  Navigator.of(sheetContext).pop();
+                                }
+                              }
                             }
-                          }
-                        },
-                        icon: const Icon(Icons.share_rounded,
-                            color: Color(0xFF00E5FF), size: 16),
-                        label: const Text('Compartilhar',
-                            style: TextStyle(
-                                color: Color(0xFF00E5FF), fontSize: 12)),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0xFF00E5FF)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          },
+                          icon: const Icon(Icons.skip_next_rounded,
+                              color: Colors.amberAccent, size: 18),
+                          label: const Text(
+                            'Pular Apresentação',
+                            style:
+                                TextStyle(color: Colors.amberAccent, fontSize: 12),
+                          ),
                         ),
-                      ),
+                        ElevatedButton(
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00E5FF),
+                            foregroundColor: const Color(0xFF0B131E),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 10),
+                          ),
+                          child: const Text('Concluir',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ] else ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.info_outline_rounded,
-                          color: Color(0xFF38BDF8), size: 20),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'A conferência foi gerada e poderá ser acompanhada na consulta da venda.',
-                          style:
-                              TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              const Divider(color: Colors.white12),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  TextButton.icon(
-                    onPressed: () async {
-                      final reason = await _showSkipReasonDialog(context);
-                      if (reason != null) {
-                        try {
-                          await api.skipBuyerConfirmation(saleId,
-                              reason: reason);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                    'Convite pulado. O link permanece válido para confirmação posterior.'),
-                                backgroundColor: Colors.amber,
-                              ),
-                            );
-                            Navigator.of(sheetContext).pop();
-                          }
-                        } catch (err) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                  content:
-                                      Text('Erro ao registrar motivo: $err'),
-                                  backgroundColor: Colors.red),
-                            );
-                            Navigator.of(sheetContext).pop();
-                          }
-                        }
-                      }
-                    },
-                    icon: const Icon(Icons.skip_next_rounded,
-                        color: Colors.amberAccent, size: 18),
-                    label: const Text(
-                      'Pular Apresentação',
-                      style:
-                          TextStyle(color: Colors.amberAccent, fontSize: 12),
-                    ),
-                  ),
-                  ElevatedButton(
-                    onPressed: () => Navigator.of(sheetContext).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF00E5FF),
-                      foregroundColor: const Color(0xFF0B131E),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 18, vertical: 10),
-                    ),
-                    child: const Text('Concluir',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                  ),
-                ],
               ),
-            ],
+            ),
           ),
         );
       },

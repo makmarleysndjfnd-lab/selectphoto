@@ -2143,6 +2143,9 @@ router.get('/:id/buyer-confirmation', authenticateToken, async (req: AuthRequest
     const sale = await prisma.sale.findFirst({
       where: { id: saleId, companyId },
       include: {
+        seller: {
+          select: { id: true, name: true, sellerBlocked: true, sellerBlockedReason: true },
+        },
         client: {
           include: {
             batch: {
@@ -2166,6 +2169,18 @@ router.get('/:id/buyer-confirmation', authenticateToken, async (req: AuthRequest
 
     const records = await prisma.buyerPurchaseConfirmation.findMany({
       where: { saleId: sale.id, companyId },
+      include: {
+        sale: {
+          include: {
+            seller: {
+              select: { id: true, name: true, sellerBlocked: true, sellerBlockedReason: true },
+            },
+            client: {
+              select: { id: true, name: true, visibleCode: true, sequenceNumber: true },
+            },
+          },
+        },
+      },
       orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
     });
 

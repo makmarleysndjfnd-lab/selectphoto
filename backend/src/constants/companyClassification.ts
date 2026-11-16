@@ -77,3 +77,23 @@ export function isConfirmedTestCompany(companyId?: string | null): boolean {
   return TEST_IDS_SET.has(companyId);
 }
 
+/**
+ * Resolve o nome comercial de exibição (White-label) de uma empresa cliente,
+ * priorizando o Nome Fantasia/Comercial (tradeName) e evitando expor o
+ * identificador legado interno "Select Photo Default" aos clientes finais.
+ */
+export function resolveCompanyDisplayName(
+  company?: { tradeName?: string | null; name?: string | null } | null,
+  fallback = 'Empresa Vendedora'
+): string {
+  const trade = typeof company?.tradeName === 'string' ? company.tradeName.trim() : '';
+  if (trade && trade !== 'Select Photo Default') {
+    return trade;
+  }
+  const name = typeof company?.name === 'string' ? company.name.trim() : '';
+  if (name && name !== 'Select Photo Default') {
+    return name;
+  }
+  return fallback;
+}
+

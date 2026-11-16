@@ -113,11 +113,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   final List<_ChildFormItem> _childFormItems = [];
   final _clothesColorController = TextEditingController();
 
-  final SignatureController _signatureController = SignatureController(
-    penStrokeWidth: 3,
-    penColor: Colors.black,
-    exportBackgroundColor: Colors.white,
-  );
+  Uint8List? _collectedSignatureBytes;
 
   bool _isLoading = false;
   String? _generatedQrCodeData;
@@ -570,7 +566,6 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     _professionController.dispose();
     _clothesColorController.dispose();
     _gateObservationController.dispose();
-    _signatureController.dispose();
 
     for (final item in _childFormItems) {
       item.dispose();
@@ -917,7 +912,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       return;
     }
 
-    if (_signatureController.isEmpty) {
+    if (_collectedSignatureBytes == null || _collectedSignatureBytes!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('A assinatura do responsável é obrigatória.')));
       return;
@@ -958,7 +953,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
     setState(() => _isLoading = true);
 
     try {
-      final signatureBytes = await _signatureController.toPngBytes();
+      final signatureBytes = _collectedSignatureBytes;
       if (signatureBytes == null || signatureBytes.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1161,7 +1156,7 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
       _selectedGateColor = null;
       _hasNoGate = false;
       _visitTime = null;
-      _signatureController.clear();
+      _collectedSignatureBytes = null;
 
       setState(() {
         _generatedQrCodeData = null;
@@ -2577,27 +2572,110 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
 
             // ── Assinatura
             _buildSectionTitle('Assinatura do Responsável'),
-            Container(
-              decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFCE93D8), width: 2),
-                  borderRadius: BorderRadius.circular(12)),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Signature(
-                    controller: _signatureController,
-                    height: 260,
-                    backgroundColor: Colors.white),
+            if (_collectedSignatureBytes != null &&
+                _collectedSignatureBytes!.isNotEmpty) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: const Color(0xFF10B981), width: 2),
+                ),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 110,
+                      width: double.infinity,
+                      child: Image.memory(
+                        _collectedSignatureBytes!,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(Icons.check_circle_rounded,
+                            color: Color(0xFF10B981), size: 15),
+                        SizedBox(width: 5),
+                        Text(
+                          'Assinatura coletada',
+                          style: TextStyle(
+                            color: Color(0xFF047857),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => _signatureController.clear(),
-                icon: const Icon(Icons.clear, color: Colors.white54, size: 16),
-                label: const Text('Limpar Assinatura',
-                    style: TextStyle(color: Colors.white54)),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _openFullscreenSignature,
+                      icon: const Icon(Icons.draw_rounded,
+                          color: Color(0xFFCE93D8), size: 18),
+                      label: const Text(
+                        'Refazer Assinatura',
+                        style: TextStyle(
+                            color: Color(0xFFCE93D8),
+                            fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(
+                            color: Color(0xFFCE93D8), width: 1.5),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  IconButton(
+                    tooltip: 'Limpar Assinatura',
+                    onPressed: () {
+                      setState(() {
+                        _collectedSignatureBytes = null;
+                      });
+                    },
+                    icon: const Icon(Icons.delete_outline_rounded,
+                        color: Colors.white54),
+                  ),
+                ],
               ),
-            ),
+            ] else ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _openFullscreenSignature,
+                  icon: const Icon(Icons.draw_rounded, size: 22),
+                  label: const Text(
+                    'Coletar Assinatura do Responsável',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1A2535),
+                    foregroundColor: const Color(0xFFCE93D8),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 18, horizontal: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(
+                          color: Color(0xFFCE93D8), width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+            ],
 
             const SizedBox(height: 24),
             LedButton(
@@ -2912,6 +2990,203 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
               ],
             )
           ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFullscreenSignature() async {
+    final result = await Navigator.of(context).push<Uint8List?>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const _FullscreenSignatureScreen(),
+      ),
+    );
+    if (result != null && result.isNotEmpty && mounted) {
+      setState(() {
+        _collectedSignatureBytes = result;
+      });
+    }
+  }
+}
+
+class _FullscreenSignatureScreen extends StatefulWidget {
+  const _FullscreenSignatureScreen();
+
+  @override
+  State<_FullscreenSignatureScreen> createState() =>
+      _FullscreenSignatureScreenState();
+}
+
+class _FullscreenSignatureScreenState
+    extends State<_FullscreenSignatureScreen> {
+  final SignatureController _controller = SignatureController(
+    penStrokeWidth: 3.5,
+    penColor: Colors.black,
+    exportBackgroundColor: Colors.white,
+  );
+  bool _isSaving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirmSignature() async {
+    if (_controller.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Peça ao responsável para assinar antes de salvar.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      final bytes = await _controller.toPngBytes();
+      if (!mounted) return;
+      if (bytes == null || bytes.isEmpty) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Não foi possível capturar a assinatura. Tente novamente.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+      Navigator.of(context).pop(bytes);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao salvar assinatura: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B131E),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF111C2D),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text(
+          'Assinatura do Responsável',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF111C2D),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: const Color(0xFFCE93D8).withOpacity(0.35)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.gesture_rounded,
+                        color: Color(0xFFCE93D8), size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Peça ao responsável para assinar livremente na área branca abaixo.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border:
+                        Border.all(color: const Color(0xFFCE93D8), width: 2.5),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(13.5),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Signature(
+                        controller: _controller,
+                        width: constraints.maxWidth,
+                        height: constraints.maxHeight,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isSaving ? null : () => _controller.clear(),
+                      icon: const Icon(Icons.clear_rounded,
+                          color: Colors.white70),
+                      label: const Text(
+                        'Limpar',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white24),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSaving ? null : _confirmSignature,
+                      icon: _isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.check_circle_rounded),
+                      label: Text(
+                        _isSaving ? 'Salvando...' : 'Salvar Assinatura',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

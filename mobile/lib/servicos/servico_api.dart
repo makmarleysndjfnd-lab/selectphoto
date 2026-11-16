@@ -47,8 +47,23 @@ class ApiService {
   late Dio _dio;
   String _baseUrl = AppConfig.serverUrl;
   String? _token;
+  String? _companyDisplayName;
   bool _isIsolatedSession = false;
   Map<String, dynamic>? lastBuyerConfirmation;
+
+  String? get companyDisplayName {
+    final v = _companyDisplayName?.trim();
+    if (v == null || v.isEmpty || v == 'Select Photo Default') return null;
+    return v;
+  }
+
+  void setCompanyDisplayName(String? name) {
+    final cleaned = name?.trim();
+    if (cleaned == null || cleaned.isEmpty || cleaned == 'Select Photo Default') {
+      return;
+    }
+    _companyDisplayName = cleaned;
+  }
 
   static ApiService? _mockInstance;
   static void Function(String message)? onSessionReplacedByOtherDevice;
@@ -265,6 +280,7 @@ class ApiService {
   void clearToken() {
     final prevToken = _token;
     _token = null;
+    _companyDisplayName = null;
     if (!_isIsolatedSession) {
       if (prevToken != null && prevToken.isNotEmpty) {
         _dio
@@ -276,6 +292,8 @@ class ApiService {
       }
       SharedPreferences.getInstance().then((prefs) {
         prefs.remove('jwt_token');
+        prefs.remove('company_name');
+        prefs.remove('company_id');
       }).catchError((_) {});
     }
   }
@@ -285,6 +303,16 @@ class ApiService {
     if (_token == null || _token!.isEmpty) return false;
     try {
       final res = await _dio.get('/auth/session');
+      if (res.statusCode == 200 && res.data is Map) {
+        final companyName =
+            (res.data['companyName'] ?? res.data['companyTradeName'])?.toString();
+        setCompanyDisplayName(companyName);
+        if (companyDisplayName != null) {
+          SharedPreferences.getInstance().then((prefs) {
+            prefs.setString('company_name', companyDisplayName!);
+          }).catchError((_) {});
+        }
+      }
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -295,7 +323,12 @@ class ApiService {
   Future<void> checkActiveSessionHeartbeat() async {
     if (_isIsolatedSession || _token == null || _token!.isEmpty) return;
     try {
-      await _dio.get('/auth/session');
+      final res = await _dio.get('/auth/session');
+      if (res.statusCode == 200 && res.data is Map) {
+        final companyName =
+            (res.data['companyName'] ?? res.data['companyTradeName'])?.toString();
+        setCompanyDisplayName(companyName);
+      }
     } catch (_) {
       // Se retornar 401 SESSION_REPLACED_BY_OTHER_DEVICE, o interceptor do Dio já dispara onSessionReplacedByOtherDevice
     }
@@ -2017,7 +2050,12 @@ class ApiService {
         if (dateFilterType != null && dateFilterType.isNotEmpty) 'dateFilterType': dateFilterType,
       };
       final resp = await _dio.get('/credit/agreements', queryParameters: params);
-      return List<dynamic>.from(resp.data);
+      final list = List<dynamic>.from(resp.data);
+      if (list.isNotEmpty && list.first is Map) {
+        final cName = (list.first as Map)['companyName']?.toString();
+        setCompanyDisplayName(cName);
+      }
+      return list;
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

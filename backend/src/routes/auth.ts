@@ -6,14 +6,31 @@ import crypto from 'crypto';
 import { loginRateLimiter } from '../middleware/securityMiddleware';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import passwordRecoveryRoutes from './passwordRecovery';
+import { resolveCompanyDisplayName } from '../constants/companyClassification';
 
 const router = Router();
 router.use(passwordRecoveryRoutes);
 
 router.get('/session', authenticateToken, async (req: AuthRequest, res: Response) => {
+  const companyId = req.user?.companyId || null;
+  let companyName: string | null = null;
+  let companyTradeName: string | null = null;
+  if (companyId) {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { name: true, tradeName: true },
+    });
+    if (company) {
+      companyTradeName = company.tradeName || null;
+      companyName = resolveCompanyDisplayName(company, company.name);
+    }
+  }
   res.json({
     valid: true,
     userId: req.user?.id || null,
+    companyId,
+    companyName,
+    companyTradeName,
   });
 });
 
@@ -118,6 +135,11 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
         role: user.role,
         teamId: user.teamId,
         companyId: user.companyId,
+        companyName: user.company
+          ? resolveCompanyDisplayName(user.company, user.company.name)
+          : null,
+        companyLegalName: user.company?.name || null,
+        companyTradeName: user.company?.tradeName || null,
         photographerCode: user.photographerCode,
         sessionId,
       }
@@ -203,7 +225,7 @@ router.post('/setup', async (req: Request, res: Response) => {
     // Create master company
     const masterCompany = await prisma.company.create({
       data: {
-        name: 'Select Photo Master',
+        name: 'Lumora Master',
         cnpj: '00000000000000',
         planLimit: 999999,
       }

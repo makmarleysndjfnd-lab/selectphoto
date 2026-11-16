@@ -14,6 +14,7 @@ import {
 import { processAsaasWebhookEvent } from '../services/asaasWebhookProcessor';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import { invalidateAndReissueConfirmationOnSaleChange } from '../services/buyerConfirmationService';
+import { resolveCompanyDisplayName } from '../constants/companyClassification';
 import {
   listSerasaAgreements,
   getAgreementSerasaDetails,
@@ -563,6 +564,9 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
     const agreements = await prisma.creditAgreement.findMany({
       where,
       include: {
+        company: {
+          select: { name: true, tradeName: true },
+        },
         client: {
           select: {
             id: true,
@@ -620,6 +624,7 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
       return {
         id: a.id,
         saleId: a.saleId,
+        companyName: resolveCompanyDisplayName((a as any).company, 'Nossa Equipe'),
         buyerName: a.buyerName,
         buyerCpf: a.buyerCpf,
         city: a.city,

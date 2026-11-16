@@ -26,13 +26,114 @@ router.get('/companies', authenticateToken, requireSuperAdmin, async (req: AuthR
 // Create a new company
 router.post('/companies', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { name, cnpj, planLimit } = req.body;
+    const {
+      name,
+      tradeName,
+      legalName,
+      cnpj,
+      planLimit,
+      adminContactName,
+      adminContactEmail,
+      adminContactPhone,
+      contractNotes,
+    } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      res.status(400).json({ error: 'Nome da empresa é obrigatório.' });
+      return;
+    }
     const company = await prisma.company.create({
-      data: { name, cnpj, planLimit: planLimit || 500 }
+      data: {
+        name: name.trim(),
+        tradeName: typeof tradeName === 'string' && tradeName.trim() ? tradeName.trim() : null,
+        legalName: typeof legalName === 'string' && legalName.trim() ? legalName.trim() : null,
+        cnpj: typeof cnpj === 'string' && cnpj.trim() ? cnpj.replace(/\D/g, '') : null,
+        adminContactName: typeof adminContactName === 'string' && adminContactName.trim() ? adminContactName.trim() : null,
+        adminContactEmail: typeof adminContactEmail === 'string' && adminContactEmail.trim() ? adminContactEmail.trim().toLowerCase() : null,
+        adminContactPhone: typeof adminContactPhone === 'string' && adminContactPhone.trim() ? adminContactPhone.trim() : null,
+        contractNotes: typeof contractNotes === 'string' && contractNotes.trim() ? contractNotes.trim() : null,
+        planLimit: planLimit || 500,
+      },
     });
     res.status(201).json(company);
   } catch (error) {
     console.error('Error creating company:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update company branding/commercial details
+router.put('/companies/:id', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.company.findUnique({ where: { id: id as string } });
+    if (!existing) {
+      res.status(404).json({ error: 'Company not found' });
+      return;
+    }
+
+    const {
+      name,
+      tradeName,
+      legalName,
+      cnpj,
+      planLimit,
+      adminContactName,
+      adminContactEmail,
+      adminContactPhone,
+      contractNotes,
+      isActive,
+    } = req.body;
+
+    const cleanCnpj =
+      cnpj !== undefined
+        ? (typeof cnpj === 'string' && cnpj.trim() ? cnpj.replace(/\D/g, '') : null)
+        : existing.cnpj;
+
+    if (cleanCnpj && cleanCnpj !== existing.cnpj) {
+      const conflict = await prisma.company.findUnique({ where: { cnpj: cleanCnpj } });
+      if (conflict && conflict.id !== existing.id) {
+        res.status(409).json({ error: 'CNPJ already registered for another company' });
+        return;
+      }
+    }
+
+    const updated = await prisma.company.update({
+      where: { id: existing.id },
+      data: {
+        name: typeof name === 'string' && name.trim() ? name.trim() : existing.name,
+        tradeName:
+          tradeName !== undefined
+            ? (typeof tradeName === 'string' && tradeName.trim() ? tradeName.trim() : null)
+            : existing.tradeName,
+        legalName:
+          legalName !== undefined
+            ? (typeof legalName === 'string' && legalName.trim() ? legalName.trim() : null)
+            : existing.legalName,
+        cnpj: cleanCnpj,
+        adminContactName:
+          adminContactName !== undefined
+            ? (typeof adminContactName === 'string' && adminContactName.trim() ? adminContactName.trim() : null)
+            : existing.adminContactName,
+        adminContactEmail:
+          adminContactEmail !== undefined
+            ? (typeof adminContactEmail === 'string' && adminContactEmail.trim() ? adminContactEmail.trim().toLowerCase() : null)
+            : existing.adminContactEmail,
+        adminContactPhone:
+          adminContactPhone !== undefined
+            ? (typeof adminContactPhone === 'string' && adminContactPhone.trim() ? adminContactPhone.trim() : null)
+            : existing.adminContactPhone,
+        contractNotes:
+          contractNotes !== undefined
+            ? (typeof contractNotes === 'string' && contractNotes.trim() ? contractNotes.trim() : null)
+            : existing.contractNotes,
+        planLimit: typeof planLimit === 'number' && planLimit > 0 ? planLimit : existing.planLimit,
+        ...(typeof isActive === 'boolean' ? { isActive } : {}),
+      },
+    });
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating company:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

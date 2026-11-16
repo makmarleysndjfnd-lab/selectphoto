@@ -544,13 +544,25 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            c['name'] ?? '',
+                            (c['tradeName']?.toString().trim().isNotEmpty == true)
+                                ? c['tradeName'].toString()
+                                : (c['name'] ?? '').toString(),
                             style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
                           ),
+                          if (c['tradeName']?.toString().trim().isNotEmpty == true && c['name'] != null)
+                            Text('Identificação: ${c['name']}', style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
                           if (c['legalName'] != null)
                             Text(c['legalName'], style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13)),
                         ],
                       ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.edit_rounded, color: Color(0xFFD8B4FE)),
+                      tooltip: 'Editar Nome / Dados',
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _abrirModalEditarEmpresa(c);
+                      },
                     ),
                     IconButton(
                       icon: const Icon(Icons.close_rounded, color: Colors.white70),
@@ -714,6 +726,16 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 decoration: const InputDecoration(labelText: 'Nome de Identificação *', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
               ),
               TextField(
+                controller: fantasiaController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Nome Comercial / Fantasia (White-label)',
+                  hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
+                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  labelStyle: TextStyle(color: Color(0xFF38BDF8)),
+                ),
+              ),
+              TextField(
                 controller: razaoController,
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(labelText: 'Razão Social', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
@@ -774,6 +796,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 final taxa = double.tryParse(taxaInicialController.text.replaceAll(',', '.'));
                 await _api.createOwnerCompany({
                   'name': nomeController.text.trim(),
+                  'tradeName': fantasiaController.text.trim(),
                   'legalName': razaoController.text.trim(),
                   'cnpj': cnpjController.text.trim(),
                   'adminContactName': contatoNomeController.text.trim(),
@@ -793,6 +816,140 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
               }
             },
             child: const Text('Cadastrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Modal de Edição Cadastral e Nome Comercial (White-label) ─────────────
+
+  void _abrirModalEditarEmpresa(Map<String, dynamic> empresa) async {
+    final authed = await _garantirStepUpAuth('Edição cadastral e nome comercial da empresa ${empresa['name']}');
+    if (!authed || !mounted) return;
+
+    final nomeController = TextEditingController(text: empresa['name']?.toString() ?? '');
+    final fantasiaController = TextEditingController(text: empresa['tradeName']?.toString() ?? '');
+    final razaoController = TextEditingController(text: empresa['legalName']?.toString() ?? '');
+    final cnpjController = TextEditingController(text: empresa['cnpj']?.toString() ?? '');
+    final contatoNomeController = TextEditingController(text: empresa['adminContactName']?.toString() ?? '');
+    final contatoEmailController = TextEditingController(text: empresa['adminContactEmail']?.toString() ?? '');
+    final contatoTelefoneController = TextEditingController(text: empresa['adminContactPhone']?.toString() ?? '');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Editar Empresa — ${empresa['tradeName'] ?? empresa['name'] ?? ''}',
+            style: const TextStyle(color: Colors.white, fontSize: 17)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nomeController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'Nome de Identificação *',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              TextField(
+                controller: fantasiaController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Nome Comercial / White-label',
+                  hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
+                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  labelStyle: TextStyle(color: Color(0xFF38BDF8)),
+                ),
+              ),
+              TextField(
+                controller: razaoController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'Razão Social',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              TextField(
+                controller: cnpjController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'CNPJ',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              TextField(
+                controller: contatoNomeController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'Contato Administrativo',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              TextField(
+                controller: contatoEmailController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'E-mail do Contato',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              TextField(
+                controller: contatoTelefoneController,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                    labelText: 'Telefone / WhatsApp',
+                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF38BDF8),
+                foregroundColor: const Color(0xFF0F172A)),
+            onPressed: () async {
+              if (nomeController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Nome é obrigatório')));
+                return;
+              }
+              try {
+                await _api.updateOwnerCompany(
+                  empresa['id'].toString(),
+                  {
+                    'name': nomeController.text.trim(),
+                    'tradeName': fantasiaController.text.trim(),
+                    'legalName': razaoController.text.trim(),
+                    'cnpj': cnpjController.text.trim(),
+                    'adminContactName': contatoNomeController.text.trim(),
+                    'adminContactEmail': contatoEmailController.text.trim(),
+                    'adminContactPhone': contatoTelefoneController.text.trim(),
+                  },
+                  stepUpToken: _stepUpToken,
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                _carregarDados();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Dados comerciais da empresa atualizados com sucesso!'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Erro ao atualizar: $e'), backgroundColor: Colors.redAccent),
+                  );
+                }
+              }
+            },
+            child: const Text('Salvar Alterações'),
           ),
         ],
       ),
@@ -1141,9 +1298,23 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Text(
-                    empresa['name'] ?? '',
-                    style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        (empresa['tradeName']?.toString().trim().isNotEmpty == true)
+                            ? empresa['tradeName'].toString()
+                            : (empresa['name'] ?? '').toString(),
+                        style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                      if (empresa['tradeName']?.toString().trim().isNotEmpty == true &&
+                          empresa['name'] != null &&
+                          empresa['tradeName'] != empresa['name'])
+                        Text(
+                          'Identificação: ${empresa['name']}',
+                          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1269,6 +1440,16 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   icon: const Icon(Icons.info_outline_rounded, size: 16),
                   label: const Text('Detalhes & Vigências', style: TextStyle(fontSize: 12)),
                   onPressed: () => _abrirDetalhesEmpresa(empresa['id']),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFA855F7)),
+                    foregroundColor: const Color(0xFFD8B4FE),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(Icons.edit_rounded, size: 16),
+                  label: const Text('Editar Nome', style: TextStyle(fontSize: 12)),
+                  onPressed: () => _abrirModalEditarEmpresa(empresa),
                 ),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(

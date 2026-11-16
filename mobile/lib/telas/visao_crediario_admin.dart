@@ -237,50 +237,22 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         title: Row(
           children: const [
             Icon(Icons.credit_score_rounded, color: Color(0xFFA855F7), size: 22),
-            SizedBox(width: 10),
-            Text(
-              'Crediário e Cobranças',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Crediário e Cobranças',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 17,
+                ),
               ),
             ),
           ],
         ),
         actions: [
-          // Configurar Datas do Fechamento e Pagamento do Vendedor (fixo no topo)
-          InkWell(
-            onTap: _showClosingDatesDialog,
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFA855F7).withOpacity(0.2),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFA855F7)),
-              ),
-              child: Row(
-                children: const [
-                  Icon(
-                    Icons.edit_calendar_rounded,
-                    size: 13,
-                    color: Color(0xFFD8B4FE),
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    'Datas Fechamento',
-                    style: TextStyle(
-                      color: Color(0xFFD8B4FE),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 10,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           // Modo Asaas
           InkWell(
             onTap: () async {
@@ -3025,18 +2997,45 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     final rawPhone = agreement['client']?['phone1'] ?? agreement['buyerPhone'] ?? agreement['client']?['phone2'] ?? '';
     final phoneController = TextEditingController(text: rawPhone.toString().replaceAll(RegExp(r'\D'), ''));
 
+    final rawCompanyName = agreement['companyName']?.toString().trim();
+    final companyLabel = (rawCompanyName != null &&
+            rawCompanyName.isNotEmpty &&
+            rawCompanyName != 'Select Photo Default')
+        ? rawCompanyName
+        : (_api.companyDisplayName ?? 'nossa equipe');
+
+    final totalSale = (agreement['totalSale'] as num?)?.toDouble() ??
+        (((agreement['totalSaleCents'] as num?)?.toDouble() ?? 0.0) / 100.0);
+    final installmentsCount = (agreement['installmentsCount'] as num?)?.toInt() ?? 1;
+    final periodicityLabel =
+        agreement['periodicity']?.toString() == 'BIWEEKLY' ? 'quinzenal' : 'mensal';
+    final totalSaleStr = currencyFormat.format(totalSale);
+
     String defaultMessage = '';
     if (installment != null) {
       final instNum = installment['installmentNumber']?.toString() ?? '1';
       final amount = ((installment['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
       final due = DateTime.tryParse(installment['dueDate'] ?? '');
       final dueStr = due != null ? dateFormat.format(due) : 'vencimento';
-      defaultMessage = 'Olá, $buyerName!\n\nTudo bem? Aqui é da equipe SelectPhoto / Lumora.\nPassando para lembrar sobre a parcela nº $instNum do seu crediário, no valor de ${currencyFormat.format(amount)}, com vencimento em $dueStr.\n\nCaso já tenha realizado o pagamento, por favor desconsidere este aviso.\nSe precisar de 2ª via ou chave Pix para pagamento, estamos à inteira disposição!';
+      defaultMessage =
+          'Olá, $buyerName! Tudo bem?\n'
+          'Aqui é da equipe $companyLabel.\n\n'
+          'Passando para lembrar de forma amigável sobre a sua compra no valor total de $totalSaleStr '
+          '(parcelamento em ${installmentsCount}x, periodicidade $periodicityLabel), '
+          'referente à parcela nº $instNum/$installmentsCount no valor de ${currencyFormat.format(amount)}, com vencimento em $dueStr.\n\n'
+          'Caso já tenha realizado o pagamento, por favor desconsidere este aviso.\n'
+          'Se precisar de 2ª via, boleto ou chave Pix, estamos à disposição para ajudar!';
     } else {
       final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ?? 0.0) > 0
           ? ((agreement['remainingPrincipalCents'] as num).toDouble() / 100.0)
           : ((agreement['remainingPrincipal'] as num?)?.toDouble() ?? 0.0);
-      defaultMessage = 'Olá, $buyerName!\n\nTudo bem? Aqui é da equipe SelectPhoto / Lumora.\nPassando para informar o extrato do seu crediário. O saldo devedor atual é de ${currencyFormat.format(remaining)}.\n\nCaso queira consultar suas parcelas ou realizar a quitação antecipada, estamos à sua inteira disposição!';
+      defaultMessage =
+          'Olá, $buyerName! Tudo bem?\n'
+          'Aqui é da equipe $companyLabel.\n\n'
+          'Passando para informar o resumo da sua compra no valor total de $totalSaleStr '
+          '(parcelamento em ${installmentsCount}x, periodicidade $periodicityLabel). '
+          'O saldo atual em aberto é de ${currencyFormat.format(remaining)}.\n\n'
+          'Caso queira consultar suas parcelas, obter 2ª via ou realizar a quitação antecipada, estamos à disposição para ajudar!';
     }
 
     final messageController = TextEditingController(text: defaultMessage);
@@ -3221,30 +3220,17 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.45), width: 1.2),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.edit_calendar_rounded, color: Color(0xFFA855F7), size: 20),
-                  SizedBox(width: 8),
-                  Text(
-                    'Período do Fechamento e Pagamento',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                ],
-              ),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.settings_rounded, size: 14),
-                label: const Text('Configurar Datas', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFA855F7),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            children: const [
+              Icon(Icons.edit_calendar_rounded, color: Color(0xFFA855F7), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Período de Fechamento e Pagamento',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                 ),
-                onPressed: () => _showConfigureClosingDatesDialog(startDate, endDate, payoutDate),
               ),
             ],
           ),
@@ -3262,28 +3248,27 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.settings_rounded, size: 15),
+              label: const Text(
+                'Configurar Datas de Fechamento',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFA855F7),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => _showConfigureClosingDatesDialog(startDate, endDate, payoutDate),
+            ),
+          ),
         ],
       ),
     );
-  }
-
-  void _showClosingDatesDialog() {
-    final now = DateTime.now();
-    final defaultStart = DateTime(now.year, now.month, 1);
-    final defaultEnd = DateTime(now.year, now.month + 1, 0);
-    final defaultPayout = DateTime(now.year, now.month + 1, 5);
-
-    final startDate = _closingConfig?['startDate'] != null
-        ? (DateTime.tryParse(_closingConfig!['startDate'].toString()) ?? defaultStart)
-        : defaultStart;
-    final endDate = _closingConfig?['endDate'] != null
-        ? (DateTime.tryParse(_closingConfig!['endDate'].toString()) ?? defaultEnd)
-        : defaultEnd;
-    final payoutDate = _closingConfig?['payoutDate'] != null
-        ? (DateTime.tryParse(_closingConfig!['payoutDate'].toString()) ?? defaultPayout)
-        : defaultPayout;
-
-    _showConfigureClosingDatesDialog(startDate, endDate, payoutDate);
   }
 
   void _showConfigureClosingDatesDialog(DateTime initialStart, DateTime initialEnd, DateTime initialPayout) {

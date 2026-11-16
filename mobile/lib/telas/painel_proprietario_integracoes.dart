@@ -79,7 +79,7 @@ class _PainelProprietarioIntegracoesState
       Map<String, dynamic>? selected = _empresaSelecionada;
       if (selected == null && empresas.isNotEmpty) {
         selected = empresas.firstWhere(
-          (e) => e['name'] == 'Select Photo Default' || e['classification'] == 'OPERATIONAL',
+          (e) => e['classification'] == 'OPERATIONAL',
           orElse: () => empresas.first,
         );
       }

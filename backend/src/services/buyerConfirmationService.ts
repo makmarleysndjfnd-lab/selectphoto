@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { prisma as defaultPrisma, PrismaClient, Prisma } from './prisma';
 import { recordOperationalAuditEvent } from './operationalAuditService';
+import { resolveCompanyDisplayName } from '../constants/companyClassification';
 
 export type BuyerConfirmationStatus =
   | 'PENDING'
@@ -774,7 +775,7 @@ export async function getPublicBuyerConfirmationPrompt(
     // ESTRITAMENTE SEM VALORES DO VENDEDOR!
     return {
       saleId: record.saleId,
-      companyName: record.company?.tradeName || record.company?.name || 'Lumora',
+      companyName: resolveCompanyDisplayName(record.company, 'Empresa Vendedora'),
       fichaCode,
       buyerFirstName: firstName,
       city: record.sale?.city || '',
@@ -947,8 +948,10 @@ export async function submitPublicBuyerConfirmation(
       record.sale?.client?.sequenceNumber ||
       `VND-${record.saleId.slice(0, 8).toUpperCase()}`;
 
-    const companyDisplayName =
-      record.company?.tradeName || record.company?.name || 'Lumora';
+    const companyDisplayName = resolveCompanyDisplayName(
+      record.company,
+      'Empresa Vendedora'
+    );
     const clientDisplayName = record.sale?.client?.name || 'Cliente';
 
     // Idempotência: se já foi respondido, verifica se é o mesmo envio
@@ -1928,7 +1931,14 @@ export function formatBuyerConfirmationForRole(
       ? Number((record.auditedReferenceCents / 100).toFixed(2))
       : null,
     sellerId: record.sellerId,
-    sellerName: (record.sale?.seller as any)?.name || null,
+    sellerName:
+      (record.sale?.seller as any)?.name || (record.seller as any)?.name || null,
+    clientName: record.sale?.client?.name || null,
+    fichaCode:
+      record.sale?.fichaNumber ||
+      record.sale?.client?.visibleCode ||
+      record.sale?.client?.sequenceNumber ||
+      null,
     sellerBlocked: Boolean((record.sale?.seller as any)?.sellerBlocked),
     sellerBlockedReason: (record.sale?.seller as any)?.sellerBlockedReason || null,
     sellerBlockedAtResolution: Boolean(record.sellerBlockedAtResolution),
@@ -2016,7 +2026,7 @@ export function renderPublicBuyerConfirmationHtml(
   const promptData =
     typeof rawTokenOrObj === 'object' && rawTokenOrObj !== null
       ? rawTokenOrObj.prompt || {
-          companyName: 'Lumora',
+          companyName: 'Empresa Vendedora',
           fichaCode: '---',
           buyerFirstName: 'Cliente',
           city: '',
@@ -2026,7 +2036,7 @@ export function renderPublicBuyerConfirmationHtml(
           isCreditAgreement: false,
         }
       : maybePromptData || {
-          companyName: 'Lumora',
+          companyName: 'Empresa Vendedora',
           fichaCode: '---',
           buyerFirstName: 'Cliente',
           city: '',
@@ -2043,64 +2053,62 @@ export function renderPublicBuyerConfirmationHtml(
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Confirmação de Compra — ${esc(promptData.companyName)}</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 16px; display: flex; justify-content: center; }
-    .container { max-width: 480px; width: 100%; margin: 16px auto; }
-    .card { background: #1e293b; border-radius: 14px; padding: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); border: 1px solid #334155; }
-    h1 { font-size: 1.2rem; margin-top: 0; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
-    p { font-size: 0.9rem; color: #cbd5e1; line-height: 1.45; margin: 8px 0; }
-    .badge { display: inline-block; background: #0284c7; color: #fff; font-size: 0.75rem; padding: 3px 8px; border-radius: 9999px; font-weight: 600; }
-    .meta { background: #0f172a; padding: 12px; border-radius: 8px; font-size: 0.85rem; color: #94a3b8; margin: 16px 0; border: 1px solid #1e293b; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 12px; display: flex; justify-content: center; }
+    .container { max-width: 460px; width: 100%; margin: 8px auto; }
+    .card { background: #1e293b; border-radius: 14px; padding: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); border: 1px solid #334155; }
+    h1 { font-size: 1.15rem; margin: 0; color: #38bdf8; }
+    p { font-size: 0.88rem; color: #cbd5e1; line-height: 1.4; margin: 8px 0; }
+    .badge { display: inline-block; background: #0284c7; color: #fff; font-size: 0.72rem; padding: 3px 8px; border-radius: 9999px; font-weight: 600; white-space: nowrap; }
+    .meta { background: #0f172a; padding: 10px 12px; border-radius: 8px; font-size: 0.82rem; color: #94a3b8; margin: 12px 0; border: 1px solid #1e293b; }
     .meta strong { color: #f1f5f9; }
-    label { display: block; margin-top: 14px; margin-bottom: 6px; font-weight: 600; font-size: 0.87rem; color: #e2e8f0; }
-    .help { font-size: 0.78rem; color: #94a3b8; margin-top: -3px; margin-bottom: 6px; }
-    input, select, textarea { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #f8fafc; font-size: 0.95rem; }
+    label { display: block; margin-top: 12px; margin-bottom: 5px; font-weight: 600; font-size: 0.85rem; color: #e2e8f0; }
+    .help { font-size: 0.75rem; color: #94a3b8; margin-top: -2px; margin-bottom: 5px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 11px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #f8fafc; font-size: 0.95rem; }
     input:focus, select:focus, textarea:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,0.25); }
-    button { margin-top: 22px; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #0284c7; color: #fff; font-weight: 700; font-size: 1rem; cursor: pointer; transition: background 0.15s; }
+    button { margin-top: 18px; width: 100%; padding: 13px; border: none; border-radius: 8px; background: #0284c7; color: #fff; font-weight: 700; font-size: 0.98rem; cursor: pointer; transition: background 0.15s; }
     button:hover { background: #0369a1; }
     button:disabled { background: #475569; cursor: not-allowed; }
-    #msg { margin-top: 16px; font-weight: 600; text-align: center; font-size: 0.95rem; }
-    .receipt { display: none; background: #0f172a; border: 1px dashed #38bdf8; border-radius: 12px; padding: 20px; margin-top: 20px; }
-    .receipt h2 { font-size: 1.05rem; margin-top: 0; color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 10px; }
-    .receipt-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.88rem; border-bottom: 1px solid #1e293b; }
+    #msg { margin-top: 14px; font-weight: 600; text-align: center; font-size: 0.92rem; }
+    .receipt { display: none; background: #0f172a; border: 1px dashed #38bdf8; border-radius: 12px; padding: 18px; margin-top: 16px; }
+    .receipt h2 { font-size: 1rem; margin-top: 0; color: #38bdf8; text-align: center; border-bottom: 1px solid #334155; padding-bottom: 8px; }
+    .receipt-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.86rem; border-bottom: 1px solid #1e293b; }
     .receipt-label { color: #94a3b8; }
     .receipt-value { font-weight: 600; color: #f8fafc; }
-    .receipt-disclaimer { margin-top: 14px; font-size: 0.75rem; color: #64748b; text-align: center; line-height: 1.3; }
+    .receipt-disclaimer { margin-top: 12px; font-size: 0.74rem; color: #64748b; text-align: center; line-height: 1.3; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="card" id="formCard">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
         <h1>${esc(promptData.companyName)}</h1>
-        <span class="badge">Conferência Segura</span>
+        <span class="badge">Conferência</span>
       </div>
-      <p>Olá, <strong>${esc(promptData.buyerFirstName)}</strong>! Para a segurança e garantia da sua compra, informe abaixo os valores combinados diretamente com o vendedor.</p>
+      <p>Olá, <strong>${esc(promptData.buyerFirstName)}</strong>! Confirme os valores combinados com <strong>${esc(promptData.companyName)}</strong>:</p>
       
       <div class="meta">
-        <div>Ficha / Pedido: <strong>${esc(promptData.fichaCode)}</strong></div>
-        <div>Cidade: <strong>${esc(promptData.city || '---')}</strong> | Produto: <strong>${esc(promptData.product)}</strong></div>
+        <div>Ficha: <strong>${esc(promptData.fichaCode)}</strong> • Produto: <strong>${esc(promptData.product)}</strong></div>
+        ${promptData.city ? `<div>Cidade: <strong>${esc(promptData.city)}</strong></div>` : ''}
       </div>
 
       <form id="confirmForm">
         ${
           promptData.requiresIdentityCheck
             ? `
-        <label for="phoneLast4">4 últimos dígitos do seu telefone ou CPF cadastrado</label>
-        <div class="help">Utilizado exclusivamente para confirmar que você é o titular desta ficha.</div>
+        <label for="phoneLast4">Últimos 4 dígitos do telefone ou CPF</label>
         <input id="phoneLast4" name="phoneLast4" type="text" inputmode="numeric" maxlength="4" placeholder="Ex: 5678" required />
         `
             : ''
         }
 
-        <label for="reportedTotalValue">Valor total combinado da compra (R$)</label>
-        <div class="help">Informe o valor total acertado pelo pedido completo.</div>
+        <label for="reportedTotalValue">Valor total da compra (R$)</label>
         <input id="reportedTotalValue" name="reportedTotalValue" type="number" step="0.01" min="0.01" placeholder="Ex: 1150.00" required />
 
-        <label for="reportedPaidValue">Quanto você já pagou de entrada ou à vista (R$)</label>
-        <div class="help">Caso não tenha pago nada de entrada, digite 0.</div>
+        <label for="reportedPaidValue">Valor pago na entrada/ato (R$)</label>
+        <div class="help">Digite 0 se não houve pagamento no ato.</div>
         <input id="reportedPaidValue" name="reportedPaidValue" type="number" step="0.01" min="0" placeholder="Ex: 150.00" required />
 
-        <label for="reportedPaymentMethod">Forma de pagamento combinada</label>
+        <label for="reportedPaymentMethod">Forma de pagamento</label>
         <select id="reportedPaymentMethod" name="reportedPaymentMethod" required>
           <option value="">Selecione...</option>
           <option value="PIX">Pix</option>
@@ -2108,13 +2116,13 @@ export function renderPublicBuyerConfirmationHtml(
           <option value="CREDIT">Cartão de Crédito</option>
           <option value="DEBIT">Cartão de Débito</option>
           <option value="CREDIARIO">Crediário / Carnê / Boleto</option>
-          <option value="SPLIT">Pagamento Combinado (Mais de uma forma)</option>
+          <option value="SPLIT">Pagamento Combinado</option>
         </select>
 
         <div id="creditFields" style="${promptData.isCreditAgreement ? 'display:block;' : 'display:none;'} margin-top: 10px; padding: 12px; background: #0f172a; border-radius: 8px; border: 1px solid #334155;">
-          <div style="font-weight:700; font-size:0.85rem; color:#38bdf8; margin-bottom:8px;">Condições do Crediário / Parcelamento:</div>
+          <div style="font-weight:700; font-size:0.84rem; color:#38bdf8; margin-bottom:6px;">Parcelamento / Crediário</div>
           
-          <label for="reportedRemainingValue">Saldo restante a pagar (R$)</label>
+          <label for="reportedRemainingValue">Saldo a pagar (R$)</label>
           <input id="reportedRemainingValue" name="reportedRemainingValue" type="number" step="0.01" min="0" placeholder="Ex: 1000.00" />
 
           <label for="reportedInstallmentsCount">Quantidade de parcelas</label>
@@ -2124,7 +2132,7 @@ export function renderPublicBuyerConfirmationHtml(
           <input id="reportedInstallmentValue" name="reportedInstallmentValue" type="number" step="0.01" min="0" placeholder="Ex: 100.00" />
         </div>
 
-        <button type="submit" id="submitBtn">Confirmar Dados da Compra</button>
+        <button type="submit" id="submitBtn">Confirmar Compra</button>
         <div id="msg"></div>
       </form>
     </div>
@@ -2134,7 +2142,7 @@ export function renderPublicBuyerConfirmationHtml(
       <h2>Registro de conferência do pedido — sem valor fiscal</h2>
       <div id="receiptContent"></div>
       <div class="receipt-disclaimer">
-        Documento emitido exclusivamente para fins de conferência operacional entre cliente e empresa. Não possui valor fiscal nem quita obrigações tributárias.
+        Registro operacional entre cliente e ${esc(promptData.companyName)}. Sem valor fiscal.
       </div>
     </div>
   </div>

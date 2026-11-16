@@ -234,6 +234,9 @@ class _LoginScreenState extends State<LoginScreen>
 
       // Disponibiliza o token imediatamente em memória
       apiService.setToken(token.trim());
+      final dynamicCompanyName =
+          (user?['companyName'] ?? user?['companyTradeName'])?.toString();
+      apiService.setCompanyDisplayName(dynamicCompanyName);
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('jwt_token', token.trim());
@@ -246,6 +249,14 @@ class _LoginScreenState extends State<LoginScreen>
       }
       if (user?['name'] != null) {
         await prefs.setString('user_name', user['name'].toString());
+      }
+      if (user?['companyId'] != null) {
+        await prefs.setString('company_id', user['companyId'].toString());
+      }
+      if (dynamicCompanyName != null &&
+          dynamicCompanyName.trim().isNotEmpty &&
+          dynamicCompanyName.trim() != 'Select Photo Default') {
+        await prefs.setString('company_name', dynamicCompanyName.trim());
       }
       if (user?['photographerCode'] != null) {
         await prefs.setString('photographer_code', user['photographerCode'].toString());

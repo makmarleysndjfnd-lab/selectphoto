@@ -1315,5 +1315,109 @@ test('Lumora — Suíte Completa de Conferência de Vendas por QR (Etapas 1 e 2)
       false
     );
   });
+
+  await t.test('16. Nome comercial dinâmico da empresa (White-label), página QR enxuta e sellerName no Admin', async () => {
+    const baseUrl = await getBaseUrl;
+
+    // Cria empresa com nome interno legado "Select Photo Default" e tradeName dinâmico "Hyper Fotos"
+    const compDynamic = await prisma.company.create({
+      data: {
+        id: `comp-wl-${randomUUID().slice(0, 8)}`,
+        name: 'Select Photo Default',
+        tradeName: 'Hyper Fotos',
+        cnpj: `${Date.now().toString().slice(-14)}`,
+      },
+    });
+    createdCompanyIds.push(compDynamic.id);
+
+    const adminDyn = await prisma.user.create({
+      data: {
+        id: `adm-wl-${randomUUID().slice(0, 8)}`,
+        name: 'Admin Hyper',
+        role: 'COMPANY_ADMIN',
+        cpf: `${Math.floor(10000000000 + Math.random() * 89999999999)}`,
+        password: 'hash',
+        companyId: compDynamic.id,
+      },
+    });
+    createdUserIds.push(adminDyn.id);
+
+    const sellerDyn = await prisma.user.create({
+      data: {
+        id: `sel-wl-${randomUUID().slice(0, 8)}`,
+        name: 'Vendedora Camila Souza',
+        role: 'SELLER',
+        cpf: `${Math.floor(10000000000 + Math.random() * 89999999999)}`,
+        password: 'hash',
+        companyId: compDynamic.id,
+      },
+    });
+    createdUserIds.push(sellerDyn.id);
+
+    const clientDyn = await prisma.client.create({
+      data: {
+        id: `cli-wl-${randomUUID().slice(0, 8)}`,
+        sequenceNumber: `WL-${randomUUID().slice(0, 6)}`,
+        name: 'Patrícia Lima',
+        phone1: '62998765432',
+        city: 'Goiânia',
+        companyId: compDynamic.id,
+      },
+    });
+    createdClientIds.push(clientDyn.id);
+
+    const saleDyn = await prisma.sale.create({
+      data: {
+        id: `sale-wl-${randomUUID().slice(0, 8)}`,
+        value: 650.0,
+        paymentMethod: 'PIX',
+        city: 'Goiânia',
+        companyId: compDynamic.id,
+        clientId: clientDyn.id,
+        sellerId: sellerDyn.id,
+      },
+    });
+    createdSaleIds.push(saleDyn.id);
+
+    const issuedDyn = await issueBuyerConfirmationLink({
+      saleId: saleDyn.id,
+      companyId: compDynamic.id,
+    });
+
+    // Página pública deve exibir "Hyper Fotos", ser objetiva e jamais exibir "Select Photo Default"
+    const resPage = await fetch(`${baseUrl}/confirmar-compra/${issuedDyn.rawToken}`);
+    assert.equal(resPage.status, 200);
+    const html = await resPage.text();
+    assert.ok(html.includes('Hyper Fotos'), 'Página pública deve exibir o nome comercial real');
+    assert.equal(html.includes('Select Photo Default'), false, 'Não deve vazar nome legado');
+    assert.ok(html.includes('Confirme os valores combinados'), 'Página deve usar texto enxuto');
+
+    // Atualiza tradeName para Moura Select Fotos e confirma atualização dinâmica na página pública
+    await prisma.company.update({
+      where: { id: compDynamic.id },
+      data: { tradeName: 'Moura Select Fotos' },
+    });
+
+    const resPageUpdated = await fetch(`${baseUrl}/confirmar-compra/${issuedDyn.rawToken}`);
+    assert.equal(resPageUpdated.status, 200);
+    const htmlUpdated = await resPageUpdated.text();
+    assert.ok(htmlUpdated.includes('Moura Select Fotos'));
+
+    // Conferência Admin individual e em lote deve trazer sellerName claramente
+    const adminDynToken = makeToken({
+      id: adminDyn.id,
+      role: adminDyn.role,
+      companyId: compDynamic.id,
+      name: adminDyn.name,
+    });
+
+    const resDetail = await fetch(`${baseUrl}/api/sales/${saleDyn.id}/buyer-confirmation`, {
+      headers: { Authorization: `Bearer ${adminDynToken}` },
+    });
+    assert.equal(resDetail.status, 200);
+    const detailData = (await resDetail.json()) as any;
+    assert.equal(detailData.sellerName, 'Vendedora Camila Souza');
+    assert.equal(detailData.clientName, 'Patrícia Lima');
+  });
 });
 

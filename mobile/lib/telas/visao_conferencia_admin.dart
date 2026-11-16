@@ -511,6 +511,16 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     final buyer = item['buyerReported'] as Map<String, dynamic>?;
     final reasons = item['divergenceReasons'] as List<dynamic>? ?? [];
     final resolution = item['reviewResolution'] as Map<String, dynamic>?;
+    final responsibleSellerName = (item['sellerName'] ??
+            item['sale']?['seller']?['name'] ??
+            'Vendedor não identificado')
+        .toString();
+    final clientDisplayName =
+        (item['clientName'] ?? item['sale']?['client']?['name'])?.toString();
+    final fichaDisplayCode = (item['fichaCode'] ??
+            item['sale']?['fichaNumber'] ??
+            item['sale']?['client']?['visibleCode'])
+        ?.toString();
 
     final sellerTotal = seller?['totalBrl'] != null
         ? _currencyFormat.format(seller!['totalBrl'])
@@ -614,6 +624,43 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                 ],
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF160D24),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.25)),
+            ),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.person_rounded,
+                        color: Color(0xFFCE93D8), size: 15),
+                    const SizedBox(width: 5),
+                    Text(
+                      'Vendedor: $responsibleSellerName',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                if (clientDisplayName != null && clientDisplayName.isNotEmpty)
+                  Text(
+                    'Cliente: $clientDisplayName${fichaDisplayCode != null && fichaDisplayCode.isNotEmpty ? ' ($fichaDisplayCode)' : ''}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+              ],
+            ),
           ),
           if (suspectedSelfScan) ...[
             const SizedBox(height: 10),
@@ -777,7 +824,12 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Vendedor responsável: $responsibleSellerName',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                  const SizedBox(height: 4),
                   if (item['commissionDeductionApplied'] == true) ...[
                     Container(
                       margin: const EdgeInsets.only(bottom: 6),
