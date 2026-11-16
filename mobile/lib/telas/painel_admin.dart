@@ -27,6 +27,8 @@ import 'visao_estatisticas_admin.dart';
 import 'visao_crediario_admin.dart';
 import 'visao_conferencia_admin.dart';
 import '../widgets/admin_ficha_actions.dart';
+import '../widgets/company_pix_dialog.dart';
+import '../utils/lumora_theme.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _accentPurple = Color(0xFF9C27B0);
@@ -749,10 +751,11 @@ class _AdminDashboardState extends State<AdminDashboard>
     return LayoutBuilder(builder: (context, constraints) {
       final isDesktop = constraints.maxWidth > 800;
 
+      final palette = LumoraTheme.of(context, isAdmin: true);
       return Scaffold(
         key: _scaffoldKey,
         drawer: !isDesktop ? Drawer(child: _buildSideMenu()) : null,
-        backgroundColor: const Color(0xFF0D0D1A),
+        backgroundColor: palette.scaffoldBg,
         body: Row(
           children: [
             if (isDesktop) _buildSideMenu(),
@@ -828,6 +831,17 @@ class _AdminDashboardState extends State<AdminDashboard>
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
                       _sideMenuItem(9, Icons.bar_chart_rounded, 'Estatísticas'),
                       _sideMenuItem(8, Icons.layers_rounded, 'Capas'),
+                      ListTile(
+                        leading: const Icon(Icons.pix, color: Color(0xFF22C55E)),
+                        title: const Text('Pix da Empresa',
+                            style: TextStyle(color: Color(0xFF22C55E))),
+                        onTap: () {
+                          if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+                            Navigator.pop(context);
+                          }
+                          showCompanyPixKeyDialog(context);
+                        },
+                      ),
                     ],
                   ),
                 ),

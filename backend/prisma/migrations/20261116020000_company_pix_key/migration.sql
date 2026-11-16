@@ -1,0 +1,3 @@
+ALTER TABLE "Company"
+ADD COLUMN IF NOT EXISTS "companyPixKey" TEXT,
+ADD COLUMN IF NOT EXISTS "companyPixKeyType" TEXT;

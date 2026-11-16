@@ -32,6 +32,8 @@ model Company {
   creditClosingEndDate    DateTime?
   creditClosingPayoutDate DateTime?
   reboloValidityDays      Int       @default(365)
+  companyPixKey           String?
+  companyPixKeyType       String?
 
   users                User[]
   teams                Team[]

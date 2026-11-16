@@ -1335,6 +1335,9 @@ class _ModalDetalhesVenda extends StatelessWidget {
                             url: receiptUrl,
                             icon: Icons.receipt_long_rounded,
                             emptyMessage: 'Sem comprovante anexado',
+                            captionTitle: 'Lote: $batchName · Ficha: $displayCode',
+                            captionSubtitle:
+                                '$clientName · $formattedValue ($paymentMethod)',
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1346,6 +1349,8 @@ class _ModalDetalhesVenda extends StatelessWidget {
                             url: sheetPhotoUrl,
                             icon: Icons.camera_alt_outlined,
                             emptyMessage: 'Sem foto da ficha',
+                            captionTitle: 'Lote: $batchName · Ficha: $displayCode',
+                            captionSubtitle: clientName,
                           ),
                         ),
                       ],
@@ -1476,6 +1481,8 @@ class _ModalDetalhesVenda extends StatelessWidget {
     required String? url,
     required IconData icon,
     required String emptyMessage,
+    String? captionTitle,
+    String? captionSubtitle,
   }) {
     final hasImage = url != null && url.isNotEmpty;
 
@@ -1507,7 +1514,9 @@ class _ModalDetalhesVenda extends StatelessWidget {
           ),
           if (hasImage)
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(11)),
+              borderRadius: captionTitle != null
+                  ? BorderRadius.zero
+                  : const BorderRadius.vertical(bottom: Radius.circular(11)),
               child: InkWell(
                 onTap: () => _abrirImagemEmZoom(context, url, title),
                 child: Stack(
@@ -1541,6 +1550,41 @@ class _ModalDetalhesVenda extends StatelessWidget {
                 emptyMessage,
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white30, fontSize: 11),
+              ),
+            ),
+          if (captionTitle != null || captionSubtitle != null)
+            Container(
+              padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.24),
+                borderRadius:
+                    const BorderRadius.vertical(bottom: Radius.circular(11)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (captionTitle != null)
+                    Text(
+                      captionTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFD8B4FE),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (captionSubtitle != null)
+                    Text(
+                      captionSubtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 10,
+                      ),
+                    ),
+                ],
               ),
             ),
         ],

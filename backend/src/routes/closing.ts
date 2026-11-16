@@ -2,8 +2,17 @@ import { Router, Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { resolveSellerCommissionRate } from '../utils/commission';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = Router();
+
+const VALID_COMPANY_PIX_KEY_TYPES = new Set(['CPF', 'CNPJ', 'EMAIL', 'PHONE', 'EVP']);
+
+function normalizePixKeyType(rawType: unknown): string | null {
+    if (typeof rawType !== 'string') return null;
+    const upper = rawType.trim().toUpperCase();
+    return VALID_COMPANY_PIX_KEY_TYPES.has(upper) ? upper : null;
+}
 
 
 // Helper de autorização para fechamento de vendedor
@@ -508,6 +517,141 @@ router.post('/city', authenticateToken, async (req: AuthRequest, res: any) => {
 // FECHAMENTO DIÁRIO TRADICIONAL (DailyClosing)
 // --------------------------------------------------------------------------
 
+// --------------------------------------------------------------------------
+// CHAVE PIX DA EMPRESA (RECEBIMENTO DE REPASSES DO VENDEDOR PARA A EMPRESA)
+// --------------------------------------------------------------------------
+router.get('/company-pix', authenticateToken, async (req: AuthRequest, res: Response) => {
+    try {
+        const companyId = req.user?.companyId;
+        if (!companyId) {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const company = await prisma.company.findUnique({
+            where: { id: companyId },
+            select: {
+                id: true,
+                name: true,
+                tradeName: true,
+                companyPixKey: true,
+                companyPixKeyType: true,
+            },
+        });
+
+        if (!company) {
+            return res.status(404).json({ error: 'Empresa não encontrada' });
+        }
+
+        return res.json({
+            companyPixKey: company.companyPixKey || '',
+            companyPixKeyType: company.companyPixKeyType || null,
+            companyName: company.tradeName || company.name,
+        });
+    } catch (error) {
+        console.error('Error fetching company pix key:', error);
+        return res.status(500).json({ error: 'Falha ao consultar chave Pix da empresa' });
+    }
+});
+
+const updateCompanyPixHandler = async (req: AuthRequest, res: Response) => {
+    try {
+        const companyId = req.user?.companyId;
+        if (!companyId) {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const rawKey = typeof req.body?.companyPixKey === 'string'
+            ? req.body.companyPixKey.trim()
+            : (typeof req.body?.pixKey === 'string' ? req.body.pixKey.trim() : '');
+
+        if (rawKey.length > 140) {
+            return res.status(400).json({ error: 'Chave Pix da empresa excede 140 caracteres.' });
+        }
+
+        const rawTypeInput = req.body?.companyPixKeyType ?? req.body?.pixKeyType;
+        if (rawTypeInput !== undefined && rawTypeInput !== null && String(rawTypeInput).trim() !== '') {
+            if (!normalizePixKeyType(rawTypeInput)) {
+                return res.status(400).json({
+                    error: 'Tipo de chave Pix inválido. Use CPF, CNPJ, EMAIL, PHONE ou EVP.',
+                });
+            }
+        }
+        const normalizedType = rawKey ? normalizePixKeyType(rawTypeInput) : null;
+
+        const existingCompany = await prisma.company.findUnique({
+            where: { id: companyId },
+            select: {
+                id: true,
+                name: true,
+                tradeName: true,
+                companyPixKey: true,
+                companyPixKeyType: true,
+            },
+        });
+
+        if (!existingCompany) {
+            return res.status(404).json({ error: 'Empresa não encontrada' });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+            const saved = await tx.company.update({
+                where: { id: companyId },
+                data: {
+                    companyPixKey: rawKey || null,
+                    companyPixKeyType: normalizedType,
+                },
+                select: {
+                    id: true,
+                    companyPixKey: true,
+                    companyPixKeyType: true,
+                },
+            });
+
+            await recordOperationalAuditEvent(
+                {
+                    companyId,
+                    category: 'PAYMENT',
+                    action: 'COMPANY_PIX_KEY_UPDATED',
+                    entityType: 'Company',
+                    entityId: companyId,
+                    entityReference: existingCompany.tradeName || existingCompany.name,
+                    previousValues: {
+                        hasCompanyPixKey: Boolean(existingCompany.companyPixKey),
+                        companyPixKeyType: existingCompany.companyPixKeyType,
+                    },
+                    newValues: {
+                        hasCompanyPixKey: Boolean(saved.companyPixKey),
+                        companyPixKeyType: saved.companyPixKeyType,
+                    },
+                    reason: req.body?.reason
+                        ? String(req.body.reason).trim()
+                        : 'Atualização administrativa da chave Pix da empresa',
+                    authorUserId: req.user?.id || null,
+                    authorName: req.user?.name || req.user?.cpf || 'Admin',
+                    authorRole: req.user?.role || null,
+                },
+                tx
+            );
+
+            return saved;
+        });
+
+        return res.json({
+            companyPixKey: updated.companyPixKey || '',
+            companyPixKeyType: updated.companyPixKeyType || null,
+            message: updated.companyPixKey
+                ? 'Chave Pix da empresa atualizada com sucesso.'
+                : 'Chave Pix da empresa removida.',
+        });
+    } catch (error) {
+        console.error('Error updating company pix key:', error);
+        return res.status(500).json({ error: 'Falha ao salvar chave Pix da empresa' });
+    }
+};
+
+router.patch('/company-pix', authenticateToken, requireAdminOrSupervisor, updateCompanyPixHandler);
+router.put('/company-pix', authenticateToken, requireAdminOrSupervisor, updateCompanyPixHandler);
+
 // Daily Closing Info for a Seller on a specific Date
 router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: Response) => {
     try {
@@ -538,7 +682,13 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 }
             },
             include: {
-                client: true,
+                client: {
+                    include: {
+                        batch: {
+                            select: { id: true, name: true, city: true }
+                        }
+                    }
+                },
                 payments: true,
                 creditAgreement: true,
             }
@@ -615,6 +765,13 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const seller = await prisma.user.findUnique({
             where: { id: sellerId }
         });
+        const effectiveCompanyId = seller?.companyId || userCompanyId;
+        const company = effectiveCompanyId
+            ? await prisma.company.findUnique({
+                where: { id: effectiveCompanyId },
+                select: { id: true, companyPixKey: true, companyPixKeyType: true }
+            })
+            : null;
         const requester = req.user?.id
             ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
             : null;
@@ -718,6 +875,41 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
           finalAmount = Math.abs(finalNet);
         }
 
+        const companyPixKey = company?.companyPixKey || requester?.pixKey || null;
+        const companyPixKeyType = company?.companyPixKey ? (company.companyPixKeyType || null) : null;
+        const sellerPixKey = seller?.pixKey || null;
+        const directionalPix =
+            finalDirection === 'SELLER_PAYS_COMPANY'
+                ? {
+                    direction: 'SELLER_PAYS_COMPANY' as const,
+                    recipient: 'COMPANY' as const,
+                    label: 'Chave Pix da Empresa',
+                    pixKey: companyPixKey,
+                    pixKeyType: companyPixKeyType,
+                }
+                : finalDirection === 'COMPANY_PAYS_SELLER'
+                    ? {
+                        direction: 'COMPANY_PAYS_SELLER' as const,
+                        recipient: 'SELLER' as const,
+                        label: 'Chave Pix do Vendedor',
+                        pixKey: sellerPixKey,
+                        pixKeyType: null,
+                    }
+                    : {
+                        direction: 'SETTLED' as const,
+                        recipient: null,
+                        label: null,
+                        pixKey: null,
+                        pixKeyType: null,
+                    };
+
+        const enrichedSales = sales.map((s) => ({
+            ...s,
+            loteName: s.client?.batch?.name || null,
+            fichaLabel: s.client?.visibleCode || s.fichaNumber || s.client?.sequenceNumber || null,
+            clientName: s.client?.name || null,
+        }));
+
         res.json({
             salesCount: sales.length,
             nonSalesCount: nonSales.length,
@@ -748,7 +940,11 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             historicalBalance,
             finalDirection,
             finalAmount,
-            adminPixKey: requester?.pixKey || null,
+            companyPixKey,
+            companyPixKeyType,
+            sellerPixKey,
+            adminPixKey: companyPixKey,
+            directionalPix,
             // Aliases de compatibilidade retroativa
             calculatedCommission: commissionAmount,
             commission: commissionAmount,
@@ -757,7 +953,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             totalHistoricalDebt: historicalBalance,
             isClosed: !!existingClosing,
             closingData: existingClosing,
-            sales,
+            sales: enrichedSales,
             nonSales
         });
     } catch (error: any) {

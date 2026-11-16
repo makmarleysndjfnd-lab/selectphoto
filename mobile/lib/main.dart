@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'servicos/servico_api.dart';
@@ -8,7 +7,7 @@ import 'servicos/servico_sincronizacao.dart';
 import 'servicos/servico_notificacoes_agenda.dart';
 import 'provedores/provedor_configuracoes.dart';
 import 'telas/tela_login.dart';
-import 'widgets/led_input_decoration.dart';
+import 'utils/lumora_theme.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -46,10 +45,13 @@ void main() async {
     await ServicoNotificacoesAgenda().inicializar();
   } catch (_) {}
 
+  final settingsProvider = SettingsProvider();
+  await settingsProvider.ensureLoaded();
+
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+        ChangeNotifierProvider<SettingsProvider>.value(value: settingsProvider),
         ProxyProvider<SettingsProvider, ApiService>(
           update: (context, settings, previous) {
             final apiService = previous ?? ApiService();
@@ -141,26 +143,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           navigatorKey: rootNavigatorKey,
           scaffoldMessengerKey: rootScaffoldMessengerKey,
           debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF0288D1),
-              brightness: settings.isDarkMode ? Brightness.dark : Brightness.light,
-            ),
-            useMaterial3: true,
-            textTheme: GoogleFonts.interTextTheme(
-              settings.isDarkMode ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
-            ),
-            inputDecorationTheme: LedInputDecoration.build(),
-            pageTransitionsTheme: const PageTransitionsTheme(
-              builders: {
-                TargetPlatform.android: ZoomPageTransitionsBuilder(),
-                TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-                TargetPlatform.windows: ZoomPageTransitionsBuilder(),
-                TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
-                TargetPlatform.linux: ZoomPageTransitionsBuilder(),
-              },
-            ),
-          ),
+          theme: buildLumoraLightTheme(),
+          darkTheme: buildLumoraDarkTheme(),
+          themeMode: settings.isDarkMode ? ThemeMode.dark : ThemeMode.light,
           home: const LoginScreen(),
         );
       },

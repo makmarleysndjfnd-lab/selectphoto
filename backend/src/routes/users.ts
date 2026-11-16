@@ -245,6 +245,146 @@ router.post('/me/request-deletion', authenticateToken, async (req: AuthRequest, 
   }
 });
 
+// Autoexclusão imediata e segura da conta com confirmação explícita de senha atual,
+// revogação imediata de sessão (activeSessionId: null / passwordResetAt) e anonimização de credenciais,
+// preservando registros financeiros e fiscais obrigatórios da empresa.
+router.post('/me/delete-account', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Sessão inválida' });
+    }
+
+    const currentPassword =
+      typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+    if (!currentPassword.trim()) {
+      return res.status(400).json({ error: 'Confirme sua senha atual para excluir a conta.' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        cpf: true,
+        email: true,
+        role: true,
+        companyId: true,
+        password: true,
+        active: true,
+      },
+    });
+
+    if (!user || !user.active) {
+      return res.status(403).json({ error: 'Conta já inativa ou não encontrada.' });
+    }
+
+    const passwordMatches = await bcrypt.compare(currentPassword, user.password);
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Senha atual incorreta.' });
+    }
+
+    const now = new Date();
+    const shortId = user.id.slice(0, 8);
+    const anonSlug = `${shortId}_${Date.now().toString(36)}`;
+    const reason =
+      typeof req.body?.reason === 'string' && req.body.reason.trim().length > 0
+        ? req.body.reason.trim().slice(0, 500)
+        : 'Exclusão de conta confirmada pelo próprio usuário';
+
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          name: `Usuário Excluído (${shortId})`,
+          cpf: user.cpf ? `anon_${anonSlug}` : null,
+          email: null,
+          phone: null,
+          emergencyPhone: null,
+          address: null,
+          rg: null,
+          criminalRecordUrl: null,
+          profilePhotoUrl: null,
+          password: `$2b$10$DELETED_${crypto.randomBytes(16).toString('hex')}`,
+          active: false,
+          activeSessionId: null,
+          activeDeviceId: null,
+          sessionStartedAt: null,
+          passwordResetAt: now,
+          fcmToken: null,
+          pixKey: null,
+        },
+      });
+
+      await tx.userRecoveryEmail.deleteMany({ where: { userId: user.id } });
+      await tx.userRecoveryChallenge.deleteMany({ where: { userId: user.id } });
+
+      const pendingRequests = await tx.accountDeletionRequest.findMany({
+        where: { userId: user.id, status: 'PENDING_REVIEW' },
+        select: { id: true },
+      });
+
+      if (pendingRequests.length > 0) {
+        await tx.accountDeletionRequest.updateMany({
+          where: { id: { in: pendingRequests.map((r) => r.id) } },
+          data: {
+            status: 'APPROVED_ANONYMIZED',
+            processedAt: now,
+            processedByUserId: user.id,
+          },
+        });
+      } else {
+        await tx.accountDeletionRequest.create({
+          data: {
+            userId: user.id,
+            companyId: user.companyId,
+            status: 'APPROVED_ANONYMIZED',
+            reason,
+            scheduledAnonymizeAt: now,
+            processedAt: now,
+            processedByUserId: user.id,
+            metadata: JSON.stringify({
+              selfService: true,
+              role: user.role,
+              ip: req.ip || null,
+            }),
+          },
+        });
+      }
+
+      await recordOperationalAuditEvent(
+        {
+          companyId: user.companyId,
+          category: 'CONDITIONS',
+          action: 'USER_ACCOUNT_DELETED_SELF',
+          entityType: 'User',
+          entityId: user.id,
+          entityReference: shortId,
+          previousValues: { role: user.role, active: true },
+          newValues: { active: false, anonymized: true, sessionRevoked: true },
+          reason,
+          authorUserId: user.id,
+          authorName: shortId,
+          authorRole: user.role,
+        },
+        tx
+      );
+    });
+
+    return res.json({
+      deleted: true,
+      deactivated: true,
+      anonymized: true,
+      sessionRevoked: true,
+      preservedFiscalAndFinancialRecords: true,
+      message: 'Conta excluída e sessão encerrada com segurança.',
+    });
+  } catch (error) {
+    console.error('Error during self-service account deletion:', error);
+    return res.status(500).json({ error: 'Falha ao processar exclusão segura da conta' });
+  }
+});
+
 // Listar solicitações de exclusão de conta (Admin only)
 router.get('/deletion-requests', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
@@ -504,7 +644,7 @@ router.post('/', authenticateToken, requireAdmin, safeUpload(upload.fields([{ na
 router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }])), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode, salesType } = req.body;
+    const { name, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, password, carId, photographerCode, salesType, pixKey } = req.body;
 
     const callerRole = req.user?.role || '';
     const callerRank = ROLE_RANK[callerRole] || 0;
@@ -590,6 +730,7 @@ router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ 
       address: address || null,
       usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
       salesType: salesType !== undefined ? (salesType && salesType.trim() !== '' ? salesType.trim() : null) : existingUser.salesType,
+      ...(pixKey !== undefined ? { pixKey: typeof pixKey === 'string' && pixKey.trim() !== '' ? pixKey.trim().slice(0, 140) : null } : {}),
       profilePhotoUrl,
       criminalRecordUrl
     };

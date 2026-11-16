@@ -7,11 +7,13 @@ import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 import 'tela_login.dart';
 import 'tela_config_impressora.dart';
-import 'tela_cadastro_custos.dart';
 import 'tela_demonstrativo_empresa_lumora.dart';
 import 'tela_suporte_empresa.dart';
 import 'tela_integracoes_empresa.dart';
 import 'tela_sincronizacao.dart';
+import '../utils/lumora_theme.dart';
+import '../widgets/account_deletion_dialog.dart';
+import '../widgets/company_pix_dialog.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/led_button.dart';
@@ -61,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _ticketCtrl = TextEditingController();
   final TextEditingController _fichasCtrl = TextEditingController();
   final TextEditingController _pixCtrl = TextEditingController();
+  String _pixKeyType = 'EVP';
   bool _savingPix = false;
 
   @override
@@ -79,26 +82,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadPixKey() async {
     try {
-      final pixKey = await ApiService().getMyPixKey();
-      if (mounted) setState(() => _pixCtrl.text = pixKey);
-    } catch (_) {}
+      final res = await ApiService().getCompanyPixKey();
+      final key = res['companyPixKey']?.toString() ?? '';
+      final type = res['companyPixKeyType']?.toString().toUpperCase();
+      if (mounted) {
+        setState(() {
+          _pixCtrl.text = key;
+          if (type != null && type.isNotEmpty) {
+            _pixKeyType = type;
+          }
+        });
+      }
+    } catch (_) {
+      try {
+        final fallbackKey = await ApiService().getMyPixKey();
+        if (mounted && _pixCtrl.text.isEmpty) {
+          setState(() => _pixCtrl.text = fallbackKey);
+        }
+      } catch (_) {}
+    }
   }
 
   Future<void> _savePixKey() async {
     if (_savingPix) return;
     setState(() => _savingPix = true);
     try {
-      final saved = await ApiService().saveMyPixKey(_pixCtrl.text);
+      final res = await ApiService().saveCompanyPixKey(
+        _pixCtrl.text,
+        pixKeyType: _pixKeyType,
+      );
+      final saved = res['companyPixKey']?.toString() ?? _pixCtrl.text.trim();
       if (!mounted) return;
       setState(() => _pixCtrl.text = saved);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Chave PIX de repasse salva.'),
+          content: Text('Chave PIX da Empresa salva com sucesso.'),
           backgroundColor: Colors.green));
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Erro ao salvar PIX: $e'),
+            content: Text('Erro ao salvar PIX da Empresa: $e'),
             backgroundColor: Colors.red));
+      }
     } finally {
       if (mounted) setState(() => _savingPix = false);
     }
@@ -448,160 +472,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _showTransferDialog(BuildContext context, String itemType) async {
-    final qtyController = TextEditingController();
-    String? selectedRecipient;
-    List<dynamic> recipients = [];
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-          child: CircularProgressIndicator(color: Colors.orangeAccent)),
-    );
-
-    try {
-      final api = ApiService();
-      final users = await api.getCompanyUsers();
-      if (itemType == 'COVER') {
-        recipients = users.where((u) {
-          final role = (u['role'] ?? '').toString().toUpperCase();
-          return role != 'PHOTOGRAPHER';
-        }).toList();
-      } else {
-        recipients = users;
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erro ao carregar usuários: $e')));
-      }
-      return;
-    }
-
-    if (!mounted) return;
-    Navigator.pop(context); // fecha loading
-
-    if (!context.mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1A2535),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              title: Row(
-                children: [
-                  Icon(
-                      itemType == 'COVER'
-                          ? Icons.layers_rounded
-                          : Icons.menu_book_rounded,
-                      color: const Color(0xFF4FC3F7)),
-                  const SizedBox(width: 8),
-                  Text('Transferir ${itemType == 'COVER' ? 'Capas' : 'Books'}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16)),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DropdownButtonFormField<String>(
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFF1A2535),
-                      value: selectedRecipient,
-                      hint: const Text('Selecione o destinatário',
-                          style: TextStyle(color: Colors.white54)),
-                      items: recipients.map((u) {
-                        final rawRole = (u['role'] ?? '').toString().toUpperCase();
-                        final isAdminRole = [
-                          'ADMIN',
-                          'COMPANY_ADMIN',
-                          'SUPERVISOR',
-                          'SUPER_ADMIN'
-                        ].contains(rawRole);
-                        final roleLabel = itemType == 'COVER'
-                            ? (isAdminRole ? 'Devolver p/ Admin' : 'Vendedor')
-                            : rawRole;
-                        return DropdownMenuItem<String>(
-                          value: u['id'].toString(),
-                          child: Text('${u['name']} ($roleLabel)',
-                              style: const TextStyle(color: Colors.white),
-                              overflow: TextOverflow.ellipsis),
-                        );
-                      }).toList(),
-                      onChanged: (val) =>
-                          setDialogState(() => selectedRecipient = val),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: qtyController,
-                      keyboardType: TextInputType.number,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        labelText: 'Quantidade',
-                        labelStyle: TextStyle(color: Colors.white54),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancelar',
-                        style: TextStyle(color: Colors.white54))),
-                LedButton(
-                  onPressed: () async {
-                    final qty = int.tryParse(qtyController.text);
-                    if (selectedRecipient == null || qty == null || qty <= 0) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text('Preencha os campos corretamente.')));
-                      return;
-                    }
-                    try {
-                      if (itemType == 'COVER') {
-                        await ApiService()
-                            .transferBetweenSellers(selectedRecipient!, qty);
-                      } else {
-                        await ApiService().requestStockTransfer(
-                            selectedRecipient!, itemType, qty);
-                      }
-                      if (context.mounted) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                            content: Text(
-                                'Transferência solicitada/realizada com sucesso!'),
-                            backgroundColor: Colors.green));
-                      }
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text('Erro: $e'),
-                            backgroundColor: Colors.red));
-                      }
-                    }
-                  },
-                  child: const Text('Confirmar'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final settings = Provider.of<SettingsProvider>(context);
+    final palette = LumoraTheme.of(context, isAdmin: widget.canManageRoi);
 
     // ── VISÃO UNIFICADA DO FOTÓGRAFO ──────────────────────────────────────────
     if (widget.isFotografo) {
@@ -609,30 +483,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
         appBar: AppBar(
           title: const Text('Configurações do Fotógrafo',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          backgroundColor: const Color(0xFF1A1A2E),
+          backgroundColor: palette.headerStart,
           iconTheme: const IconThemeData(color: Colors.white),
         ),
-        backgroundColor: const Color(0xFF161625),
+        backgroundColor: palette.scaffoldBg,
         body: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             // 1. Imprimir Lote Atual
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.print_rounded, color: Color(0xFFFFB74D)),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.print_rounded, color: Color(0xFFFFB74D)),
                 ),
-                title: const Text('Imprimir Lote Atual',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text('Imprimir Lote Atual',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
                 subtitle: Text(
                   widget.currentLoteName != null && widget.currentLoteName!.isNotEmpty
                       ? 'Lote em uso: ${widget.currentLoteName} (${widget.currentLoteCount ?? 0} ficha(s))'
                       : 'Imprime o relatório de fechamento do lote em uso',
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, color: palette.textSecondary, size: 16),
                 onTap: () {
                   if (widget.onPrintLote != null) {
                     widget.onPrintLote!();
@@ -649,19 +523,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // 2. Finalizar Produção do Lote
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.done_all_rounded, color: Color(0xFFCE93D8)),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.done_all_rounded, color: Color(0xFFCE93D8)),
                 ),
-                title: const Text('Finalizar Produção do Lote',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                title: Text('Finalizar Produção do Lote',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                   'Notifica o admin e encerra a produção deste lote para envio à gráfica',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, color: palette.textSecondary, size: 16),
                 onTap: () {
                   if (widget.onFinalizeLote != null) {
                     widget.onFinalizeLote!();
@@ -678,19 +552,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // 3. Sincronização / Pendências Offline
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.sync_rounded, color: Color(0xFF4FC3F7)),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.sync_rounded, color: Color(0xFF4FC3F7)),
                 ),
-                title: const Text('Sincronização & Pendências Offline',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                title: Text('Sincronização & Pendências Offline',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                   'Sincroniza fichas e fotos locais com o servidor',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, color: palette.textSecondary, size: 16),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -701,27 +575,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 12),
 
-            // 4. Modo Escuro
+            // 4. Modo Escuro / Modo Claro
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: Colors.white12,
+                  backgroundColor: palette.surfaceAlt,
                   child: Icon(
                     settings.isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-                    color: const Color(0xFF90CAF9),
+                    color: palette.accent,
                   ),
                 ),
-                title: const Text('Modo Escuro',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text(settings.isDarkMode ? 'Modo Escuro' : 'Modo Claro',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
                 subtitle: Text(
                   settings.isDarkMode ? 'Tema escuro ativado' : 'Tema claro ativado',
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
                 trailing: Switch(
                   value: settings.isDarkMode,
                   onChanged: (val) => settings.setDarkMode(val),
-                  activeColor: const Color(0xFF4FC3F7),
+                  activeColor: palette.accent,
                 ),
               ),
             ),
@@ -729,19 +603,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // 5. Configurar Impressora Bluetooth
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.bluetooth_connected_rounded, color: Color(0xFF81C784)),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.bluetooth_connected_rounded, color: Color(0xFF81C784)),
                 ),
-                title: const Text('Configurar Impressora Bluetooth',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                title: Text('Configurar Impressora Bluetooth',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                   'Conectar impressora térmica portátil para comprovantes',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, color: palette.textSecondary, size: 16),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -754,27 +628,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // 6. Notificações Disponíveis
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.notifications_active_outlined, color: Colors.amberAccent),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.notifications_active_outlined, color: Colors.amberAccent),
                 ),
-                title: const Text('Notificações Disponíveis',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                title: Text('Notificações Disponíveis',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                   'Scout Automático de Eventos (Push IA) na sua região',
-                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                  style: TextStyle(color: palette.textSecondary, fontSize: 12),
                 ),
                 trailing: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.white10,
+                    color: Colors.amber.withOpacity(0.14),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Colors.amberAccent.withOpacity(0.5)),
                   ),
                   child: const Text('Ativo',
-                      style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
               ),
             ),
@@ -782,52 +656,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // 7. Política de Privacidade
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.privacy_tip_outlined, color: Color(0xFF4FC3F7)),
+                leading: CircleAvatar(
+                  backgroundColor: palette.surfaceAlt,
+                  child: const Icon(Icons.privacy_tip_outlined, color: Color(0xFF4FC3F7)),
                 ),
-                title: const Text('Política de Privacidade',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text('Minuta técnica e proteção de dados',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.open_in_new_rounded, color: Colors.white38, size: 18),
+                title: Text('Política de Privacidade',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text('Minuta técnica e proteção de dados',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.open_in_new_rounded, color: palette.textSecondary, size: 18),
                 onTap: () => _openLegalUrl('privacy.html'),
               ),
             ),
             const SizedBox(height: 12),
 
-            // 8. Exclusão de Conta
+            // 8. Exclusão Segura de Conta
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: Colors.redAccent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.person_remove_outlined, color: Colors.orangeAccent),
+                leading: CircleAvatar(
+                  backgroundColor: Colors.redAccent.withOpacity(0.14),
+                  child: const Icon(Icons.person_remove_outlined, color: Colors.redAccent),
                 ),
-                title: const Text('Exclusão de Conta',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text('Procedimento e canal de encerramento cadastral',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.open_in_new_rounded, color: Colors.white38, size: 18),
-                onTap: () => _openLegalUrl('account-deletion.html'),
+                title: const Text('Excluir Conta',
+                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                subtitle: Text('Confirme sua senha atual para encerrar e anonimizar o acesso',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.redAccent),
+                onTap: () => showSecureDeleteAccountDialog(context),
               ),
             ),
             const SizedBox(height: 16),
 
             // 9. Sair da Conta (preserva rascunhos e fichas locais)
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Colors.white12,
-                  child: Icon(Icons.logout_rounded, color: Colors.redAccent),
+                leading: CircleAvatar(
+                  backgroundColor: Colors.redAccent.withOpacity(0.12),
+                  child: const Icon(Icons.logout_rounded, color: Colors.redAccent),
                 ),
                 title: const Text('Sair da Conta',
                     style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                subtitle: const Text('Preserva rascunhos e fichas pendentes no dispositivo',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                subtitle: Text('Preserva rascunhos e fichas pendentes no dispositivo',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
                 onTap: () => _handleLogout(context),
               ),
             ),
@@ -843,27 +717,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         title:
             const Text('Configurações', style: TextStyle(color: Colors.white)),
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: palette.headerStart,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      backgroundColor: const Color(0xFF161625),
+      backgroundColor: palette.scaffoldBg,
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Theme Settings
           LedCard(
-            color: const Color(0xFF1A1A2E),
+            color: palette.accent,
             child: ListTile(
               leading: Icon(
                 settings.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                color: Colors.blueAccent,
+                color: palette.accent,
               ),
-              title: const Text('Modo Escuro',
-                  style: TextStyle(color: Colors.white)),
+              title: Text(
+                settings.isDarkMode ? 'Modo Escuro' : 'Modo Claro',
+                style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                settings.isDarkMode
+                    ? 'Alternar para tema claro de alta legibilidade'
+                    : 'Tema claro ativado (toque para voltar ao escuro)',
+                style: TextStyle(color: palette.textSecondary, fontSize: 12),
+              ),
               trailing: Switch(
                 value: settings.isDarkMode,
                 onChanged: (val) => settings.setDarkMode(val),
-                activeColor: Colors.blueAccent,
+                activeColor: palette.accent,
               ),
             ),
           ),
@@ -919,32 +801,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           if (widget.canManageRoi) ...[
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Row(children: [
-                      Icon(Icons.pix, color: Colors.greenAccent),
-                      SizedBox(width: 8),
+                    Row(children: [
+                      const Icon(Icons.pix, color: Colors.greenAccent),
+                      const SizedBox(width: 8),
                       Expanded(
-                          child: Text('PIX para recebimento de repasses',
+                          child: Text('PIX da Empresa para recebimento de repasses',
                               style: TextStyle(
-                                  color: Colors.white,
+                                  color: palette.textPrimary,
                                   fontWeight: FontWeight.bold))),
                     ]),
                     const SizedBox(height: 8),
-                    const Text(
-                        'Esta é a chave exibida ao vendedor quando ele precisa repassar valores à empresa.',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    Text(
+                        'Chave cadastrada da empresa exibida apenas quando o vendedor precisar repassar valores à empresa.',
+                        style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: _pixKeyType,
+                      dropdownColor: palette.surface,
+                      style: TextStyle(color: palette.textPrimary, fontSize: 13),
+                      decoration: const InputDecoration(
+                        labelText: 'Tipo da Chave PIX',
+                      ),
+                      items: lumoraPixKeyTypes
+                          .map((t) => DropdownMenuItem<String>(
+                                value: t['value'],
+                                child: Text(t['label']!),
+                              ))
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) setState(() => _pixKeyType = val);
+                      },
+                    ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _pixCtrl,
-                      style: const TextStyle(color: Colors.white),
+                      style: TextStyle(color: palette.textPrimary),
                       maxLength: 140,
                       decoration: const InputDecoration(
-                          labelText: 'Chave PIX do administrador',
+                          labelText: 'Chave PIX da Empresa',
                           prefixIcon: Icon(Icons.key)),
                     ),
                     SizedBox(
@@ -952,7 +852,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: LedButton(
                         onPressed: _savingPix ? null : _savePixKey,
                         child: Text(
-                            _savingPix ? 'Salvando...' : 'Salvar chave PIX'),
+                            _savingPix ? 'Salvando...' : 'Salvar chave PIX da Empresa'),
                       ),
                     ),
                   ],
@@ -967,16 +867,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Row(
+                    Row(
                       children: [
                         Icon(Icons.calculate,
-                            color: Color(0xFFCE93D8), size: 20),
-                        SizedBox(width: 8),
+                            color: palette.accent, size: 20),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Parâmetros Base da Calculadora de ROI',
                             style: TextStyle(
-                                color: Colors.white,
+                                color: palette.textPrimary,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 15),
                           ),
@@ -984,9 +884,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Valores padrão usados para estimar o lucro líquido das viagens.',
-                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                      style: TextStyle(color: palette.textSecondary, fontSize: 12),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -995,14 +895,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _hotelCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Hospedagem (R\$/p/dia)',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1011,14 +911,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _foodCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Alimentação (R\$/p/dia)',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1031,14 +931,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _fuelCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Combustível (R\$/km)',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1047,14 +947,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _prodCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Custo Produto (R\$)',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1067,14 +967,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _ticketCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Ticket Médio (R\$)',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1083,14 +983,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: TextField(
                             controller: _fichasCtrl,
                             keyboardType: TextInputType.number,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: const InputDecoration(
+                            style: TextStyle(color: palette.textPrimary),
+                            decoration: InputDecoration(
                               labelText: 'Fichas/Dia Padrão',
                               labelStyle: TextStyle(
-                                  color: Colors.white54, fontSize: 12),
+                                  color: palette.textSecondary, fontSize: 12),
                               filled: true,
-                              fillColor: Color(0xFF161625),
-                              border: OutlineInputBorder(),
+                              fillColor: palette.scaffoldBg,
+                              border: const OutlineInputBorder(),
                             ),
                           ),
                         ),
@@ -1115,14 +1015,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
                 leading: const Icon(Icons.description_rounded, color: Color(0xFF4FC3F7)),
-                title: const Text('Contrato Lumora (Consulta)',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text('Consulte os dados da sua empresa, taxa e vigência atual',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white38, size: 16),
+                title: Text('Contrato Lumora (Consulta)',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text('Consulte os dados da sua empresa, taxa e vigência atual',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded, color: palette.textSecondary, size: 16),
                 onTap: () => _showMyContractDialog(context),
               ),
             ),
@@ -1131,18 +1031,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           if (widget.canManageRoi) ...[
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
                 leading: const Icon(Icons.receipt_long_rounded,
                     color: Colors.amberAccent),
-                title: const Text('Demonstrativo Mensal Lumora (Consulta)',
+                title: Text('Demonstrativo Mensal Lumora (Consulta)',
                     style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                        color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                     'Competências, vigências, itens e saldo B2B sem dados pessoais',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded,
-                    color: Colors.white38, size: 16),
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded,
+                    color: palette.textSecondary, size: 16),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const TelaDemonstrativoEmpresaLumora(),
@@ -1152,18 +1052,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
                 leading: const Icon(Icons.support_agent_rounded,
                     color: Color(0xFF38BDF8)),
-                title: const Text('Suporte Técnico Lumora',
+                title: Text('Suporte Técnico Lumora',
                     style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                        color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                     'Abertura de chamados, mensagens e autorização de acesso técnico',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded,
-                    color: Colors.white38, size: 16),
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded,
+                    color: palette.textSecondary, size: 16),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const TelaSuporteEmpresa(),
@@ -1173,16 +1073,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
             LedCard(
-              color: const Color(0xFF1A1A2E),
+              color: palette.accent,
               child: ListTile(
                 leading: const Icon(Icons.api_rounded, color: Color(0xFF10B981)),
-                title: const Text('Integrações da minha empresa',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text(
+                title: Text('Integrações da minha empresa',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
                     'Cadastre e teste suas credenciais de IA (Gemini), Asaas e WhatsApp',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded,
-                    color: Colors.white38, size: 16),
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded,
+                    color: palette.textSecondary, size: 16),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const TelaIntegracoesEmpresa(),
@@ -1193,87 +1093,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 16),
           ],
 
-          if (widget.isVendedor) ...[
-            LedCard(
-              color: const Color(0xFF1A1A2E),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Row(
-                      children: [
-                        Icon(Icons.handyman_rounded,
-                            color: Color(0xFF4FC3F7), size: 18),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Operações do Vendedor',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(color: Colors.white12, height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.assignment_return_rounded,
-                        color: Colors.orangeAccent),
-                    title: const Text('Transferir / Dividir Capas',
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text(
-                        'Repassar saldo de capas para outro vendedor',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () => _showTransferDialog(context, 'COVER'),
-                  ),
-                  const Divider(color: Colors.white12, height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.menu_book_rounded,
-                        color: Colors.lightGreenAccent),
-                    title: const Text('Transferir / Dividir Books',
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text(
-                        'Repassar books físicos entre a equipe',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () => _showTransferDialog(context, 'BOOK'),
-                  ),
-                  const Divider(color: Colors.white12, height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.receipt_long_rounded,
-                        color: Color(0xFFCE93D8)),
-                    title: const Text('Lançar Despesas / Custos',
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: const Text(
-                        'Cadastrar alimentação, combustível, hotel ou outros',
-                        style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    onTap: () {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const CostEntryScreen(),
-                          ));
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-
+          // Operações do vendedor ficam na aba Operações (painel principal),
+          // mantendo Configurações enxuta para ajustes de conta e sistema.
           // Actions
           LedCard(
-            color: const Color(0xFF1A1A2E),
+            color: palette.accent,
             child: Column(
               children: [
                 ListTile(
                   leading: const Icon(Icons.sync, color: Colors.greenAccent),
-                  title: const Text('Sincronizar Manualmente',
-                      style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Envia dados offline pendentes',
-                      style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  title: Text('Sincronizar Manualmente',
+                      style: TextStyle(color: palette.textPrimary)),
+                  subtitle: Text('Envia dados offline pendentes',
+                      style: TextStyle(color: palette.textSecondary, fontSize: 12)),
                   onTap: () => _handleSync(context),
                 ),
                 if (widget.isFotografo) ...[
@@ -1496,27 +1328,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                const Divider(color: Colors.white12, height: 1),
+                const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.privacy_tip_outlined, color: Colors.blueAccent),
-                  title: const Text('Política de Privacidade (Minuta)',
-                      style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Minuta técnica em validação jurídica',
-                      style: TextStyle(color: Colors.white54, fontSize: 11)),
-                  trailing: const Icon(Icons.open_in_new, color: Colors.white38, size: 18),
+                  title: Text('Política de Privacidade (Minuta)',
+                      style: TextStyle(color: palette.textPrimary)),
+                  subtitle: Text('Minuta técnica em validação jurídica',
+                      style: TextStyle(color: palette.textSecondary, fontSize: 11)),
+                  trailing: Icon(Icons.open_in_new, color: palette.textSecondary, size: 18),
                   onTap: () => _openLegalUrl('privacy.html'),
                 ),
-                const Divider(color: Colors.white12, height: 1),
+                const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.person_remove_outlined, color: Colors.orangeAccent),
-                  title: const Text('Exclusão de Conta (Procedimento)',
-                      style: TextStyle(color: Colors.white)),
-                  subtitle: const Text('Instruções e canal de inativação/exclusão',
-                      style: TextStyle(color: Colors.white54, fontSize: 11)),
-                  trailing: const Icon(Icons.open_in_new, color: Colors.white38, size: 18),
-                  onTap: () => _openLegalUrl('account-deletion.html'),
+                  leading: const Icon(Icons.person_remove_outlined, color: Colors.redAccent),
+                  title: const Text('Excluir Conta',
+                      style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                  subtitle: Text('Desativa e anonimiza seu acesso após confirmar a senha atual',
+                      style: TextStyle(color: palette.textSecondary, fontSize: 11)),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Colors.redAccent),
+                  onTap: () => showSecureDeleteAccountDialog(context),
                 ),
-                const Divider(color: Colors.white12, height: 1),
+                const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.logout, color: Colors.redAccent),
                   title: const Text('Sair da Conta',

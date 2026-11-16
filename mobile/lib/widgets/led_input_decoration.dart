@@ -2,16 +2,21 @@ import 'package:flutter/material.dart';
 
 class LedInputDecoration {
   static InputDecorationTheme build({
-    Color color = const Color(0xFFCE93D8), // Default purple
+    Color color = const Color(0xFFCE93D8),
+    Brightness brightness = Brightness.dark,
   }) {
+    final isLight = brightness == Brightness.light;
     return InputDecorationTheme(
-      labelStyle: const TextStyle(color: Colors.white70),
-      hintStyle: const TextStyle(color: Colors.white38),
+      labelStyle: TextStyle(color: isLight ? const Color(0xFF475569) : Colors.white70),
+      hintStyle: TextStyle(color: isLight ? const Color(0xFF94A3B8) : Colors.white38),
       filled: true,
-      fillColor: const Color(0xFF1A1A2E), // Dark background
+      fillColor: isLight ? Colors.white : const Color(0xFF1A1A2E),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(30),
-        borderSide: BorderSide(color: color.withOpacity(0.3), width: 1),
+        borderSide: BorderSide(
+          color: isLight ? const Color(0xFFCBD5E1) : color.withOpacity(0.3),
+          width: 1,
+        ),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(30),
@@ -19,11 +24,11 @@ class LedInputDecoration {
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(30),
-        borderSide: BorderSide(color: Colors.redAccent, width: 1),
+        borderSide: const BorderSide(color: Colors.redAccent, width: 1),
       ),
       focusedErrorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(30),
-        borderSide: BorderSide(color: Colors.redAccent, width: 2),
+        borderSide: const BorderSide(color: Colors.redAccent, width: 2),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
     );

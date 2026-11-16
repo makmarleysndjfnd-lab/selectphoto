@@ -18,6 +18,7 @@ import '../utils/km_request_dialog.dart';
 import '../utils/ui_helpers.dart';
 import '../utils/brazilian_phone_formatter.dart';
 import '../widgets/led_button.dart';
+import '../utils/lumora_theme.dart';
 
 // ── Palette for House Colors ──────────────────────────────────────────────────
 const List<Color> _houseColors = [
@@ -1469,8 +1470,9 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
   // ── UI Building ─────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final palette = LumoraTheme.of(context, isAdmin: false);
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1923),
+      backgroundColor: palette.scaffoldBg,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: Column(

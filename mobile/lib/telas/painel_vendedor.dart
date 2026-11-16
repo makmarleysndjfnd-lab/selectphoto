@@ -13,8 +13,11 @@ import '../utils/km_request_dialog.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
 import 'tela_agenda.dart';
+import 'tela_cadastro_custos.dart';
 import 'tela_sincronizacao.dart';
 import 'tela_carteira_crediario_vendedor.dart';
+import '../utils/lumora_theme.dart';
+import '../widgets/transfer_capas_dialog.dart';
 
 double normalizeCommissionPercentage(dynamic rate, dynamic percentage) {
   final raw = rate is num
@@ -1035,8 +1038,9 @@ class _SellerDashboardState extends State<SellerDashboard>
 
   @override
   Widget build(BuildContext context) {
+    final palette = LumoraTheme.of(context, isAdmin: false);
     return Scaffold(
-      backgroundColor: const Color(0xFF0F1923),
+      backgroundColor: palette.scaffoldBg,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: Column(
@@ -1075,55 +1079,95 @@ class _SellerDashboardState extends State<SellerDashboard>
   }
 
   Widget _buildTopQuickActionsBar() {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: _buildTopActionButton(
-            icon: Icons.account_balance_wallet_rounded,
-            label: 'Meus\nCrediários',
-            accentColor: const Color(0xFF00E5FF),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const TelaCarteiraCrediarioVendedor(),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.account_balance_wallet_rounded,
+                label: 'Meu\nCrediário',
+                accentColor: const Color(0xFF00E5FF),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const TelaCarteiraCrediarioVendedor(),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.calendar_month_rounded,
+                label: 'Abrir\nAgenda',
+                accentColor: const Color(0xFF4FC3F7),
+                badgeCount: _personalAppointments.length,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TelaAgenda()),
+                  ).then((_) => _fetchClients());
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // Dois botões quadrados logo abaixo de Meu Crediário e Abrir Agenda
+        Row(
+          children: [
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.layers_rounded,
+                label: 'Transferir\nCapas',
+                accentColor: const Color(0xFFFFB74D),
+                onTap: () => showTransferCapasDialog(
+                  context,
+                  onTransferred: _fetchClients,
                 ),
-              );
-            },
-          ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.receipt_long_rounded,
+                label: 'Lançar\nDespesa',
+                accentColor: const Color(0xFFA855F7),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CostEntryScreen()),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildTopActionButton(
-            icon: Icons.calendar_month_rounded,
-            label: 'Abrir\nAgenda',
-            accentColor: const Color(0xFF4FC3F7),
-            badgeCount: _personalAppointments.length,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TelaAgenda()),
-              ).then((_) => _fetchClients());
-            },
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildTopActionButton(
-            icon: Icons.qr_code_scanner_rounded,
-            label: 'Buscar\nFicha',
-            accentColor: const Color(0xFF29B6F6),
-            onTap: _showBuscaFichaModal,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _buildTopActionButton(
-            icon: Icons.swap_horiz_rounded,
-            label: 'Distribuição\nVendedor',
-            accentColor: const Color(0xFFCE93D8),
-            onTap: _showDistribuicaoVendedorModal,
-          ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.qr_code_scanner_rounded,
+                label: 'Buscar\nFicha',
+                accentColor: const Color(0xFF29B6F6),
+                onTap: _showBuscaFichaModal,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.swap_horiz_rounded,
+                label: 'Distribuição\nVendedor',
+                accentColor: const Color(0xFFCE93D8),
+                onTap: _showDistribuicaoVendedorModal,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1136,18 +1180,28 @@ class _SellerDashboardState extends State<SellerDashboard>
     required VoidCallback onTap,
     int badgeCount = 0,
   }) {
+    final palette = LumoraTheme.of(context, isAdmin: false);
     return Container(
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF13273A), Color(0xFF1A2634)],
+        gradient: LinearGradient(
+          colors: palette.isLight
+              ? [Colors.white, palette.surfaceAlt]
+              : const [Color(0xFF13273A), Color(0xFF1A2634)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accentColor.withOpacity(0.45), width: 1.2),
+        border: Border.all(
+          color: palette.isLight
+              ? palette.border
+              : accentColor.withOpacity(0.45),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: accentColor.withOpacity(0.1),
+            color: palette.isLight
+                ? Colors.black.withOpacity(0.05)
+                : accentColor.withOpacity(0.1),
             blurRadius: 8,
             offset: const Offset(0, 3),
           ),
@@ -1172,7 +1226,11 @@ class _SellerDashboardState extends State<SellerDashboard>
                         color: accentColor.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Icon(icon, color: accentColor, size: 22),
+                      child: Icon(
+                        icon,
+                        color: palette.isLight ? palette.accentText : accentColor,
+                        size: 22,
+                      ),
                     ),
                     if (badgeCount > 0)
                       Positioned(
@@ -1202,8 +1260,8 @@ class _SellerDashboardState extends State<SellerDashboard>
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: palette.textPrimary,
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                     height: 1.15,

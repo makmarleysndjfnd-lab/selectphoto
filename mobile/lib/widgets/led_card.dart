@@ -33,24 +33,29 @@ class _LedCardState extends State<LedCard> {
 
   @override
   Widget build(BuildContext context) {
-    final glowOpacity = widget.isInteractive && _isHovering ? 0.3 : 0.1;
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    final glowOpacity = widget.isInteractive && _isHovering ? 0.28 : 0.1;
     final blurRadius = widget.isInteractive && _isHovering ? 15.0 : 8.0;
 
     Widget cardContent = Container(
       margin: widget.margin,
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E), // Dark background matching app
+        color: isLight ? Colors.white : const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(widget.borderRadius),
         border: Border.all(
-          color: widget.color.withOpacity(0.5),
+          color: isLight
+              ? const Color(0xFFCBD5E1)
+              : widget.color.withOpacity(0.5),
           width: 1.0,
         ),
         boxShadow: [
           BoxShadow(
-            color: widget.color.withOpacity(glowOpacity),
+            color: isLight
+                ? Colors.black.withOpacity(0.06)
+                : widget.color.withOpacity(glowOpacity),
             blurRadius: blurRadius,
-            spreadRadius: 1,
-            offset: const Offset(0, 0),
+            spreadRadius: isLight ? 0 : 1,
+            offset: Offset(0, isLight ? 3 : 0),
           ),
         ],
       ),

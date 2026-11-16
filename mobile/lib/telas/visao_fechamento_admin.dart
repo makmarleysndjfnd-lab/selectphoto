@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
 import 'package:flutter/services.dart';
 import '../widgets/authenticated_image.dart';
+import '../widgets/company_pix_dialog.dart';
 import '../widgets/led_button.dart';
+import '../utils/lumora_theme.dart';
 import 'visao_rotas_chegada.dart';
 
 double normalizeCommissionPercentage(dynamic rate, dynamic percentage) {
@@ -615,6 +617,65 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                   _infoRow('Comissão a Pagar ao Vendedor (Final)',
                       'R\$ ${saldoFinal.toStringAsFixed(2)}',
                       color: Colors.green),
+                  const SizedBox(height: 10),
+                  Builder(builder: (context) {
+                    final sellerPixKey =
+                        data['sellerPixKey']?.toString().trim() ?? '';
+                    return Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.sizeOf(context).width - 104,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.greenAccent.withOpacity(0.45)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.pix,
+                                  color: Colors.greenAccent, size: 15),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  'Pix do Vendedor: ${sellerPixKey.isNotEmpty ? sellerPixKey : 'não cadastrado'}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              if (sellerPixKey.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                InkWell(
+                                  onTap: () {
+                                    Clipboard.setData(
+                                        ClipboardData(text: sellerPixKey));
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                            content: Text(
+                                                'Pix do vendedor copiado!')));
+                                  },
+                                  child: const Icon(Icons.copy,
+                                      color: Colors.greenAccent, size: 15),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  }),
                   const SizedBox(height: 16),
                   LedButton(
                       onPressed: () async {
@@ -641,71 +702,112 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                       child: const Text('Registrar Pagamento')),
                 ] else if (direction == 'SELLER_PAYS_COMPANY' &&
                     saldoFinal > 0) ...[
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Repasse Pendente',
-                          style:
-                              TextStyle(color: Colors.white70, fontSize: 14)),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Container(
-                            constraints: BoxConstraints(
-                              maxWidth: MediaQuery.sizeOf(context).width - 104,
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 4),
-                            decoration: BoxDecoration(
+                  Builder(builder: (context) {
+                    final companyPixKey =
+                        (data['companyPixKey'] ?? data['adminPixKey'])
+                                ?.toString()
+                                .trim() ??
+                            '';
+                    final companyPixKeyType =
+                        data['companyPixKeyType']?.toString().trim() ?? '';
+                    final hasCompanyPix = companyPixKey.isNotEmpty;
+                    final typeLabel = companyPixKeyType.isNotEmpty
+                        ? ' ($companyPixKeyType)'
+                        : '';
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Repasse Pendente (Vendedor → Empresa)',
+                            style:
+                                TextStyle(color: Colors.white70, fontSize: 14)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Container(
+                              constraints: BoxConstraints(
+                                maxWidth: MediaQuery.sizeOf(context).width - 104,
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 6),
+                              decoration: BoxDecoration(
                                 color: Colors.white12,
-                                borderRadius: BorderRadius.circular(4)),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    'Pix: ${data['adminPixKey']?.toString().trim().isNotEmpty == true ? data['adminPixKey'] : 'não cadastrado'}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        color: Colors.white, fontSize: 11),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                    color: const Color(0xFFA855F7)
+                                        .withOpacity(0.45)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.pix,
+                                      color: Color(0xFFD8B4FE), size: 15),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      'Pix da Empresa$typeLabel: ${hasCompanyPix ? companyPixKey : 'não cadastrado'}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600),
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 6),
-                                GestureDetector(
-                                  onTap: data['adminPixKey']
-                                              ?.toString()
-                                              .trim()
-                                              .isNotEmpty ==
-                                          true
-                                      ? () {
-                                          Clipboard.setData(ClipboardData(
-                                              text: data['adminPixKey']
-                                                  .toString()));
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(const SnackBar(
-                                                  content:
-                                                      Text('Pix copiado!')));
-                                        }
-                                      : null,
-                                  child: const Icon(Icons.copy,
-                                      color: Colors.white, size: 14),
-                                ),
-                              ],
+                                  if (hasCompanyPix) ...[
+                                    const SizedBox(width: 8),
+                                    InkWell(
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(
+                                            text: companyPixKey));
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(const SnackBar(
+                                                content: Text(
+                                                    'Pix da Empresa copiado!')));
+                                      },
+                                      child: const Icon(Icons.copy,
+                                          color: Color(0xFFD8B4FE), size: 15),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
-                          ),
-                          Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                  color: Colors.redAccent,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                    ],
-                  ),
+                            Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                    color: Colors.redAccent,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold)),
+                            TextButton.icon(
+                              onPressed: () {
+                                showCompanyPixKeyDialog(
+                                  context,
+                                  initialKey: companyPixKey,
+                                  initialType: companyPixKeyType,
+                                  onSaved: () {
+                                    if (mounted) setState(() {});
+                                  },
+                                );
+                              },
+                              icon: const Icon(Icons.edit_outlined,
+                                  size: 15, color: Color(0xFFD8B4FE)),
+                              label: Text(
+                                hasCompanyPix
+                                    ? 'Editar Pix da Empresa'
+                                    : 'Cadastrar Pix da Empresa',
+                                style: const TextStyle(
+                                    color: Color(0xFFD8B4FE),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  }),
                   const SizedBox(height: 16),
                   LedButton(
                       onPressed: () async {
@@ -743,33 +845,181 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                         color: Colors.white, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 Builder(builder: (context) {
-                  final receipts = (data['sales'] is List
+                  final salesWithReceipts = (data['sales'] is List
                           ? data['sales'] as List
                           : const [])
-                      .map((sale) =>
-                          sale is Map ? sale['receiptUrl']?.toString() : null)
-                      .whereType<String>()
-                      .where((url) => url.trim().isNotEmpty)
+                      .whereType<Map>()
+                      .map((s) => Map<String, dynamic>.from(s))
+                      .where((s) =>
+                          s['receiptUrl'] != null &&
+                          s['receiptUrl'].toString().trim().isNotEmpty)
                       .toList();
-                  if (receipts.isEmpty) {
+                  if (salesWithReceipts.isEmpty) {
                     return const Text('Nenhum comprovante concluído hoje.',
                         style: TextStyle(color: Colors.white54));
                   }
+                  final palette = LumoraTheme.of(context, isAdmin: true);
                   return SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
-                      children: receipts
-                          .map((url) => Padding(
-                                padding: const EdgeInsets.only(right: 12),
-                                child: AuthenticatedImage(
-                                  url: url,
-                                  width: 100,
-                                  height: 140,
-                                  fit: BoxFit.cover,
-                                  borderRadius: BorderRadius.circular(8),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: salesWithReceipts.map((sale) {
+                        final url = sale['receiptUrl'].toString().trim();
+                        final client = sale['client'] is Map
+                            ? Map<String, dynamic>.from(sale['client'] as Map)
+                            : <String, dynamic>{};
+                        final batch = client['batch'] is Map
+                            ? Map<String, dynamic>.from(client['batch'] as Map)
+                            : <String, dynamic>{};
+                        final loteName = (sale['loteName'] ??
+                                batch['name'] ??
+                                'Sem Lote')
+                            .toString();
+                        final fichaLabel = (sale['fichaLabel'] ??
+                                client['visibleCode'] ??
+                                sale['fichaNumber'] ??
+                                client['sequenceNumber'] ??
+                                'S/N')
+                            .toString();
+                        final clientName =
+                            (sale['clientName'] ?? client['name'] ?? 'Cliente')
+                                .toString();
+                        final valNum =
+                            double.tryParse(sale['value']?.toString() ?? '0') ??
+                                0.0;
+                        final method =
+                            (sale['paymentMethod'] ?? 'CASH').toString();
+
+                        return Container(
+                          width: 175,
+                          margin: const EdgeInsets.only(right: 12),
+                          decoration: BoxDecoration(
+                            color: palette.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: palette.accent.withOpacity(0.35)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              InkWell(
+                                borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(11)),
+                                onTap: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (dCtx) => Dialog(
+                                      backgroundColor: palette.surface,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          SizedBox(
+                                            height: 360,
+                                            child: InteractiveViewer(
+                                              child: AuthenticatedImage(
+                                                url: url,
+                                                fit: BoxFit.contain,
+                                              ),
+                                            ),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.all(14),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Lote: $loteName · Ficha: $fichaLabel',
+                                                  style: TextStyle(
+                                                      color: palette.accentText,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 13),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  '$clientName · R\$ ${valNum.toStringAsFixed(2)} ($method)',
+                                                  style: TextStyle(
+                                                      color:
+                                                          palette.textPrimary,
+                                                      fontSize: 12),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: ClipRRect(
+                                  borderRadius: const BorderRadius.vertical(
+                                      top: Radius.circular(11)),
+                                  child: AuthenticatedImage(
+                                    url: url,
+                                    width: 175,
+                                    height: 135,
+                                    fit: BoxFit.cover,
+                                  ),
                                 ),
-                              ))
-                          .toList(),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Lote: $loteName',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: palette.accentText,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Ficha: $fichaLabel',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      clientName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'R\$ ${valNum.toStringAsFixed(2)} · $method',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xFF22C55E),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
                     ),
                   );
                 }),

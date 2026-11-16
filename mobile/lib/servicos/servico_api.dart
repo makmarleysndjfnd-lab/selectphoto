@@ -1314,6 +1314,50 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getCompanyPixKey() async {
+    try {
+      final response = await _dio.get('/closing/company-pix');
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveCompanyPixKey(
+    String companyPixKey, {
+    String? pixKeyType,
+    String? reason,
+  }) async {
+    try {
+      final response = await _dio.patch('/closing/company-pix', data: {
+        'companyPixKey': companyPixKey.trim(),
+        if (pixKeyType != null && pixKeyType.trim().isNotEmpty)
+          'companyPixKeyType': pixKeyType.trim().toUpperCase(),
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteMyAccount(
+    String currentPassword, {
+    String? reason,
+  }) async {
+    try {
+      final response = await _dio.post('/users/me/delete-account', data: {
+        'currentPassword': currentPassword,
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      });
+      final result = Map<String, dynamic>.from(response.data as Map);
+      clearToken();
+      return result;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<void> saveProspect(Map<String, dynamic> eventData) async {
     try {
       await _dio.post('/events', data: eventData);

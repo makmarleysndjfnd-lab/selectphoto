@@ -1,5 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
@@ -25,8 +24,16 @@ class SettingsProvider with ChangeNotifier {
   double get defaultTicket => _defaultTicket;
   int get defaultFichasPerDay => _defaultFichasPerDay;
 
+  bool _loaded = false;
+
   SettingsProvider() {
-    _loadSettings();
+    ensureLoaded();
+  }
+
+  Future<void> ensureLoaded() async {
+    if (_loaded) return;
+    await _loadSettings();
+    _loaded = true;
   }
 
   Future<void> _loadSettings() async {
