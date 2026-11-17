@@ -3825,4 +3825,59 @@ class ApiService {
       throw _extractApiException(e);
     }
   }
+
+  /// Lista vendedores ativos e desbloqueados da mesma empresa para troca direta de books
+  Future<List<Map<String, dynamic>>> getPeerExchangeSellers() async {
+    try {
+      final resp = await _dio.get('/books/peer-exchange/sellers');
+      if (resp.data is List) {
+        return List<Map<String, dynamic>>.from(
+          (resp.data as List).map((e) => Map<String, dynamic>.from(e)),
+        );
+      }
+      return [];
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Executa troca direta de books entre vendedores ativos da mesma empresa sem aprovação prévia do Admin,
+  /// mediante validação autenticada da credencial/senha do vendedor parceiro
+  Future<Map<String, dynamic>> executePeerBookExchange({
+    required String targetSellerId,
+    required String partnerPassword,
+    required List<String> clientIds,
+    String? partnerLogin,
+    List<String>? counterClientIds,
+    String? reason,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/books/peer-exchange',
+        data: {
+          'targetSellerId': targetSellerId,
+          'partnerPassword': partnerPassword,
+          'clientIds': clientIds,
+          if (partnerLogin != null && partnerLogin.trim().isNotEmpty)
+            'partnerLogin': partnerLogin.trim(),
+          if (counterClientIds != null && counterClientIds.isNotEmpty)
+            'counterClientIds': counterClientIds,
+          if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+        },
+      );
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
+
+  /// Consulta trilha completa de rastreamento e trocas de um book/ficha
+  Future<Map<String, dynamic>> getBookTrackingHistory(String clientId) async {
+    try {
+      final resp = await _dio.get('/books/$clientId/history');
+      return Map<String, dynamic>.from(resp.data);
+    } on DioException catch (e) {
+      throw _extractApiException(e);
+    }
+  }
 }

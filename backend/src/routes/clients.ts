@@ -958,6 +958,7 @@ router.get('/ficha/:identifier', authenticateToken, async (req: AuthRequest, res
         photographer: true,
         sales: { orderBy: { date: 'desc' } },
         nonSales: { where: { supersededAt: null }, orderBy: { date: 'desc' } },
+        bookTransfers: { orderBy: { createdAt: 'desc' } },
       },
     });
 
@@ -1241,7 +1242,30 @@ router.get('/:id/timeline', authenticateToken, async (req: AuthRequest, res: Res
       orderBy: { timestamp: 'asc' },
     });
 
-    res.json(timeline);
+    const userIdsToResolve = Array.from(
+      new Set(
+        timeline
+          .flatMap((t) => [t.previousSellerId, t.newSellerId, t.authorId])
+          .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      )
+    );
+    const resolvedUsers =
+      userIdsToResolve.length > 0
+        ? await prisma.user.findMany({
+            where: { id: { in: userIdsToResolve } },
+            select: { id: true, name: true },
+          })
+        : [];
+    const userNameMap = new Map(resolvedUsers.map((u) => [u.id, u.name]));
+
+    const enrichedTimeline = timeline.map((t) => ({
+      ...t,
+      previousSellerName: t.previousSellerId ? userNameMap.get(t.previousSellerId) || null : null,
+      newSellerName: t.newSellerId ? userNameMap.get(t.newSellerId) || null : null,
+      authorName: t.authorId ? userNameMap.get(t.authorId) || null : null,
+    }));
+
+    res.json(enrichedTimeline);
   } catch (error) {
     console.error('Error fetching client timeline:', error);
     res.status(500).json({ error: 'Falha ao buscar linha do tempo da ficha' });

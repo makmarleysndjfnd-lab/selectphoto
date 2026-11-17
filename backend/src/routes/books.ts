@@ -1,4 +1,6 @@
 import express from 'express';
+import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import { prisma, Prisma } from '../services/prisma';
 import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
@@ -1014,6 +1016,11 @@ router.get('/search', authMiddleware, async (req: AuthRequest, res) => {
                     bookStatus: c.bookStatus,
                     outcomeStatus: c.outcomeStatus,
                     currentCustodian,
+                    trackingLocationLabel: c.assignedSeller?.name
+                        ? `Com vendedor: ${c.assignedSeller.name}`
+                        : c.batch?.name
+                        ? `No lote: ${c.batch.name}`
+                        : currentCustodian,
                     assignedSeller: c.assignedSeller,
                 };
             });
@@ -1423,6 +1430,480 @@ router.post('/travel-batch', authMiddleware, requireAdminOrSupervisor, async (re
     } catch (error: any) {
         console.error('Error creating travel batch:', error);
         res.status(500).json({ error: error.message || 'Falha ao gerar novo lote Em Viagem' });
+    }
+});
+
+// Lista vendedores ativos e desbloqueados da mesma empresa para troca direta de books
+router.get('/peer-exchange/sellers', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const companyId = req.user?.companyId;
+        const requesterId = req.user?.id;
+        if (!companyId) {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const sellers = await prisma.user.findMany({
+            where: {
+                companyId,
+                active: true,
+                sellerBlocked: false,
+                role: { in: ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'] },
+                ...(requesterId ? { id: { not: requesterId } } : {}),
+            },
+            select: {
+                id: true,
+                name: true,
+                role: true,
+                active: true,
+                sellerBlocked: true,
+            },
+            orderBy: { name: 'asc' },
+        });
+
+        res.json(sellers);
+    } catch (error: any) {
+        console.error('Error fetching peer-exchange sellers:', error);
+        res.status(500).json({ error: 'Falha ao listar vendedores disponíveis para troca' });
+    }
+});
+
+// Troca direta de books entre vendedores ativos da mesma empresa sem aprovação prévia do Admin,
+// com validação autenticada (sessão ativa do solicitante + credencial/senha do parceiro) e Serializable + FOR UPDATE
+router.post('/peer-exchange', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const requesterId = req.user?.id;
+        const companyId = req.user?.companyId;
+
+        if (!requesterId || !companyId) {
+            return res.status(403).json({ error: 'Sessão de vendedor ou empresa inválida' });
+        }
+
+        const {
+            targetSellerId,
+            partnerLogin,
+            partnerCpf,
+            partnerPassword,
+            clientIds,
+            counterClientIds,
+            reason,
+        } = req.body as {
+            targetSellerId?: string;
+            partnerLogin?: string;
+            partnerCpf?: string;
+            partnerPassword?: string;
+            clientIds?: string[];
+            counterClientIds?: string[];
+            reason?: string;
+        };
+
+        const cleanTargetSellerId = String(targetSellerId || '').trim();
+        if (!cleanTargetSellerId) {
+            return res.status(400).json({ error: 'Selecione o vendedor parceiro para concluir a troca.' });
+        }
+        if (cleanTargetSellerId === requesterId) {
+            return res.status(400).json({ error: 'Não é possível realizar troca de books consigo mesmo.' });
+        }
+        if (!partnerPassword || String(partnerPassword).length === 0) {
+            return res.status(400).json({ error: 'Informe a senha do vendedor parceiro selecionado para validar a troca.' });
+        }
+
+        const outgoingIds = Array.isArray(clientIds)
+            ? Array.from(new Set(clientIds.map((id) => String(id).trim()).filter(Boolean)))
+            : [];
+        const incomingIds = Array.isArray(counterClientIds)
+            ? Array.from(new Set(counterClientIds.map((id) => String(id).trim()).filter(Boolean)))
+            : [];
+
+        if (outgoingIds.length === 0 && incomingIds.length === 0) {
+            return res.status(400).json({ error: 'Selecione ao menos um book/ficha para realizar a troca.' });
+        }
+
+        const outgoingSet = new Set(outgoingIds);
+        if (incomingIds.some((id) => outgoingSet.has(id))) {
+            return res.status(400).json({ error: 'A mesma ficha não pode ser enviada e recebida na mesma operação.' });
+        }
+
+        const totalBooks = outgoingIds.length + incomingIds.length;
+        if (totalBooks > 200) {
+            return res.status(400).json({ error: 'Limite máximo de 200 fichas por troca excedido.' });
+        }
+
+        const [requester, targetSeller] = await Promise.all([
+            prisma.user.findUnique({
+                where: { id: requesterId },
+                select: {
+                    id: true,
+                    name: true,
+                    cpf: true,
+                    role: true,
+                    companyId: true,
+                    active: true,
+                    sellerBlocked: true,
+                    sellerBlockedReason: true,
+                },
+            }),
+            prisma.user.findUnique({
+                where: { id: cleanTargetSellerId },
+                select: {
+                    id: true,
+                    name: true,
+                    cpf: true,
+                    email: true,
+                    password: true,
+                    role: true,
+                    companyId: true,
+                    active: true,
+                    sellerBlocked: true,
+                    sellerBlockedReason: true,
+                },
+            }),
+        ]);
+
+        if (!requester || !requester.active || requester.companyId !== companyId) {
+            return res.status(403).json({ error: 'Vendedor solicitante inativo ou sem vínculo com a empresa.' });
+        }
+        const allowedExchangeRoles = ['SELLER', 'SELLER_MANAGER', 'VENDEDOR', 'ADMIN', 'COMPANY_ADMIN', 'SUPERVISOR', 'SUPER_ADMIN'];
+        if (!allowedExchangeRoles.includes(requester.role)) {
+            return res.status(403).json({ error: 'Perfil sem permissão para trocar books.' });
+        }
+        if (requester.sellerBlocked) {
+            return res.status(403).json({
+                error: `Seu usuário está bloqueado para movimentações: ${requester.sellerBlockedReason || 'bloqueio administrativo ativo'}.`,
+                code: 'SELLER_BLOCKED',
+            });
+        }
+
+        if (!targetSeller || targetSeller.companyId !== companyId) {
+            return res.status(403).json({ error: 'Vendedor parceiro não encontrado na mesma empresa.' });
+        }
+        if (!targetSeller.active) {
+            return res.status(403).json({ error: 'O vendedor parceiro selecionado está inativo.' });
+        }
+        const allowedPartnerRoles = ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'];
+        if (!allowedPartnerRoles.includes(targetSeller.role)) {
+            return res.status(400).json({ error: 'O usuário selecionado não possui perfil de vendedor ativo.' });
+        }
+        if (targetSeller.sellerBlocked) {
+            return res.status(403).json({
+                error: `Troca bloqueada: o vendedor parceiro está bloqueado (${targetSeller.sellerBlockedReason || 'bloqueio administrativo ativo'}).`,
+                code: 'PARTNER_SELLER_BLOCKED',
+            });
+        }
+
+        const rawLogin = String(partnerLogin ?? partnerCpf ?? '').trim();
+        if (rawLogin.length > 0) {
+            const digitsLogin = rawLogin.replace(/\D/g, '');
+            const targetCpfDigits = String(targetSeller.cpf || '').replace(/\D/g, '');
+            const matchesCpf =
+                rawLogin === targetSeller.cpf ||
+                (digitsLogin.length > 0 && digitsLogin === targetCpfDigits);
+            const matchesEmail =
+                Boolean(targetSeller.email) &&
+                rawLogin.toLowerCase() === String(targetSeller.email).toLowerCase();
+            if (!matchesCpf && !matchesEmail) {
+                return res.status(401).json({
+                    error: 'Login (CPF/e-mail) não confere com o vendedor parceiro selecionado.',
+                    code: 'PARTNER_CREDENTIALS_INVALID',
+                });
+            }
+        }
+
+        const passwordMatches = await bcrypt.compare(String(partnerPassword), targetSeller.password);
+        if (!passwordMatches) {
+            return res.status(401).json({
+                error: 'Senha do vendedor parceiro incorreta. Validação negada.',
+                code: 'PARTNER_CREDENTIALS_INVALID',
+            });
+        }
+
+        const allSortedIds = [...outgoingIds, ...incomingIds].sort();
+        const exchangeGroupId = randomUUID();
+        const cleanReason =
+            (reason && String(reason).trim()) ||
+            `Troca direta autenticada entre ${requester.name} e ${targetSeller.name}`;
+
+        const txResult = await prisma.$transaction(
+            async (tx) => {
+                // Bloqueio determinístico de linha para evitar corrida/troca simultânea do mesmo book
+                await tx.$executeRaw`
+                    SELECT id FROM "Client"
+                    WHERE id IN (${Prisma.join(allSortedIds)})
+                    ORDER BY id ASC
+                    FOR UPDATE
+                `;
+
+                const lockedClients = await tx.client.findMany({
+                    where: { id: { in: allSortedIds } },
+                    include: {
+                        batch: { select: { id: true, name: true } },
+                        assignedSeller: { select: { id: true, name: true } },
+                    },
+                });
+
+                if (lockedClients.length !== allSortedIds.length) {
+                    throw { status: 404, message: 'Um ou mais books/fichas informados não foram encontrados.' };
+                }
+
+                const clientMap = new Map(lockedClients.map((c) => [c.id, c]));
+                const transferableStatuses = ['DISTRIBUTED', 'DISTRIBUTED_REBOLO'];
+
+                const movePlans: Array<{
+                    client: (typeof lockedClients)[number];
+                    fromSellerId: string;
+                    fromSellerName: string;
+                    toSellerId: string;
+                    toSellerName: string;
+                }> = [];
+
+                for (const id of outgoingIds) {
+                    const c = clientMap.get(id)!;
+                    if (c.companyId !== companyId) {
+                        throw { status: 403, message: 'Acesso negado: ficha de outra empresa não pode ser trocada.' };
+                    }
+                    if (c.assignedSellerId !== requester.id) {
+                        throw {
+                            status: 403,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber || c.name}" não está mais sob posse de ${requester.name}.`,
+                        };
+                    }
+                    if (c.cityClosedAt) {
+                        throw {
+                            status: 409,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber}" pertence a uma cidade já fechada.`,
+                        };
+                    }
+                    if (!transferableStatuses.includes(c.bookStatus) || c.outcomeStatus !== 'PENDING') {
+                        throw {
+                            status: 409,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber}" possui status "${c.bookStatus}/${c.outcomeStatus}" e não está elegível para troca direta.`,
+                        };
+                    }
+                    movePlans.push({
+                        client: c,
+                        fromSellerId: requester.id,
+                        fromSellerName: requester.name,
+                        toSellerId: targetSeller.id,
+                        toSellerName: targetSeller.name,
+                    });
+                }
+
+                for (const id of incomingIds) {
+                    const c = clientMap.get(id)!;
+                    if (c.companyId !== companyId) {
+                        throw { status: 403, message: 'Acesso negado: ficha de outra empresa não pode ser trocada.' };
+                    }
+                    if (c.assignedSellerId !== targetSeller.id) {
+                        throw {
+                            status: 403,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber || c.name}" não está sob posse de ${targetSeller.name}.`,
+                        };
+                    }
+                    if (c.cityClosedAt) {
+                        throw {
+                            status: 409,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber}" pertence a uma cidade já fechada.`,
+                        };
+                    }
+                    if (!transferableStatuses.includes(c.bookStatus) || c.outcomeStatus !== 'PENDING') {
+                        throw {
+                            status: 409,
+                            message: `A ficha "${c.visibleCode || c.sequenceNumber}" possui status "${c.bookStatus}/${c.outcomeStatus}" e não está elegível para troca direta.`,
+                        };
+                    }
+                    movePlans.push({
+                        client: c,
+                        fromSellerId: targetSeller.id,
+                        fromSellerName: targetSeller.name,
+                        toSellerId: requester.id,
+                        toSellerName: requester.name,
+                    });
+                }
+
+                const createdTransfers = [];
+                for (const plan of movePlans) {
+                    const updatedClient = await tx.client.update({
+                        where: { id: plan.client.id },
+                        data: {
+                            assignedSellerId: plan.toSellerId,
+                            releasedForRouting: true,
+                        },
+                        select: {
+                            id: true,
+                            visibleCode: true,
+                            sequenceNumber: true,
+                            name: true,
+                            bookStatus: true,
+                            assignedSellerId: true,
+                            batchId: true,
+                            commercialCycle: true,
+                        },
+                    });
+
+                    const transfer = await tx.bookTransfer.create({
+                        data: {
+                            clientId: plan.client.id,
+                            companyId,
+                            fromSellerId: plan.fromSellerId,
+                            toSellerId: plan.toSellerId,
+                            initiatedById: requester.id,
+                            fromSellerName: plan.fromSellerName,
+                            toSellerName: plan.toSellerName,
+                            initiatedByName: requester.name,
+                            cycle: plan.client.commercialCycle || 1,
+                            previousStatus: plan.client.bookStatus,
+                            newStatus: updatedClient.bookStatus,
+                            exchangeGroupId,
+                            reason: cleanReason,
+                        },
+                    });
+                    createdTransfers.push(transfer);
+
+                    await tx.clientTimeline.create({
+                        data: {
+                            clientId: plan.client.id,
+                            cycle: plan.client.commercialCycle || 1,
+                            action: 'SELLER_PEER_EXCHANGE',
+                            previousStatus: plan.client.bookStatus,
+                            newStatus: updatedClient.bookStatus,
+                            previousSellerId: plan.fromSellerId,
+                            newSellerId: plan.toSellerId,
+                            authorId: requester.id,
+                            authorRole: requester.role,
+                            reason: cleanReason,
+                            metadata: {
+                                exchangeGroupId,
+                                transferId: transfer.id,
+                                fromSellerId: plan.fromSellerId,
+                                fromSellerName: plan.fromSellerName,
+                                toSellerId: plan.toSellerId,
+                                toSellerName: plan.toSellerName,
+                                initiatedById: requester.id,
+                                initiatedByName: requester.name,
+                                authenticatedPartnerId: targetSeller.id,
+                                authenticatedPartnerName: targetSeller.name,
+                                batchId: plan.client.batchId,
+                                batchName: plan.client.batch?.name || null,
+                                trackingLocationLabel: `Com vendedor: ${plan.toSellerName}`,
+                            },
+                        },
+                    });
+
+                    await recordOperationalAuditEvent(
+                        {
+                            companyId,
+                            category: 'CONDITIONS',
+                            action: 'SELLER_PEER_BOOK_EXCHANGE',
+                            entityType: 'Client',
+                            entityId: plan.client.id,
+                            entityReference:
+                                plan.client.visibleCode || plan.client.sequenceNumber || plan.client.name,
+                            previousValues: {
+                                assignedSellerId: plan.fromSellerId,
+                                assignedSellerName: plan.fromSellerName,
+                                bookStatus: plan.client.bookStatus,
+                            },
+                            newValues: {
+                                assignedSellerId: plan.toSellerId,
+                                assignedSellerName: plan.toSellerName,
+                                bookStatus: updatedClient.bookStatus,
+                                exchangeGroupId,
+                                authenticatedPartnerId: targetSeller.id,
+                            },
+                            reason: cleanReason,
+                            authorUserId: requester.id,
+                            authorName: requester.name,
+                            authorRole: requester.role,
+                        },
+                        tx
+                    );
+                }
+
+                return {
+                    transfers: createdTransfers,
+                    updatedClientIds: movePlans.map((p) => p.client.id),
+                };
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+        );
+
+        res.json({
+            success: true,
+            exchangeGroupId,
+            transferredCount: txResult.transfers.length,
+            updatedClientIds: txResult.updatedClientIds,
+            transfers: txResult.transfers,
+            fromSeller: { id: requester.id, name: requester.name },
+            toSeller: { id: targetSeller.id, name: targetSeller.name },
+            trackingLocationLabel: `Com vendedor: ${targetSeller.name}`,
+            message: `${txResult.transfers.length} book(s) trocado(s) com ${targetSeller.name} com rastreamento imediato.`,
+        });
+    } catch (error: any) {
+        if (error && error.status && error.message) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        console.error('Error in peer book exchange:', error);
+        res.status(500).json({ error: error.message || 'Falha ao executar troca direta de books' });
+    }
+});
+
+// Histórico completo de rastreamento e trocas de um book/ficha (Admin / Supervisor / Vendedor detentor)
+router.get('/:id/history', authMiddleware, async (req: AuthRequest, res) => {
+    try {
+        const id = String(req.params.id || '').trim();
+        const companyId = req.user?.companyId;
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const client = await prisma.client.findFirst({
+            where: {
+                ...(companyId ? { companyId } : {}),
+                OR: [{ id }, { uuid: id }, { visibleCode: id }, { sequenceNumber: id }],
+            },
+            include: {
+                batch: { select: { id: true, name: true, city: true, status: true } },
+                assignedSeller: { select: { id: true, name: true } },
+                photographer: { select: { id: true, name: true } },
+                bookTransfers: { orderBy: { createdAt: 'asc' } },
+                timeline: { orderBy: { timestamp: 'asc' } },
+            },
+        });
+
+        if (!client) {
+            return res.status(404).json({ error: 'Book/ficha não encontrado na empresa.' });
+        }
+
+        const roleUpper = (req.user?.role || '').toUpperCase();
+        if (
+            ['SELLER', 'VENDEDOR', 'SELLER_MANAGER'].includes(roleUpper) &&
+            client.assignedSellerId !== req.user?.id
+        ) {
+            return res.status(403).json({
+                error: 'Acesso negado: esta ficha não pertence à sua carteira atual.',
+            });
+        }
+
+        const trackingLocationLabel = client.assignedSeller?.name
+            ? `Com vendedor: ${client.assignedSeller.name}`
+            : client.batch?.name
+            ? `No lote: ${client.batch.name}`
+            : 'Sem lote atribuído';
+
+        res.json({
+            clientId: client.id,
+            visibleCode: client.visibleCode,
+            sequenceNumber: client.sequenceNumber,
+            name: client.name,
+            bookStatus: client.bookStatus,
+            trackingLocationLabel,
+            assignedSeller: client.assignedSeller,
+            batch: client.batch,
+            transfers: client.bookTransfers,
+            timeline: client.timeline,
+        });
+    } catch (error: any) {
+        console.error('Error fetching book history:', error);
+        res.status(500).json({ error: 'Falha ao consultar histórico de rastreamento do book.' });
     }
 });
 

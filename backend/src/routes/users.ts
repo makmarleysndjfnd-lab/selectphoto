@@ -84,7 +84,9 @@ router.get('/company', authenticateToken, async (req: AuthRequest, res: Response
         name: true,
         role: true,
         email: true,
-        active: true
+        active: true,
+        sellerBlocked: true,
+        sellerBlockedReason: true,
       },
       orderBy: { name: 'asc' }
     });

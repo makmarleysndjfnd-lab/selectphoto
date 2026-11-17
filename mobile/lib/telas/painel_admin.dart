@@ -4233,9 +4233,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         : book;
     final String? sellerName = book['assignedSellerName']?.toString() ??
         rawClient['assignedSeller']?['name']?.toString();
-    final String trackingLabel = sellerName != null && sellerName.isNotEmpty
-        ? 'Com Vendedor: $sellerName'
-        : 'Em Lote: ${book['lote']}';
+    final String trackingLabel = book['trackingLocationLabel']?.toString() ??
+        (sellerName != null && sellerName.isNotEmpty
+            ? 'Com vendedor: $sellerName'
+            : 'Em Lote: ${book['lote']}');
     final bool isWithSeller = sellerName != null && sellerName.isNotEmpty;
     final bool canDeleteIncomplete =
         isClientEligibleForIncompleteDeletion(rawClient);
@@ -4278,6 +4279,8 @@ class _AdminDashboardState extends State<AdminDashboard>
         onSelected: (val) {
           if (val == 'atribuir_vendedor') {
             _atribuirBookDialog(book, rotaId, isRebolo);
+          } else if (val == 'historico_rastreamento') {
+            _showBookTrackingHistoryDialog(rawClient);
           } else if (val == 'editar_ficha') {
             showAdminEditFichaDialog(context, rawClient, _loadClients);
           } else if (val == 'mover_ficha') {
@@ -4293,6 +4296,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         itemBuilder: (context) {
           List<PopupMenuEntry<String>> items = [];
 
+          items.add(const PopupMenuItem(
+              value: 'historico_rastreamento',
+              child: Text('Histórico / Rastreamento',
+                  style: TextStyle(color: Color(0xFF38BDF8)))));
           items.add(const PopupMenuItem(
               value: 'editar_ficha',
               child: Text('Editar Dados da Ficha',
@@ -4332,6 +4339,176 @@ class _AdminDashboardState extends State<AdminDashboard>
           return items;
         },
       ),
+    );
+  }
+
+  Future<void> _showBookTrackingHistoryDialog(
+      Map<String, dynamic> rawClient) async {
+    final clientId = rawClient['id']?.toString() ?? '';
+    if (clientId.isEmpty) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: lumoraSurfaceDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: lumoraNeonPurple.withOpacity(0.5)),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.timeline_rounded, color: Color(0xFF38BDF8)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Rastreamento • ${rawClient['visibleCode'] ?? rawClient['sequenceNumber'] ?? rawClient['name'] ?? 'Ficha'}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+              IconButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 440,
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: ApiService().getBookTrackingHistory(clientId),
+              builder: (_, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(
+                      child: CircularProgressIndicator(color: lumoraNeonPurple),
+                    ),
+                  );
+                }
+                if (snap.hasError) {
+                  return Text(
+                    'Erro ao carregar histórico: ${snap.error}',
+                    style: const TextStyle(color: Colors.redAccent),
+                  );
+                }
+                final data = snap.data ?? {};
+                final currentLoc =
+                    data['trackingLocationLabel']?.toString() ?? 'Desconhecido';
+                final transfers = (data['transfers'] as List?) ?? [];
+                final timeline = (data['timeline'] as List?) ?? [];
+
+                String fmtTs(dynamic rawTs) {
+                  if (rawTs == null) return '';
+                  final parsed = DateTime.tryParse(rawTs.toString());
+                  if (parsed == null) return rawTs.toString();
+                  final br = parsed.toUtc().subtract(const Duration(hours: 3));
+                  String two(int n) => n.toString().padLeft(2, '0');
+                  return '${two(br.day)}/${two(br.month)}/${br.year} ${two(br.hour)}:${two(br.minute)} (-03:00)';
+                }
+
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _trackingChip(currentLoc, lumoraNeonPurple),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Trocas entre Vendedores',
+                        style: TextStyle(
+                            color: Color(0xFFD8B4FE),
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      if (transfers.isEmpty)
+                        const Text(
+                          'Nenhuma troca direta registrada até o momento.',
+                          style: TextStyle(color: Colors.white54, fontSize: 12),
+                        )
+                      else
+                        ...transfers.map((tr) {
+                          final m = Map<String, dynamic>.from(tr as Map);
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: lumoraNeonPurple.withOpacity(0.3)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${m['fromSellerName'] ?? 'Origem'} → ${m['toSellerName'] ?? 'Destino'}',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Por: ${m['initiatedByName'] ?? 'Sistema'} • ${fmtTs(m['createdAt'])}',
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 11),
+                                ),
+                                if ((m['reason'] ?? '').toString().isNotEmpty)
+                                  Text(
+                                    'Motivo: ${m['reason']}',
+                                    style: const TextStyle(
+                                        color: Colors.white54, fontSize: 11),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Linha do Tempo Completa',
+                        style: TextStyle(
+                            color: Color(0xFF38BDF8),
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      if (timeline.isEmpty)
+                        const Text(
+                          'Sem eventos de linha do tempo.',
+                          style: TextStyle(color: Colors.white54, fontSize: 12),
+                        )
+                      else
+                        ...timeline.map((ev) {
+                          final m = Map<String, dynamic>.from(ev as Map);
+                          final meta = m['metadata'] is Map
+                              ? Map<String, dynamic>.from(m['metadata'] as Map)
+                              : <String, dynamic>{};
+                          final action = m['action']?.toString() ?? '';
+                          final subtitle = meta['fromSellerName'] != null &&
+                                  meta['toSellerName'] != null
+                              ? '${meta['fromSellerName']} → ${meta['toSellerName']}'
+                              : '${m['previousStatus'] ?? '-'} → ${m['newStatus'] ?? '-'}';
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              '• [$action] $subtitle (${fmtTs(m['timestamp'])})',
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 11),
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 

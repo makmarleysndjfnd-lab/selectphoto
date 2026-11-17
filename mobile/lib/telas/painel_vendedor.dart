@@ -1087,19 +1087,6 @@ class _SellerDashboardState extends State<SellerDashboard>
           ],
         ),
       ),
-      floatingActionButton: _selectedClientIds.isNotEmpty
-          ? FloatingActionButton.extended(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Solicitando troca de ${_selectedClientIds.length} ficha(s)...')));
-                setState(() {
-                  _selectedClientIds.clear();
-                });
-              },
-              backgroundColor: const Color(0xFFCE93D8),
-              icon: const Icon(Icons.swap_horiz_rounded, color: Colors.white),
-              label: Text('Trocar ${_selectedClientIds.length}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            )
-          : null,
     );
   }
 
@@ -1194,7 +1181,84 @@ class _SellerDashboardState extends State<SellerDashboard>
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        _buildFixedBookExchangeButton(),
       ],
+    );
+  }
+
+  Widget _buildFixedBookExchangeButton() {
+    final palette = LumoraTheme.of(context, isAdmin: false);
+    final selectedCount = _selectedClientIds.length;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _showPeerBookExchangeModal,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: palette.isLight
+                  ? [const Color(0xFFF3E8FF), const Color(0xFFE9D5FF)]
+                  : const [Color(0xFF2B124C), Color(0xFF4C1D95)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xFFA855F7).withOpacity(0.65),
+              width: 1.4,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFA855F7).withOpacity(0.22),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.swap_horizontal_circle_rounded,
+                color: Color(0xFFD8B4FE),
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                selectedCount > 0
+                    ? 'Trocar Book ($selectedCount selecionado${selectedCount > 1 ? 's' : ''})'
+                    : 'Trocar Book',
+                style: TextStyle(
+                  color: palette.isLight ? const Color(0xFF581C87) : Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              if (selectedCount > 0) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFA855F7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$selectedCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1396,6 +1460,495 @@ class _SellerDashboardState extends State<SellerDashboard>
               ),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showPeerBookExchangeModal() async {
+    final eligibleBooks = _sellerClients.where((c) {
+      final isCityClosed = c['cityClosedAt'] != null;
+      final outcome = (c['outcomeStatus'] ?? 'PENDING').toString().toUpperCase();
+      final status = (c['bookStatus'] ?? '').toString().toUpperCase();
+      return !isCityClosed &&
+          outcome == 'PENDING' &&
+          (status == 'DISTRIBUTED' || status == 'DISTRIBUTED_REBOLO');
+    }).toList();
+
+    if (eligibleBooks.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Nenhum book pendente disponível na sua rota para troca direta.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
+    final Set<String> chosenBookIds = eligibleBooks
+        .map((c) => c['id'].toString())
+        .where((id) => _selectedClientIds.contains(id))
+        .toSet();
+    if (chosenBookIds.isEmpty && eligibleBooks.length == 1) {
+      chosenBookIds.add(eligibleBooks.first['id'].toString());
+    }
+
+    final partnerLoginCtrl = TextEditingController();
+    final partnerPasswordCtrl = TextEditingController();
+    final reasonCtrl = TextEditingController();
+    final filterBooksCtrl = TextEditingController();
+
+    List<Map<String, dynamic>> availablePartners = [];
+    bool loadingPartners = true;
+    String? partnerLoadError;
+    String? selectedPartnerId;
+    bool obscurePassword = true;
+    bool submitting = false;
+    String? submitError;
+    bool partnersFetchStarted = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: !submitting,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            if (!partnersFetchStarted) {
+              partnersFetchStarted = true;
+              ApiService().getPeerExchangeSellers().then((list) {
+                if (!ctx.mounted) return;
+                setModalState(() {
+                  availablePartners = list;
+                  loadingPartners = false;
+                  if (availablePartners.isNotEmpty) {
+                    selectedPartnerId = availablePartners.first['id']?.toString();
+                  }
+                });
+              }).catchError((e) {
+                if (!ctx.mounted) return;
+                setModalState(() {
+                  loadingPartners = false;
+                  partnerLoadError = e.toString().replaceFirst('Exception: ', '');
+                });
+              });
+            }
+
+            final query = filterBooksCtrl.text.trim().toLowerCase();
+            final visibleBooks = eligibleBooks.where((b) {
+              if (query.isEmpty) return true;
+              final name = (b['name'] ?? '').toString().toLowerCase();
+              final code = (b['visibleCode'] ?? b['sequenceNumber'] ?? '').toString().toLowerCase();
+              final city = (b['city'] ?? '').toString().toLowerCase();
+              return name.contains(query) || code.contains(query) || city.contains(query);
+            }).toList();
+
+            Map<String, dynamic>? selectedPartnerObj;
+            if (selectedPartnerId != null) {
+              for (final p in availablePartners) {
+                if (p['id']?.toString() == selectedPartnerId) {
+                  selectedPartnerObj = p;
+                  break;
+                }
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF140D24),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.55)),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+              title: Row(
+                children: [
+                  const Icon(
+                    Icons.swap_horizontal_circle_rounded,
+                    color: Color(0xFFD8B4FE),
+                    size: 24,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Troca Direta de Books',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: submitting ? null : () => Navigator.pop(dialogCtx),
+                    icon: const Icon(Icons.close, color: Colors.white54, size: 20),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 440,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Transfira books diretamente para outro vendedor ativo da empresa sem aguardar aprovação do Admin. O vendedor receptor confirma na hora com login e senha.',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      if (loadingPartners)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Center(
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFA855F7),
+                            ),
+                          ),
+                        )
+                      else if (partnerLoadError != null)
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            partnerLoadError!,
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                          ),
+                        )
+                      else if (availablePartners.isEmpty)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.orangeAccent.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Text(
+                            'Nenhum outro vendedor ativo e desbloqueado encontrado na sua empresa.',
+                            style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                          ),
+                        )
+                      else
+                        DropdownButtonFormField<String>(
+                          isExpanded: true,
+                          value: selectedPartnerId,
+                          dropdownColor: const Color(0xFF1E1338),
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          decoration: InputDecoration(
+                            labelText: 'Vendedor parceiro ativo',
+                            labelStyle: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 12),
+                            filled: true,
+                            fillColor: Colors.white.withOpacity(0.06),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: Colors.white24),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.white.withOpacity(0.18)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                            ),
+                          ),
+                          items: availablePartners
+                              .map(
+                                (p) => DropdownMenuItem<String>(
+                                  value: p['id']?.toString(),
+                                  child: Text(
+                                    '${p['name'] ?? 'Vendedor'}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: submitting
+                              ? null
+                              : (val) => setModalState(() {
+                                    selectedPartnerId = val;
+                                    submitError = null;
+                                  }),
+                        ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Books selecionados (${chosenBookIds.length}/${eligibleBooks.length})',
+                              style: const TextStyle(
+                                color: Color(0xFFD8B4FE),
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: submitting
+                                ? null
+                                : () => setModalState(() {
+                                      if (chosenBookIds.length == visibleBooks.length) {
+                                        chosenBookIds.clear();
+                                      } else {
+                                        for (final b in visibleBooks) {
+                                          chosenBookIds.add(b['id'].toString());
+                                        }
+                                      }
+                                    }),
+                            child: Text(
+                              chosenBookIds.length == visibleBooks.length
+                                  ? 'Limpar'
+                                  : 'Selecionar visíveis',
+                              style: const TextStyle(
+                                color: Color(0xFF4FC3F7),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      TextField(
+                        controller: filterBooksCtrl,
+                        onChanged: (_) => setModalState(() {}),
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          hintText: 'Filtrar book por código, mãe ou cidade...',
+                          hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12),
+                          prefixIcon: const Icon(Icons.search, color: Colors.white54, size: 18),
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 165),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white.withOpacity(0.1)),
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: visibleBooks.length,
+                          itemBuilder: (_, idx) {
+                            final b = visibleBooks[idx];
+                            final id = b['id'].toString();
+                            final code = (b['visibleCode'] ?? b['sequenceNumber'] ?? 'S/N').toString();
+                            final name = (b['name'] ?? 'Ficha').toString();
+                            final city = (b['city'] ?? '').toString();
+                            final checked = chosenBookIds.contains(id);
+                            return CheckboxListTile(
+                              value: checked,
+                              dense: true,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              activeColor: const Color(0xFFA855F7),
+                              checkColor: Colors.white,
+                              onChanged: submitting
+                                  ? null
+                                  : (val) => setModalState(() {
+                                        if (val == true) {
+                                          chosenBookIds.add(id);
+                                        } else {
+                                          chosenBookIds.remove(id);
+                                        }
+                                        submitError = null;
+                                      }),
+                              title: Text(
+                                '$code • $name',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              subtitle: city.isNotEmpty
+                                  ? Text(
+                                      city,
+                                      style: const TextStyle(color: Colors.white54, fontSize: 11),
+                                    )
+                                  : null,
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: partnerLoginCtrl,
+                        enabled: !submitting,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'Login do vendedor parceiro (CPF ou e-mail)',
+                          labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                          prefixIcon: const Icon(Icons.person_outline, color: Color(0xFFD8B4FE), size: 18),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: partnerPasswordCtrl,
+                        enabled: !submitting,
+                        obscureText: obscurePassword,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'Senha do vendedor parceiro selecionado',
+                          labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                          prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFFD8B4FE), size: 18),
+                          suffixIcon: IconButton(
+                            onPressed: () => setModalState(() => obscurePassword = !obscurePassword),
+                            icon: Icon(
+                              obscurePassword ? Icons.visibility_off : Icons.visibility,
+                              color: Colors.white54,
+                              size: 18,
+                            ),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: reasonCtrl,
+                        enabled: !submitting,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        decoration: InputDecoration(
+                          labelText: 'Observação da troca (opcional)',
+                          labelStyle: const TextStyle(color: Colors.white70, fontSize: 12),
+                          prefixIcon: const Icon(Icons.notes_rounded, color: Colors.white54, size: 18),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.05),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                      if (submitError != null) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            submitError!,
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: submitting ? null : () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+                ),
+                LedButton(
+                  onPressed: submitting ||
+                          availablePartners.isEmpty ||
+                          selectedPartnerId == null ||
+                          chosenBookIds.isEmpty
+                      ? null
+                      : () async {
+                          final login = partnerLoginCtrl.text.trim();
+                          final pwd = partnerPasswordCtrl.text;
+                          if (login.isEmpty || pwd.isEmpty) {
+                            setModalState(() {
+                              submitError =
+                                  'Informe o login (CPF/e-mail) e a senha do vendedor parceiro para concluir a troca.';
+                            });
+                            return;
+                          }
+                          setModalState(() {
+                            submitting = true;
+                            submitError = null;
+                          });
+                          try {
+                            final res = await ApiService().executePeerBookExchange(
+                              targetSellerId: selectedPartnerId!,
+                              partnerLogin: login,
+                              partnerPassword: pwd,
+                              clientIds: chosenBookIds.toList(),
+                              reason: reasonCtrl.text.trim(),
+                            );
+                            if (mounted) {
+                              setState(() {
+                                _selectedClientIds.removeAll(chosenBookIds);
+                                _sellerClients.removeWhere(
+                                  (c) => chosenBookIds.contains(c['id']?.toString()),
+                                );
+                              });
+                            }
+                            await _fetchClients();
+                            if (dialogCtx.mounted) {
+                              Navigator.pop(dialogCtx);
+                            }
+                            if (mounted) {
+                              final partnerName =
+                                  selectedPartnerObj?['name']?.toString() ?? 'parceiro';
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    res['message']?.toString() ??
+                                        'Troca direta de ${chosenBookIds.length} book(s) concluída com $partnerName!',
+                                  ),
+                                  backgroundColor: const Color(0xFF2E7D32),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            setModalState(() {
+                              submitting = false;
+                              submitError = e.toString().replaceFirst('Exception: ', '');
+                            });
+                          }
+                        },
+                  style: LedButton.styleFrom(
+                    backgroundColor: const Color(0xFF7E22CE),
+                    disabledBackgroundColor: Colors.grey.shade800,
+                  ),
+                  child: submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Confirmar Troca',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                ),
+              ],
+            );
+          },
         );
       },
     );

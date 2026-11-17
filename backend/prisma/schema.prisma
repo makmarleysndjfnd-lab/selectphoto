@@ -47,6 +47,7 @@ model Company {
   coverStockBatches    CoverStockBatch[]
   sellerCoverTransfers SellerCoverTransfer[]
   bookBatches          BookBatch[]
+  bookTransfers        BookTransfer[]
   notifications        Notification[]
   clientEditRequests   ClientEditRequest[]
   tripSettings         TripSettings?
@@ -183,6 +184,9 @@ model User {
   supportGrantsApproved       SupportAccessGrant[]           @relation("SupportAccessApprover")
   supportGrantsRevoked        SupportAccessGrant[]           @relation("SupportAccessRevoker")
   deviceTelemetries           DeviceTelemetry[]
+  bookTransfersFrom           BookTransfer[]                 @relation("BookTransfersFrom")
+  bookTransfersTo             BookTransfer[]                 @relation("BookTransfersTo")
+  bookTransfersInitiated      BookTransfer[]                 @relation("BookTransfersInitiated")
   sellerBlocked               Boolean                        @default(false)
   sellerBlockedReason         String?
   sellerBlockedAt             DateTime?
@@ -273,6 +277,7 @@ model Client {
   sellerPhotos     SellerPhoto[]
   editRequests     ClientEditRequest[]
   timeline         ClientTimeline[]
+  bookTransfers    BookTransfer[]
   creditAgreements CreditAgreement[]
 
   @@index([companyId, assignedSellerId, city])
@@ -307,6 +312,34 @@ model ClientTimeline {
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId, timestamp])
+}
+
+model BookTransfer {
+  id              String   @id @default(uuid())
+  clientId        String
+  companyId       String
+  fromSellerId    String?
+  toSellerId      String
+  initiatedById   String
+  fromSellerName  String?
+  toSellerName    String
+  initiatedByName String
+  cycle           Int      @default(1)
+  previousStatus  String?
+  newStatus       String
+  exchangeGroupId String?
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  client      Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromSeller  User?   @relation("BookTransfersFrom", fields: [fromSellerId], references: [id], onDelete: SetNull)
+  toSeller    User    @relation("BookTransfersTo", fields: [toSellerId], references: [id], onDelete: Cascade)
+  initiatedBy User    @relation("BookTransfersInitiated", fields: [initiatedById], references: [id], onDelete: Cascade)
+
+  @@index([clientId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([exchangeGroupId])
 }
 
 model Child {
