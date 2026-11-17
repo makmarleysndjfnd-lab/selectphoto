@@ -21,15 +21,15 @@ describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas', { concurrency
     assert.equal(match[1], pkg.version);
   });
 
-  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION e CURRENT_BUILD_NUMBER válidos (1.0.33+49)', () => {
+  it('3. backend/src/routes/app.ts define CURRENT_APP_VERSION e CURRENT_BUILD_NUMBER válidos (1.0.34+50)', () => {
     const appRoutePath = path.join(rootDir, 'backend/src/routes/app.ts');
     const content = fs.readFileSync(appRoutePath, 'utf8');
     const vMatch = content.match(/CURRENT_APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
     const bMatch = content.match(/CURRENT_BUILD_NUMBER\s*=\s*(\d+)/);
     assert.ok(vMatch, 'CURRENT_APP_VERSION deve existir');
     assert.ok(bMatch, 'CURRENT_BUILD_NUMBER deve existir');
-    assert.equal(vMatch[1], '1.0.33');
-    assert.equal(Number(bMatch[1]), 49);
+    assert.equal(vMatch[1], '1.0.34');
+    assert.equal(Number(bMatch[1]), 50);
   });
 
   it('4. mobile/pubspec.yaml define versão e build number válidos', () => {
@@ -72,8 +72,8 @@ describe('ALINHAMENTO DE VERSÃO — Consistência Multi-Camadas', { concurrency
     const appRouteBuild = appRouteContent.match(/CURRENT_BUILD_NUMBER\s*=\s*(\d+)/)?.[1];
 
     // Consistência mobile + manifesto backend (/api/app/version)
-    assert.equal(pubspecMatch?.[1], '1.0.33', 'pubspec version == 1.0.33');
-    assert.equal(pubspecMatch?.[2], '49', 'pubspec build == 49');
+    assert.equal(pubspecMatch?.[1], '1.0.34', 'pubspec version == 1.0.34');
+    assert.equal(pubspecMatch?.[2], '50', 'pubspec build == 50');
     assert.equal(pubspecMatch?.[1], configVersion, 'pubspec version == AppConfig appVersion');
     assert.equal(pubspecMatch?.[2], configBuild, 'pubspec build == AppConfig buildNumber');
     assert.equal(pubspecMatch?.[1], appRouteVersion, 'pubspec version == routes/app.ts CURRENT_APP_VERSION');
