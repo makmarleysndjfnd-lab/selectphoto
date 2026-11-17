@@ -1,7 +1,8 @@
 import express from 'express';
 import { prisma, Prisma } from '../services/prisma';
-import { authenticateToken as authMiddleware, AuthRequest } from '../middleware/authMiddleware';
+import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
+import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 
 const router = express.Router();
 
@@ -420,6 +421,46 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
             return res.status(404).json({ error: 'Book not found' });
         }
         if (client.bookStatus !== 'AWAITING_RETURN') return res.status(400).json({ error: 'Book is not awaiting return' });
+
+        const latestNonSale =
+          Array.isArray(client.nonSales) && client.nonSales.length > 0
+            ? [...client.nonSales].sort(
+                (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+              )[0]
+            : null;
+        const isTravelReturn =
+          String(latestNonSale?.reason || '')
+            .trim()
+            .toUpperCase()
+            .replace(/\s+/g, ' ') === 'EM VIAGEM';
+
+        if (isTravelReturn) {
+          const updated = await prisma.client.update({
+            where: { id: client.id },
+            data: {
+              bookStatus: 'IN_STOCK_VIRGIN',
+              assignedSellerId: null,
+            },
+          });
+
+          await prisma.clientTimeline.create({
+            data: {
+              clientId: client.id,
+              cycle: client.commercialCycle || 1,
+              previousStatus: client.bookStatus,
+              newStatus: 'IN_STOCK_VIRGIN',
+              previousSellerId: client.assignedSellerId,
+              newSellerId: null,
+              authorId: req.user?.id,
+              authorRole: req.user?.role,
+              action: 'RECEIVE_RETURN_TRAVEL_VIRGIN',
+              reason:
+                'Devolução "Em Viagem" recebida pelo Admin; ficha retornou como book virgem (sem envio para Rebolo)',
+            },
+          });
+
+          return res.json(updated);
+        }
 
         const currentCycle = client.commercialCycle || 1;
         const nonSalesCount = client.nonSales ? client.nonSales.length : 0;
@@ -1167,6 +1208,221 @@ router.patch('/batch/:id/base-city', authMiddleware, async (req: AuthRequest, re
         res.json({ success: true, batch: updated });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Lista fichas registradas como "Em Viagem" aguardando geração de novo lote (book virgem)
+router.get('/travel-virgin', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res) => {
+    try {
+        const companyId = req.user?.companyId;
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const clients = await prisma.client.findMany({
+            where: {
+                ...(companyId ? { companyId } : {}),
+                bookStatus: 'IN_STOCK_VIRGIN',
+            },
+            include: {
+                batch: { select: { id: true, name: true, city: true } },
+                photographer: { select: { id: true, name: true } },
+                assignedSeller: { select: { id: true, name: true } },
+                nonSales: {
+                    where: { supersededAt: null },
+                    include: { seller: { select: { id: true, name: true } } },
+                    orderBy: { date: 'desc' },
+                    take: 1,
+                },
+                children: true,
+            },
+            orderBy: { outcomeUpdatedAt: 'desc' },
+        });
+
+        res.json(clients);
+    } catch (error: any) {
+        console.error('Error fetching travel-virgin books:', error);
+        res.status(500).json({ error: 'Falha ao buscar books Em Viagem (virgens)' });
+    }
+});
+
+// Gera um novo lote operacional (BookBatch) identificado a partir de fichas "Em Viagem" para nova tentativa
+router.post('/travel-batch', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res) => {
+    try {
+        const companyId = req.user?.companyId;
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const { clientIds, batchName, city, targetSellerId, reason } = req.body as {
+            clientIds?: string[];
+            batchName?: string;
+            city?: string;
+            targetSellerId?: string;
+            reason?: string;
+        };
+
+        if (!Array.isArray(clientIds) || clientIds.length === 0) {
+            return res.status(400).json({ error: 'Selecione ao menos uma ficha "Em Viagem" para gerar o novo lote.' });
+        }
+
+        const cleanIds = Array.from(new Set(clientIds.map((id) => String(id).trim()).filter(Boolean)));
+        if (cleanIds.length === 0) {
+            return res.status(400).json({ error: 'Nenhuma ficha válida informada.' });
+        }
+
+        const virginClients = await prisma.client.findMany({
+            where: {
+                id: { in: cleanIds },
+                ...(companyId ? { companyId } : {}),
+                bookStatus: 'IN_STOCK_VIRGIN',
+            },
+            include: {
+                batch: { select: { id: true, name: true } },
+            },
+        });
+
+        if (virginClients.length !== cleanIds.length) {
+            return res.status(409).json({
+                error: 'Uma ou mais fichas selecionadas não estão disponíveis como book virgem "Em Viagem" na sua empresa.',
+            });
+        }
+
+        const effectiveCompanyId = virginClients[0].companyId || companyId!;
+
+        let validSeller: { id: string; name: string } | null = null;
+        if (targetSellerId && String(targetSellerId).trim()) {
+            const seller = await prisma.user.findFirst({
+                where: {
+                    id: String(targetSellerId).trim(),
+                    companyId: effectiveCompanyId,
+                    active: true,
+                    role: { in: ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'] },
+                },
+                select: { id: true, name: true },
+            });
+            if (!seller) {
+                return res.status(404).json({ error: 'Vendedor de destino não encontrado ou inativo na empresa.' });
+            }
+            validSeller = seller;
+        }
+
+        const citiesList = Array.from(
+            new Set(virginClients.map((c) => (c.city || '').trim()).filter(Boolean))
+        );
+        const effectiveCity =
+            (city && String(city).trim()) ||
+            (citiesList.length === 1 ? citiesList[0] : citiesList.join(', ').slice(0, 80) || null);
+
+        const nowBr = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        const dayStr = `${String(nowBr.getUTCDate()).padStart(2, '0')}/${String(nowBr.getUTCMonth() + 1).padStart(2, '0')}`;
+        const defaultName = effectiveCity
+            ? `Lote Em Viagem - ${effectiveCity} (${dayStr})`
+            : `Lote Em Viagem (${dayStr})`;
+        const cleanBatchName =
+            batchName && String(batchName).trim()
+                ? String(batchName).trim()
+                : defaultName;
+
+        const photographerId =
+            virginClients.find((c) => Boolean(c.photographerId))?.photographerId || req.user?.id!;
+        const nextClientStatus = validSeller ? 'DISTRIBUTED' : 'IN_STOCK';
+        const nextBatchStatus = validSeller ? 'DISTRIBUTED' : 'IN_STOCK';
+
+        const result = await prisma.$transaction(async (tx) => {
+            const createdBatch = await tx.bookBatch.create({
+                data: {
+                    name: cleanBatchName,
+                    city: effectiveCity,
+                    photographerId,
+                    companyId: effectiveCompanyId,
+                    status: nextBatchStatus,
+                    totalProduced: virginClients.length,
+                },
+            });
+
+            await tx.client.updateMany({
+                where: { id: { in: cleanIds } },
+                data: {
+                    batchId: createdBatch.id,
+                    bookStatus: nextClientStatus,
+                    assignedSellerId: validSeller ? validSeller.id : null,
+                    outcomeStatus: 'PENDING',
+                    outcomeUpdatedAt: null,
+                    cityClosedAt: null,
+                    commercialCycle: 1,
+                },
+            });
+
+            for (const c of virginClients) {
+                await tx.clientTimeline.create({
+                    data: {
+                        clientId: c.id,
+                        cycle: 1,
+                        action: 'TRAVEL_BATCH_CREATED',
+                        previousStatus: c.bookStatus,
+                        newStatus: nextClientStatus,
+                        previousSellerId: c.assignedSellerId,
+                        newSellerId: validSeller ? validSeller.id : null,
+                        authorId: req.user?.id || null,
+                        authorRole: req.user?.role || null,
+                        reason:
+                            reason?.trim() ||
+                            `Novo lote "${cleanBatchName}" gerado a partir de book Em Viagem (book virgem)`,
+                        metadata: {
+                            previousBatchId: c.batchId,
+                            previousBatchName: c.batch?.name || null,
+                            newBatchId: createdBatch.id,
+                            newBatchName: createdBatch.name,
+                            origin: 'EM_VIAGEM_VIRGIN',
+                        },
+                    },
+                });
+            }
+
+            await recordOperationalAuditEvent(
+                {
+                    companyId: effectiveCompanyId,
+                    category: 'CONDITIONS',
+                    action: 'ADMIN_TRAVEL_BATCH_CREATED',
+                    entityType: 'BookBatch',
+                    entityId: createdBatch.id,
+                    entityReference: createdBatch.name,
+                    previousValues: {
+                        sourceClientIds: cleanIds,
+                        previousStatus: 'IN_STOCK_VIRGIN',
+                    },
+                    newValues: {
+                        batchId: createdBatch.id,
+                        batchName: createdBatch.name,
+                        status: createdBatch.status,
+                        movedCount: virginClients.length,
+                        targetSellerId: validSeller?.id || null,
+                        targetSellerName: validSeller?.name || null,
+                    },
+                    reason:
+                        reason?.trim() ||
+                        `Geração de lote operacional "${createdBatch.name}" com ${virginClients.length} book(s) virgem(ns) Em Viagem`,
+                    authorUserId: req.user?.id || null,
+                    authorName: req.user?.name || req.user?.cpf || 'Admin',
+                    authorRole: req.user?.role || null,
+                },
+                tx
+            );
+
+            return createdBatch;
+        });
+
+        res.status(201).json({
+            batch: result,
+            movedCount: virginClients.length,
+            clientIds: cleanIds,
+            targetSeller: validSeller,
+            message: `Lote "${result.name}" gerado com ${virginClients.length} ficha(s) virgem(ns).`,
+        });
+    } catch (error: any) {
+        console.error('Error creating travel batch:', error);
+        res.status(500).json({ error: error.message || 'Falha ao gerar novo lote Em Viagem' });
     }
 });
 

@@ -225,6 +225,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   int _reboloValidityDays = 365;
   // ignore: unused_field
   List<Map<String, dynamic>> _pendingReleaseBatches = [];
+  List<Map<String, dynamic>> _travelVirginBooks = [];
   List<Map<String, dynamic>> _companySellers = [];
 
   final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
@@ -279,9 +280,18 @@ class _AdminDashboardState extends State<AdminDashboard>
         });
 
       final pendingBatches = await api.getPendingBookBatches();
+      final travelVirgins = await api
+          .getTravelVirginBooks()
+          .catchError((_) => <dynamic>[]);
       if (mounted)
-        setState(() => _pendingReleaseBatches =
-            List<Map<String, dynamic>>.from(pendingBatches));
+        setState(() {
+          _pendingReleaseBatches =
+              List<Map<String, dynamic>>.from(pendingBatches);
+          _travelVirginBooks = travelVirgins
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        });
 
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
       final List<Map<String, dynamic>> unassigned = [];
@@ -2605,6 +2615,80 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF160D24),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: _travelVirginBooks.isNotEmpty
+                    ? const Color(0xFF00E5FF).withOpacity(0.5)
+                    : lumoraNeonPurple.withOpacity(0.25),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00E5FF).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.flight_takeoff_rounded,
+                          color: Color(0xFF00E5FF), size: 22),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Em Viagem — Books Virgens',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _travelVirginBooks.isEmpty
+                                ? 'Nenhuma ficha aguardando novo lote no momento.'
+                                : '${_travelVirginBooks.length} ficha(s) aguardando novo lote operacional (não vão para o Rebolo).',
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (_travelVirginBooks.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    onPressed: _showCreateTravelBatchDialog,
+                    icon: const Icon(Icons.create_new_folder_rounded, size: 18),
+                    label: Text(
+                      'Gerar Novo Lote (${_travelVirginBooks.length} Book Virgem)',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: lumoraNeonPurple,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
           const SizedBox(height: 20),
 
           // Cards por equipe
@@ -2909,6 +2993,229 @@ class _AdminDashboardState extends State<AdminDashboard>
           Expanded(child: Text(title, style: const TextStyle(color: Colors.white70, fontSize: 13))),
           Text('$count', style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
         ],
+      ),
+    );
+  }
+
+  Future<void> _showCreateTravelBatchDialog() async {
+    if (_travelVirginBooks.isEmpty) return;
+    final Set<String> selectedIds = _travelVirginBooks
+        .map((e) => e['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final cities = _travelVirginBooks
+        .map((e) => (e['city'] ?? '').toString().trim())
+        .where((c) => c.isNotEmpty)
+        .toSet()
+        .toList();
+    final nowBr = DateTime.now();
+    final dayLabel =
+        '${nowBr.day.toString().padLeft(2, '0')}/${nowBr.month.toString().padLeft(2, '0')}';
+    final nameCtrl = TextEditingController(
+      text: cities.length == 1
+          ? 'Lote Em Viagem - ${cities.first} ($dayLabel)'
+          : 'Lote Em Viagem ($dayLabel)',
+    );
+    String? selectedSellerId;
+    bool saving = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: lumoraSurfaceDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: lumoraNeonPurple.withOpacity(0.5)),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.flight_takeoff_rounded, color: Color(0xFF00E5FF)),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Gerar Novo Lote (Book Virgem)',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Crie um novo lote operacional identificado a partir das fichas "Em Viagem" para distribuir uma nova tentativa de visita (sem contar como Rebolo).',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Nome do Novo Lote *',
+                      labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                      filled: true,
+                      fillColor: lumoraBgDark,
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            BorderSide(color: lumoraNeonPurple.withOpacity(0.3)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: lumoraNeonPurple),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String?>(
+                    value: selectedSellerId,
+                    dropdownColor: lumoraBgDark,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Distribuir para Vendedor (opcional)',
+                      labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                      filled: true,
+                      fillColor: lumoraBgDark,
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                            BorderSide(color: lumoraNeonPurple.withOpacity(0.3)),
+                      ),
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('Manter em Estoque para distribuição'),
+                      ),
+                      ..._companySellers.map(
+                        (s) => DropdownMenuItem<String?>(
+                          value: s['id']?.toString(),
+                          child: Text(
+                            s['name']?.toString() ?? 'Vendedor',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: saving
+                        ? null
+                        : (val) => setDialogState(() => selectedSellerId = val),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Fichas selecionadas (${selectedIds.length} de ${_travelVirginBooks.length}):',
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  ..._travelVirginBooks.map((item) {
+                    final id = item['id']?.toString() ?? '';
+                    final name = (item['name'] ?? 'Cliente').toString();
+                    final city = (item['city'] ?? 'Sem cidade').toString();
+                    final code =
+                        (item['visibleCode'] ?? item['sequenceNumber'] ?? '')
+                            .toString();
+                    final checked = selectedIds.contains(id);
+                    return CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: checked,
+                      activeColor: lumoraNeonPurple,
+                      onChanged: saving
+                          ? null
+                          : (val) {
+                              setDialogState(() {
+                                if (val == true) {
+                                  selectedIds.add(id);
+                                } else {
+                                  selectedIds.remove(id);
+                                }
+                              });
+                            },
+                      title: Text(
+                        '$code · $name',
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                      subtitle: Text(
+                        city,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 11),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar',
+                  style: TextStyle(color: Colors.white60)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: lumoraNeonPurple,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: (saving || selectedIds.isEmpty)
+                  ? null
+                  : () async {
+                      setDialogState(() => saving = true);
+                      try {
+                        final res = await ApiService().createTravelBookBatch(
+                          clientIds: selectedIds.toList(),
+                          batchName: nameCtrl.text.trim(),
+                          targetSellerId: selectedSellerId,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        await _loadClients();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                res['message']?.toString() ??
+                                    'Novo lote Em Viagem gerado com sucesso!',
+                              ),
+                              backgroundColor: const Color(0xFF10B981),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        setDialogState(() => saving = false);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Erro ao gerar lote: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              icon: saving
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.check_rounded, size: 16),
+              label: Text(saving ? 'Gerando...' : 'Gerar Lote'),
+            ),
+          ],
+        ),
       ),
     );
   }

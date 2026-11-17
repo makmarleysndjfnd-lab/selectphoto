@@ -395,30 +395,43 @@ class _SellerDashboardState extends State<SellerDashboard>
       ),
     );
 
-    if (result != null && result is Map && result['saleSuccess'] == true) {
+    if (result != null &&
+        result is Map &&
+        (result['saleSuccess'] == true || result['nonSaleSuccess'] == true)) {
       await _fetchClients();
       if (mounted) {
+        final isNonSale = result['nonSaleSuccess'] == true;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
               children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const Icon(Icons.check_circle_rounded,
+                    color: Colors.white, size: 20),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    result['message']?.toString() ?? 'Venda registrada com sucesso',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    result['message']?.toString() ??
+                        (isNonSale
+                            ? 'Não-venda registrada com sucesso'
+                            : 'Venda registrada com sucesso'),
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
-            backgroundColor: const Color(0xFF2E7D32),
+            backgroundColor: isNonSale
+                ? const Color(0xFFE65100)
+                : const Color(0xFF2E7D32),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             duration: const Duration(seconds: 4),
           ),
         );
       }
+    } else {
+      await _fetchClients();
     }
   }
 

@@ -1548,6 +1548,39 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
   }
 });
 
+function isTravelNonSaleReason(reason?: string | null): boolean {
+  const normalized = String(reason || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+  return normalized === 'EM VIAGEM' || normalized === 'EM_VIAGEM';
+}
+
+function buildSaoPauloAppointmentDate(dateInput: string, timeInput?: string | null): Date {
+  const rawDate = String(dateInput || '').trim();
+  const cleanTime = String(timeInput || '').trim();
+  const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})/);
+  const hh = timeMatch ? timeMatch[1].padStart(2, '0') : '08';
+  const mm = timeMatch ? timeMatch[2] : '00';
+
+  const dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dateMatch) {
+    const ymd = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+    const candidate = new Date(`${ymd}T${hh}:${mm}:00.000-03:00`);
+    if (!isNaN(candidate.getTime())) return candidate;
+  }
+
+  const parsed = new Date(rawDate);
+  if (!isNaN(parsed.getTime())) {
+    const br = new Date(parsed.getTime() - 3 * 60 * 60 * 1000);
+    const y = br.getUTCFullYear();
+    const m = String(br.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(br.getUTCDate()).padStart(2, '0');
+    return new Date(`${y}-${m}-${d}T${hh}:${mm}:00.000-03:00`);
+  }
+  return new Date();
+}
+
 // Register a Non-Sale
 router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) => {
   try {
@@ -1616,8 +1649,13 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         throw { status: 409, message: 'Não é possível registrar não-venda para ficha já vendida' };
       }
 
-      // 4. Idempotência: se já é não-venda aguardando devolução neste ciclo para o mesmo vendedor
-      if (client.outcomeStatus === 'NON_SALE' && client.bookStatus === 'AWAITING_RETURN') {
+      const isTravelReason = isTravelNonSaleReason(reason);
+
+      // 4. Idempotência: se já é não-venda aguardando devolução (ou Em Viagem virgem) neste ciclo para o mesmo vendedor
+      if (
+        client.outcomeStatus === 'NON_SALE' &&
+        (client.bookStatus === 'AWAITING_RETURN' || client.bookStatus === 'IN_STOCK_VIRGIN')
+      ) {
         const activeNonSale = await tx.nonSale.findFirst({
           where: {
             clientId,
@@ -1659,13 +1697,16 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
+      // Regra "Em Viagem": NÃO vai para Rebolo; retorna como book virgem aguardando novo lote operacional
+      const targetBookStatus = isTravelReason ? 'IN_STOCK_VIRGIN' : 'AWAITING_RETURN';
+
       // 7. Atualizar Client
       const updatedClient = await tx.client.update({
         where: { id: clientId },
         data: {
           outcomeStatus: 'NON_SALE',
           outcomeUpdatedAt: nonSale.date,
-          bookStatus: 'AWAITING_RETURN',
+          bookStatus: targetBookStatus,
         },
       });
 
@@ -1675,20 +1716,25 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
           clientId,
           cycle: client.commercialCycle || 1,
           previousStatus: client.bookStatus,
-          newStatus: 'AWAITING_RETURN',
+          newStatus: targetBookStatus,
           previousSellerId: client.assignedSellerId,
           newSellerId: client.assignedSellerId,
           authorId: sellerId,
           authorRole: req.user?.role,
-          action: 'NON_SALE',
-          reason: String(reason).trim(),
+          action: isTravelReason ? 'NON_SALE_TRAVEL_VIRGIN' : 'NON_SALE',
+          reason: isTravelReason
+            ? 'Em Viagem — retorno como book virgem (sem envio para Rebolo)'
+            : String(reason).trim(),
         },
       });
 
       return { nonSale, client: updatedClient, created: true };
     });
 
-    res.status(result.created ? 201 : 200).json(result.nonSale);
+    res.status(result.created ? 201 : 200).json({
+      ...result.nonSale,
+      bookStatus: result.client.bookStatus,
+    });
   } catch (error: any) {
     if (error && error.status && error.message) {
       return res.status(error.status).json({ error: error.message });
@@ -1928,17 +1974,30 @@ router.post('/appointments', authenticateToken, async (req: AuthRequest, res: an
       return res.status(404).json({ error: 'Client not found in your company' });
     }
 
+    const cleanTime = String(time).trim();
+    const resolvedDate = buildSaoPauloAppointmentDate(String(date), cleanTime);
+
     const appointment = await prisma.appointment.create({
       data: {
         clientId,
         responsibleId,
-        date: new Date(date),
-        time: String(time).trim(),
+        date: resolvedDate,
+        time: cleanTime,
         observation: observation ? String(observation).trim() : null,
       },
     });
 
-    res.status(201).json(appointment);
+    const brClock = new Date(resolvedDate.getTime() - 3 * 60 * 60 * 1000);
+    const brDate = `${brClock.getUTCFullYear()}-${String(brClock.getUTCMonth() + 1).padStart(2, '0')}-${String(
+      brClock.getUTCDate()
+    ).padStart(2, '0')}`;
+
+    res.status(201).json({
+      ...appointment,
+      brDate,
+      brTime: cleanTime,
+      dateTime: resolvedDate.toISOString(),
+    });
   } catch (error) {
     console.error('Create appointment error:', error);
     res.status(500).json({ error: 'Internal server error' });

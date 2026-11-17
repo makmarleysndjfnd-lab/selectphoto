@@ -5,6 +5,71 @@ import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 const router = express.Router();
 
 
+const SAO_PAULO_OFFSET_MS = -3 * 60 * 60 * 1000;
+
+function formatSaoPauloParts(dateObj: Date): { brDate: string; brTime: string } {
+  const shifted = new Date(dateObj.getTime() + SAO_PAULO_OFFSET_MS);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(shifted.getUTCDate()).padStart(2, '0');
+  const hh = String(shifted.getUTCHours()).padStart(2, '0');
+  const mm = String(shifted.getUTCMinutes()).padStart(2, '0');
+  return { brDate: `${y}-${m}-${d}`, brTime: `${hh}:${mm}` };
+}
+
+function parseSaoPauloDateTime(input: string, timeOverride?: string | null): Date {
+  const raw = String(input || '').trim();
+  const cleanTime = timeOverride ? String(timeOverride).trim() : '';
+  const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})/);
+
+  if (timeMatch) {
+    const hh = timeMatch[1].padStart(2, '0');
+    const mm = timeMatch[2];
+    const ymdMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    let ymd: string;
+    if (ymdMatch) {
+      ymd = `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+    } else {
+      const p = new Date(raw);
+      ymd = !isNaN(p.getTime()) ? formatSaoPauloParts(p).brDate : formatSaoPauloParts(new Date()).brDate;
+    }
+    const candidate = new Date(`${ymd}T${hh}:${mm}:00.000-03:00`);
+    if (!isNaN(candidate.getTime())) return candidate;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(raw)) {
+    const d = new Date(`${raw}-03:00`);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  const parsed = new Date(raw);
+  return !isNaN(parsed.getTime()) ? parsed : new Date();
+}
+
+function reconstructClientAppointmentDate(storedDate: Date, storedTime?: string | null): {
+  instant: Date;
+  brDate: string;
+  brTime: string;
+} {
+  const iso = storedDate.toISOString();
+  const ymd = iso.endsWith('T00:00:00.000Z')
+    ? iso.slice(0, 10)
+    : formatSaoPauloParts(storedDate).brDate;
+
+  const cleanTime = String(storedTime || '').trim();
+  const timeMatch = cleanTime.match(/^(\d{1,2}):(\d{2})/);
+  const brTime = timeMatch
+    ? `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`
+    : formatSaoPauloParts(storedDate).brTime;
+
+  const instant = new Date(`${ymd}T${brTime}:00.000-03:00`);
+  return {
+    instant: isNaN(instant.getTime()) ? storedDate : instant,
+    brDate: ymd,
+    brTime,
+  };
+}
+
 // Helper to check if a user is allowed to access/modify a given seller's appointments
 async function canAccessSellerAppointments(reqUser: any, targetSellerId: string): Promise<boolean> {
   if (!reqUser) return false;
@@ -44,7 +109,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
         sellerId,
         title: String(title).slice(0, 200),
         description: description ? String(description).slice(0, 1000) : undefined,
-        dateTime: new Date(dateTime),
+        dateTime: parseSaoPauloDateTime(String(dateTime)),
       },
     });
 
@@ -164,13 +229,15 @@ router.get('/unified/:sellerId', authenticateToken, async (req: AuthRequest, res
       orderBy: { date: 'asc' },
     });
 
-    // 3. Normalizar em DTOs unificados
+    // 3. Normalizar em DTOs unificados no fuso America/Sao_Paulo (-03:00)
     const unifiedList: Array<{
       id: string;
       type: 'PERSONAL' | 'CLIENT';
       title: string;
       description?: string | null;
       dateTime: string;
+      brDate: string;
+      brTime: string;
       clientId?: string | null;
       clientName?: string | null;
       sequenceNumber?: string | null;
@@ -178,12 +245,15 @@ router.get('/unified/:sellerId', authenticateToken, async (req: AuthRequest, res
     }> = [];
 
     for (const p of personalApps) {
+      const br = formatSaoPauloParts(p.dateTime);
       unifiedList.push({
         id: p.id,
         type: 'PERSONAL',
         title: p.title,
         description: p.description,
         dateTime: p.dateTime.toISOString(),
+        brDate: br.brDate,
+        brTime: br.brTime,
         clientId: null,
         clientName: null,
         sequenceNumber: null,
@@ -192,20 +262,16 @@ router.get('/unified/:sellerId', authenticateToken, async (req: AuthRequest, res
     }
 
     for (const c of clientApps) {
-      const appDateTime = new Date(c.date);
-      if (c.time && c.time.includes(':')) {
-        const [h, m] = c.time.split(':').map(Number);
-        if (!isNaN(h) && !isNaN(m)) {
-          appDateTime.setHours(h, m, 0, 0);
-        }
-      }
+      const rebuilt = reconstructClientAppointmentDate(c.date, c.time);
 
       unifiedList.push({
         id: c.id,
         type: 'CLIENT',
         title: c.client ? `Visita: ${c.client.name}` : 'Visita de Ficha',
         description: c.observation,
-        dateTime: appDateTime.toISOString(),
+        dateTime: rebuilt.instant.toISOString(),
+        brDate: rebuilt.brDate,
+        brTime: rebuilt.brTime,
         clientId: c.client?.id ?? c.clientId,
         clientName: c.client?.name ?? null,
         sequenceNumber: c.client?.sequenceNumber ?? null,
@@ -225,68 +291,173 @@ router.get('/unified/:sellerId', authenticateToken, async (req: AuthRequest, res
   }
 });
 
-// Atualizar um agendamento
+// Atualizar um agendamento (pessoal ou de ficha/cliente)
 router.put('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
-    const { title, description, dateTime } = req.body;
+    const { title, description, observation, dateTime, date, time } = req.body;
 
-    const existing = await prisma.personalAppointment.findUnique({
+    const existingPersonal = await prisma.personalAppointment.findUnique({
       where: { id },
     });
 
-    if (!existing) {
+    if (existingPersonal) {
+      const hasAccess = await canAccessSellerAppointments(req.user, existingPersonal.sellerId);
+      if (!hasAccess) {
+        res.status(403).json({ error: 'Forbidden: Sem permissão para alterar este agendamento' });
+        return;
+      }
+
+      const dataToUpdate: any = {};
+      if (title) dataToUpdate.title = String(title).slice(0, 200);
+      if (description !== undefined) dataToUpdate.description = description ? String(description).slice(0, 1000) : null;
+      if (dateTime) {
+        dataToUpdate.dateTime = parseSaoPauloDateTime(String(dateTime), time);
+      } else if (date) {
+        dataToUpdate.dateTime = parseSaoPauloDateTime(String(date), time);
+      }
+
+      const updated = await prisma.personalAppointment.update({
+        where: { id },
+        data: dataToUpdate,
+      });
+      const br = formatSaoPauloParts(updated.dateTime);
+      res.json({
+        ...updated,
+        type: 'PERSONAL',
+        brDate: br.brDate,
+        brTime: br.brTime,
+        dateTime: updated.dateTime.toISOString(),
+      });
+      return;
+    }
+
+    const existingClientApp = await prisma.appointment.findUnique({
+      where: { id },
+      include: {
+        client: { select: { id: true, companyId: true, assignedSellerId: true, name: true, sequenceNumber: true, city: true } },
+      },
+    });
+
+    if (!existingClientApp) {
       res.status(404).json({ error: 'Appointment not found' });
       return;
     }
 
-    const hasAccess = await canAccessSellerAppointments(req.user, existing.sellerId);
-    if (!hasAccess) {
+    const ownerSellerId = existingClientApp.responsibleId || existingClientApp.client?.assignedSellerId || '';
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(req.user?.role || '');
+    const sameCompany = req.user?.role === 'SUPER_ADMIN' || (existingClientApp.client?.companyId && existingClientApp.client.companyId === req.user?.companyId);
+    const hasClientAppAccess =
+      (ownerSellerId && (await canAccessSellerAppointments(req.user, ownerSellerId))) ||
+      (isAdminOrSupervisor && sameCompany);
+
+    if (!hasClientAppAccess) {
       res.status(403).json({ error: 'Forbidden: Sem permissão para alterar este agendamento' });
       return;
     }
 
-    const dataToUpdate: any = {};
-    if (title) dataToUpdate.title = String(title).slice(0, 200);
-    if (description !== undefined) dataToUpdate.description = description ? String(description).slice(0, 1000) : null;
-    if (dateTime) dataToUpdate.dateTime = new Date(dateTime);
+    const currentRebuilt = reconstructClientAppointmentDate(existingClientApp.date, existingClientApp.time);
+    let nextDate = existingClientApp.date;
+    let nextTime = existingClientApp.time;
 
-    const appointment = await prisma.personalAppointment.update({
+    if (dateTime) {
+      const parsedDt = parseSaoPauloDateTime(String(dateTime), time);
+      const parts = formatSaoPauloParts(parsedDt);
+      nextDate = parsedDt;
+      nextTime = time ? String(time).trim() : parts.brTime;
+    } else if (date || time) {
+      const dateStr = date ? String(date).trim() : currentRebuilt.brDate;
+      const timeStr = time ? String(time).trim() : currentRebuilt.brTime;
+      nextDate = parseSaoPauloDateTime(dateStr, timeStr);
+      nextTime = timeStr;
+    }
+
+    const nextObs =
+      observation !== undefined
+        ? observation
+          ? String(observation).trim().slice(0, 1000)
+          : null
+        : description !== undefined
+        ? description
+          ? String(description).trim().slice(0, 1000)
+          : null
+        : existingClientApp.observation;
+
+    const updatedClientApp = await prisma.appointment.update({
       where: { id },
-      data: dataToUpdate,
+      data: {
+        date: nextDate,
+        time: nextTime,
+        observation: nextObs,
+      },
     });
 
-    res.json(appointment);
+    const br = reconstructClientAppointmentDate(updatedClientApp.date, updatedClientApp.time);
+    res.json({
+      ...updatedClientApp,
+      type: 'CLIENT',
+      description: updatedClientApp.observation,
+      dateTime: br.instant.toISOString(),
+      brDate: br.brDate,
+      brTime: br.brTime,
+    });
   } catch (error) {
     console.error('Error updating appointment:', error);
     res.status(500).json({ error: 'Failed to update appointment' });
   }
 });
 
-// Deletar um agendamento
+// Deletar um agendamento (pessoal ou de ficha/cliente)
 router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    const existing = await prisma.personalAppointment.findUnique({
+    const existingPersonal = await prisma.personalAppointment.findUnique({
       where: { id },
     });
 
-    if (!existing) {
+    if (existingPersonal) {
+      const hasAccess = await canAccessSellerAppointments(req.user, existingPersonal.sellerId);
+      if (!hasAccess) {
+        res.status(403).json({ error: 'Forbidden: Sem permissão para excluir este agendamento' });
+        return;
+      }
+
+      await prisma.personalAppointment.delete({
+        where: { id },
+      });
+      res.json({ message: 'Appointment deleted successfully', deleted: true, type: 'PERSONAL' });
+      return;
+    }
+
+    const existingClientApp = await prisma.appointment.findUnique({
+      where: { id },
+      include: {
+        client: { select: { companyId: true, assignedSellerId: true } },
+      },
+    });
+
+    if (!existingClientApp) {
       res.status(404).json({ error: 'Appointment not found' });
       return;
     }
 
-    const hasAccess = await canAccessSellerAppointments(req.user, existing.sellerId);
-    if (!hasAccess) {
+    const ownerSellerId = existingClientApp.responsibleId || existingClientApp.client?.assignedSellerId || '';
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR', 'SELLER_MANAGER', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(req.user?.role || '');
+    const sameCompany = req.user?.role === 'SUPER_ADMIN' || (existingClientApp.client?.companyId && existingClientApp.client.companyId === req.user?.companyId);
+    const hasClientAppAccess =
+      (ownerSellerId && (await canAccessSellerAppointments(req.user, ownerSellerId))) ||
+      (isAdminOrSupervisor && sameCompany);
+
+    if (!hasClientAppAccess) {
       res.status(403).json({ error: 'Forbidden: Sem permissão para excluir este agendamento' });
       return;
     }
 
-    await prisma.personalAppointment.delete({
+    await prisma.appointment.delete({
       where: { id },
     });
-    res.json({ message: 'Appointment deleted successfully' });
+    res.json({ message: 'Appointment deleted successfully', deleted: true, type: 'CLIENT' });
   } catch (error) {
     console.error('Error deleting appointment:', error);
     res.status(500).json({ error: 'Failed to delete appointment' });

@@ -906,9 +906,46 @@ class ApiService {
   }
 
   // Appointments
-  Future<void> registerAppointment(Map<String, dynamic> appointmentData) async {
+  Future<Map<String, dynamic>> registerAppointment(
+      Map<String, dynamic> appointmentData) async {
     try {
-      await _dio.post('/sales/appointments', data: appointmentData);
+      final response =
+          await _dio.post('/sales/appointments', data: appointmentData);
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : <String, dynamic>{};
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<List<dynamic>> getTravelVirginBooks() async {
+    try {
+      final response = await _dio.get('/books/travel-virgin');
+      return response.data as List<dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> createTravelBookBatch({
+    required List<String> clientIds,
+    String? batchName,
+    String? city,
+    String? targetSellerId,
+    String? reason,
+  }) async {
+    try {
+      final response = await _dio.post('/books/travel-batch', data: {
+        'clientIds': clientIds,
+        if (batchName != null && batchName.trim().isNotEmpty)
+          'batchName': batchName.trim(),
+        if (city != null && city.trim().isNotEmpty) 'city': city.trim(),
+        if (targetSellerId != null && targetSellerId.trim().isNotEmpty)
+          'targetSellerId': targetSellerId.trim(),
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      });
+      return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }
@@ -1893,13 +1930,47 @@ class ApiService {
     required DateTime dateTime,
   }) async {
     try {
+      final brIso =
+          '${dateTime.year.toString().padLeft(4, '0')}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}T${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}:00-03:00';
       final response = await _dio.post('/appointments', data: {
         'sellerId': sellerId,
         'title': title,
         'description': description,
-        'dateTime': dateTime.toUtc().toIso8601String(),
+        'dateTime': brIso,
       });
       return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateAppointment(
+    String appointmentId, {
+    String? title,
+    String? description,
+    String? observation,
+    String? date,
+    String? time,
+    String? dateTime,
+  }) async {
+    try {
+      final response = await _dio.put('/appointments/$appointmentId', data: {
+        if (title != null) 'title': title,
+        if (description != null) 'description': description,
+        if (observation != null) 'observation': observation,
+        if (date != null) 'date': date,
+        if (time != null) 'time': time,
+        if (dateTime != null) 'dateTime': dateTime,
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<void> deleteAppointment(String appointmentId) async {
+    try {
+      await _dio.delete('/appointments/$appointmentId');
     } on DioException catch (e) {
       throw Exception(_extractError(e));
     }

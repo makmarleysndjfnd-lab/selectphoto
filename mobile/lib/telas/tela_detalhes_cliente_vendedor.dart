@@ -8,7 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:signature/signature.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:table_calendar/table_calendar.dart';
-import 'package:flutter_rating_bar/flutter_rating_bar.dart';
+import 'package:intl/intl.dart';
 import 'package:currency_text_input_formatter/currency_text_input_formatter.dart';
 import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
@@ -17,6 +17,7 @@ import '../servicos/servico_sincronizacao.dart';
 import '../servicos/servico_midia.dart';
 import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/authenticated_image.dart';
+import '../widgets/fullscreen_signature_screen.dart';
 import '../widgets/led_button.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
@@ -702,6 +703,73 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                             ),
                           ),
                         ],
+                        if (client['appointments'] != null &&
+                            client['appointments'] is List &&
+                            (client['appointments'] as List).isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Builder(builder: (context) {
+                            final appts = List<Map<String, dynamic>>.from(
+                              (client['appointments'] as List)
+                                  .whereType<Map>()
+                                  .map((e) => Map<String, dynamic>.from(e)),
+                            );
+                            if (appts.isEmpty) return const SizedBox.shrink();
+                            appts.sort((a, b) => (b['date'] ?? '')
+                                .toString()
+                                .compareTo((a['date'] ?? '').toString()));
+                            final latest = appts.first;
+                            final dtStr = _formatFichaAppointmentDateTime(latest);
+                            final obs = (latest['observation'] ?? '').toString().trim();
+                            return Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00E5FF).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                    color: const Color(0xFF00E5FF).withOpacity(0.45)),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.event_available_rounded,
+                                      color: Color(0xFF00E5FF), size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Agendamento Ativo',
+                                          style: TextStyle(
+                                            color: Color(0xFF00E5FF),
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          dtStr,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        if (obs.isNotEmpty)
+                                          Text(
+                                            obs,
+                                            style: const TextStyle(
+                                                color: Colors.white70, fontSize: 11),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
                         if (client['cityClosedAt'] != null) ...[
                           const SizedBox(height: 8),
                           Container(
@@ -805,26 +873,25 @@ InputDecoration _fieldDecoration(String label, IconData icon) {
   );
 }
 
-Widget _buildRatingField(String label, void Function(double) onRatingUpdate) {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-      const SizedBox(height: 4),
-      RatingBar.builder(
-        initialRating: 0,
-        minRating: 1,
-        direction: Axis.horizontal,
-        allowHalfRating: false,
-        itemCount: 5,
-        itemSize: 30,
-        unratedColor: Colors.white24,
-        itemBuilder: (context, _) =>
-            const Icon(Icons.star_rounded, color: Colors.amber),
-        onRatingUpdate: onRatingUpdate,
-      ),
-    ],
-  );
+String _formatFichaAppointmentDateTime(Map<String, dynamic> appt) {
+  final rawDate = (appt['date'] ?? appt['dateTime'] ?? '').toString();
+  final rawTime = (appt['time'] ?? appt['brTime'] ?? '').toString().trim();
+  String ymdDisplay = '';
+  if (rawDate.isNotEmpty) {
+    final parsed = DateTime.tryParse(rawDate);
+    if (parsed != null) {
+      final base = rawDate.endsWith('T00:00:00.000Z')
+          ? DateTime(parsed.year, parsed.month, parsed.day)
+          : parsed.toUtc().subtract(const Duration(hours: 3));
+      ymdDisplay = DateFormat('dd/MM/yyyy').format(base);
+    } else if (rawDate.length >= 10) {
+      ymdDisplay = rawDate.substring(0, 10);
+    }
+  }
+  if (rawTime.isNotEmpty) {
+    return ymdDisplay.isNotEmpty ? '$ymdDisplay às $rawTime' : rawTime;
+  }
+  return ymdDisplay.isNotEmpty ? ymdDisplay : 'Horário agendado';
 }
 
 Widget _confirmButton(
@@ -881,8 +948,7 @@ class _SaleTab extends StatefulWidget {
 
 class _SaleTabState extends State<_SaleTab> {
   final _valorVendaController = TextEditingController();
-  final _numeroFichaController = TextEditingController();
-  final _reportNotesController = TextEditingController();
+  final _observacoesController = TextEditingController();
   bool _isLoading = false;
 
   // Crediário / Parcelado
@@ -919,11 +985,12 @@ class _SaleTabState extends State<_SaleTab> {
     'DEBIT': TextEditingController(),
   };
 
-  String _product = 'Book completo capa +Book+mídias';
-  bool _hasCover = true;
-  double _sellerRating = 0;
-  double _photoRating = 0;
-  double _contactRating = 0;
+  static const List<String> _productOptions = ['Book', 'Capa', 'Mídia', 'Defeito'];
+  final Set<String> _selectedProducts = {'Book', 'Capa', 'Mídia'};
+
+  bool get _hasCover => _selectedProducts.contains('Capa');
+  String get _product =>
+      _productOptions.where(_selectedProducts.contains).join(' + ');
 
   File? _receiptPhoto;
 
@@ -955,8 +1022,7 @@ class _SaleTabState extends State<_SaleTab> {
   @override
   void dispose() {
     _valorVendaController.dispose();
-    _numeroFichaController.dispose();
-    _reportNotesController.dispose();
+    _observacoesController.dispose();
     _buyerNameController.dispose();
     _buyerCpfController.dispose();
     _cepController.dispose();
@@ -1097,6 +1163,12 @@ class _SaleTabState extends State<_SaleTab> {
 
   void _submit() async {
     if (_isLoading) return;
+    if (_selectedProducts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Selecione ao menos um item de Produto (Book, Capa, Mídia ou Defeito).'),
+          backgroundColor: Colors.red));
+      return;
+    }
     final double valor = _parseMonetary(_valorVendaController.text);
     if (_valorVendaController.text.isEmpty || valor <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1239,7 +1311,7 @@ class _SaleTabState extends State<_SaleTab> {
         'periodicity': _periodicity,
         'firstDueDate': _firstDueDate.toIso8601String(),
         'signedAgreementUrl': sigBase64,
-        'notes': _reportNotesController.text.trim(),
+        'notes': _observacoesController.text.trim(),
       };
     } else {
       if (sumCents != totalCents) {
@@ -1265,6 +1337,11 @@ class _SaleTabState extends State<_SaleTab> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
+      final fichaCode = (widget.client['visibleCode'] ??
+              widget.client['sequenceNumber'] ??
+              '')
+          .toString();
+
       final payload = {
         'clientId': widget.client['id'],
         'city': widget.client['city'] ?? '',
@@ -1273,13 +1350,10 @@ class _SaleTabState extends State<_SaleTab> {
         'hasCover': _hasCover,
         'status': 'PRONTO',
         'paymentStatus': _isCrediario ? 'PARTIALLY_PAID' : 'PAID',
-        'fichaNumber': _numeroFichaController.text,
+        'fichaNumber': fichaCode,
         'paymentMethod': paymentsList.length > 1 ? 'SPLIT' : paymentsList.first['method'],
         'payments': paymentsList,
-        'reportNotes': _reportNotesController.text,
-        'sellerRating': _sellerRating,
-        'photoRating': _photoRating,
-        'contactRating': _contactRating,
+        'reportNotes': _observacoesController.text.trim(),
         if (creditPayload != null) 'credit': creditPayload,
       };
 
@@ -1310,8 +1384,7 @@ class _SaleTabState extends State<_SaleTab> {
               _receiptPhoto = null;
             });
             _valorVendaController.clear();
-            _numeroFichaController.clear();
-            _reportNotesController.clear();
+            _observacoesController.clear();
             Navigator.of(context).pop({
               'saleSuccess': true,
               'message': 'Sem confirmação do servidor. Venda salva offline aguardando sincronização.',
@@ -1341,8 +1414,7 @@ class _SaleTabState extends State<_SaleTab> {
         _receiptPhoto = null;
       });
       _valorVendaController.clear();
-      _numeroFichaController.clear();
-      _reportNotesController.clear();
+      _observacoesController.clear();
 
       if (saleId != null && saleId.isNotEmpty) {
         await _showBuyerConfirmationSheet(
@@ -1392,6 +1464,10 @@ class _SaleTabState extends State<_SaleTab> {
         _receiptPhoto = null;
       });
       widget.onSuccess('Comprovante anexado com sucesso!');
+      Navigator.of(context).pop({
+        'saleSuccess': true,
+        'message': 'Comprovante anexado com sucesso!',
+      });
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -1631,6 +1707,55 @@ class _SaleTabState extends State<_SaleTab> {
               'Cliente: ${widget.client['name'] ?? widget.client['id']} · Cidade: ${widget.client['city'] ?? ''}',
               style: const TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
           const SizedBox(height: 20),
+
+          // 1. Produto (botões de múltipla escolha)
+          const Text(
+            'Produto (seleção múltipla)',
+            style: TextStyle(
+              color: Color(0xFF90CAF9),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _productOptions.map((item) {
+              final isSelected = _selectedProducts.contains(item);
+              final isDefect = item == 'Defeito';
+              final activeColor =
+                  isDefect ? Colors.orangeAccent : const Color(0xFF4FC3F7);
+              return FilterChip(
+                label: Text(item),
+                selected: isSelected,
+                showCheckmark: true,
+                checkmarkColor: Colors.black,
+                selectedColor: activeColor,
+                backgroundColor: Colors.white.withOpacity(0.06),
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.black : Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+                side: BorderSide(
+                  color: isSelected ? activeColor : Colors.white24,
+                ),
+                onSelected: (checked) {
+                  setState(() {
+                    if (checked) {
+                      _selectedProducts.add(item);
+                    } else {
+                      _selectedProducts.remove(item);
+                    }
+                  });
+                },
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 18),
+
+          // 2. Valor da Venda
           ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 56),
             child: TextField(
@@ -1647,81 +1772,28 @@ class _SaleTabState extends State<_SaleTab> {
             ),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _numeroFichaController,
-            style: const TextStyle(color: Colors.white),
-            decoration: _fieldDecoration('Observações', Icons.notes_rounded),
-          ),
-          const SizedBox(height: 16),
-          _buildDropdown('Produto', _product, [
-            'Book completo capa +Book+mídias',
-            'Book sem mídias',
-            'Book sem capa',
-            'Book com defeito'
-          ], (v) {
-            setState(() {
-              _product = v!;
-              if (_product == 'Book sem capa') {
-                _hasCover = false;
-              } else if (_product == 'Book completo capa +Book+mídias' ||
-                  _product == 'Book sem mídias') {
-                _hasCover = true;
-              }
-            });
-          }),
-          const SizedBox(height: 16),
-          if (_product == 'Book com defeito') ...[
-            Theme(
-              data: Theme.of(context).copyWith(
-                unselectedWidgetColor: Colors.white54,
-              ),
-              child: CheckboxListTile(
-                title: const Text('O book tinha capa?',
-                    style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Marque se a capa precisou ser usada.',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-                value: _hasCover,
-                activeColor: const Color(0xFF4FC3F7),
-                checkColor: Colors.black,
-                tileColor: Colors.white.withOpacity(0.05),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                onChanged: (val) => setState(() => _hasCover = val ?? false),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          _buildCrediarioToggle(),
-          const SizedBox(height: 16),
+
+          // 3. Formas de Pagamento
           _buildSplitPaymentSection(),
+          const SizedBox(height: 16),
+
+          // 4. Venda no Crediário
+          _buildCrediarioToggle(),
           if (_isCrediario) ...[
             const SizedBox(height: 16),
             _buildCrediarioDetailsSection(),
           ],
-          const SizedBox(height: 24),
-          const Text('Avaliação do Atendimento',
-              style: TextStyle(
-                  color: Color(0xFF90CAF9),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14)),
-          const SizedBox(height: 12),
-          _buildRatingField(
-              'Vendedor', (r) => setState(() => _sellerRating = r)),
-          const SizedBox(height: 12),
-          _buildRatingField(
-              'Fotógrafo', (r) => setState(() => _photoRating = r)),
-          const SizedBox(height: 12),
-          _buildRatingField(
-              'O Contato', (r) => setState(() => _contactRating = r)),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
+
+          // 5. Observações
           TextField(
-            controller: _reportNotesController,
-            maxLines: 2,
+            controller: _observacoesController,
+            maxLines: 3,
             style: const TextStyle(color: Colors.white),
-            decoration: _fieldDecoration('Anotações do Relatório de Vendas',
-                Icons.rate_review_outlined),
+            decoration: _fieldDecoration('Observações', Icons.notes_rounded),
           ),
 
+          // 6. Comprovante e Confirmação
           const SizedBox(height: 24),
           const Text('Comprovante de pagamento (obrigatório)',
               style: TextStyle(
@@ -2815,38 +2887,6 @@ class _SaleTabState extends State<_SaleTab> {
     );
   }
 
-  Widget _buildDropdown(
-    String label,
-    String value,
-    List<String> items,
-    ValueChanged<String?> onChanged,
-  ) {
-    return DropdownButtonFormField<String>(
-      isExpanded: true,
-      value: value,
-      dropdownColor: const Color(0xFF1A1A2E),
-      style: const TextStyle(color: Colors.white),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Color(0xFF90CAF9)),
-        filled: true,
-        fillColor: Colors.white.withOpacity(0.05),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide:
-                BorderSide(color: Colors.white.withOpacity(0.15), width: 1)),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFF4FC3F7), width: 1.5)),
-      ),
-      items: items
-          .map((i) => DropdownMenuItem(
-              value: i, child: Text(i, overflow: TextOverflow.ellipsis)))
-          .toList(),
-      onChanged: onChanged,
-    );
-  }
-
   String _formatSkippedReason(String reason) {
     switch (reason) {
       case 'CLIENT_REFUSED':
@@ -3531,16 +3571,28 @@ class _NonSaleTabState extends State<_NonSaleTab> {
     'Dados incorretos',
     'Book trocado',
     'Sem qualidade',
+    'Em Viagem',
   ];
-  final SignatureController _sigController = SignatureController(
-    penStrokeWidth: 3,
-    penColor: Colors.black,
-    exportBackgroundColor: Colors.white,
-  );
+  Uint8List? _collectedSignatureBytes;
   bool _isLoading = false;
-  double _sellerRating = 0;
-  double _photoRating = 0;
-  double _contactRating = 0;
+
+  Future<void> _openFullscreenSignature() async {
+    final result = await Navigator.of(context).push<Uint8List?>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => const FullscreenSignatureScreen(
+          title: 'Assinatura do Cliente',
+          instructions:
+              'Peça ao cliente para assinar livremente na área branca abaixo.',
+        ),
+      ),
+    );
+    if (result != null && result.isNotEmpty && mounted) {
+      setState(() {
+        _collectedSignatureBytes = result;
+      });
+    }
+  }
 
   void _submit() async {
     if (_selectedReason == null) {
@@ -3549,7 +3601,7 @@ class _NonSaleTabState extends State<_NonSaleTab> {
           behavior: SnackBarBehavior.floating));
       return;
     }
-    if (_sigController.isEmpty) {
+    if (_collectedSignatureBytes == null || _collectedSignatureBytes!.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('A assinatura é obrigatória.'),
           behavior: SnackBarBehavior.floating));
@@ -3563,45 +3615,35 @@ class _NonSaleTabState extends State<_NonSaleTab> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
-      final signatureBytes = await _sigController.toPngBytes();
-      if (signatureBytes == null || signatureBytes.isEmpty) {
-        setState(() => _isLoading = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('A assinatura é obrigatória.'),
-              behavior: SnackBarBehavior.floating));
-        }
-        return;
-      }
-      final base64Signature = base64Encode(signatureBytes);
+      final base64Signature = base64Encode(_collectedSignatureBytes!);
 
       final payload = {
         'clientId': widget.client['id'],
         'reason': reasonToSubmit,
         'signatureBase64': base64Signature,
-        'sellerRating': _sellerRating,
-        'photoRating': _photoRating,
-        'contactRating': _contactRating,
       };
 
+      bool savedOnline = false;
       try {
         await apiService.registerNonSale(payload);
-        widget.onSuccess('Não-venda registrada com sucesso!');
+        savedOnline = true;
       } catch (e) {
         await syncService.addPendingRequest('REGISTER_NONSALE', payload);
-        if (mounted)
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Não-venda salva no aparelho e aguardando envio.'),
-              backgroundColor: Colors.orange));
-        widget.onSuccess('Não-venda aguardando confirmação do servidor.');
       }
 
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _selectedReason = null;
+        _collectedSignatureBytes = null;
       });
-      _sigController.clear();
+      final msg = savedOnline
+          ? 'Não-venda registrada com sucesso!'
+          : 'Não-venda salva no aparelho e aguardando envio.';
+      Navigator.of(context).pop({
+        'nonSaleSuccess': true,
+        'message': msg,
+      });
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
@@ -3719,40 +3761,108 @@ class _NonSaleTabState extends State<_NonSaleTab> {
                   fontWeight: FontWeight.w600,
                   fontSize: 13)),
           const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border:
-                  Border.all(color: const Color(0xFF4FC3F7).withOpacity(0.4)),
+          if (_collectedSignatureBytes != null &&
+              _collectedSignatureBytes!.isNotEmpty) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF10B981), width: 2),
+              ),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 110,
+                    width: double.infinity,
+                    child: Image.memory(
+                      _collectedSignatureBytes!,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(Icons.check_circle_rounded,
+                          color: Color(0xFF10B981), size: 15),
+                      SizedBox(width: 5),
+                      Text(
+                        'Assinatura coletada',
+                        style: TextStyle(
+                          color: Color(0xFF047857),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Signature(
-                  controller: _sigController,
-                  height: 280,
-                  backgroundColor: Colors.white),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _openFullscreenSignature,
+                    icon: const Icon(Icons.draw_rounded,
+                        color: Color(0xFF4FC3F7), size: 18),
+                    label: const Text(
+                      'Refazer Assinatura',
+                      style: TextStyle(
+                          color: Color(0xFF4FC3F7),
+                          fontWeight: FontWeight.bold),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(
+                          color: Color(0xFF4FC3F7), width: 1.5),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton(
+                  tooltip: 'Limpar Assinatura',
+                  onPressed: () {
+                    setState(() {
+                      _collectedSignatureBytes = null;
+                    });
+                  },
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      color: Colors.white54),
+                ),
+              ],
             ),
-          ),
-          TextButton.icon(
-            onPressed: () => _sigController.clear(),
-            icon: const Icon(Icons.refresh_rounded,
-                color: Color(0xFF90CAF9), size: 16),
-            label: const Text('Limpar assinatura',
-                style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12)),
-          ),
-          const SizedBox(height: 12),
-          const Text('Avaliação do Atendimento',
-              style: TextStyle(
-                  color: Color(0xFF90CAF9),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14)),
-          const SizedBox(height: 12),
-          _buildRatingField('Vendedor', (r) => _sellerRating = r),
-          const SizedBox(height: 12),
-          _buildRatingField('Fotógrafo', (r) => _photoRating = r),
-          const SizedBox(height: 12),
-          _buildRatingField('O Contato', (r) => _contactRating = r),
+          ] else ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _openFullscreenSignature,
+                icon: const Icon(Icons.draw_rounded, size: 22),
+                label: const Text(
+                  'Coletar Assinatura do Cliente',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF1A2535),
+                  foregroundColor: const Color(0xFF4FC3F7),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                        color: const Color(0xFF4FC3F7).withOpacity(0.55)),
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           _confirmButton(
             isLoading: _isLoading,
@@ -3803,18 +3913,33 @@ class _ScheduleTabState extends State<_ScheduleTab> {
       final apiService = Provider.of<ApiService>(context, listen: false);
       final syncService = Provider.of<SyncService>(context, listen: false);
 
-      final dateIso = _selectedDay!.toIso8601String();
+      final day = _selectedDay!;
+      final ymd =
+          '${day.year.toString().padLeft(4, '0')}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
       final timeToSubmit = _selectedTime!;
+      final brDateIso = '${ymd}T$timeToSubmit:00.000-03:00';
 
       final payload = {
         'clientId': widget.client['id'],
-        'date': dateIso,
+        'date': brDateIso,
         'time': timeToSubmit,
-        'observation': _obsController.text,
+        'observation': _obsController.text.trim(),
       };
 
       try {
-        await apiService.registerAppointment(payload);
+        final savedAppt = await apiService.registerAppointment(payload);
+        if (mounted) {
+          final existingList = (widget.client['appointments'] is List)
+              ? List<dynamic>.from(widget.client['appointments'] as List)
+              : <dynamic>[];
+          existingList.insert(0, {
+            if (savedAppt['id'] != null) 'id': savedAppt['id'],
+            'date': savedAppt['date'] ?? brDateIso,
+            'time': savedAppt['time'] ?? timeToSubmit,
+            'observation': _obsController.text.trim(),
+          });
+          widget.client['appointments'] = existingList;
+        }
         widget.onSuccess('Agendamento salvo com sucesso!');
       } catch (e) {
         await syncService.addPendingRequest('REGISTER_APPOINTMENT', payload);
@@ -3930,23 +4055,59 @@ class _ScheduleTabState extends State<_ScheduleTab> {
 
   @override
   Widget build(BuildContext context) {
-    List<String> hours = [
-      '08:00',
-      '09:00',
-      '10:00',
-      '11:00',
-      '13:00',
-      '14:00',
-      '15:00',
-      '16:00',
-      '17:00'
-    ];
+    final List<String> hours = List.generate(
+      17,
+      (i) => '${(6 + i).toString().padLeft(2, '0')}:00',
+    );
+    final activeAppointments = (widget.client['appointments'] is List)
+        ? (widget.client['appointments'] as List)
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (activeAppointments.isNotEmpty) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00E5FF).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border:
+                    Border.all(color: const Color(0xFF00E5FF).withOpacity(0.45)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Agendamento Ativo na Ficha',
+                    style: TextStyle(
+                      color: Color(0xFF00E5FF),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ...activeAppointments.take(2).map((appt) {
+                    final dtStr = _formatFichaAppointmentDateTime(appt);
+                    final obs = (appt['observation'] ?? '').toString().trim();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        obs.isNotEmpty ? '$dtStr · $obs' : dtStr,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ],
           Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,

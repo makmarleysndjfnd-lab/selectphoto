@@ -740,9 +740,16 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
         where: { 
           companyId: userCompanyId,
           ...sellerOnlyWalletFilter,
+          bookStatus: { not: 'IN_STOCK_VIRGIN' },
           OR: [
             { bookStatus: { in: reboloStatuses } },
-            { nonSales: { some: {} } }
+            {
+              nonSales: {
+                some: {
+                  reason: { notIn: ['Em Viagem', 'EM VIAGEM', 'em viagem', 'EM_VIAGEM'] },
+                },
+              },
+            },
           ]
         },
         include: {
