@@ -144,6 +144,7 @@ export interface BuyerConfirmationReceipt {
     reportedInstallmentBrl: string;
   };
   reportedPayments?: Array<{ method: string; amountBrl: string }>;
+  serviceRating?: number | null;
   notes?: string | null;
   disclaimer: string;
 }
@@ -162,6 +163,7 @@ export function buildConfirmationReceipt(params: {
   reportedInstallmentsCount?: number | null;
   reportedInstallmentCents?: number | null;
   reportedPayments?: any[] | null;
+  serviceRating?: number | null;
   notes?: string | null;
 }): BuyerConfirmationReceipt {
   const formatBrl = (cents: number) =>
@@ -199,6 +201,7 @@ export function buildConfirmationReceipt(params: {
           amountBrl: formatBrl(p.amountCents || Math.round(Number(p.amount || 0) * 100)),
         }))
       : undefined,
+    serviceRating: params.serviceRating ?? null,
     notes: params.notes || null,
     disclaimer:
       'Documento emitido exclusivamente para fins de conferência operacional entre cliente e empresa. Não possui valor fiscal nem quita obrigações tributárias.',
@@ -215,6 +218,7 @@ export async function issueBuyerConfirmationLink(
     expiresInMinutes?: number;
     customExpiresAt?: Date;
     baseUrl?: string;
+    forceReissue?: boolean;
   },
   dbClient: PrismaClient | Prisma.TransactionClient = defaultPrisma
 ) {
@@ -237,11 +241,34 @@ export async function issueBuyerConfirmationLink(
     throw err;
   }
 
-  const latestExisting = await dbClient.buyerPurchaseConfirmation.findFirst({
+  const existingRecords = await dbClient.buyerPurchaseConfirmation.findMany({
     where: { saleId: sale.id, companyId: params.companyId },
     orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
   });
 
+  const existingResponded = existingRecords.find((r) =>
+    ['CONFIRMED', 'UNDER_REVIEW', 'ADMIN_EXCEPTION'].includes(r.status)
+  );
+  if (existingResponded && !params.forceReissue) {
+    return {
+      confirmation: existingResponded,
+      rawToken: null as string | null,
+      confirmationUrl: null as string | null,
+      apiConfirmationUrl: null as string | null,
+      qrCodePayload: null as string | null,
+      status: existingResponded.status,
+      statusLabel: getConfirmationStatusLabel(existingResponded.status),
+      statusProgress: getSellerProgressLabel(
+        existingResponded.status,
+        existingResponded.isSkipped
+      ),
+      conditionsVersion: existingResponded.conditionsVersion,
+      expiresAt: existingResponded.expiresAt,
+      alreadyResponded: true,
+    };
+  }
+
+  const latestExisting = existingRecords[0];
   const conditionsVersion = latestExisting ? latestExisting.conditionsVersion : 1;
 
   // Invalida link PENDING anterior na mesma versão por rotação
@@ -323,6 +350,7 @@ export async function issueBuyerConfirmationLink(
       sellerPaidCents,
       sellerPaymentMethod,
       expiresAt,
+      operationalBatchId: sale.client?.batchId || null,
     },
   });
 
@@ -346,6 +374,7 @@ export async function issueBuyerConfirmationLink(
     statusProgress: getSellerProgressLabel(created.status, created.isSkipped),
     conditionsVersion: created.conditionsVersion,
     expiresAt: created.expiresAt,
+    alreadyResponded: false,
   };
 }
 
@@ -864,6 +893,8 @@ export async function submitPublicBuyerConfirmation(
     reportedInstallmentValue?: number | string;
     reportedInstallmentCents?: number;
     reportedPayments?: Array<{ method: string; amount?: number; amountCents?: number }>;
+    serviceRating?: number | string | null;
+    serviceRatingComment?: string | null;
     notes?: string;
     buyerChannel?: string;
     ipAddress?: string | null;
@@ -974,6 +1005,7 @@ export async function submitPublicBuyerConfirmation(
           reportedInstallmentsCount: record.reportedInstallmentsCount,
           reportedInstallmentCents: record.reportedInstallmentCents,
           reportedPayments: record.reportedPayments as any[],
+          serviceRating: record.serviceRating,
           notes: record.reportedNotes,
         });
 
@@ -1102,6 +1134,26 @@ export async function submitPublicBuyerConfirmation(
         'MISSING_PAYMENT_METHOD'
       );
     }
+
+    let parsedServiceRating: number | null = null;
+    if (
+      params.serviceRating !== undefined &&
+      params.serviceRating !== null &&
+      String(params.serviceRating).trim() !== ''
+    ) {
+      const n = Number(params.serviceRating);
+      if (!Number.isInteger(n) || n < 1 || n > 5) {
+        throw createPublicConfirmationError(
+          'Avaliação do atendimento deve ser entre 1 e 5 estrelas.',
+          400,
+          'INVALID_SERVICE_RATING'
+        );
+      }
+      parsedServiceRating = n;
+    }
+    const cleanServiceRatingComment = params.serviceRatingComment
+      ? String(params.serviceRatingComment).trim().slice(0, 500)
+      : null;
 
     const snap = (record.conditionsSnapshot as any) || {};
     const hasCreditAgreement = Boolean(
@@ -1374,6 +1426,8 @@ export async function submitPublicBuyerConfirmation(
         suspectedSelfScan,
         selfScanReason,
         operationalBatchId: batchId,
+        serviceRating: parsedServiceRating,
+        serviceRatingComment: cleanServiceRatingComment,
       },
     });
 
@@ -1431,6 +1485,7 @@ export async function submitPublicBuyerConfirmation(
           buyerReportedTotalBrl: Number((reportedTotalCents / 100).toFixed(2)),
           buyerReportedPaidBrl: Number((reportedPaidCents / 100).toFixed(2)),
           buyerReportedPaymentMethod: rawReportedMethod,
+          serviceRating: parsedServiceRating,
           status: nextStatus,
           hasDivergence,
           reasons: divergenceReasons,
@@ -1475,6 +1530,7 @@ export async function submitPublicBuyerConfirmation(
       reportedInstallmentsCount,
       reportedInstallmentCents,
       reportedPayments: reportedPaymentsJson,
+      serviceRating: updated.serviceRating,
       notes: params.notes,
     });
 
@@ -1487,6 +1543,7 @@ export async function submitPublicBuyerConfirmation(
       status: updated.status,
       statusLabel: getConfirmationStatusLabel(updated.status),
       respondedAt: updated.usedAt,
+      serviceRating: updated.serviceRating,
       message: 'Sua confirmação de compra foi registrada com sucesso!',
       receipt,
     };
@@ -1819,6 +1876,7 @@ export function formatBuyerConfirmationForRole(
     expiresAt: record.expiresAt,
     respondedAt: record.usedAt || null,
     invalidatedAt: record.invalidatedAt || null,
+    hasServiceRating: record.serviceRating !== null && record.serviceRating !== undefined,
     operationalBatch: null as any,
   };
 
@@ -1939,6 +1997,12 @@ export function formatBuyerConfirmationForRole(
       record.sale?.client?.visibleCode ||
       record.sale?.client?.sequenceNumber ||
       null,
+    saleDate: record.sale?.date || record.createdAt || null,
+    receiptUrl: record.sale?.receiptUrl || null,
+    product: record.sale?.product || null,
+    city: record.sale?.city || record.sale?.client?.city || null,
+    serviceRating: record.serviceRating ?? null,
+    serviceRatingComment: record.serviceRatingComment ?? null,
     sellerBlocked: Boolean((record.sale?.seller as any)?.sellerBlocked),
     sellerBlockedReason: (record.sale?.seller as any)?.sellerBlockedReason || null,
     sellerBlockedAtResolution: Boolean(record.sellerBlockedAtResolution),
@@ -2075,6 +2139,11 @@ export function renderPublicBuyerConfirmationHtml(
     .receipt-label { color: #94a3b8; }
     .receipt-value { font-weight: 600; color: #f8fafc; }
     .receipt-disclaimer { margin-top: 12px; font-size: 0.74rem; color: #64748b; text-align: center; line-height: 1.3; }
+    .stars-box { display: flex; justify-content: space-between; gap: 6px; margin-top: 6px; }
+    .star-btn { flex: 1; margin-top: 0; padding: 10px 4px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #64748b; font-size: 1.35rem; line-height: 1; cursor: pointer; }
+    .star-btn:hover { background: #1e293b; border-color: #fbbf24; }
+    .star-btn.active { color: #fbbf24; border-color: #fbbf24; background: rgba(251,191,36,0.12); }
+    .star-hint { margin-top: 5px; font-size: 0.78rem; color: #fbbf24; text-align: center; min-height: 18px; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -2132,6 +2201,18 @@ export function renderPublicBuyerConfirmationHtml(
           <input id="reportedInstallmentValue" name="reportedInstallmentValue" type="number" step="0.01" min="0" placeholder="Ex: 100.00" />
         </div>
 
+        <label>Avaliação do atendimento (1 a 5 estrelas)</label>
+        <div class="help">Toque nas estrelas para avaliar o atendimento recebido.</div>
+        <div class="stars-box" id="starsBox" role="radiogroup" aria-label="Avaliação de atendimento">
+          <button type="button" class="star-btn" data-star="1" aria-label="1 estrela">★</button>
+          <button type="button" class="star-btn" data-star="2" aria-label="2 estrelas">★</button>
+          <button type="button" class="star-btn" data-star="3" aria-label="3 estrelas">★</button>
+          <button type="button" class="star-btn" data-star="4" aria-label="4 estrelas">★</button>
+          <button type="button" class="star-btn" data-star="5" aria-label="5 estrelas">★</button>
+        </div>
+        <input id="serviceRating" name="serviceRating" type="hidden" value="" />
+        <div class="star-hint" id="starHint">Selecione de 1 a 5 estrelas</div>
+
         <button type="submit" id="submitBtn">Confirmar Compra</button>
         <div id="msg"></div>
       </form>
@@ -2156,6 +2237,28 @@ export function renderPublicBuyerConfirmationHtml(
     const formCard = document.getElementById('formCard');
     const receiptCard = document.getElementById('receiptCard');
     const receiptContent = document.getElementById('receiptContent');
+    const starInput = document.getElementById('serviceRating');
+    const starHint = document.getElementById('starHint');
+    const starBtns = Array.from(document.querySelectorAll('.star-btn'));
+    const starLabels = {
+      1: '1 estrela — Muito ruim',
+      2: '2 estrelas — Regular',
+      3: '3 estrelas — Bom',
+      4: '4 estrelas — Muito bom',
+      5: '5 estrelas — Excelente',
+    };
+
+    starBtns.forEach((b) => {
+      b.addEventListener('click', () => {
+        const val = Number(b.getAttribute('data-star'));
+        starInput.value = String(val);
+        starBtns.forEach((other) => {
+          const otherVal = Number(other.getAttribute('data-star'));
+          other.classList.toggle('active', otherVal <= val);
+        });
+        starHint.textContent = starLabels[val] || (val + ' estrelas');
+      });
+    });
 
     methodSelect.addEventListener('change', () => {
       if (methodSelect.value === 'CREDIARIO') {
@@ -2167,6 +2270,11 @@ export function renderPublicBuyerConfirmationHtml(
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (!starInput.value) {
+        msg.style.color = '#f87171';
+        msg.textContent = 'Selecione uma avaliação de 1 a 5 estrelas para o atendimento.';
+        return;
+      }
       btn.disabled = true;
       msg.style.color = '#38bdf8';
       msg.textContent = 'Enviando conferência...';
@@ -2192,6 +2300,7 @@ export function renderPublicBuyerConfirmationHtml(
         reportedRemainingValue: document.getElementById('reportedRemainingValue') ? document.getElementById('reportedRemainingValue').value : undefined,
         reportedInstallmentsCount: document.getElementById('reportedInstallmentsCount') ? document.getElementById('reportedInstallmentsCount').value : undefined,
         reportedInstallmentValue: document.getElementById('reportedInstallmentValue') ? document.getElementById('reportedInstallmentValue').value : undefined,
+        serviceRating: Number(starInput.value),
       };
 
       try {
@@ -2215,6 +2324,10 @@ export function renderPublicBuyerConfirmationHtml(
           html += '<div class="receipt-row"><span class="receipt-label">Total Declarado:</span><span class="receipt-value">' + (r.reportedTotalBrl || '') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Pago no Ato / Entrada:</span><span class="receipt-value">' + (r.reportedPaidBrl || '') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Forma de Pagamento:</span><span class="receipt-value">' + (r.reportedPaymentMethod || '') + '</span></div>';
+          if (r.serviceRating) {
+            const starsText = '★'.repeat(Number(r.serviceRating)) + '☆'.repeat(Math.max(0, 5 - Number(r.serviceRating)));
+            html += '<div class="receipt-row"><span class="receipt-label">Atendimento:</span><span class="receipt-value" style="color:#fbbf24;">' + starsText + ' (' + r.serviceRating + '/5)</span></div>';
+          }
 
           if (r.creditDetails) {
             html += '<div class="receipt-row"><span class="receipt-label">Saldo a Parcelar:</span><span class="receipt-value">' + r.creditDetails.reportedRemainingBrl + '</span></div>';

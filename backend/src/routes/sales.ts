@@ -1093,6 +1093,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         statusProgress: issued.statusProgress,
         conditionsVersion: issued.conditionsVersion,
         expiresAt: issued.expiresAt,
+        alreadyResponded: Boolean((issued as any).alreadyResponded),
       };
     } catch (confErr) {
       console.warn('[SALES] Falha não-bloqueante ao emitir link de confirmação do comprador:', confErr);
@@ -1201,6 +1202,7 @@ router.post(
           statusProgress: issued.statusProgress,
           conditionsVersion: issued.conditionsVersion,
           expiresAt: issued.expiresAt,
+          alreadyResponded: Boolean((issued as any).alreadyResponded),
         };
       } catch (confErr) {
         console.warn('[SALES] Falha não-bloqueante ao emitir link de confirmação do comprador:', confErr);
@@ -1893,8 +1895,6 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
     });
 
     res.json(sales);
-
-    res.json(sales);
   } catch (error) {
     console.error('Get sales history error:', error);
     res.status(500).json({ error: 'Erro ao carregar histórico de vendas' });
@@ -2031,7 +2031,7 @@ router.post('/public/confirm/:token', async (req, res: any) => {
   }
 });
 
-// Listagem e revisão de conferências para o Admin da própria empresa (com agrupamento por lote BookBatch)
+// Listagem e revisão de conferências para o Admin da própria empresa (com agrupamento por vendedor ou lote)
 router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthRequest, res: any) => {
   const companyId = req.user?.companyId;
   if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
@@ -2041,7 +2041,7 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
     return res.status(403).json({ error: 'Acesso restrito à administração da empresa' });
   }
 
-  const { status, batchId, hasDivergence, isSkipped, groupBy } = req.query as Record<string, string | undefined>;
+  const { status, batchId, sellerId, hasDivergence, isSkipped, groupBy } = req.query as Record<string, string | undefined>;
 
   try {
     const whereClause: Prisma.BuyerPurchaseConfirmationWhereInput = {
@@ -2049,7 +2049,12 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
     };
 
     if (status) {
-      whereClause.status = status;
+      const upperStatus = String(status).trim().toUpperCase();
+      if (upperStatus === 'DIVERGENT') {
+        whereClause.hasDivergence = true;
+      } else {
+        whereClause.status = upperStatus;
+      }
     }
     if (hasDivergence !== undefined) {
       whereClause.hasDivergence = hasDivergence === 'true';
@@ -2057,12 +2062,14 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
     if (isSkipped !== undefined) {
       whereClause.isSkipped = isSkipped === 'true';
     }
+    if (sellerId) {
+      whereClause.sellerId = sellerId;
+    }
     if (batchId) {
-      whereClause.sale = {
-        client: {
-          batchId,
-        },
-      };
+      whereClause.OR = [
+        { operationalBatchId: batchId },
+        { sale: { client: { batchId } } },
+      ];
     }
 
     const records = await prisma.buyerPurchaseConfirmation.findMany({
@@ -2087,10 +2094,41 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
           },
         },
       },
-      orderBy: [{ createdAt: 'desc' }],
+      orderBy: [{ conditionsVersion: 'desc' }, { createdAt: 'desc' }],
     });
 
-    const formattedList = records.map((rec) =>
+    // Priorizar por saleId: resposta do comprador (UNDER_REVIEW / CONFIRMED) ou divergência
+    // nunca pode ser ocultada por duplicata PENDING/INVALIDATED mais recente do mesmo saleId.
+    const statusPriority = (rec: any): number => {
+      if (rec.hasDivergence && (rec.status === 'UNDER_REVIEW' || rec.usedAt)) return 5;
+      if (rec.hasDivergence) return 4;
+      if (rec.status === 'CONFIRMED' || rec.status === 'UNDER_REVIEW') return 3;
+      if (rec.status === 'PENDING') return 2;
+      if (rec.status === 'EXPIRED') return 1;
+      return 0;
+    };
+
+    const dedupBySale = new Map<string, (typeof records)[0]>();
+    for (const rec of records) {
+      const prev = dedupBySale.get(rec.saleId);
+      if (!prev) {
+        dedupBySale.set(rec.saleId, rec);
+        continue;
+      }
+      const prevScore = statusPriority(prev);
+      const currScore = statusPriority(rec);
+      if (currScore > prevScore) {
+        dedupBySale.set(rec.saleId, rec);
+      }
+    }
+    const effectiveRecords = Array.from(dedupBySale.values()).sort((a, b) => {
+      const aDiv = a.hasDivergence ? 1 : 0;
+      const bDiv = b.hasDivergence ? 1 : 0;
+      if (aDiv !== bDiv) return bDiv - aDiv;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    const formattedList = effectiveRecords.map((rec) =>
       formatBuyerConfirmationForRole(
         rec,
         true,
@@ -2098,6 +2136,101 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
         rec.sale?.client?.batch
       )
     );
+
+    const ratingsAll = formattedList
+      .map((i: any) => i.serviceRating)
+      .filter((r: any) => typeof r === 'number' && r >= 1 && r <= 5) as number[];
+    const overallSummary = {
+      total: formattedList.length,
+      divergentCount: formattedList.filter((i: any) => i.hasDivergence === true).length,
+      confirmedCount: formattedList.filter((i: any) => i.status === 'CONFIRMED').length,
+      pendingCount: formattedList.filter((i: any) => i.status === 'PENDING').length,
+      skippedCount: formattedList.filter((i: any) => i.isSkipped === true).length,
+      ratedCount: ratingsAll.length,
+      averageRating:
+        ratingsAll.length > 0
+          ? Number((ratingsAll.reduce((a, b) => a + b, 0) / ratingsAll.length).toFixed(1))
+          : null,
+    };
+
+    if (groupBy === 'seller') {
+      const sellerMap: Record<
+        string,
+        {
+          seller: {
+            sellerId: string;
+            sellerName: string;
+            sellerBlocked: boolean;
+            sellerBlockedReason: string | null;
+            totalCount: number;
+            divergentCount: number;
+            confirmedCount: number;
+            pendingCount: number;
+            skippedCount: number;
+            ratedCount: number;
+            averageRating: number | null;
+          };
+          confirmations: any[];
+          _ratings: number[];
+        }
+      > = {};
+
+      for (const item of formattedList as any[]) {
+        const sId = String(item.sellerId || 'SEM_VENDEDOR');
+        if (!sellerMap[sId]) {
+          sellerMap[sId] = {
+            seller: {
+              sellerId: sId,
+              sellerName: item.sellerName || 'Vendedor não identificado',
+              sellerBlocked: Boolean(item.sellerBlocked),
+              sellerBlockedReason: item.sellerBlockedReason || null,
+              totalCount: 0,
+              divergentCount: 0,
+              confirmedCount: 0,
+              pendingCount: 0,
+              skippedCount: 0,
+              ratedCount: 0,
+              averageRating: null,
+            },
+            confirmations: [],
+            _ratings: [],
+          };
+        }
+        const entry = sellerMap[sId];
+        entry.confirmations.push(item);
+        entry.seller.totalCount += 1;
+        if (item.hasDivergence === true) entry.seller.divergentCount += 1;
+        if (item.status === 'CONFIRMED') entry.seller.confirmedCount += 1;
+        if (item.status === 'PENDING') entry.seller.pendingCount += 1;
+        if (item.isSkipped === true) entry.seller.skippedCount += 1;
+        if (typeof item.serviceRating === 'number' && item.serviceRating >= 1 && item.serviceRating <= 5) {
+          entry._ratings.push(item.serviceRating);
+        }
+      }
+
+      const sellerGroups = Object.values(sellerMap)
+        .map(({ seller, confirmations, _ratings }) => {
+          seller.ratedCount = _ratings.length;
+          seller.averageRating =
+            _ratings.length > 0
+              ? Number((_ratings.reduce((a, b) => a + b, 0) / _ratings.length).toFixed(1))
+              : null;
+          return { seller, confirmations };
+        })
+        .sort((a, b) => {
+          if (b.seller.divergentCount !== a.seller.divergentCount) {
+            return b.seller.divergentCount - a.seller.divergentCount;
+          }
+          return a.seller.sellerName.localeCompare(b.seller.sellerName);
+        });
+
+      return res.json({
+        total: formattedList.length,
+        summary: overallSummary,
+        sellerGroups,
+        groups: sellerGroups,
+      });
+    }
 
     if (groupBy === 'batch') {
       const groupsMap: Record<string, { batch: any; confirmations: any[] }> = {};
@@ -2118,12 +2251,14 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
       }
       return res.json({
         total: formattedList.length,
+        summary: overallSummary,
         groups: Object.values(groupsMap),
       });
     }
 
     res.json({
       total: formattedList.length,
+      summary: overallSummary,
       confirmations: formattedList,
     });
   } catch (error: any) {
@@ -2188,11 +2323,30 @@ router.get('/:id/buyer-confirmation', authenticateToken, async (req: AuthRequest
       return res.status(404).json({ error: 'Nenhuma conferência encontrada para esta venda' });
     }
 
-    const latest = records[0];
+    const prioritized = [...records].sort((a, b) => {
+      const rank = (r: any) =>
+        r.hasDivergence && (r.status === 'UNDER_REVIEW' || r.usedAt)
+          ? 5
+          : r.hasDivergence
+          ? 4
+          : r.status === 'CONFIRMED' || r.status === 'UNDER_REVIEW'
+          ? 3
+          : r.status === 'PENDING'
+          ? 2
+          : 1;
+      const diff = rank(b) - rank(a);
+      if (diff !== 0) return diff;
+      if (b.conditionsVersion !== a.conditionsVersion) {
+        return b.conditionsVersion - a.conditionsVersion;
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    const latest = prioritized[0];
     const formatted = formatBuyerConfirmationForRole(
       latest,
       isManager,
-      isManager ? records.slice(1) : undefined,
+      isManager ? prioritized.slice(1) : undefined,
       isManager ? sale.client?.batch : undefined
     );
 
@@ -2200,6 +2354,63 @@ router.get('/:id/buyer-confirmation', authenticateToken, async (req: AuthRequest
   } catch (error: any) {
     console.error('[SALES] Erro ao buscar conferência da venda:', error);
     res.status(500).json({ error: 'Erro ao buscar conferência' });
+  }
+});
+
+// Vendedor ou Admin gera/reabre QR Code de conferência para venda ainda não respondida pelo cliente
+router.post('/:id/buyer-confirmation/reissue', authenticateToken, async (req: AuthRequest, res: any) => {
+  const companyId = req.user?.companyId;
+  if (!companyId) return res.status(403).json({ error: 'Empresa não identificada' });
+
+  const saleId = req.params.id as string;
+  try {
+    const sale = await prisma.sale.findFirst({
+      where: { id: saleId, companyId },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Venda não encontrada' });
+    }
+
+    const isManager = SALE_MANAGER_ROLES.includes(req.user?.role || '');
+    if (!isManager && sale.sellerId !== req.user?.id) {
+      return res.status(403).json({ error: 'Acesso negado a esta venda' });
+    }
+
+    const issued = await issueBuyerConfirmationLink({
+      saleId: sale.id,
+      companyId,
+    });
+
+    if ((issued as any).alreadyResponded) {
+      return res.json({
+        alreadyResponded: true,
+        id: issued.confirmation.id,
+        status: issued.status,
+        statusLabel: issued.statusLabel,
+        statusProgress: issued.statusProgress,
+        conditionsVersion: issued.conditionsVersion,
+        message: 'Esta venda já possui confirmação respondida pelo cliente.',
+      });
+    }
+
+    return res.json({
+      alreadyResponded: false,
+      id: issued.confirmation.id,
+      confirmationUrl: issued.confirmationUrl,
+      qrCodePayload: issued.qrCodePayload,
+      status: issued.status,
+      statusLabel: issued.statusLabel,
+      statusProgress: issued.statusProgress,
+      conditionsVersion: issued.conditionsVersion,
+      expiresAt: issued.expiresAt,
+    });
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[SALES] Erro ao gerar/reabrir QR de conferência:', error);
+    return res.status(500).json({ error: 'Erro ao gerar QR Code de conferência' });
   }
 });
 

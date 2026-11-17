@@ -891,8 +891,9 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                             (sale['paymentMethod'] ?? 'CASH').toString();
 
                         return Container(
-                          width: 175,
+                          width: 204,
                           margin: const EdgeInsets.only(right: 12),
+                          clipBehavior: Clip.antiAlias,
                           decoration: BoxDecoration(
                             color: palette.surface,
                             borderRadius: BorderRadius.circular(12),
@@ -955,30 +956,52 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                     ),
                                   );
                                 },
-                                child: ClipRRect(
-                                  borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(11)),
+                                child: AspectRatio(
+                                  aspectRatio: 16 / 11,
                                   child: AuthenticatedImage(
                                     url: url,
-                                    width: 175,
-                                    height: 135,
+                                    width: double.infinity,
                                     fit: BoxFit.cover,
                                   ),
                                 ),
                               ),
-                              Padding(
-                                padding: const EdgeInsets.all(8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.22),
+                                  border: Border(
+                                    top: BorderSide(
+                                        color: palette.accent.withOpacity(0.2)),
+                                  ),
+                                ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Text(
+                                      clientName,
+                                      maxLines: 2,
+                                      softWrap: true,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        height: 1.25,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
                                       'Lote: $loteName',
-                                      maxLines: 1,
+                                      maxLines: 2,
+                                      softWrap: true,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         color: palette.accentText,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.2,
                                       ),
                                     ),
                                     const SizedBox(height: 2),
@@ -987,29 +1010,18 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        color: palette.textPrimary,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      clientName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
                                         color: palette.textSecondary,
                                         fontSize: 10,
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
+                                    const SizedBox(height: 4),
                                     Text(
                                       'R\$ ${valNum.toStringAsFixed(2)} · $method',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
                                         color: Color(0xFF22C55E),
-                                        fontSize: 10,
+                                        fontSize: 11,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),

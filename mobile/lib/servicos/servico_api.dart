@@ -742,6 +742,22 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> reissueBuyerConfirmation(String saleId) async {
+    try {
+      final response =
+          await _dio.post('/sales/$saleId/buyer-confirmation/reissue');
+      final data = Map<String, dynamic>.from(response.data);
+      if (data['alreadyResponded'] != true && data['confirmationUrl'] != null) {
+        lastBuyerConfirmation = data;
+      }
+      return data;
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao gerar QR Code de validação');
+    }
+  }
+
   Future<Map<String, dynamic>> skipBuyerConfirmation(
     String saleId, {
     String reason = 'CLIENT_REFUSED',
@@ -789,6 +805,7 @@ class ApiService {
   Future<Map<String, dynamic>> listBuyerConfirmationsReview({
     String? status,
     String? batchId,
+    String? sellerId,
     bool? hasDivergence,
     bool? isSkipped,
     String? groupBy,
@@ -798,6 +815,7 @@ class ApiService {
           queryParameters: {
             if (status != null) 'status': status,
             if (batchId != null) 'batchId': batchId,
+            if (sellerId != null) 'sellerId': sellerId,
             if (hasDivergence != null) 'hasDivergence': hasDivergence.toString(),
             if (isSkipped != null) 'isSkipped': isSkipped.toString(),
             if (groupBy != null) 'groupBy': groupBy,

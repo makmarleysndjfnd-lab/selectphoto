@@ -3022,21 +3022,80 @@ class _SaleTabState extends State<_SaleTab> {
         }
 
         if (snapshot.hasError || !snapshot.hasData) {
-          // Mantém compatibilidade com backend em produção ou vendas antigas sem registro
-          return const SizedBox.shrink();
+          // Permite gerar/reabrir o QR Code caso a venda ainda não possua conferência ativa
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF111C2D),
+              borderRadius: BorderRadius.circular(12),
+              border:
+                  Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.qr_code_2_rounded,
+                        color: Color(0xFF38BDF8), size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Conferência do Pedido pelo Cliente',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Gere ou reabra o QR Code para o cliente confirmar a compra e avaliar o atendimento.',
+                  style: TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _reopenBuyerConfirmationQr(saleId),
+                    icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                    label: const Text(
+                      'Gerar / Reabrir QR Code de Validação',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0284C7),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
         }
 
         final data = snapshot.data!;
         final status = data['status']?.toString() ?? 'PENDING';
         final isSkipped = data['isSkipped'] == true;
+        final hasServiceRating = data['hasServiceRating'] == true;
+        final isResponded = status == 'CONFIRMED' || status == 'UNDER_REVIEW';
         final skippedReason = data['skippedReason']?.toString();
 
         String statusLabel = 'Aguardando cliente';
         IconData statusIcon = Icons.hourglass_top_rounded;
         Color statusColor = const Color(0xFF38BDF8);
 
-        if (status == 'CONFIRMED' || status == 'UNDER_REVIEW') {
-          statusLabel = 'Resposta recebida';
+        if (isResponded) {
+          statusLabel = hasServiceRating
+              ? 'Confirmado e avaliado pelo cliente'
+              : 'Resposta recebida';
           statusIcon = Icons.check_circle_outline_rounded;
           statusColor = const Color(0xFF00E676);
         } else if (isSkipped) {
@@ -3108,35 +3167,90 @@ class _SaleTabState extends State<_SaleTab> {
                   style: const TextStyle(color: Colors.white54, fontSize: 11),
                 ),
               ],
-              if (status == 'PENDING' && !isSkipped) ...[
+              if (!isResponded) ...[
                 const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton.icon(
-                    onPressed: () =>
-                        _promptSkipConfirmation(context, saleId),
-                    icon: const Icon(Icons.skip_next_rounded,
-                        color: Colors.amberAccent, size: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _reopenBuyerConfirmationQr(saleId),
+                    icon: const Icon(Icons.qr_code_2_rounded, size: 18),
                     label: const Text(
-                      'Pular Apresentação',
-                      style:
-                          TextStyle(color: Colors.amberAccent, fontSize: 12),
+                      'Gerar / Reabrir QR Code de Validação',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.amberAccent),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0284C7),
+                      foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
                 ),
+                if (status == 'PENDING' && !isSkipped) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          _promptSkipConfirmation(context, saleId),
+                      icon: const Icon(Icons.skip_next_rounded,
+                          color: Colors.amberAccent, size: 16),
+                      label: const Text(
+                        'Pular Apresentação',
+                        style:
+                            TextStyle(color: Colors.amberAccent, fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.amberAccent),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ],
           ),
         );
       },
     );
+  }
+
+  Future<void> _reopenBuyerConfirmationQr(String saleId) async {
+    final api = Provider.of<ApiService>(context, listen: false);
+    try {
+      final result = await api.reissueBuyerConfirmation(saleId);
+      if (!mounted) return;
+      if (result['alreadyResponded'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cliente já respondeu a conferência desta venda!'),
+            backgroundColor: Color(0xFF10B981),
+          ),
+        );
+        setState(() {});
+        return;
+      }
+      await _showBuyerConfirmationSheet(
+        context,
+        saleId,
+        clientName: widget.client['name']?.toString() ?? 'Cliente',
+      );
+      if (mounted) setState(() {});
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao gerar QR Code de validação: $err'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _showBuyerConfirmationSheet(

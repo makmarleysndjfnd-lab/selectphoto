@@ -1741,6 +1741,8 @@ model BuyerPurchaseConfirmation {
   commissionDeductionApplied Boolean  @default(false)
   commissionDeductionBatchId String?
   sellerBlockedAtResolution Boolean   @default(false)
+  serviceRating             Int?
+  serviceRatingComment      String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 

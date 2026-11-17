@@ -14,6 +14,8 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   bool _isLoading = true;
   String? _errorMessage;
   List<dynamic> _groups = [];
+  Map<String, dynamic>? _summary;
+  String? _selectedSellerId;
   String _selectedFilter = 'ALL'; // ALL, DIVERGENT, CONFIRMED, SKIPPED, PENDING
 
   final NumberFormat _currencyFormat =
@@ -63,15 +65,29 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
       }
 
       final res = await _api.listBuyerConfirmationsReview(
-        groupBy: 'batch',
+        groupBy: 'seller',
         hasDivergence: hasDivergence,
         isSkipped: isSkipped,
         status: status,
       );
 
-      final groupsList = res['groups'] as List<dynamic>? ?? [];
+      final groupsList = (res['sellerGroups'] as List<dynamic>?) ??
+          (res['groups'] as List<dynamic>?) ??
+          [];
+      final summaryMap = res['summary'] is Map
+          ? Map<String, dynamic>.from(res['summary'] as Map)
+          : null;
       setState(() {
         _groups = groupsList;
+        _summary = summaryMap;
+        if (_selectedSellerId != null &&
+            !groupsList.any((g) =>
+                (g is Map && g['seller'] is Map
+                    ? g['seller']['sellerId']?.toString()
+                    : null) ==
+                _selectedSellerId)) {
+          _selectedSellerId = null;
+        }
         _isLoading = false;
       });
     } catch (e) {
@@ -268,40 +284,69 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     const cardColor = Color(0xFF160D24);
     const accentNeonPurple = Color(0xFFA855F7);
 
-    return Scaffold(
-      backgroundColor: bgColor,
-      appBar: AppBar(
-        backgroundColor: cardColor,
-        elevation: 0,
-        title: const Text(
-          'Conferência e Auditoria (QR)',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
+    final selectedGroup = _selectedSellerId == null
+        ? null
+        : _groups.cast<Map<String, dynamic>?>().firstWhere(
+              (g) => g?['seller']?['sellerId']?.toString() == _selectedSellerId,
+              orElse: () => null,
+            );
+    final selectedSellerName =
+        selectedGroup?['seller']?['sellerName']?.toString() ?? 'Vendedor';
+
+    return PopScope(
+      canPop: selectedGroup == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && selectedGroup != null) {
+          setState(() => _selectedSellerId = null);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: bgColor,
+        appBar: AppBar(
+          backgroundColor: cardColor,
+          elevation: 0,
+          leading: selectedGroup != null
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                  onPressed: () => setState(() => _selectedSellerId = null),
+                )
+              : null,
+          title: Text(
+            selectedGroup != null
+                ? 'Conferência · $selectedSellerName'
+                : 'Conferência e Auditoria (QR)',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh, color: accentNeonPurple),
+              onPressed: _carregarConferencias,
+            ),
+          ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: accentNeonPurple),
-            onPressed: _carregarConferencias,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildFilterBar(),
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(color: accentNeonPurple))
-                : _errorMessage != null
-                    ? _buildErrorView()
-                    : _groups.isEmpty
-                        ? _buildEmptyView()
-                        : _buildGroupsList(),
-          ),
-        ],
+        body: Column(
+          children: [
+            _buildFilterBar(),
+            if (selectedGroup == null && _summary != null && !_isLoading && _errorMessage == null)
+              _buildOverallSummaryBanner(_summary!),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(color: accentNeonPurple))
+                  : _errorMessage != null
+                      ? _buildErrorView()
+                      : selectedGroup != null
+                          ? _buildSellerDetailView(selectedGroup)
+                          : _groups.isEmpty
+                              ? _buildEmptyView()
+                              : _buildSellerCardsList(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -399,104 +444,261 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     );
   }
 
-  Widget _buildGroupsList() {
+  Widget _buildOverallSummaryBanner(Map<String, dynamic> summary) {
+    final total = (summary['total'] as num?)?.toInt() ?? 0;
+    final divergentCount = (summary['divergentCount'] as num?)?.toInt() ?? 0;
+    final avgRating = summary['averageRating'];
+    final ratedCount = (summary['ratedCount'] as num?)?.toInt() ?? 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      color: const Color(0xFF160D24),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          _badge('$total conferência(s)', const Color(0xFFA855F7), Icons.qr_code_2_rounded),
+          if (divergentCount > 0)
+            _badge('$divergentCount divergência(s)', const Color(0xFFEF4444), Icons.warning_rounded),
+          _badge(
+            avgRating != null ? 'Média ★ $avgRating ($ratedCount)' : 'Sem avaliações ★',
+            const Color(0xFFFBBF24),
+            Icons.star_rounded,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSellerCardsList() {
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: _groups.length,
       itemBuilder: (context, index) {
-        final group = _groups[index] as Map<String, dynamic>;
-        final batch = group['batch'] as Map<String, dynamic>?;
-        final confirmations =
-            (group['confirmations'] as List<dynamic>?) ?? [];
+        final group = Map<String, dynamic>.from(_groups[index] as Map);
+        final seller = Map<String, dynamic>.from(
+            (group['seller'] as Map?) ?? <String, dynamic>{});
+        final sellerId = seller['sellerId']?.toString() ?? 'SEM_VENDEDOR';
+        final sellerName =
+            seller['sellerName']?.toString() ?? 'Vendedor não identificado';
+        final sellerBlocked = seller['sellerBlocked'] == true;
+        final totalCount = (seller['totalCount'] as num?)?.toInt() ??
+            ((group['confirmations'] as List?)?.length ?? 0);
+        final divergentCount = (seller['divergentCount'] as num?)?.toInt() ?? 0;
+        final confirmedCount = (seller['confirmedCount'] as num?)?.toInt() ?? 0;
+        final pendingCount = (seller['pendingCount'] as num?)?.toInt() ?? 0;
+        final skippedCount = (seller['skippedCount'] as num?)?.toInt() ?? 0;
+        final avgRating = seller['averageRating'];
+        final ratedCount = (seller['ratedCount'] as num?)?.toInt() ?? 0;
 
-        final batchName =
-            batch?['batchName']?.toString() ?? 'Sem lote vinculado';
-        final city = batch?['city']?.toString();
-        final photographer = batch?['photographerName']?.toString();
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF160D24),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.25)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Cabeçalho do Lote Operacional (BookBatch)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF221638),
-                  borderRadius:
-                      BorderRadius.vertical(top: Radius.circular(15)),
-                ),
-                child: Row(
+        return InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => setState(() => _selectedSellerId = sellerId),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF160D24),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: divergentCount > 0
+                    ? const Color(0xFFEF4444).withOpacity(0.55)
+                    : const Color(0xFFA855F7).withOpacity(0.35),
+                width: divergentCount > 0 ? 1.4 : 1.0,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    const Icon(Icons.folder_shared_rounded,
-                        color: Color(0xFFA855F7), size: 20),
-                    const SizedBox(width: 8),
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: divergentCount > 0
+                          ? const Color(0xFFEF4444).withOpacity(0.2)
+                          : const Color(0xFFA855F7).withOpacity(0.22),
+                      child: Icon(
+                        Icons.person_rounded,
+                        color: divergentCount > 0
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFFA855F7),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            batchName,
+                            sellerName,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 14,
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          if (city != null || photographer != null)
-                            Text(
-                              [
-                                if (city != null) 'Cidade: $city',
-                                if (photographer != null)
-                                  'Fotógrafo: $photographer'
-                              ].join(' • '),
-                              style: const TextStyle(
-                                  color: Colors.white54, fontSize: 11),
-                            ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '$totalCount ${totalCount == 1 ? 'venda conferida/emitida' : 'vendas conferidas/emitidas'}',
+                            style: const TextStyle(
+                                color: Colors.white54, fontSize: 11),
+                          ),
                         ],
                       ),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                          horizontal: 9, vertical: 5),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFA855F7).withOpacity(0.2),
+                        color: const Color(0xFFFBBF24).withOpacity(0.15),
                         borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: const Color(0xFFFBBF24).withOpacity(0.4)),
                       ),
-                      child: Text(
-                        '${confirmations.length} ${confirmations.length == 1 ? 'venda' : 'vendas'}',
-                        style: const TextStyle(
-                            color: Color(0xFFA855F7),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.star_rounded,
+                              size: 14, color: Color(0xFFFBBF24)),
+                          const SizedBox(width: 4),
+                          Text(
+                            avgRating != null
+                                ? '$avgRating ($ratedCount)'
+                                : 'S/ aval.',
+                            style: const TextStyle(
+                              color: Color(0xFFFBBF24),
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.chevron_right_rounded,
+                        color: Colors.white54),
                   ],
                 ),
-              ),
-
-              // Lista de conferências do lote
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(12),
-                itemCount: confirmations.length,
-                separatorBuilder: (_, __) =>
-                    const Divider(color: Colors.white12, height: 24),
-                itemBuilder: (context, cIndex) {
-                  final item = confirmations[cIndex] as Map<String, dynamic>;
-                  return _buildConfirmationCard(item);
-                },
-              ),
-            ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (divergentCount > 0)
+                      _badge(
+                        '$divergentCount Divergência(s)',
+                        const Color(0xFFEF4444),
+                        Icons.warning_rounded,
+                      ),
+                    if (confirmedCount > 0)
+                      _badge(
+                        '$confirmedCount Confirmada(s)',
+                        const Color(0xFF10B981),
+                        Icons.check_circle_rounded,
+                      ),
+                    if (pendingCount > 0)
+                      _badge(
+                        '$pendingCount Pendente(s)',
+                        const Color(0xFF00E5FF),
+                        Icons.hourglass_top,
+                      ),
+                    if (skippedCount > 0)
+                      _badge(
+                        '$skippedCount Pulado(s)',
+                        const Color(0xFFF59E0B),
+                        Icons.skip_next_rounded,
+                      ),
+                    if (sellerBlocked)
+                      _badge(
+                        'Bloqueado Preventivamente',
+                        const Color(0xFFEF4444),
+                        Icons.block,
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
+      },
+    );
+  }
+
+  Widget _buildSellerDetailView(Map<String, dynamic> group) {
+    final seller = Map<String, dynamic>.from(
+        (group['seller'] as Map?) ?? <String, dynamic>{});
+    final confirmations = (group['confirmations'] as List<dynamic>?) ?? [];
+    final sellerId = seller['sellerId']?.toString() ?? '';
+    final sellerName = seller['sellerName']?.toString() ?? 'Vendedor';
+    final sellerBlocked = seller['sellerBlocked'] == true;
+    final avgRating = seller['averageRating'];
+    final ratedCount = (seller['ratedCount'] as num?)?.toInt() ?? 0;
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: confirmations.length + 1,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF221638),
+              borderRadius: BorderRadius.circular(14),
+              border:
+                  Border.all(color: const Color(0xFFA855F7).withOpacity(0.35)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      sellerName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    _badge(
+                      avgRating != null
+                          ? 'Média ★ $avgRating ($ratedCount aval.)'
+                          : 'Sem avaliações ★',
+                      const Color(0xFFFBBF24),
+                      Icons.star_rounded,
+                    ),
+                    if (sellerBlocked)
+                      _badge('Vendedor Bloqueado', const Color(0xFFEF4444),
+                          Icons.block),
+                  ],
+                ),
+                if (sellerBlocked && sellerId.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _unblockingSellers.contains(sellerId)
+                        ? null
+                        : () => _showUnblockSellerDialog(sellerId, sellerName),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFE9D5FF),
+                      side: const BorderSide(color: Color(0xFFA855F7)),
+                    ),
+                    icon: const Icon(Icons.lock_open_rounded, size: 16),
+                    label: const Text('Desbloquear Vendedor',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
+        final item =
+            Map<String, dynamic>.from(confirmations[index - 1] as Map);
+        return _buildConfirmationCard(item);
       },
     );
   }
@@ -540,6 +742,9 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
 
     final suspectedSelfScan = item['suspectedSelfScan'] == true;
     final selfScanReason = item['selfScanReason']?.toString();
+    final serviceRating = (item['serviceRating'] as num?)?.toInt();
+    final opBatch = item['operationalBatch'] as Map<String, dynamic>?;
+    final batchName = opBatch?['batchName']?.toString();
 
     int? calculatedDivergenceCents;
     if (item['differences'] != null &&
@@ -615,6 +820,10 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (serviceRating != null && serviceRating >= 1 && serviceRating <= 5) ...[
+                    _badge('★ $serviceRating/5', const Color(0xFFFBBF24), Icons.star_rounded),
+                    const SizedBox(width: 6),
+                  ],
                   if (suspectedSelfScan) ...[
                     _badge('Auto-scan suspeito', const Color(0xFFF59E0B),
                         Icons.fingerprint),
@@ -658,6 +867,11 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                   Text(
                     'Cliente: $clientDisplayName${fichaDisplayCode != null && fichaDisplayCode.isNotEmpty ? ' ($fichaDisplayCode)' : ''}',
                     style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                if (batchName != null && batchName.isNotEmpty)
+                  Text(
+                    'Lote: $batchName',
+                    style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 11),
                   ),
               ],
             ),

@@ -1098,7 +1098,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
               children: [
                 Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
                 SizedBox(width: 8),
-                Text('Excluir incompleta',
+                Text('Excluir ficha',
                     style: TextStyle(color: Colors.redAccent, fontSize: 13)),
               ],
             ),

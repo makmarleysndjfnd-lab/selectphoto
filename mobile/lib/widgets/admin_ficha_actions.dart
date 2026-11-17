@@ -6,15 +6,11 @@ const Color lumoraSurfaceDark = Color(0xFF160D24);
 const Color lumoraNeonPurple = Color(0xFFA855F7);
 
 bool isClientEligibleForIncompleteDeletion(Map<String, dynamic> rawClient) {
-  final status = (rawClient['bookStatus'] ?? '').toString().toUpperCase();
-  final cityClosedAt = rawClient['cityClosedAt'];
-  return (status == 'CREATED' || status == 'AWAITING_RELEASE') &&
-      cityClosedAt == null;
+  return (rawClient['id'] ?? '').toString().trim().isNotEmpty;
 }
 
 bool isClientFinalizedForMove(Map<String, dynamic> rawClient) {
-  final status = (rawClient['bookStatus'] ?? '').toString().toUpperCase();
-  return status == 'SOLD' || status == 'REBOLO_SOLD' || status == 'DISCARDED';
+  return false;
 }
 
 Future<void> showAdminEditFichaDialog(
@@ -447,7 +443,7 @@ Future<void> confirmAdminDeleteIncompleteFicha(
             SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Excluir Ficha Não Concluída',
+                'Excluir Ficha Definitivamente',
                 style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
               ),
             ),
@@ -458,17 +454,17 @@ Future<void> confirmAdminDeleteIncompleteFicha(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Deseja excluir a ficha de "$clientName" (status: $status)?',
+              'Confirma a exclusão definitiva da ficha de "$clientName" (status: $status)?',
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Apenas fichas não concluídas e sem book gerado/venda/crediário vinculado podem ser removidas para destravar o fechamento do lote.',
+              'Atenção: esta ação administrativa remove a ficha e eventuais vínculos (vendas, crediário, não-vendas e histórico), mantendo o registro completo na trilha de auditoria.',
               style: TextStyle(color: Colors.white70, fontSize: 12),
             ),
             const SizedBox(height: 12),
             _darkField('Motivo da exclusão (auditoria)', reasonCtrl,
-                hint: 'Ex.: Ficha duplicada/incompleta travando lote'),
+                hint: 'Ex.: Correção administrativa / ficha duplicada'),
           ],
         ),
         actions: [
@@ -489,7 +485,7 @@ Future<void> confirmAdminDeleteIncompleteFicha(
                     child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.delete_outline_rounded, size: 18),
-            label: Text(deleting ? 'Excluindo...' : 'Excluir Ficha'),
+            label: Text(deleting ? 'Excluindo...' : 'Confirmar Exclusão'),
             onPressed: deleting
                 ? null
                 : () async {

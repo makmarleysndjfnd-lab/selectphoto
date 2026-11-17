@@ -70,6 +70,7 @@ class _SellerDashboardState extends State<SellerDashboard>
   // ignore: unused_field
   bool _isQuickMenuOpen = false; // Proteção contra duplo clique no menu de ações
   bool _atendidasExpanded = false; // Controle da seção recolhida de fichas atendidas
+  bool _hideHistoryAfterCityClosing = false; // Oculta histórico subsequente após concluir Fechamento da Cidade
 
   @override
   void initState() {
@@ -129,10 +130,15 @@ class _SellerDashboardState extends State<SellerDashboard>
       final fromWindow = startOfToday.subtract(const Duration(days: 4));
       final appointments = userId != null ? await ApiService().getUnifiedAppointments(userId, from: fromWindow) : [];
       if (mounted) {
+        final nextClients = List<Map<String, dynamic>>.from(clients);
+        final hasOpenClients = nextClients.any((c) => c['cityClosedAt'] == null);
         setState(() {
-          _sellerClients = List<Map<String, dynamic>>.from(clients);
+          _sellerClients = nextClients;
           _personalAppointments = appointments;
           _isLoadingClients = false;
+          if (hasOpenClients) {
+            _hideHistoryAfterCityClosing = false;
+          }
         });
       }
     } catch (e) {
@@ -524,14 +530,16 @@ class _SellerDashboardState extends State<SellerDashboard>
               });
               try {
                 final list = await ApiService().getCitiesClosingPreview();
+                final openOnly = list
+                    .where((p) => p['isAlreadyClosed'] != true)
+                    .toList();
                 if (context.mounted) {
                   setDialogState(() {
-                    previews = list;
+                    previews = openOnly;
                     isLoadingPreviews = false;
-                    for (final p in list) {
+                    for (final p in openOnly) {
                       final canClose = p['canClose'] == true;
-                      final isClosed = p['isAlreadyClosed'] == true;
-                      if (canClose && !isClosed) {
+                      if (canClose) {
                         selectedCities.add(p['city'].toString());
                       }
                     }
@@ -586,7 +594,7 @@ class _SellerDashboardState extends State<SellerDashboard>
                         const SizedBox(height: 8),
                         TextButton(onPressed: loadPreviews, child: const Text('Tentar novamente')),
                       ] else if (previews.isEmpty) ...[
-                        const Text('Nenhuma cidade encontrada para fechamento.',
+                        const Text('Nenhuma cidade em aberto para fechamento.',
                             style: TextStyle(color: Colors.white70, fontSize: 13)),
                       ] else ...[
                         const Text(
@@ -757,13 +765,17 @@ class _SellerDashboardState extends State<SellerDashboard>
                               Navigator.pop(dialogContext);
                             }
                             if (mounted) {
+                              setState(() {
+                                _atendidasExpanded = false;
+                                _hideHistoryAfterCityClosing = true;
+                              });
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text('${selectedCities.length} cidade(s) encerrada(s) com sucesso!'),
                                   backgroundColor: Colors.green,
                                 ),
                               );
-                              _fetchClients();
+                              await _fetchClients();
                             }
                           } catch (e) {
                             setDialogState(() => isSubmitting = false);
@@ -2096,8 +2108,33 @@ class _SellerDashboardState extends State<SellerDashboard>
         ],
 
         const SizedBox(height: 16),
-        _buildFechamentoDoDiaCard(),
-        const SizedBox(height: 16),
+        if (!_hideHistoryAfterCityClosing) ...[
+          _buildFechamentoDoDiaCard(),
+          const SizedBox(height: 16),
+        ] else ...[
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF064E3B).withOpacity(0.35),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF10B981).withOpacity(0.5)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Fechamento de Cidade concluído. As fichas encerradas foram arquivadas.',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         LedButton.icon(
           onPressed: () {
             _showFechamentoCidadeDialog();

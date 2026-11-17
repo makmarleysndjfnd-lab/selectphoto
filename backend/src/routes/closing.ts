@@ -31,46 +31,52 @@ async function canAccessSellerClosing(user: any, sellerId: string): Promise<bool
     return false;
 }
 
-function parseDateRange(dateStr?: string): { startDate: Date; endDate: Date } {
-    let startDate = new Date();
-    let endDate = new Date();
+const SAO_PAULO_OFFSET_MS = -3 * 60 * 60 * 1000;
 
-    if (dateStr) {
-        const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+function getSaoPauloDateString(refDate: Date = new Date()): string {
+    const brTime = new Date(refDate.getTime() + SAO_PAULO_OFFSET_MS);
+    const year = brTime.getUTCFullYear();
+    const month = String(brTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(brTime.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function parseDateRange(dateStr?: string): { startDate: Date; endDate: Date } {
+    let ymd: string;
+
+    if (dateStr && String(dateStr).trim()) {
+        const trimmed = String(dateStr).trim();
+        const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
         if (m) {
-            const year = parseInt(m[1], 10);
-            const month = parseInt(m[2], 10) - 1;
-            const day = parseInt(m[3], 10);
-            startDate = new Date(year, month, day, 0, 0, 0, 0);
-            endDate = new Date(year, month, day, 23, 59, 59, 999);
-            return { startDate, endDate };
+            ymd = `${m[1]}-${m[2]}-${m[3]}`;
+        } else {
+            const parsed = new Date(trimmed);
+            ymd = !isNaN(parsed.getTime())
+                ? getSaoPauloDateString(parsed)
+                : getSaoPauloDateString();
         }
-        startDate = new Date(dateStr);
-        endDate = new Date(dateStr);
+    } else {
+        ymd = getSaoPauloDateString();
     }
 
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
-    return { startDate, endDate };
+    return {
+        startDate: new Date(`${ymd}T00:00:00.000-03:00`),
+        endDate: new Date(`${ymd}T23:59:59.999-03:00`),
+    };
 }
 
 function parseExplicitDate(dateStr: string, isEnd: boolean): Date {
-    const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) {
-        const year = parseInt(m[1], 10);
-        const month = parseInt(m[2], 10) - 1;
-        const day = parseInt(m[3], 10);
-        return isEnd
-            ? new Date(year, month, day, 23, 59, 59, 999)
-            : new Date(year, month, day, 0, 0, 0, 0);
-    }
-    const d = new Date(dateStr);
-    if (isEnd) {
-        d.setHours(23, 59, 59, 999);
-    } else {
-        d.setHours(0, 0, 0, 0);
-    }
-    return d;
+    const trimmed = String(dateStr || '').trim();
+    const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const ymd = m
+        ? `${m[1]}-${m[2]}-${m[3]}`
+        : (() => {
+            const parsed = new Date(trimmed);
+            return !isNaN(parsed.getTime())
+                ? getSaoPauloDateString(parsed)
+                : getSaoPauloDateString();
+        })();
+    return new Date(`${ymd}T${isEnd ? '23:59:59.999' : '00:00:00.000'}-03:00`);
 }
 
 
@@ -1305,10 +1311,7 @@ router.get('/city/:city', authenticateToken, async (req: AuthRequest, res: Respo
         }
 
         if (dateParam) {
-            const startDate = new Date(dateParam);
-            const endDate = new Date(dateParam);
-            startDate.setHours(0, 0, 0, 0);
-            endDate.setHours(23, 59, 59, 999);
+            const { startDate, endDate } = parseDateRange(dateParam);
             whereSale.date = { gte: startDate, lte: endDate };
             whereNonSale.date = { gte: startDate, lte: endDate };
         }

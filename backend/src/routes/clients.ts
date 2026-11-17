@@ -1432,11 +1432,7 @@ router.post('/:id/move', authenticateToken, requireAdminOrSupervisor, async (req
     }
 
     const finalizedStatuses = ['SOLD', 'REBOLO_SOLD', 'DISCARDED'];
-    if (finalizedStatuses.includes(existingClient.bookStatus)) {
-      return res.status(409).json({
-        error: `Não é permitido mover ficha com status finalizado (${existingClient.bookStatus}).`,
-      });
-    }
+    const isFinalized = finalizedStatuses.includes(existingClient.bookStatus);
 
     const hasBatchTarget = Object.prototype.hasOwnProperty.call(req.body || {}, 'targetBatchId');
     const hasSellerTarget = Object.prototype.hasOwnProperty.call(req.body || {}, 'targetSellerId');
@@ -1478,13 +1474,15 @@ router.post('/:id/move', authenticateToken, requireAdminOrSupervisor, async (req
       if (!targetSellerId) {
         updateData.assignedSellerId = null;
         nextSellerName = null;
-        updateData.cityClosedAt = null;
-        if (existingClient.bookStatus === 'DISTRIBUTED') {
-          nextStatus = 'IN_STOCK';
-          updateData.bookStatus = 'IN_STOCK';
-        } else if (existingClient.bookStatus === 'DISTRIBUTED_REBOLO') {
-          nextStatus = 'IN_STOCK_REBOLO';
-          updateData.bookStatus = 'IN_STOCK_REBOLO';
+        if (!isFinalized) {
+          updateData.cityClosedAt = null;
+          if (existingClient.bookStatus === 'DISTRIBUTED') {
+            nextStatus = 'IN_STOCK';
+            updateData.bookStatus = 'IN_STOCK';
+          } else if (existingClient.bookStatus === 'DISTRIBUTED_REBOLO') {
+            nextStatus = 'IN_STOCK_REBOLO';
+            updateData.bookStatus = 'IN_STOCK_REBOLO';
+          }
         }
       } else {
         const targetSeller = await prisma.user.findFirst({
@@ -1505,13 +1503,17 @@ router.post('/:id/move', authenticateToken, requireAdminOrSupervisor, async (req
           return res.status(400).json({ error: 'O usuário selecionado não possui perfil de vendedor.' });
         }
 
-        const isReboloFlow = ['AWAITING_RETURN', 'IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO'].includes(
-          existingClient.bookStatus
-        );
-        nextStatus = isReboloFlow ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED';
-        updateData.assignedSellerId = targetSeller.id;
-        updateData.bookStatus = nextStatus;
-        updateData.cityClosedAt = null;
+        if (isFinalized) {
+          updateData.assignedSellerId = targetSeller.id;
+        } else {
+          const isReboloFlow = ['AWAITING_RETURN', 'IN_STOCK_REBOLO', 'DISTRIBUTED_REBOLO'].includes(
+            existingClient.bookStatus
+          );
+          nextStatus = isReboloFlow ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED';
+          updateData.assignedSellerId = targetSeller.id;
+          updateData.bookStatus = nextStatus;
+          updateData.cityClosedAt = null;
+        }
         nextSellerName = targetSeller.name;
       }
     }
@@ -1593,7 +1595,7 @@ router.post('/:id/move', authenticateToken, requireAdminOrSupervisor, async (req
   }
 });
 
-// Exclusão administrativa segura apenas para fichas não concluídas e sem book gerado/venda/crediário
+// Exclusão administrativa irrestrita de qualquer ficha da própria empresa mediante confirmação e auditoria
 router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
   try {
     const id = String(req.params.id);
@@ -1619,28 +1621,11 @@ router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: A
       return res.status(404).json({ error: 'Ficha não encontrada na empresa' });
     }
 
-    if (existingClient.sales.length > 0 || existingClient.creditAgreements.length > 0) {
-      return res.status(409).json({
-        error: 'Exclusão bloqueada: esta ficha possui venda ou contrato de crediário vinculado.',
-        code: 'CLIENT_HAS_FINANCIAL_RECORDS',
-      });
-    }
-
-    const deletableStatuses = ['CREATED', 'AWAITING_RELEASE'];
-    if (
-      !deletableStatuses.includes(existingClient.bookStatus) ||
-      existingClient.cityClosedAt !== null ||
-      existingClient.nonSales.length > 0
-    ) {
-      return res.status(409).json({
-        error: `Exclusão bloqueada: somente fichas não concluídas e sem book liberado/gerado podem ser excluídas (status atual: ${existingClient.bookStatus}).`,
-        code: 'CLIENT_ALREADY_GENERATED_OR_CONCLUDED',
-      });
-    }
-
     const reason = req.body?.reason
       ? String(req.body.reason).trim()
-      : 'Exclusão administrativa de ficha incompleta travando lote';
+      : 'Exclusão administrativa de ficha pelo painel Admin';
+
+    const saleIds = existingClient.sales.map((s) => s.id);
 
     await prisma.$transaction(async (tx) => {
       await recordOperationalAuditEvent(
@@ -1652,11 +1637,16 @@ router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: A
           entityId: existingClient.id,
           entityReference: existingClient.visibleCode || existingClient.sequenceNumber,
           previousValues: {
+            name: existingClient.name,
             sequenceNumber: existingClient.sequenceNumber,
             visibleCode: existingClient.visibleCode,
             bookStatus: existingClient.bookStatus,
+            outcomeStatus: existingClient.outcomeStatus,
             batchId: existingClient.batchId,
             batchName: existingClient.batch?.name || null,
+            salesCount: saleIds.length,
+            creditAgreementsCount: existingClient.creditAgreements.length,
+            nonSalesCount: existingClient.nonSales.length,
           },
           newValues: null,
           reason,
@@ -1666,6 +1656,39 @@ router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: A
         },
         tx
       );
+
+      if (saleIds.length > 0) {
+        await tx.platformStatementAdjustment.updateMany({
+          where: { originSaleId: { in: saleIds } },
+          data: { originSaleId: null },
+        });
+        await tx.platformStatementItem.deleteMany({
+          where: { saleId: { in: saleIds } },
+        });
+        await tx.batchCommissionAdjustment.deleteMany({
+          where: { saleId: { in: saleIds } },
+        });
+        await tx.buyerPurchaseConfirmation.deleteMany({
+          where: { saleId: { in: saleIds } },
+        });
+        await tx.salePayment.deleteMany({
+          where: { saleId: { in: saleIds } },
+        });
+        await tx.nonSale.updateMany({
+          where: { supersededBySaleId: { in: saleIds } },
+          data: { supersededBySaleId: null },
+        });
+      }
+
+      if (existingClient.creditAgreements.length > 0) {
+        await tx.creditAgreement.deleteMany({ where: { clientId: existingClient.id } });
+      }
+      if (existingClient.nonSales.length > 0) {
+        await tx.nonSale.deleteMany({ where: { clientId: existingClient.id } });
+      }
+      if (saleIds.length > 0) {
+        await tx.sale.deleteMany({ where: { clientId: existingClient.id } });
+      }
 
       await tx.evaluation.deleteMany({ where: { clientId: existingClient.id } });
       await tx.sellerPhoto.deleteMany({ where: { clientId: existingClient.id } });
@@ -1679,10 +1702,10 @@ router.delete('/:id', authenticateToken, requireAdminOrSupervisor, async (req: A
     res.json({
       deleted: true,
       id: existingClient.id,
-      message: 'Ficha não concluída excluída com sucesso e registrada na auditoria.',
+      message: 'Ficha excluída definitivamente e registrada na trilha de auditoria.',
     });
   } catch (error: any) {
-    console.error('Error deleting incomplete client:', error);
+    console.error('Error deleting client as admin:', error);
     res.status(500).json({ error: 'Falha ao excluir ficha' });
   }
 });

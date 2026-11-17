@@ -583,22 +583,14 @@ test('Etapa 13 — Admin edit/move/delete, Rotas Gráficas, Book tracking e Rebo
     assert.equal(moveRes.json.client.assignedSellerId, sellerA2.id);
     assert.equal(moveRes.json.client.bookStatus, 'DISTRIBUTED');
 
-    // Proteção: não excluir ficha com Sale / CreditAgreement ativo
-    const delProtected = await apiJson(baseUrl, `/api/clients/${cWithCredit.id}`, {
+    // Etapa 16: Admin da própria empresa possui permissão total para excluir fichas (com auditoria e isolamento multi-tenant)
+    // Cross-tenant continua bloqueado com 404
+    const delCross = await apiJson(baseUrl, `/api/clients/${cDist1.id}`, {
       method: 'DELETE',
-      token: tokenAdminA,
-      body: { reason: 'Tentativa indevida' },
+      token: tokenAdminB,
+      body: { reason: 'Tentativa cross-tenant' },
     });
-    assert.equal(delProtected.status, 409);
-    assert.equal(delProtected.json.code, 'CLIENT_HAS_FINANCIAL_RECORDS');
-
-    // Proteção: não excluir book já distribuído/vendido
-    const delDist = await apiJson(baseUrl, `/api/clients/${cDist1.id}`, {
-      method: 'DELETE',
-      token: tokenAdminA,
-    });
-    assert.equal(delDist.status, 409);
-    assert.equal(delDist.json.code, 'CLIENT_ALREADY_GENERATED_OR_CONCLUDED');
+    assert.equal(delCross.status, 404);
 
     // Exclusão segura de ficha incompleta (CREATED) travando fechamento
     const delOk = await apiJson(baseUrl, `/api/clients/${cIncomplete.id}`, {
@@ -611,6 +603,26 @@ test('Etapa 13 — Admin edit/move/delete, Rotas Gráficas, Book tracking e Rebo
 
     const checkDeleted = await prisma.client.findUnique({ where: { id: cIncomplete.id } });
     assert.equal(checkDeleted, null);
+
+    // Exclusão administrativa autorizada de ficha distribuída temporária (mantendo cDist1 para subtestes 3 e 4)
+    const cTempDist = await prisma.client.create({
+      data: {
+        sequenceNumber: `TMP-DEL-${Date.now()}`,
+        name: 'Temp Excluir Admin',
+        city: 'Maringá',
+        companyId: compA.id,
+        batchId: batchTarget.id,
+        assignedSellerId: sellerA2.id,
+        bookStatus: 'DISTRIBUTED',
+      },
+    });
+    const delDist = await apiJson(baseUrl, `/api/clients/${cTempDist.id}`, {
+      method: 'DELETE',
+      token: tokenAdminA,
+      body: { reason: 'Limpeza administrativa autorizada' },
+    });
+    assert.equal(delDist.status, 200);
+    assert.equal(delDist.json.deleted, true);
 
     // Verificar trilha de auditoria gravada no banco para edição, movimentação e exclusão
     const auditActions = await prisma.operationalAuditEvent.findMany({

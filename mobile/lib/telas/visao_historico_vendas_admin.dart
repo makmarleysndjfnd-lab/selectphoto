@@ -1487,6 +1487,7 @@ class _ModalDetalhesVenda extends StatelessWidget {
     final hasImage = url != null && url.isNotEmpty;
 
     return Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: const Color(0xFF1F1F35),
         borderRadius: BorderRadius.circular(12),
@@ -1494,6 +1495,7 @@ class _ModalDetalhesVenda extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
@@ -1513,32 +1515,28 @@ class _ModalDetalhesVenda extends StatelessWidget {
             ),
           ),
           if (hasImage)
-            ClipRRect(
-              borderRadius: captionTitle != null
-                  ? BorderRadius.zero
-                  : const BorderRadius.vertical(bottom: Radius.circular(11)),
-              child: InkWell(
-                onTap: () => _abrirImagemEmZoom(context, url, title),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      height: 130,
-                      width: double.infinity,
-                      child: AuthenticatedImage(
-                        url: url,
-                        fit: BoxFit.cover,
-                      ),
+            InkWell(
+              onTap: () => _abrirImagemEmZoom(context, url, title),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    height: 130,
+                    width: double.infinity,
+                    child: AuthenticatedImage(
+                      url: url,
+                      fit: BoxFit.cover,
                     ),
-                    Container(
-                      height: 130,
-                      color: Colors.black26,
-                      child: const Center(
-                        child: Icon(Icons.zoom_in_rounded, color: Colors.white70, size: 28),
-                      ),
+                  ),
+                  Container(
+                    height: 130,
+                    width: double.infinity,
+                    color: Colors.black26,
+                    child: const Center(
+                      child: Icon(Icons.zoom_in_rounded, color: Colors.white70, size: 28),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             )
           else
@@ -1554,36 +1552,45 @@ class _ModalDetalhesVenda extends StatelessWidget {
             ),
           if (captionTitle != null || captionSubtitle != null)
             Container(
-              padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.24),
-                borderRadius:
-                    const BorderRadius.vertical(bottom: Radius.circular(11)),
+                color: Colors.black.withOpacity(0.28),
+                border: const Border(
+                  top: BorderSide(color: Colors.white10),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   if (captionTitle != null)
                     Text(
                       captionTitle,
-                      maxLines: 1,
+                      maxLines: 2,
+                      softWrap: true,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Color(0xFFD8B4FE),
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
+                        height: 1.25,
                       ),
                     ),
-                  if (captionSubtitle != null)
+                  if (captionSubtitle != null) ...[
+                    const SizedBox(height: 2),
                     Text(
                       captionSubtitle,
-                      maxLines: 1,
+                      maxLines: 2,
+                      softWrap: true,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 10,
+                        height: 1.25,
                       ),
                     ),
+                  ],
                 ],
               ),
             ),

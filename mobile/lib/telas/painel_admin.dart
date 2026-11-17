@@ -831,17 +831,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
                       _sideMenuItem(9, Icons.bar_chart_rounded, 'Estatísticas'),
                       _sideMenuItem(8, Icons.layers_rounded, 'Capas'),
-                      ListTile(
-                        leading: const Icon(Icons.pix, color: Color(0xFF22C55E)),
-                        title: const Text('Pix da Empresa',
-                            style: TextStyle(color: Color(0xFF22C55E))),
-                        onTap: () {
-                          if (_scaffoldKey.currentState?.isDrawerOpen == true) {
-                            Navigator.pop(context);
-                          }
-                          showCompanyPixKeyDialog(context);
-                        },
-                      ),
                     ],
                   ),
                 ),
@@ -4008,7 +3997,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           if (canDeleteIncomplete) {
             items.add(const PopupMenuItem(
                 value: 'excluir_incompleta',
-                child: Text('Excluir Ficha Não Concluída',
+                child: Text('Excluir Ficha Definitivamente',
                     style: TextStyle(color: Colors.redAccent))));
           }
           items.add(const PopupMenuDivider());
