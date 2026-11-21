@@ -2138,6 +2138,9 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
           include: {
             client: {
               include: {
+                photographer: {
+                  select: { id: true, name: true },
+                },
                 batch: {
                   include: {
                     photographer: {
@@ -2199,6 +2202,15 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
     const ratingsAll = formattedList
       .map((i: any) => i.serviceRating)
       .filter((r: any) => typeof r === 'number' && r >= 1 && r <= 5) as number[];
+    const contactRatingsAll = formattedList
+      .map((i: any) => i.contactRating)
+      .filter((r: any) => typeof r === 'number' && r >= 1 && r <= 5) as number[];
+    const photographerRatingsAll = formattedList
+      .map((i: any) => i.photographerRating)
+      .filter((r: any) => typeof r === 'number' && r >= 1 && r <= 5) as number[];
+    const avgOf = (arr: number[]) =>
+      arr.length > 0 ? Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1)) : null;
+
     const overallSummary = {
       total: formattedList.length,
       divergentCount: formattedList.filter((i: any) => i.hasDivergence === true).length,
@@ -2206,10 +2218,11 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
       pendingCount: formattedList.filter((i: any) => i.status === 'PENDING').length,
       skippedCount: formattedList.filter((i: any) => i.isSkipped === true).length,
       ratedCount: ratingsAll.length,
-      averageRating:
-        ratingsAll.length > 0
-          ? Number((ratingsAll.reduce((a, b) => a + b, 0) / ratingsAll.length).toFixed(1))
-          : null,
+      averageRating: avgOf(ratingsAll),
+      contactRatedCount: contactRatingsAll.length,
+      contactAverageRating: avgOf(contactRatingsAll),
+      photographerRatedCount: photographerRatingsAll.length,
+      photographerAverageRating: avgOf(photographerRatingsAll),
     };
 
     if (groupBy === 'seller') {

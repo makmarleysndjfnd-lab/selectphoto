@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
+import { translatePaymentMethodPt } from '../services/buyerConfirmationService';
 
 const router = Router();
 
@@ -23,13 +24,16 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     const companyId = req.user?.companyId;
     if (!companyId) return res.status(403).json({ error: 'Sem empresa associada' });
 
-    const { from, to, city } = req.query;
+    const { from, to, city, event } = req.query;
     const dateFilter: any = {};
     if (from) dateFilter.gte = new Date(from as string);
     if (to) dateFilter.lte = new Date(to as string);
     const saleWhere: any = { companyId, receiptUrl: { not: null } };
     if (Object.keys(dateFilter).length) saleWhere.date = dateFilter;
-    if (city) saleWhere.city = city as string;
+    if (city && String(city).trim()) saleWhere.city = String(city).trim();
+    if (event && String(event).trim()) {
+      saleWhere.client = { event: String(event).trim() };
+    }
 
     // 1. Ranking de Clientes
     let rankingClientes: any[] = [];
@@ -175,11 +179,11 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
       const weekOfMonthAgg: Record<number, number> = {};
       allSalesWithDate.forEach(s => {
         if (!s.date) return;
-        const d = new Date(s.date);
-        hourAgg[d.getHours()] = (hourAgg[d.getHours()] ?? 0) + 1;
-        weekdayAgg[d.getDay()] = (weekdayAgg[d.getDay()] ?? 0) + 1;
-        monthAgg[d.getMonth()] = (monthAgg[d.getMonth()] ?? 0) + 1;
-        const wom = Math.ceil(d.getDate() / 7);
+        const br = new Date(new Date(s.date).getTime() - 3 * 60 * 60 * 1000);
+        hourAgg[br.getUTCHours()] = (hourAgg[br.getUTCHours()] ?? 0) + 1;
+        weekdayAgg[br.getUTCDay()] = (weekdayAgg[br.getUTCDay()] ?? 0) + 1;
+        monthAgg[br.getUTCMonth()] = (monthAgg[br.getUTCMonth()] ?? 0) + 1;
+        const wom = Math.ceil(br.getUTCDate() / 7);
         weekOfMonthAgg[wom] = (weekOfMonthAgg[wom] ?? 0) + 1;
       });
       const bestDay = Object.entries(weekdayAgg).sort((a, b) => b[1] - a[1])[0];
@@ -266,12 +270,208 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
       salesByPayment.sort((a, b) => b._count.id - a._count.id);
       const totalSaleCount = salesByPayment.reduce((a, b) => a + b._count.id, 0);
       formasPagamento = salesByPayment.map(s => ({
-        method: s.paymentMethod, count: s._count.id,
+        method: s.paymentMethod,
+        methodLabel: translatePaymentMethodPt(s.paymentMethod),
+        count: s._count.id,
         value: Math.round((s._sum.value ?? 0) * 100) / 100,
         percentual: totalSaleCount > 0 ? Math.round((s._count.id / totalSaleCount) * 10000) / 100 : 0,
       }));
     } catch (e) {
       console.error('Error in formasPagamento:', e);
+    }
+
+    // 10. Avaliacoes Reais da Equipe (Vendedor, Contato e Fotografo)
+    let avaliacoesEquipe: any = {
+      resumoGeral: {
+        vendedor: { media: null, totalAvaliacoes: 0 },
+        contato: { media: null, totalAvaliacoes: 0 },
+        fotografo: { media: null, totalAvaliacoes: 0 },
+      },
+      porVendedor: [],
+      porContato: [],
+      porFotografo: [],
+    };
+    try {
+      const confSaleFilter: any = {};
+      if (city && String(city).trim()) confSaleFilter.city = String(city).trim();
+      if (event && String(event).trim()) {
+        confSaleFilter.client = { event: String(event).trim() };
+      }
+
+      const confWhere: any = {
+        companyId,
+        OR: [
+          { serviceRating: { not: null } },
+          { contactRating: { not: null } },
+          { photographerRating: { not: null } },
+        ],
+      };
+      if (Object.keys(dateFilter).length) {
+        confWhere.usedAt = dateFilter;
+      }
+      if (Object.keys(confSaleFilter).length) {
+        confWhere.sale = confSaleFilter;
+      }
+
+      const confirmations = await prisma.buyerPurchaseConfirmation.findMany({
+        where: confWhere,
+        select: {
+          sellerId: true,
+          serviceRating: true,
+          contactRating: true,
+          photographerRating: true,
+          contactNameSnapshot: true,
+          photographerIdSnapshot: true,
+          photographerNameSnapshot: true,
+          sale: {
+            select: {
+              seller: { select: { id: true, name: true } },
+              client: {
+                select: {
+                  mainContact: true,
+                  photographerId: true,
+                  photographer: { select: { id: true, name: true } },
+                  batch: {
+                    select: {
+                      photographerId: true,
+                      photographer: { select: { id: true, name: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const addScore = (
+        map: Map<string, { key: string; name: string; sum: number; count: number }>,
+        key: string,
+        name: string,
+        rating: number | null | undefined
+      ) => {
+        if (typeof rating !== 'number' || rating < 1 || rating > 5) return;
+        const prev = map.get(key);
+        if (prev) {
+          prev.sum += rating;
+          prev.count += 1;
+        } else {
+          map.set(key, { key, name, sum: rating, count: 1 });
+        }
+      };
+
+      const sellerBuckets = new Map<string, { key: string; name: string; sum: number; count: number }>();
+      const contactBuckets = new Map<string, { key: string; name: string; sum: number; count: number }>();
+      const photogBuckets = new Map<string, { key: string; name: string; sum: number; count: number }>();
+
+      let totalSellerSum = 0;
+      let totalSellerCount = 0;
+      let totalContactSum = 0;
+      let totalContactCount = 0;
+      let totalPhotogSum = 0;
+      let totalPhotogCount = 0;
+
+      for (const c of confirmations) {
+        if (typeof c.serviceRating === 'number' && c.serviceRating >= 1 && c.serviceRating <= 5) {
+          totalSellerSum += c.serviceRating;
+          totalSellerCount += 1;
+          const sId = c.sale?.seller?.id || c.sellerId || 'SEM_VENDEDOR';
+          const sName = c.sale?.seller?.name || 'Vendedor não identificado';
+          addScore(sellerBuckets, sId, sName, c.serviceRating);
+        }
+
+        if (typeof c.contactRating === 'number' && c.contactRating >= 1 && c.contactRating <= 5) {
+          totalContactSum += c.contactRating;
+          totalContactCount += 1;
+          const rawContact =
+            c.contactNameSnapshot || c.sale?.client?.mainContact || 'Contato não identificado';
+          const cleanContact = String(rawContact).trim() || 'Contato não identificado';
+          addScore(contactBuckets, cleanContact.toLowerCase(), cleanContact, c.contactRating);
+        }
+
+        if (typeof c.photographerRating === 'number' && c.photographerRating >= 1 && c.photographerRating <= 5) {
+          totalPhotogSum += c.photographerRating;
+          totalPhotogCount += 1;
+          const pId =
+            c.photographerIdSnapshot ||
+            c.sale?.client?.photographerId ||
+            c.sale?.client?.batch?.photographerId ||
+            'SEM_FOTOGRAFO';
+          const pName =
+            c.photographerNameSnapshot ||
+            c.sale?.client?.photographer?.name ||
+            c.sale?.client?.batch?.photographer?.name ||
+            'Fotógrafo não identificado';
+          addScore(photogBuckets, pId, pName, c.photographerRating);
+        }
+      }
+
+      const toRankedList = (
+        map: Map<string, { key: string; name: string; sum: number; count: number }>,
+        idField: string
+      ) =>
+        Array.from(map.values())
+          .map((item) => ({
+            [idField]: item.key,
+            name: item.name,
+            media: Number((item.sum / item.count).toFixed(1)),
+            totalAvaliacoes: item.count,
+          }))
+          .sort((a: any, b: any) => b.media - a.media || b.totalAvaliacoes - a.totalAvaliacoes);
+
+      avaliacoesEquipe = {
+        resumoGeral: {
+          vendedor: {
+            media: totalSellerCount > 0 ? Number((totalSellerSum / totalSellerCount).toFixed(1)) : null,
+            totalAvaliacoes: totalSellerCount,
+          },
+          contato: {
+            media: totalContactCount > 0 ? Number((totalContactSum / totalContactCount).toFixed(1)) : null,
+            totalAvaliacoes: totalContactCount,
+          },
+          fotografo: {
+            media: totalPhotogCount > 0 ? Number((totalPhotogSum / totalPhotogCount).toFixed(1)) : null,
+            totalAvaliacoes: totalPhotogCount,
+          },
+        },
+        porVendedor: toRankedList(sellerBuckets, 'sellerId'),
+        porContato: toRankedList(contactBuckets, 'contactKey'),
+        porFotografo: toRankedList(photogBuckets, 'photographerId'),
+      };
+    } catch (e) {
+      console.error('Error in avaliacoesEquipe:', e);
+    }
+
+    // 11. Resumo Operacional Geral da Empresa
+    let resumoOperacional: any = { totalClientes: 0, totalNaoVendas: 0, taxaConversaoGeral: 0 };
+    try {
+      const clientFilter: any = { companyId, bookStatus: { not: 'CREATED' } };
+      if (city && String(city).trim()) clientFilter.city = String(city).trim();
+      if (event && String(event).trim()) clientFilter.event = String(event).trim();
+
+      const nonSaleFilter: any = { companyId, supersededAt: null };
+      if (Object.keys(dateFilter).length) nonSaleFilter.date = dateFilter;
+      if (city && String(city).trim()) nonSaleFilter.client = { city: String(city).trim() };
+
+      const [totalClientes, totalNaoVendas] = await Promise.all([
+        prisma.client.count({ where: clientFilter }),
+        prisma.nonSale.count({ where: nonSaleFilter }),
+      ]);
+
+      const totalVendas = analiseValores?.totalVendas ?? 0;
+      const baseAtendimentos = totalVendas + totalNaoVendas;
+      resumoOperacional = {
+        totalClientes,
+        totalNaoVendas,
+        taxaConversaoGeral:
+          baseAtendimentos > 0
+            ? Math.round((totalVendas / baseAtendimentos) * 10000) / 100
+            : totalClientes > 0
+            ? Math.round((totalVendas / totalClientes) * 10000) / 100
+            : 0,
+      };
+    } catch (e) {
+      console.error('Error in resumoOperacional:', e);
     }
 
     // Filtros disponiveis
@@ -290,6 +490,8 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     return res.json({
       rankingClientes, rankingCidades, analiseChildrens, rankingEventos,
       analiseValores, analiseHorarios, rankingVendedores, rankingFotografos, formasPagamento,
+      avaliacoesEquipe,
+      resumoOperacional,
       filtrosDisponiveis: {
         cidades: allCities.map(c => c.city).filter(Boolean),
         eventos: allEvents,

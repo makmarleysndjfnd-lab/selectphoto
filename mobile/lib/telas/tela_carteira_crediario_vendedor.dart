@@ -519,39 +519,36 @@ class _TelaCarteiraCrediarioVendedorState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. Número do Contrato + Nome do Cliente + Status
+              // 1. Código do Contrato + Status (linha superior) e Nome do Cliente (linha dedicada)
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00E5FF).withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFF00E5FF).withOpacity(0.4)),
-                    ),
-                    child: Text(
-                      'Contrato $contractNumber',
-                      style: const TextStyle(
-                        color: Color(0xFF00E5FF),
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E5FF).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: const Color(0xFF00E5FF).withOpacity(0.4)),
+                        ),
+                        child: Text(
+                          'Contrato $contractNumber',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF00E5FF),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      buyerName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
                   _buildStatusBadge(
                     isSettled
                         ? 'QUITADO'
@@ -559,44 +556,80 @@ class _TelaCarteiraCrediarioVendedorState
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: Text(
+                  buyerName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
               const Divider(color: Colors.white10, height: 16),
 
               // 2. Parcelas a Pagar
               Container(
+                width: double.infinity,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
                   color: const Color(0xFF141E28),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         const Icon(Icons.receipt_long_rounded,
                             color: Color(0xFF00E5FF), size: 15),
                         const SizedBox(width: 6),
-                        Text(
-                          'Parcelas a pagar: $toPayInst de $totalInst ($paidInst paga${paidInst == 1 ? '' : 's'})',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Text(
+                            'Parcelas a pagar: $toPayInst de $totalInst ($paidInst paga${paidInst == 1 ? '' : 's'})',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    if (nextDue != null)
-                      Text(
-                        'Próx: ${nextDue.day.toString().padLeft(2, '0')}/${nextDue.month.toString().padLeft(2, '0')}/${nextDue.year}',
-                        style: TextStyle(
-                          color: isOverdue ? Colors.redAccent : Colors.white60,
-                          fontSize: 11,
-                          fontWeight:
-                              isOverdue ? FontWeight.bold : FontWeight.normal,
-                        ),
+                    if (nextDue != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.event_rounded,
+                            size: 13,
+                            color:
+                                isOverdue ? Colors.redAccent : Colors.white60,
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'Próx: ${nextDue.day.toString().padLeft(2, '0')}/${nextDue.month.toString().padLeft(2, '0')}/${nextDue.year}',
+                              style: TextStyle(
+                                color: isOverdue
+                                    ? Colors.redAccent
+                                    : Colors.white60,
+                                fontSize: 11,
+                                fontWeight: isOverdue
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
+                    ],
                   ],
                 ),
               ),

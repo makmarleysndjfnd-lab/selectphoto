@@ -1776,6 +1776,11 @@ model BuyerPurchaseConfirmation {
   sellerBlockedAtResolution Boolean   @default(false)
   serviceRating             Int?
   serviceRatingComment      String?
+  contactRating             Int?
+  photographerRating        Int?
+  contactNameSnapshot       String?
+  photographerIdSnapshot    String?
+  photographerNameSnapshot  String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 

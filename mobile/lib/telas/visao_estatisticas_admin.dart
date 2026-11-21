@@ -65,12 +65,12 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
     }
   }
 
-  static const _bg = Color(0xFF0D0D1A);
-  static const _card = Color(0xFF1A1A2E);
-  static const _accent = Color(0xFFCE93D8);
-  static const _blue = Color(0xFF4FC3F7);
-  static const _green = Color(0xFF66BB6A);
-  static const _gold = Color(0xFFFFD54F);
+  static const _bg = Color(0xFF0D0714);
+  static const _card = Color(0xFF160D24);
+  static const _accent = Color(0xFFA855F7);
+  static const _blue = Color(0xFF38BDF8);
+  static const _green = Color(0xFF10B981);
+  static const _gold = Color(0xFFFBBF24);
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +81,7 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
           _buildFilterBar(),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)))
                 : _error != null
                     ? Center(child: Text('Erro: $_error', style: const TextStyle(color: Colors.redAccent)))
                     : _buildContent(),
@@ -95,7 +95,7 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
     final allCities = (_stats?['filtrosDisponiveis']?['cidades'] as List? ?? []).cast<String>();
     final allEvents = (_stats?['filtrosDisponiveis']?['eventos'] as List? ?? []).cast<String>();
     return Container(
-      color: const Color(0xFF12122A),
+      color: _card,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
@@ -188,6 +188,10 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
         _buildAiSection(),
         const SizedBox(height: 16),
         _buildKpiRow(s),
+        const SizedBox(height: 12),
+        _buildOperationalSummaryRow(s),
+        const SizedBox(height: 16),
+        _buildTeamRatingsSection(s),
         const SizedBox(height: 16),
         _buildClientRanking(s),
         const SizedBox(height: 16),
@@ -215,9 +219,9 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
   Widget _buildAiSection() {
     return Container(
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFF2D0060), Color(0xFF1A0040)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+        gradient: const LinearGradient(colors: [Color(0xFF3B0764), Color(0xFF160D24)], begin: Alignment.topLeft, end: Alignment.bottomRight),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _accent.withOpacity(0.4)),
+        border: Border.all(color: _accent.withOpacity(0.45)),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -294,12 +298,206 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
           children: [
             Icon(icon, color: color, size: 20),
             const SizedBox(height: 8),
-            Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold)),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
             const SizedBox(height: 2),
             Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10)),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildOperationalSummaryRow(Map<String, dynamic> s) {
+    final op = s['resumoOperacional'] as Map? ?? {};
+    final totalClientes = op['totalClientes'] ?? 0;
+    final totalNaoVendas = op['totalNaoVendas'] ?? 0;
+    final conversao = op['taxaConversaoGeral'] ?? 0;
+    return Row(
+      children: [
+        _kpiCard('Conversao Geral', '$conversao%', Icons.trending_up_rounded, const Color(0xFFD8B4FE)),
+        const SizedBox(width: 10),
+        _kpiCard('Fichas na Rede', '$totalClientes', Icons.folder_shared_rounded, _blue),
+        const SizedBox(width: 10),
+        _kpiCard('Nao-Vendas', '$totalNaoVendas', Icons.assignment_return_rounded, const Color(0xFFF59E0B)),
+      ],
+    );
+  }
+
+  Widget _buildTeamRatingsSection(Map<String, dynamic> s) {
+    final avEquipe = s['avaliacoesEquipe'] as Map? ?? {};
+    final resumo = avEquipe['resumoGeral'] as Map? ?? {};
+    final vendedorResumo = resumo['vendedor'] as Map? ?? {};
+    final contatoResumo = resumo['contato'] as Map? ?? {};
+    final fotografoResumo = resumo['fotografo'] as Map? ?? {};
+
+    final porVendedor = (avEquipe['porVendedor'] as List? ?? []);
+    final porContato = (avEquipe['porContato'] as List? ?? []);
+    final porFotografo = (avEquipe['porFotografo'] as List? ?? []);
+
+    return _statsCard(
+      'Avaliações da Equipe (1 a 5 estrelas)',
+      Icons.star_rounded,
+      _gold,
+      children: [
+        Row(
+          children: [
+            _teamSummaryTile(
+              'Vendedor',
+              vendedorResumo['media'],
+              (vendedorResumo['totalAvaliacoes'] as num?)?.toInt() ?? 0,
+              _gold,
+            ),
+            const SizedBox(width: 8),
+            _teamSummaryTile(
+              'Contato',
+              contatoResumo['media'],
+              (contatoResumo['totalAvaliacoes'] as num?)?.toInt() ?? 0,
+              _blue,
+            ),
+            const SizedBox(width: 8),
+            _teamSummaryTile(
+              'Fotógrafo',
+              fotografoResumo['media'],
+              (fotografoResumo['totalAvaliacoes'] as num?)?.toInt() ?? 0,
+              _green,
+            ),
+          ],
+        ),
+        if (porVendedor.isEmpty && porContato.isEmpty && porFotografo.isEmpty) ...[
+          const SizedBox(height: 12),
+          const Text(
+            'Ainda não há avaliações registradas na conferência QR dos compradores.',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ] else ...[
+          if (porVendedor.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _teamRatingRankingBlock('Média por Vendedor', porVendedor, _gold),
+          ],
+          if (porContato.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _teamRatingRankingBlock('Média por Contato / Agendamento', porContato, _blue),
+          ],
+          if (porFotografo.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _teamRatingRankingBlock('Média por Fotógrafo', porFotografo, _green),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _teamSummaryTile(String roleLabel, dynamic media, int count, Color color) {
+    final mediaStr = media != null ? '$media/5' : '---';
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.star_rounded, color: color, size: 15),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    roleLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              mediaStr,
+              style: TextStyle(
+                color: color,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '$count aval.',
+              style: const TextStyle(color: Colors.white54, fontSize: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _teamRatingRankingBlock(String heading, List<dynamic> items, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          heading,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 6),
+        ...items.take(8).map((entry) {
+          final m = Map<String, dynamic>.from(entry as Map);
+          final name = m['name']?.toString() ?? 'Não identificado';
+          final media = m['media'];
+          final count = (m['totalAvaliacoes'] as num?)?.toInt() ?? 0;
+          return Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.star_rounded, color: color, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  '${media ?? '-'} ($count)',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 
@@ -485,13 +683,25 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
   // ── Payment ────────────────────────────────────────────────
   Widget _buildPaymentCard(Map<String, dynamic> s) {
     final list = s['formasPagamento'] as List? ?? [];
-    const methodMap = { 'CASH': 'Dinheiro', 'PIX': 'Pix', 'CREDIT': 'Credito', 'DEBIT': 'Debito', 'BOLETO': 'Boleto' };
+    const methodMap = {
+      'CASH': 'Dinheiro',
+      'PIX': 'Pix',
+      'CREDIT': 'Cartão de Crédito',
+      'CREDIT_CARD': 'Cartão de Crédito',
+      'DEBIT': 'Cartão de Débito',
+      'DEBIT_CARD': 'Cartão de Débito',
+      'SPLIT': 'Pagamento Misto',
+      'CREDIT_AGREEMENT': 'Crediário',
+      'CREDIARIO': 'Crediário',
+      'BOLETO': 'Crediário',
+    };
     final colors = [_green, _blue, _accent, _gold, const Color(0xFFFF8A65)];
     return _statsCard('Formas de Pagamento', Icons.payments_rounded, _green, children: [
       ...list.asMap().entries.map((e) {
         final i = e.key; final p = e.value;
         final color = colors[i % colors.length];
-        final label = methodMap[p['method']] ?? p['method'];
+        final rawCode = (p['method'] ?? '').toString().toUpperCase();
+        final label = p['methodLabel']?.toString() ?? methodMap[rawCode] ?? p['method']?.toString() ?? 'Outro';
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Row(children: [

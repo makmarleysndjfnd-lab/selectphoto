@@ -126,6 +126,78 @@ export function arePaymentMethodsCompatible(
   return false;
 }
 
+const PAYMENT_METHOD_LABELS_PT: Record<string, string> = {
+  CASH: 'Dinheiro',
+  DINHEIRO: 'Dinheiro',
+  ESPECIE: 'Dinheiro',
+  'ESPÉCIE': 'Dinheiro',
+  PIX: 'Pix',
+  CREDIT: 'Cartão de Crédito',
+  CREDITO: 'Cartão de Crédito',
+  'CRÉDITO': 'Cartão de Crédito',
+  CREDIT_CARD: 'Cartão de Crédito',
+  CARTAO_CREDITO: 'Cartão de Crédito',
+  'CARTÃO DE CRÉDITO': 'Cartão de Crédito',
+  DEBIT: 'Cartão de Débito',
+  DEBITO: 'Cartão de Débito',
+  'DÉBITO': 'Cartão de Débito',
+  DEBIT_CARD: 'Cartão de Débito',
+  CARTAO_DEBITO: 'Cartão de Débito',
+  'CARTÃO DE DÉBITO': 'Cartão de Débito',
+  SPLIT: 'Pagamento Misto',
+  MISTO: 'Pagamento Misto',
+  COMBINADO: 'Pagamento Misto',
+  'PAGAMENTO COMBINADO': 'Pagamento Misto',
+  CREDIT_AGREEMENT: 'Crediário',
+  CREDIARIO: 'Crediário',
+  'CREDIÁRIO': 'Crediário',
+  CREDIARIO_BOLETO: 'Crediário',
+  BOLETO: 'Crediário',
+  CARNE: 'Crediário',
+  'CARNÊ': 'Crediário',
+};
+
+const DIVERGENCE_REASON_LABELS_PT: Record<string, string> = {
+  TOTAL_MISMATCH: 'Divergência no valor total',
+  PAID_MISMATCH: 'Divergência no valor pago no ato',
+  PAYMENT_METHOD_MISMATCH: 'Divergência na forma de pagamento',
+  CREDIT_REMAINING_MISMATCH: 'Divergência no saldo restante do crediário',
+  CREDIT_INSTALLMENTS_COUNT_MISMATCH: 'Divergência na quantidade de parcelas',
+  CREDIT_INSTALLMENT_AMOUNT_MISMATCH: 'Divergência no valor da parcela',
+  SPLIT_TOTAL_MISMATCH: 'Divergência na soma do pagamento misto',
+};
+
+export function translatePaymentMethodPt(raw?: string | null): string {
+  const key = String(raw || '').trim().toUpperCase();
+  if (!key) return 'Não informado';
+  return PAYMENT_METHOD_LABELS_PT[key] || String(raw).trim();
+}
+
+export function translateDivergenceReasonPt(raw?: string | null): string {
+  const key = String(raw || '').trim().toUpperCase();
+  if (!key) return 'Valores divergentes';
+  return DIVERGENCE_REASON_LABELS_PT[key] || String(raw).trim();
+}
+
+function parseOptionalStarRating(
+  raw: number | string | null | undefined,
+  fieldLabel: string,
+  errorCode: string
+): number | null {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return null;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 5) {
+    throw createPublicConfirmationError(
+      `${fieldLabel} deve ser entre 1 e 5 estrelas.`,
+      400,
+      errorCode
+    );
+  }
+  return n;
+}
+
 export interface BuyerConfirmationReceipt {
   documentTitle: string;
   referenceCode: string;
@@ -137,14 +209,17 @@ export interface BuyerConfirmationReceipt {
   reportedTotalBrl: string;
   reportedPaidBrl: string;
   reportedPaymentMethod: string;
+  reportedPaymentMethodLabel: string;
   isCredit: boolean;
   creditDetails?: {
     reportedRemainingBrl: string;
     reportedInstallmentsCount: number;
     reportedInstallmentBrl: string;
   };
-  reportedPayments?: Array<{ method: string; amountBrl: string }>;
+  reportedPayments?: Array<{ method: string; methodLabel: string; amountBrl: string }>;
   serviceRating?: number | null;
+  contactRating?: number | null;
+  photographerRating?: number | null;
   notes?: string | null;
   disclaimer: string;
 }
@@ -164,6 +239,8 @@ export function buildConfirmationReceipt(params: {
   reportedInstallmentCents?: number | null;
   reportedPayments?: any[] | null;
   serviceRating?: number | null;
+  contactRating?: number | null;
+  photographerRating?: number | null;
   notes?: string | null;
 }): BuyerConfirmationReceipt {
   const formatBrl = (cents: number) =>
@@ -187,6 +264,7 @@ export function buildConfirmationReceipt(params: {
     reportedTotalBrl: formatBrl(params.reportedTotalCents),
     reportedPaidBrl: formatBrl(params.reportedPaidCents),
     reportedPaymentMethod: params.reportedPaymentMethod,
+    reportedPaymentMethodLabel: translatePaymentMethodPt(params.reportedPaymentMethod),
     isCredit,
     creditDetails: isCredit
       ? {
@@ -198,10 +276,13 @@ export function buildConfirmationReceipt(params: {
     reportedPayments: Array.isArray(params.reportedPayments)
       ? params.reportedPayments.map((p) => ({
           method: p.method,
+          methodLabel: translatePaymentMethodPt(p.method),
           amountBrl: formatBrl(p.amountCents || Math.round(Number(p.amount || 0) * 100)),
         }))
       : undefined,
     serviceRating: params.serviceRating ?? null,
+    contactRating: params.contactRating ?? null,
+    photographerRating: params.photographerRating ?? null,
     notes: params.notes || null,
     disclaimer:
       'Documento emitido exclusivamente para fins de conferência operacional entre cliente e empresa. Não possui valor fiscal nem quita obrigações tributárias.',
@@ -739,11 +820,19 @@ export async function getPublicBuyerConfirmationPrompt(
             fichaNumber: true,
             product: true,
             city: true,
+            seller: { select: { name: true } },
             client: {
               select: {
                 name: true,
                 visibleCode: true,
                 sequenceNumber: true,
+                mainContact: true,
+                photographer: { select: { name: true } },
+                batch: {
+                  select: {
+                    photographer: { select: { name: true } },
+                  },
+                },
               },
             },
           },
@@ -800,6 +889,12 @@ export async function getPublicBuyerConfirmationPrompt(
 
     const snap = (record.conditionsSnapshot as any) || {};
     const isCreditAgreement = Boolean(snap.hasCreditAgreement);
+    const sellerName = record.sale?.seller?.name?.trim() || null;
+    const contactName = record.sale?.client?.mainContact?.trim() || null;
+    const photographerName =
+      record.sale?.client?.photographer?.name?.trim() ||
+      record.sale?.client?.batch?.photographer?.name?.trim() ||
+      null;
 
     // ESTRITAMENTE SEM VALORES DO VENDEDOR!
     return {
@@ -807,6 +902,9 @@ export async function getPublicBuyerConfirmationPrompt(
       companyName: resolveCompanyDisplayName(record.company, 'Empresa Vendedora'),
       fichaCode,
       buyerFirstName: firstName,
+      sellerName,
+      contactName,
+      photographerName,
       city: record.sale?.city || '',
       product: record.sale?.product || 'Mídias fotográficas',
       conditionsVersion: record.conditionsVersion,
@@ -895,6 +993,8 @@ export async function submitPublicBuyerConfirmation(
     reportedPayments?: Array<{ method: string; amount?: number; amountCents?: number }>;
     serviceRating?: number | string | null;
     serviceRatingComment?: string | null;
+    contactRating?: number | string | null;
+    photographerRating?: number | string | null;
     notes?: string;
     buyerChannel?: string;
     ipAddress?: string | null;
@@ -933,7 +1033,17 @@ export async function submitPublicBuyerConfirmation(
         company: { select: { name: true, tradeName: true } },
         sale: {
           include: {
-            client: true,
+            seller: { select: { id: true, name: true } },
+            client: {
+              include: {
+                photographer: { select: { id: true, name: true } },
+                batch: {
+                  include: {
+                    photographer: { select: { id: true, name: true } },
+                  },
+                },
+              },
+            },
             payments: true,
             creditAgreement: {
               include: {
@@ -1006,6 +1116,8 @@ export async function submitPublicBuyerConfirmation(
           reportedInstallmentCents: record.reportedInstallmentCents,
           reportedPayments: record.reportedPayments as any[],
           serviceRating: record.serviceRating,
+          contactRating: record.contactRating,
+          photographerRating: record.photographerRating,
           notes: record.reportedNotes,
         });
 
@@ -1135,25 +1247,36 @@ export async function submitPublicBuyerConfirmation(
       );
     }
 
-    let parsedServiceRating: number | null = null;
-    if (
-      params.serviceRating !== undefined &&
-      params.serviceRating !== null &&
-      String(params.serviceRating).trim() !== ''
-    ) {
-      const n = Number(params.serviceRating);
-      if (!Number.isInteger(n) || n < 1 || n > 5) {
-        throw createPublicConfirmationError(
-          'Avaliação do atendimento deve ser entre 1 e 5 estrelas.',
-          400,
-          'INVALID_SERVICE_RATING'
-        );
-      }
-      parsedServiceRating = n;
-    }
+    const parsedServiceRating = parseOptionalStarRating(
+      params.serviceRating,
+      'Avaliação do atendimento do vendedor',
+      'INVALID_SERVICE_RATING'
+    );
+    const parsedContactRating = parseOptionalStarRating(
+      params.contactRating,
+      'Avaliação do contato/agendamento',
+      'INVALID_CONTACT_RATING'
+    );
+    const parsedPhotographerRating = parseOptionalStarRating(
+      params.photographerRating,
+      'Avaliação do fotógrafo',
+      'INVALID_PHOTOGRAPHER_RATING'
+    );
     const cleanServiceRatingComment = params.serviceRatingComment
       ? String(params.serviceRatingComment).trim().slice(0, 500)
       : null;
+
+    const contactNameSnapshot = record.sale?.client?.mainContact
+      ? String(record.sale.client.mainContact).trim()
+      : null;
+    const photographerIdSnapshot =
+      record.sale?.client?.photographerId ||
+      record.sale?.client?.batch?.photographerId ||
+      null;
+    const photographerNameSnapshot =
+      record.sale?.client?.photographer?.name?.trim() ||
+      record.sale?.client?.batch?.photographer?.name?.trim() ||
+      null;
 
     const snap = (record.conditionsSnapshot as any) || {};
     const hasCreditAgreement = Boolean(
@@ -1428,6 +1551,11 @@ export async function submitPublicBuyerConfirmation(
         operationalBatchId: batchId,
         serviceRating: parsedServiceRating,
         serviceRatingComment: cleanServiceRatingComment,
+        contactRating: parsedContactRating,
+        photographerRating: parsedPhotographerRating,
+        contactNameSnapshot,
+        photographerIdSnapshot,
+        photographerNameSnapshot,
       },
     });
 
@@ -1486,14 +1614,16 @@ export async function submitPublicBuyerConfirmation(
           buyerReportedPaidBrl: Number((reportedPaidCents / 100).toFixed(2)),
           buyerReportedPaymentMethod: rawReportedMethod,
           serviceRating: parsedServiceRating,
+          contactRating: parsedContactRating,
+          photographerRating: parsedPhotographerRating,
           status: nextStatus,
           hasDivergence,
           reasons: divergenceReasons,
         },
         reason: hasDivergence
-          ? `Divergência entre o registro do vendedor e o informado pelo cliente (${divergenceReasons.join(
-              ', '
-            )}). Encaminhado para revisão do Admin.`
+          ? `Divergência entre o registro do vendedor e o informado pelo cliente (${divergenceReasons
+              .map(translateDivergenceReasonPt)
+              .join(', ')}). Encaminhado para revisão do Admin.`
           : 'Confirmação de compra respondida pelo cliente com valores coincidentes.',
         authorUserId: null,
         authorName: 'Cliente (Link Público)',
@@ -1531,6 +1661,8 @@ export async function submitPublicBuyerConfirmation(
       reportedInstallmentCents,
       reportedPayments: reportedPaymentsJson,
       serviceRating: updated.serviceRating,
+      contactRating: updated.contactRating,
+      photographerRating: updated.photographerRating,
       notes: params.notes,
     });
 
@@ -1544,6 +1676,8 @@ export async function submitPublicBuyerConfirmation(
       statusLabel: getConfirmationStatusLabel(updated.status),
       respondedAt: updated.usedAt,
       serviceRating: updated.serviceRating,
+      contactRating: updated.contactRating,
+      photographerRating: updated.photographerRating,
       message: 'Sua confirmação de compra foi registrada com sucesso!',
       receipt,
     };
@@ -1896,22 +2030,29 @@ export function formatBuyerConfirmationForRole(
       : null;
 
   const snap = (record.conditionsSnapshot as any) || {};
+  const divergenceReasonCodes: string[] = Array.isArray(record.divergenceReasons)
+    ? record.divergenceReasons.map((r: any) => String(r))
+    : [];
+  const divergenceReasonLabels = divergenceReasonCodes.map(translateDivergenceReasonPt);
+  const sellerPaymentMethodLabel = translatePaymentMethodPt(record.sellerPaymentMethod);
+  const buyerPaymentMethodLabel = translatePaymentMethodPt(record.reportedPaymentMethod);
 
   const divergenceSummary =
     record.hasDivergence && buyerTotalBrl !== null
       ? `Vendedor: R$ ${sellerTotalBrl.toFixed(2)} (Pago ato: R$ ${sellerPaidBrl.toFixed(
           2
-        )}, ${record.sellerPaymentMethod}) | Cliente: R$ ${buyerTotalBrl.toFixed(
+        )}, ${sellerPaymentMethodLabel}) | Cliente: R$ ${buyerTotalBrl.toFixed(
           2
         )} (Pago ato: R$ ${(buyerPaidBrl ?? 0).toFixed(2)}, ${
-          record.reportedPaymentMethod
-        }). Motivo: ${(record.divergenceReasons || []).join(', ') || 'Valores divergentes'}.`
+          buyerPaymentMethodLabel
+        }). Motivo: ${divergenceReasonLabels.join(', ') || 'Valores divergentes'}.`
       : null;
 
   return {
     ...baseSellerSafeView,
     hasDivergence: Boolean(record.hasDivergence),
-    divergenceReasons: record.divergenceReasons || [],
+    divergenceReasons: divergenceReasonCodes,
+    divergenceReasonLabels,
     divergenceSummary,
     identityVerifiedBy: record.identityVerifiedBy || null,
     sellerDeclared: {
@@ -1920,6 +2061,7 @@ export function formatBuyerConfirmationForRole(
       paidCents: record.sellerPaidCents,
       paidBrl: sellerPaidBrl,
       paymentMethod: record.sellerPaymentMethod,
+      paymentMethodLabel: sellerPaymentMethodLabel,
       hasCreditAgreement: Boolean(snap.hasCreditAgreement),
       installmentsCount: snap.installmentsCount || null,
       installmentCents: snap.installmentAmountCents || null,
@@ -1934,6 +2076,7 @@ export function formatBuyerConfirmationForRole(
             paidCents: record.reportedPaidCents,
             paidBrl: buyerPaidBrl,
             paymentMethod: record.reportedPaymentMethod,
+            paymentMethodLabel: buyerPaymentMethodLabel,
             remainingCents: record.reportedRemainingCents,
             remainingBrl:
               record.reportedRemainingCents !== null
@@ -2003,6 +2146,22 @@ export function formatBuyerConfirmationForRole(
     city: record.sale?.city || record.sale?.client?.city || null,
     serviceRating: record.serviceRating ?? null,
     serviceRatingComment: record.serviceRatingComment ?? null,
+    contactRating: record.contactRating ?? null,
+    photographerRating: record.photographerRating ?? null,
+    contactName:
+      record.contactNameSnapshot ||
+      record.sale?.client?.mainContact ||
+      null,
+    photographerId:
+      record.photographerIdSnapshot ||
+      record.sale?.client?.photographerId ||
+      operationalBatch?.photographerId ||
+      null,
+    photographerName:
+      record.photographerNameSnapshot ||
+      record.sale?.client?.photographer?.name ||
+      operationalBatch?.photographer?.name ||
+      null,
     sellerBlocked: Boolean((record.sale?.seller as any)?.sellerBlocked),
     sellerBlockedReason: (record.sale?.seller as any)?.sellerBlockedReason || null,
     sellerBlockedAtResolution: Boolean(record.sellerBlockedAtResolution),
@@ -2110,6 +2269,31 @@ export function renderPublicBuyerConfirmationHtml(
           isCreditAgreement: false,
         };
 
+  const renderStarRatingGroup = (inputId: string, title: string, helpText: string) => `
+        <div class="rating-block" data-rating-group="${inputId}">
+          <label>${esc(title)}</label>
+          <div class="help">${esc(helpText)}</div>
+          <div class="stars-box" role="radiogroup" aria-label="${esc(title)}">
+            <button type="button" class="star-btn" data-target="${inputId}" data-star="1" aria-label="1 estrela">★</button>
+            <button type="button" class="star-btn" data-target="${inputId}" data-star="2" aria-label="2 estrelas">★</button>
+            <button type="button" class="star-btn" data-target="${inputId}" data-star="3" aria-label="3 estrelas">★</button>
+            <button type="button" class="star-btn" data-target="${inputId}" data-star="4" aria-label="4 estrelas">★</button>
+            <button type="button" class="star-btn" data-target="${inputId}" data-star="5" aria-label="5 estrelas">★</button>
+          </div>
+          <input id="${inputId}" name="${inputId}" type="hidden" value="" />
+          <div class="star-hint" id="${inputId}Hint">Selecione de 1 a 5 estrelas</div>
+        </div>`;
+
+  const sellerRatingTitle = promptData.sellerName
+    ? `Atendimento do Vendedor (${promptData.sellerName})`
+    : 'Atendimento do Vendedor (1 a 5 estrelas)';
+  const contactRatingTitle = promptData.contactName
+    ? `Contato / Agendamento (${promptData.contactName})`
+    : 'Contato / Agendamento (1 a 5 estrelas)';
+  const photographerRatingTitle = promptData.photographerName
+    ? `Fotógrafo (${promptData.photographerName})`
+    : 'Fotógrafo (1 a 5 estrelas)';
+
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -2201,17 +2385,21 @@ export function renderPublicBuyerConfirmationHtml(
           <input id="reportedInstallmentValue" name="reportedInstallmentValue" type="number" step="0.01" min="0" placeholder="Ex: 100.00" />
         </div>
 
-        <label>Avaliação do atendimento (1 a 5 estrelas)</label>
-        <div class="help">Toque nas estrelas para avaliar o atendimento recebido.</div>
-        <div class="stars-box" id="starsBox" role="radiogroup" aria-label="Avaliação de atendimento">
-          <button type="button" class="star-btn" data-star="1" aria-label="1 estrela">★</button>
-          <button type="button" class="star-btn" data-star="2" aria-label="2 estrelas">★</button>
-          <button type="button" class="star-btn" data-star="3" aria-label="3 estrelas">★</button>
-          <button type="button" class="star-btn" data-star="4" aria-label="4 estrelas">★</button>
-          <button type="button" class="star-btn" data-star="5" aria-label="5 estrelas">★</button>
-        </div>
-        <input id="serviceRating" name="serviceRating" type="hidden" value="" />
-        <div class="star-hint" id="starHint">Selecione de 1 a 5 estrelas</div>
+        ${renderStarRatingGroup(
+          'serviceRating',
+          sellerRatingTitle,
+          'Avalie o atendimento recebido durante a venda.'
+        )}
+        ${renderStarRatingGroup(
+          'contactRating',
+          contactRatingTitle,
+          'Avalie o contato e agendamento prévio da visita.'
+        )}
+        ${renderStarRatingGroup(
+          'photographerRating',
+          photographerRatingTitle,
+          'Avalie a sessão fotográfica realizada.'
+        )}
 
         <button type="submit" id="submitBtn">Confirmar Compra</button>
         <div id="msg"></div>
@@ -2237,8 +2425,6 @@ export function renderPublicBuyerConfirmationHtml(
     const formCard = document.getElementById('formCard');
     const receiptCard = document.getElementById('receiptCard');
     const receiptContent = document.getElementById('receiptContent');
-    const starInput = document.getElementById('serviceRating');
-    const starHint = document.getElementById('starHint');
     const starBtns = Array.from(document.querySelectorAll('.star-btn'));
     const starLabels = {
       1: '1 estrela — Muito ruim',
@@ -2247,16 +2433,30 @@ export function renderPublicBuyerConfirmationHtml(
       4: '4 estrelas — Muito bom',
       5: '5 estrelas — Excelente',
     };
+    const paymentLabelsPt = {
+      CASH: 'Dinheiro',
+      PIX: 'Pix',
+      CREDIT: 'Cartão de Crédito',
+      DEBIT: 'Cartão de Débito',
+      SPLIT: 'Pagamento Misto',
+      CREDIARIO: 'Crediário',
+      CREDIT_AGREEMENT: 'Crediário',
+    };
 
     starBtns.forEach((b) => {
       b.addEventListener('click', () => {
+        const targetId = b.getAttribute('data-target');
         const val = Number(b.getAttribute('data-star'));
-        starInput.value = String(val);
-        starBtns.forEach((other) => {
-          const otherVal = Number(other.getAttribute('data-star'));
-          other.classList.toggle('active', otherVal <= val);
-        });
-        starHint.textContent = starLabels[val] || (val + ' estrelas');
+        const inputEl = document.getElementById(targetId);
+        const hintEl = document.getElementById(targetId + 'Hint');
+        if (inputEl) inputEl.value = String(val);
+        starBtns
+          .filter((other) => other.getAttribute('data-target') === targetId)
+          .forEach((other) => {
+            const otherVal = Number(other.getAttribute('data-star'));
+            other.classList.toggle('active', otherVal <= val);
+          });
+        if (hintEl) hintEl.textContent = starLabels[val] || (val + ' estrelas');
       });
     });
 
@@ -2270,9 +2470,12 @@ export function renderPublicBuyerConfirmationHtml(
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (!starInput.value) {
+      const serviceVal = document.getElementById('serviceRating').value;
+      const contactVal = document.getElementById('contactRating').value;
+      const photoVal = document.getElementById('photographerRating').value;
+      if (!serviceVal || !contactVal || !photoVal) {
         msg.style.color = '#f87171';
-        msg.textContent = 'Selecione uma avaliação de 1 a 5 estrelas para o atendimento.';
+        msg.textContent = 'Selecione as avaliações (1 a 5 estrelas) para Vendedor, Contato e Fotógrafo.';
         return;
       }
       btn.disabled = true;
@@ -2300,7 +2503,15 @@ export function renderPublicBuyerConfirmationHtml(
         reportedRemainingValue: document.getElementById('reportedRemainingValue') ? document.getElementById('reportedRemainingValue').value : undefined,
         reportedInstallmentsCount: document.getElementById('reportedInstallmentsCount') ? document.getElementById('reportedInstallmentsCount').value : undefined,
         reportedInstallmentValue: document.getElementById('reportedInstallmentValue') ? document.getElementById('reportedInstallmentValue').value : undefined,
-        serviceRating: Number(starInput.value),
+        serviceRating: Number(serviceVal),
+        contactRating: Number(contactVal),
+        photographerRating: Number(photoVal),
+      };
+
+      const renderStarsReceipt = (label, rating) => {
+        if (!rating) return '';
+        const starsText = '★'.repeat(Number(rating)) + '☆'.repeat(Math.max(0, 5 - Number(rating)));
+        return '<div class="receipt-row"><span class="receipt-label">' + label + ':</span><span class="receipt-value" style="color:#fbbf24;">' + starsText + ' (' + rating + '/5)</span></div>';
       };
 
       try {
@@ -2316,6 +2527,8 @@ export function renderPublicBuyerConfirmationHtml(
           receiptCard.style.display = 'block';
 
           const r = data.receipt || {};
+          const rawMethod = String(r.reportedPaymentMethod || '').toUpperCase();
+          const methodDisplay = r.reportedPaymentMethodLabel || paymentLabelsPt[rawMethod] || r.reportedPaymentMethod || '';
           let html = '';
           html += '<div class="receipt-row"><span class="receipt-label">Código de Referência:</span><span class="receipt-value">' + (r.referenceCode || '${esc(promptData.fichaCode)}') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Empresa:</span><span class="receipt-value">' + (r.companyName || '${esc(promptData.companyName)}') + '</span></div>';
@@ -2323,11 +2536,10 @@ export function renderPublicBuyerConfirmationHtml(
           html += '<div class="receipt-row"><span class="receipt-label">Data do Registro:</span><span class="receipt-value">' + new Date().toLocaleString('pt-BR') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Total Declarado:</span><span class="receipt-value">' + (r.reportedTotalBrl || '') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Pago no Ato / Entrada:</span><span class="receipt-value">' + (r.reportedPaidBrl || '') + '</span></div>';
-          html += '<div class="receipt-row"><span class="receipt-label">Forma de Pagamento:</span><span class="receipt-value">' + (r.reportedPaymentMethod || '') + '</span></div>';
-          if (r.serviceRating) {
-            const starsText = '★'.repeat(Number(r.serviceRating)) + '☆'.repeat(Math.max(0, 5 - Number(r.serviceRating)));
-            html += '<div class="receipt-row"><span class="receipt-label">Atendimento:</span><span class="receipt-value" style="color:#fbbf24;">' + starsText + ' (' + r.serviceRating + '/5)</span></div>';
-          }
+          html += '<div class="receipt-row"><span class="receipt-label">Forma de Pagamento:</span><span class="receipt-value">' + methodDisplay + '</span></div>';
+          html += renderStarsReceipt('Vendedor', r.serviceRating);
+          html += renderStarsReceipt('Contato / Agendamento', r.contactRating);
+          html += renderStarsReceipt('Fotógrafo', r.photographerRating);
 
           if (r.creditDetails) {
             html += '<div class="receipt-row"><span class="receipt-label">Saldo a Parcelar:</span><span class="receipt-value">' + r.creditDetails.reportedRemainingBrl + '</span></div>';

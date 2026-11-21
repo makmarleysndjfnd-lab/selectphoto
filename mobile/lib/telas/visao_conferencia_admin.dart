@@ -449,6 +449,10 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     final divergentCount = (summary['divergentCount'] as num?)?.toInt() ?? 0;
     final avgRating = summary['averageRating'];
     final ratedCount = (summary['ratedCount'] as num?)?.toInt() ?? 0;
+    final contactAvg = summary['contactAverageRating'];
+    final contactRatedCount = (summary['contactRatedCount'] as num?)?.toInt() ?? 0;
+    final photogAvg = summary['photographerAverageRating'];
+    final photogRatedCount = (summary['photographerRatedCount'] as num?)?.toInt() ?? 0;
 
     return Container(
       width: double.infinity,
@@ -462,10 +466,22 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
           if (divergentCount > 0)
             _badge('$divergentCount divergência(s)', const Color(0xFFEF4444), Icons.warning_rounded),
           _badge(
-            avgRating != null ? 'Média ★ $avgRating ($ratedCount)' : 'Sem avaliações ★',
+            avgRating != null ? 'Vendedor $avgRating ($ratedCount)' : 'Vendedor s/ aval.',
             const Color(0xFFFBBF24),
             Icons.star_rounded,
           ),
+          if (contactRatedCount > 0 && contactAvg != null)
+            _badge(
+              'Contato $contactAvg ($contactRatedCount)',
+              const Color(0xFF38BDF8),
+              Icons.star_rounded,
+            ),
+          if (photogRatedCount > 0 && photogAvg != null)
+            _badge(
+              'Fotógrafo $photogAvg ($photogRatedCount)',
+              const Color(0xFF10B981),
+              Icons.star_rounded,
+            ),
         ],
       ),
     );
@@ -667,8 +683,8 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                     ),
                     _badge(
                       avgRating != null
-                          ? 'Média ★ $avgRating ($ratedCount aval.)'
-                          : 'Sem avaliações ★',
+                          ? 'Média $avgRating ($ratedCount aval.)'
+                          : 'Sem avaliações',
                       const Color(0xFFFBBF24),
                       Icons.star_rounded,
                     ),
@@ -730,7 +746,9 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     final sellerPaid = seller?['paidBrl'] != null
         ? _currencyFormat.format(seller!['paidBrl'])
         : '---';
-    final sellerMethod = seller?['paymentMethod']?.toString() ?? '---';
+    final sellerMethodRaw = seller?['paymentMethod']?.toString();
+    final sellerMethod = seller?['paymentMethodLabel']?.toString() ??
+        _translateMethodPt(sellerMethodRaw);
 
     final buyerTotal = buyer?['totalBrl'] != null
         ? _currencyFormat.format(buyer!['totalBrl'])
@@ -738,11 +756,17 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
     final buyerPaid = buyer?['paidBrl'] != null
         ? _currencyFormat.format(buyer!['paidBrl'])
         : 'Não informado';
-    final buyerMethod = buyer?['paymentMethod']?.toString() ?? '---';
+    final buyerMethodRaw = buyer?['paymentMethod']?.toString();
+    final buyerMethod = buyer?['paymentMethodLabel']?.toString() ??
+        _translateMethodPt(buyerMethodRaw);
 
     final suspectedSelfScan = item['suspectedSelfScan'] == true;
     final selfScanReason = item['selfScanReason']?.toString();
     final serviceRating = (item['serviceRating'] as num?)?.toInt();
+    final contactRating = (item['contactRating'] as num?)?.toInt();
+    final photographerRating = (item['photographerRating'] as num?)?.toInt();
+    final contactName = item['contactName']?.toString();
+    final photographerName = item['photographerName']?.toString();
     final opBatch = item['operationalBatch'] as Map<String, dynamic>?;
     final batchName = opBatch?['batchName']?.toString();
 
@@ -817,18 +841,19 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                   fontSize: 13,
                 ),
               ),
-              Row(
-                mainAxisSize: MainAxisSize.min,
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
                 children: [
-                  if (serviceRating != null && serviceRating >= 1 && serviceRating <= 5) ...[
-                    _badge('★ $serviceRating/5', const Color(0xFFFBBF24), Icons.star_rounded),
-                    const SizedBox(width: 6),
-                  ],
-                  if (suspectedSelfScan) ...[
+                  if (serviceRating != null && serviceRating >= 1 && serviceRating <= 5)
+                    _badge('Vend: $serviceRating/5', const Color(0xFFFBBF24), Icons.star_rounded),
+                  if (contactRating != null && contactRating >= 1 && contactRating <= 5)
+                    _badge('Contato: $contactRating/5', const Color(0xFF38BDF8), Icons.star_rounded),
+                  if (photographerRating != null && photographerRating >= 1 && photographerRating <= 5)
+                    _badge('Foto: $photographerRating/5', const Color(0xFF10B981), Icons.star_rounded),
+                  if (suspectedSelfScan)
                     _badge('Auto-scan suspeito', const Color(0xFFF59E0B),
                         Icons.fingerprint),
-                    const SizedBox(width: 6),
-                  ],
                   statusBadge,
                 ],
               ),
@@ -872,6 +897,16 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                   Text(
                     'Lote: $batchName',
                     style: const TextStyle(color: Color(0xFFD8B4FE), fontSize: 11),
+                  ),
+                if (contactName != null && contactName.isNotEmpty)
+                  Text(
+                    'Contato: $contactName',
+                    style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 11),
+                  ),
+                if (photographerName != null && photographerName.isNotEmpty)
+                  Text(
+                    'Fotógrafo: $photographerName',
+                    style: const TextStyle(color: Color(0xFF10B981), fontSize: 11),
                   ),
               ],
             ),
@@ -997,8 +1032,11 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      item['divergenceSummary']?.toString() ??
-                          'Divergência detectada entre os relatos.',
+                      _translateDivergenceSummaryPt(
+                        item['divergenceSummary']?.toString(),
+                        item['divergenceReasonLabels'] as List<dynamic>?,
+                        reasons,
+                      ),
                       style: const TextStyle(
                           color: Color(0xFFFCA5A5), fontSize: 11),
                     ),
@@ -1419,6 +1457,60 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
         ),
       ],
     );
+  }
+
+  String _translateMethodPt(String? raw) {
+    final upper = (raw ?? '').trim().toUpperCase();
+    if (upper.isEmpty) return '---';
+    const map = {
+      'CASH': 'Dinheiro',
+      'DINHEIRO': 'Dinheiro',
+      'PIX': 'Pix',
+      'CREDIT': 'Cartão de Crédito',
+      'CREDIT_CARD': 'Cartão de Crédito',
+      'DEBIT': 'Cartão de Débito',
+      'DEBIT_CARD': 'Cartão de Débito',
+      'SPLIT': 'Pagamento Misto',
+      'CREDIT_AGREEMENT': 'Crediário',
+      'CREDIARIO': 'Crediário',
+      'BOLETO': 'Crediário',
+    };
+    return map[upper] ?? raw!.trim();
+  }
+
+  String _translateDivergenceSummaryPt(
+    String? rawSummary,
+    List<dynamic>? reasonLabels,
+    List<dynamic> reasonCodes,
+  ) {
+    if (rawSummary == null || rawSummary.trim().isEmpty) {
+      if (reasonLabels != null && reasonLabels.isNotEmpty) {
+        return reasonLabels.map((e) => e.toString()).join(', ');
+      }
+      return 'Divergência detectada entre os relatos.';
+    }
+    var translated = rawSummary;
+    const replacements = {
+      'TOTAL_MISMATCH': 'Divergência no valor total',
+      'PAID_MISMATCH': 'Divergência no valor pago no ato',
+      'PAYMENT_METHOD_MISMATCH': 'Divergência na forma de pagamento',
+      'CREDIT_REMAINING_MISMATCH': 'Divergência no saldo restante do crediário',
+      'CREDIT_INSTALLMENTS_COUNT_MISMATCH': 'Divergência na quantidade de parcelas',
+      'CREDIT_INSTALLMENT_AMOUNT_MISMATCH': 'Divergência no valor da parcela',
+      'SPLIT_TOTAL_MISMATCH': 'Divergência na soma do pagamento misto',
+      'CREDIT_AGREEMENT': 'Crediário',
+      'CREDIARIO': 'Crediário',
+      'CREDIT_CARD': 'Cartão de Crédito',
+      'DEBIT_CARD': 'Cartão de Débito',
+      'CREDIT': 'Cartão de Crédito',
+      'DEBIT': 'Cartão de Débito',
+      'CASH': 'Dinheiro',
+      'SPLIT': 'Pagamento Misto',
+    };
+    replacements.forEach((k, v) {
+      translated = translated.replaceAll(RegExp('\\b$k\\b'), v);
+    });
+    return translated;
   }
 
   Widget _badge(String text, Color color, IconData icon) {
