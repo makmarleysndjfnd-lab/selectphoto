@@ -6,7 +6,8 @@ import '../servicos/servico_api.dart';
 import 'tela_integracoes_empresa.dart';
 
 class VisaoCrediarioAdmin extends StatefulWidget {
-  const VisaoCrediarioAdmin({super.key});
+  final String? initialStatusFilter;
+  const VisaoCrediarioAdmin({super.key, this.initialStatusFilter});
 
   @override
   State<VisaoCrediarioAdmin> createState() => _VisaoCrediarioAdminState();
@@ -69,6 +70,10 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   @override
   void initState() {
     super.initState();
+    if (widget.initialStatusFilter != null &&
+        widget.initialStatusFilter!.isNotEmpty) {
+      _selectedStatus = widget.initialStatusFilter!;
+    }
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
@@ -80,6 +85,18 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       }
     });
     _loadAll();
+  }
+
+  @override
+  void didUpdateWidget(covariant VisaoCrediarioAdmin oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialStatusFilter != oldWidget.initialStatusFilter &&
+        widget.initialStatusFilter != null &&
+        widget.initialStatusFilter!.isNotEmpty &&
+        _selectedStatus != widget.initialStatusFilter) {
+      setState(() => _selectedStatus = widget.initialStatusFilter!);
+      _loadAll();
+    }
   }
 
   @override

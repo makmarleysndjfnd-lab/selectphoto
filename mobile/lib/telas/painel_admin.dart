@@ -192,7 +192,10 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with TickerProviderStateMixin {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  int _navIndex = 7; // Fechamentos is default agora
+  int _navIndex = 13; // Rotas e Chegada + 4 atalhos é a Home padrão
+  String? _crediarioInitialFilter;
+  bool _conferenciaTodayOnly = false;
+  Map<String, dynamic>? _pendingReturnsSummary;
   // métricas
   int _selectedMonth = 5;
   int _selectedTeam = 0;
@@ -283,6 +286,9 @@ class _AdminDashboardState extends State<AdminDashboard>
       final travelVirgins = await api
           .getTravelVirginBooks()
           .catchError((_) => <dynamic>[]);
+      final pendingReturns = await api
+          .getPendingReturns()
+          .catchError((_) => <String, dynamic>{});
       if (mounted)
         setState(() {
           _pendingReleaseBatches =
@@ -291,6 +297,7 @@ class _AdminDashboardState extends State<AdminDashboard>
               .whereType<Map>()
               .map((e) => Map<String, dynamic>.from(e))
               .toList();
+          _pendingReturnsSummary = pendingReturns;
         });
 
       final Map<String, List<Map<String, dynamic>>> cityGroups = {};
@@ -832,11 +839,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                     iconColor: const Color(0xFF90CAF9),
                     collapsedIconColor: const Color(0xFF90CAF9),
                     children: [
-                      _sideMenuItem(7, Icons.account_balance_wallet_rounded,
-                          'Fechamentos'),
-                      _sideMenuItem(13, Icons.local_shipping_rounded,
-                          'Rotas e Chegada da Gráfica'),
-                      _sideMenuItem(0, Icons.auto_awesome, 'Eventos IA'),
+                      _sideMenuItem(13, Icons.home_rounded,
+                          'Início • Rotas e Chegada'),
                       _sideMenuItem(1, Icons.menu_book_rounded, 'Books'),
                       _sideMenuItem(2, Icons.inventory_2_rounded, 'Rebolo'),
                       _sideMenuItem(9, Icons.bar_chart_rounded, 'Estatísticas'),
@@ -1082,22 +1086,43 @@ class _AdminDashboardState extends State<AdminDashboard>
     showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1A1A2E),
-              title: const Text('Receber Devolução de Book',
-                  style: TextStyle(color: Colors.white)),
+              backgroundColor: lumoraSurfaceDark,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: lumoraNeonPurple.withOpacity(0.45)),
+              ),
+              title: const Text('Receber Devolução Física',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                      'O book será re-cadastrado no estoque para Rebolo.',
-                      style: TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 16),
+                      'Informe o código ou use a câmera QR Code. O sistema roteará automaticamente para Rebolo, Em Viagem (Book Virgem) ou Descarte.',
+                      style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 14),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openReturnQrScannerModal();
+                    },
+                    icon: const Icon(Icons.qr_code_scanner_rounded,
+                        color: lumoraNeonPurple),
+                    label: const Text('Abrir Scanner QR Code (Câmera)',
+                        style: TextStyle(color: Color(0xFFD8B4FE))),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: lumoraNeonPurple.withOpacity(0.6)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   TextField(
                     controller: codeCtrl,
                     style: const TextStyle(color: Colors.white),
                     textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(
-                      labelText: 'Código da Ficha',
+                      labelText: 'Código / Sequência / UUID da Ficha',
                       labelStyle: TextStyle(color: Colors.white54),
                       enabledBorder: UnderlineInputBorder(
                           borderSide: BorderSide(color: Colors.white24)),
@@ -1115,28 +1140,307 @@ class _AdminDashboardState extends State<AdminDashboard>
                     final code = codeCtrl.text.trim();
                     if (code.isEmpty) return;
                     Navigator.pop(ctx);
-                    try {
-                      await ApiService().receiveReturnedBook(code);
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text(
-                                    'Devolução registrada. Book no estoque!'),
-                                backgroundColor: Colors.green));
-                        _loadClients();
-                      }
-                    } catch (e) {
-                      if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text('Erro: $e'),
-                            backgroundColor: Colors.red));
-                      }
-                    }
+                    await _processPhysicalReturnScan(code);
                   },
-                  child: const Text('Confirmar'),
+                  child: const Text('Confirmar Baixa'),
                 )
               ],
             ));
+  }
+
+  Future<Map<String, dynamic>?> _processPhysicalReturnScan(
+    String rawCode, {
+    String? condition,
+    bool showSnackBar = true,
+  }) async {
+    try {
+      final res =
+          await ApiService().receiveReturnedBook(rawCode, condition: condition);
+      final msg = (res['message'] ?? 'Devolução física confirmada.').toString();
+      final routingLabel = (res['routingLabel'] ?? '').toString();
+      final progress = res['batchReturnProgress'] is Map
+          ? Map<String, dynamic>.from(res['batchReturnProgress'] as Map)
+          : null;
+      final progressText = progress != null
+          ? ' · Bipados ${progress['scannedCount']} de ${progress['totalExpected']} (faltam ${progress['pendingCount']})'
+          : '';
+
+      if (mounted && showSnackBar) {
+        final isAlready = res['alreadyProcessed'] == true;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              '${routingLabel.isNotEmpty ? "[$routingLabel] " : ""}$msg$progressText'),
+          backgroundColor:
+              isAlready ? const Color(0xFF0284C7) : const Color(0xFF16A34A),
+          duration: const Duration(seconds: 4),
+        ));
+      }
+      await _loadClients();
+      return res;
+    } catch (e) {
+      if (mounted && showSnackBar) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Erro na bipagem: $e'),
+          backgroundColor: Colors.red,
+        ));
+      }
+      rethrow;
+    }
+  }
+
+  void _openReturnQrScannerModal() {
+    bool isProcessing = false;
+    String? lastScannedRaw;
+    DateTime? lastScannedAt;
+    String? feedbackMessage;
+    String? feedbackSub;
+    bool feedbackSuccess = true;
+    final manualCtrl = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: lumoraBgDark,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final totalPending = int.tryParse(
+                    (_pendingReturnsSummary?['totalPending'] ??
+                            _rebolosAwaitingReturn.length)
+                        .toString()) ??
+                0;
+            final totalScanned = int.tryParse(
+                    (_pendingReturnsSummary?['totalScanned'] ?? 0).toString()) ??
+                0;
+            final totalExpected = int.tryParse(
+                    (_pendingReturnsSummary?['totalExpected'] ?? totalPending)
+                        .toString()) ??
+                totalPending;
+
+            Future<void> handleCode(String raw) async {
+              final trimmed = raw.trim();
+              if (trimmed.isEmpty || isProcessing) return;
+              final now = DateTime.now();
+              if (lastScannedRaw == trimmed &&
+                  lastScannedAt != null &&
+                  now.difference(lastScannedAt!).inSeconds < 3) {
+                return;
+              }
+              lastScannedRaw = trimmed;
+              lastScannedAt = now;
+              setModalState(() => isProcessing = true);
+
+              try {
+                final res = await _processPhysicalReturnScan(
+                  trimmed,
+                  showSnackBar: false,
+                );
+                if (!ctx.mounted) return;
+                final prog = res?['batchReturnProgress'] is Map
+                    ? Map<String, dynamic>.from(res!['batchReturnProgress'] as Map)
+                    : null;
+                setModalState(() {
+                  isProcessing = false;
+                  feedbackSuccess = true;
+                  feedbackMessage =
+                      '${res?['routingLabel'] ?? 'Conferido'}: ${res?['message'] ?? 'Devolução registrada'}';
+                  feedbackSub = prog != null
+                      ? 'Lote/Vendedor: Bipados ${prog['scannedCount']} de ${prog['totalExpected']} · Faltam ${prog['pendingCount']}'
+                      : null;
+                });
+              } catch (e) {
+                if (!ctx.mounted) return;
+                setModalState(() {
+                  isProcessing = false;
+                  feedbackSuccess = false;
+                  feedbackMessage = e.toString().replaceFirst('Exception: ', '');
+                  feedbackSub = null;
+                });
+              }
+            }
+
+            return SizedBox(
+              height: MediaQuery.of(context).size.height * 0.88,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+                    decoration: BoxDecoration(
+                      color: lumoraSurfaceDark,
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(22)),
+                      border: Border(
+                          bottom: BorderSide(
+                              color: lumoraNeonPurple.withOpacity(0.35))),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.qr_code_scanner_rounded,
+                            color: lumoraNeonPurple, size: 22),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Bipar Devolução Física (QR Base)',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15),
+                              ),
+                              Text(
+                                'Bipados $totalScanned de $totalExpected · Faltam $totalPending',
+                                style: const TextStyle(
+                                    color: Color(0xFFD8B4FE), fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: const Icon(Icons.close, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (feedbackMessage != null)
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: (feedbackSuccess
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFFDC2626))
+                            .withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: feedbackSuccess
+                                ? const Color(0xFF22C55E)
+                                : const Color(0xFFEF4444)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            feedbackMessage!,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12.5),
+                          ),
+                          if (feedbackSub != null) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              feedbackSub!,
+                              style: const TextStyle(
+                                  color: Color(0xFFBBF7D0), fontSize: 11.5),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            MobileScanner(
+                              onDetect: (capture) {
+                                final barcodes = capture.barcodes;
+                                if (barcodes.isNotEmpty) {
+                                  final raw = barcodes.first.rawValue;
+                                  if (raw != null && raw.isNotEmpty) {
+                                    handleCode(raw);
+                                  }
+                                }
+                              },
+                            ),
+                            if (isProcessing)
+                              Container(
+                                color: Colors.black54,
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                      color: lumoraNeonPurple),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                        14, 0, 14, 14 + MediaQuery.of(ctx).viewInsets.bottom),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: manualCtrl,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: InputDecoration(
+                              hintText: 'Ou digite o código da ficha...',
+                              hintStyle: const TextStyle(
+                                  color: Colors.white38, fontSize: 12),
+                              filled: true,
+                              fillColor: lumoraSurfaceDark,
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide(
+                                    color: lumoraNeonPurple.withOpacity(0.4)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(
+                                    color: lumoraNeonPurple, width: 1.5),
+                              ),
+                            ),
+                            onSubmitted: (v) async {
+                              await handleCode(v);
+                              manualCtrl.clear();
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: isProcessing
+                              ? null
+                              : () async {
+                                  final txt = manualCtrl.text;
+                                  await handleCode(txt);
+                                  manualCtrl.clear();
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: lumoraNeonPurple,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 13),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.check_rounded, size: 18),
+                          label: const Text('Bipar'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showSearchFichasDialog() {
@@ -1266,8 +1570,28 @@ class _AdminDashboardState extends State<AdminDashboard>
                         final batch = item['batchName'] ?? 'Sem lote';
                         final custodian = item['currentCustodian'] ?? (item['assignedSeller'] != null ? 'Com vendedor: ${item['assignedSeller']['name']}' : 'No Estoque');
 
+                        final clientMap = Map<String, dynamic>.from(item as Map);
                         return ListTile(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => SellerClientDetailScreen(
+                                  clientData: clientMap,
+                                  isFotografo: true,
+                                  isAdmin: true,
+                                ),
+                              ),
+                            );
+                          },
                           contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                          trailing: AdminUniversalFichaMenu(
+                            client: clientMap,
+                            onActionDone: () {
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              _loadClients();
+                            },
+                          ),
                           title: Row(
                             children: [
                               Container(
@@ -1330,7 +1654,11 @@ class _AdminDashboardState extends State<AdminDashboard>
       label: label,
       selected: selected,
       onTap: () {
-        setState(() => _navIndex = index);
+        setState(() {
+          if (index == 12) _crediarioInitialFilter = null;
+          if (index == 14) _conferenciaTodayOnly = false;
+          _navIndex = index;
+        });
         if (_scaffoldKey.currentState?.isDrawerOpen == true) {
           Navigator.pop(context);
         }
@@ -1547,16 +1875,42 @@ class _AdminDashboardState extends State<AdminDashboard>
         tabWidget = const VisaoHistoricoVendasAdmin();
         break;
       case 12:
-        tabWidget = const VisaoCrediarioAdmin();
+        tabWidget = VisaoCrediarioAdmin(
+          initialStatusFilter: _crediarioInitialFilter,
+        );
         break;
       case 13:
-        tabWidget = const VisaoRotasChegada();
+        tabWidget = VisaoRotasChegada(
+          onOpenFechamentos: () => setState(() => _navIndex = 7),
+          onOpenEventosIa: () => setState(() => _navIndex = 0),
+          onOpenCobrancasDia: () => setState(() {
+            _crediarioInitialFilter = 'DUE_TODAY';
+            _navIndex = 12;
+          }),
+          onOpenConferenciaDia: () => setState(() {
+            _conferenciaTodayOnly = true;
+            _navIndex = 14;
+          }),
+        );
         break;
       case 14:
-        tabWidget = const VisaoConferenciaAdmin();
+        tabWidget = VisaoConferenciaAdmin(
+          initialTodayOnly: _conferenciaTodayOnly,
+        );
         break;
       default:
-        tabWidget = const VisaoFechamentoAdmin();
+        tabWidget = VisaoRotasChegada(
+          onOpenFechamentos: () => setState(() => _navIndex = 7),
+          onOpenEventosIa: () => setState(() => _navIndex = 0),
+          onOpenCobrancasDia: () => setState(() {
+            _crediarioInitialFilter = 'DUE_TODAY';
+            _navIndex = 12;
+          }),
+          onOpenConferenciaDia: () => setState(() {
+            _conferenciaTodayOnly = true;
+            _navIndex = 14;
+          }),
+        );
     }
 
     return AdminErrorBoundary(
@@ -2669,6 +3023,42 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ),
                 if (_travelVirginBooks.isNotEmpty) ...[
                   const SizedBox(height: 12),
+                  ..._travelVirginBooks.map((tv) {
+                    final tvCode =
+                        (tv['visibleCode'] ?? tv['sequenceNumber'] ?? 'S/N')
+                            .toString();
+                    final tvName = (tv['name'] ?? 'Cliente').toString();
+                    final tvCity = (tv['city'] ?? 'Sem cidade').toString();
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      decoration: BoxDecoration(
+                        color: lumoraBgDark.withOpacity(0.65),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: lumoraNeonPurple.withOpacity(0.28)),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        title: Text(
+                          '$tvCode · $tvName',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(
+                          'Book Virgem (Em Viagem) · $tvCity',
+                          style: const TextStyle(
+                              color: Color(0xFFD8B4FE), fontSize: 11),
+                        ),
+                        trailing: AdminUniversalFichaMenu(
+                          client: tv,
+                          onActionDone: _loadClients,
+                        ),
+                      ),
+                    );
+                  }),
+                  const SizedBox(height: 8),
                   ElevatedButton.icon(
                     onPressed: _showCreateTravelBatchDialog,
                     icon: const Icon(Icons.create_new_folder_rounded, size: 18),
@@ -3334,7 +3724,11 @@ class _AdminDashboardState extends State<AdminDashboard>
               children: [
                 _buildReboloCategoryChip('Disponíveis (${_rebolosInStock.length})', 0, Colors.greenAccent),
                 const SizedBox(width: 8),
-                _buildReboloCategoryChip('Aguardando Devolução (${_rebolosAwaitingReturn.length})', 1, Colors.orangeAccent),
+                _buildReboloCategoryChip(
+                  'Aguardando Devolução (${_pendingReturnsSummary?['totalPending'] ?? _rebolosAwaitingReturn.length})',
+                  1,
+                  Colors.orangeAccent,
+                ),
                 const SizedBox(width: 8),
                 _buildReboloCategoryChip('Em Rota (${_rebolosInRoute.length})', 2, Colors.blueAccent),
                 const SizedBox(width: 8),
@@ -3372,19 +3766,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             else
               ..._rotasRebolo.map((c) => _buildCityStockCard(c)),
           ] else if (_selectedReboloTab == 1) ...[
-            const Text('Fichas com Vendedores Aguardando Devolução',
-                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            if (_rebolosAwaitingReturn.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(
-                  child: Text('Nenhuma ficha aguardando devolução no momento.',
-                      style: TextStyle(color: Colors.white54)),
-                ),
-              )
-            else
-              ..._rebolosAwaitingReturn.map((b) => _buildReboloTile(b, const Color(0xFFFFA726))),
+            _buildPendingReturnsSection(),
           ] else if (_selectedReboloTab == 2) ...[
             const Text('Fichas de Rebolo Distribuídas em Rota',
                 style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
@@ -3417,6 +3799,268 @@ class _AdminDashboardState extends State<AdminDashboard>
           const SizedBox(height: 20),
         ],
       ),
+    );
+  }
+
+  Widget _buildPendingReturnsSection() {
+    final summary = _pendingReturnsSummary ?? {};
+    final groups = (summary['groups'] as List?)
+            ?.whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList() ??
+        [];
+    final totalPending =
+        int.tryParse((summary['totalPending'] ?? _rebolosAwaitingReturn.length).toString()) ??
+            0;
+    final totalScanned =
+        int.tryParse((summary['totalScanned'] ?? 0).toString()) ?? 0;
+    final totalExpected =
+        int.tryParse((summary['totalExpected'] ?? totalPending).toString()) ??
+            totalPending;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: lumoraSurfaceDark,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: lumoraNeonPurple.withOpacity(0.45)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFA726).withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.qr_code_scanner_rounded,
+                        color: Color(0xFFFFA726), size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Conferência Física na Base',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          totalExpected > 0
+                              ? 'Bipados $totalScanned de $totalExpected · Faltam $totalPending'
+                              : 'Nenhum book pendente de devolução física.',
+                          style: const TextStyle(
+                              color: Color(0xFFD8B4FE), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _openReturnQrScannerModal,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                      label: const Text('Bipar QR Code',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: lumoraNeonPurple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _showReceiveReturnDialog,
+                    icon: const Icon(Icons.keyboard_alt_outlined,
+                        size: 16, color: Color(0xFFD8B4FE)),
+                    label: const Text('Digitar',
+                        style: TextStyle(
+                            color: Color(0xFFD8B4FE),
+                            fontWeight: FontWeight.bold)),
+                    style: OutlinedButton.styleFrom(
+                      side:
+                          BorderSide(color: lumoraNeonPurple.withOpacity(0.5)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 11),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (groups.isNotEmpty)
+          ...groups.map((g) {
+            final sellerName = (g['sellerName'] ?? 'Vendedor').toString();
+            final batchName = (g['batchName'] ?? 'Sem Lote').toString();
+            final gScanned =
+                int.tryParse((g['scannedCount'] ?? 0).toString()) ?? 0;
+            final gExpected =
+                int.tryParse((g['totalExpected'] ?? 0).toString()) ?? 0;
+            final gPending =
+                int.tryParse((g['pendingCount'] ?? 0).toString()) ?? 0;
+            final items = (g['items'] as List?)
+                    ?.whereType<Map>()
+                    .map((e) => Map<String, dynamic>.from(e))
+                    .toList() ??
+                [];
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A2E),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: const Color(0xFFFFA726).withOpacity(0.45)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              sellerName,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14),
+                            ),
+                            Text(
+                              'Lote: $batchName',
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFA726).withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFFA726)),
+                        ),
+                        child: Text(
+                          'Bipados $gScanned de $gExpected · Faltam $gPending',
+                          style: const TextStyle(
+                              color: Color(0xFFFFA726),
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ...items.map((item) {
+                    final code = (item['visibleCode'] ??
+                            item['sequenceNumber'] ??
+                            'S/N')
+                        .toString();
+                    final clientName = (item['name'] ?? 'Cliente').toString();
+                    final reason =
+                        (item['nonSaleReason'] ?? 'Não-venda').toString();
+                    final routingLabel =
+                        (item['expectedRoutingLabel'] ?? 'Rebolo').toString();
+                    final rawClient = item['rawClientData'] is Map
+                        ? Map<String, dynamic>.from(item['rawClientData'] as Map)
+                        : item;
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: lumoraBgDark,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '$code · $clientName',
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12.5),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '$reason → $routingLabel',
+                                  style: const TextStyle(
+                                      color: Color(0xFFD8B4FE), fontSize: 11),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Confirmar recebimento físico',
+                            icon: const Icon(Icons.qr_code_2_rounded,
+                                color: Color(0xFF22C55E), size: 20),
+                            onPressed: () {
+                              final scanTarget = (item['id'] ??
+                                      item['uuid'] ??
+                                      item['sequenceNumber'] ??
+                                      '')
+                                  .toString();
+                              if (scanTarget.isNotEmpty) {
+                                _processPhysicalReturnScan(scanTarget);
+                              }
+                            },
+                          ),
+                          AdminUniversalFichaMenu(
+                            client: rawClient,
+                            onActionDone: _loadClients,
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          })
+        else if (_rebolosAwaitingReturn.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text('Nenhuma ficha aguardando devolução no momento.',
+                  style: TextStyle(color: Colors.white54)),
+            ),
+          )
+        else
+          ..._rebolosAwaitingReturn
+              .map((b) => _buildReboloTile(b, const Color(0xFFFFA726))),
+      ],
     );
   }
 
@@ -3675,42 +4319,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                   ],
                 ),
               ),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 18),
-                color: lumoraSurfaceDark,
-                onSelected: (val) {
-                  if (val == 'details') {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => SellerClientDetailScreen(
-                          clientData: rawClient,
-                          isFotografo: true,
-                        ),
-                      ),
-                    );
-                  } else if (val == 'edit') {
-                    showAdminEditFichaDialog(context, rawClient, _loadClients);
-                  } else if (val == 'move') {
-                    showAdminMoveFichaDialog(context, rawClient, _loadClients);
-                  }
-                },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                    value: 'details',
-                    child: Text('Ver Ficha', style: TextStyle(color: Colors.white)),
-                  ),
-                  PopupMenuItem(
-                    value: 'edit',
-                    child: Text('Editar dados',
-                        style: TextStyle(color: Color(0xFFD8B4FE))),
-                  ),
-                  PopupMenuItem(
-                    value: 'move',
-                    child: Text('Mover (Lote / Vendedor)',
-                        style: TextStyle(color: Color(0xFFA855F7))),
-                  ),
-                ],
+              AdminUniversalFichaMenu(
+                client: rawClient,
+                onActionDone: _loadClients,
               ),
             ],
           ),
@@ -4277,7 +4888,18 @@ class _AdminDashboardState extends State<AdminDashboard>
         icon: const Icon(Icons.more_vert, color: Colors.white70),
         color: lumoraSurfaceDark,
         onSelected: (val) {
-          if (val == 'atribuir_vendedor') {
+          if (val == 'ver_ficha') {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SellerClientDetailScreen(
+                  clientData: rawClient,
+                  isFotografo: true,
+                  isAdmin: true,
+                ),
+              ),
+            ).then((_) => _loadClients());
+          } else if (val == 'atribuir_vendedor') {
             _atribuirBookDialog(book, rotaId, isRebolo);
           } else if (val == 'historico_rastreamento') {
             _showBookTrackingHistoryDialog(rawClient);
@@ -4296,6 +4918,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         itemBuilder: (context) {
           List<PopupMenuEntry<String>> items = [];
 
+          items.add(const PopupMenuItem(
+              value: 'ver_ficha',
+              child: Text('Ver Ficha',
+                  style: TextStyle(color: Colors.white))));
           items.add(const PopupMenuItem(
               value: 'historico_rastreamento',
               child: Text('Histórico / Rastreamento',

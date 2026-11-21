@@ -809,6 +809,8 @@ class ApiService {
     bool? hasDivergence,
     bool? isSkipped,
     String? groupBy,
+    bool? todayOnly,
+    String? date,
   }) async {
     try {
       final response = await _dio.get('/sales/buyer-confirmations/review',
@@ -819,6 +821,8 @@ class ApiService {
             if (hasDivergence != null) 'hasDivergence': hasDivergence.toString(),
             if (isSkipped != null) 'isSkipped': isSkipped.toString(),
             if (groupBy != null) 'groupBy': groupBy,
+            if (todayOnly == true) 'todayOnly': 'true',
+            if (date != null && date.isNotEmpty) 'date': date,
           });
       return Map<String, dynamic>.from(response.data);
     } on DioException catch (e) {
@@ -2073,10 +2077,35 @@ class ApiService {
     }
   }
 
-  Future<void> receiveReturnedBook(String sequenceNumber) async {
+  Future<Map<String, dynamic>> getPendingReturns() async {
     try {
-      await _dio.post('/books/receive-return',
-          data: {'sequenceNumber': sequenceNumber});
+      final res = await _dio.get('/books/pending-returns');
+      if (res.data is Map) {
+        return Map<String, dynamic>.from(res.data as Map);
+      }
+      return {'totalPending': 0, 'totalScanned': 0, 'totalExpected': 0, 'groups': []};
+    } on DioException catch (e) {
+      throw Exception(
+          (e.response?.data is Map ? e.response?.data['error'] : null) ??
+              'Erro ao consultar pendências de devolução física');
+    }
+  }
+
+  Future<Map<String, dynamic>> receiveReturnedBook(
+    String identifier, {
+    String? condition,
+  }) async {
+    try {
+      final res = await _dio.post('/books/receive-return', data: {
+        'identifier': identifier,
+        'sequenceNumber': identifier,
+        'qrCode': identifier,
+        if (condition != null && condition.isNotEmpty) 'condition': condition,
+      });
+      if (res.data is Map) {
+        return Map<String, dynamic>.from(res.data as Map);
+      }
+      return {'success': true};
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??

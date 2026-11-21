@@ -459,13 +459,14 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
     }
 
     const isAdmin = isUserAdmin(req);
-    const { search, status, sellerId, dateFilterType, startDate, endDate } = req.query as {
+    const { search, status, sellerId, dateFilterType, startDate, endDate, date } = req.query as {
       search?: string;
       status?: string;
       sellerId?: string;
       dateFilterType?: 'DUE_DATE' | 'PAYMENT_DATE' | 'COMMISSION_DATE';
       startDate?: string;
       endDate?: string;
+      date?: string;
     };
 
     // Vendedor comum só vê a própria carteira
@@ -491,10 +492,16 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
           },
         };
       } else if (status === 'DUE_TODAY') {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
+        let brYmd: string;
+        const m = String(date || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) {
+          brYmd = `${m[1]}-${m[2]}-${m[3]}`;
+        } else {
+          const brNow = new Date(Date.now() - 3 * 60 * 60 * 1000);
+          brYmd = `${brNow.getUTCFullYear()}-${String(brNow.getUTCMonth() + 1).padStart(2, '0')}-${String(brNow.getUTCDate()).padStart(2, '0')}`;
+        }
+        const todayStart = new Date(`${brYmd}T00:00:00.000-03:00`);
+        const todayEnd = new Date(`${brYmd}T23:59:59.999-03:00`);
         where.status = { in: ['ACTIVE', 'RENEGOTIATED'] };
         where.installments = {
           some: {

@@ -394,19 +394,312 @@ router.put('/batch/:id/release', authMiddleware, async (req: AuthRequest, res) =
     }
 });
 
-// Receive returned book (Admin)
+function parseQrBookIdentifier(rawInput: unknown): string {
+    const raw = String(rawInput || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('{') && raw.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(raw);
+            const candidate =
+                parsed?.clientId ||
+                parsed?.id ||
+                parsed?.uuid ||
+                parsed?.visibleCode ||
+                parsed?.sequenceNumber;
+            if (candidate) return String(candidate).trim();
+        } catch {
+            // fallback to literal
+        }
+    }
+    if (/^https?:\/\//i.test(raw)) {
+        const cleanUrl = raw.split('?')[0].replace(/\/+$/, '');
+        const lastSeg = cleanUrl.split('/').pop();
+        if (lastSeg) return decodeURIComponent(lastSeg).trim();
+    }
+    if (/^lumora:/i.test(raw)) {
+        const seg = raw.split(':').pop();
+        if (seg && seg.trim()) return seg.trim();
+    }
+    return raw;
+}
+
+function classifyNonSaleReturn(
+    client: { commercialCycle?: number | null; nonSales?: Array<{ reason?: string | null; date?: Date; supersededAt?: Date | null }> },
+    requestedCondition?: unknown
+): {
+    routingType: 'EM_VIAGEM' | 'DEFECT' | 'REBOLO' | 'DISCARD_SECOND_CYCLE';
+    nextBookStatus: 'IN_STOCK_VIRGIN' | 'IN_STOCK_REBOLO' | 'DISCARDED';
+    nextCycle: number;
+    timelineAction: string;
+    auditAction: string;
+    routingLabel: string;
+    timelineReason: string;
+} {
+    const allNonSales = Array.isArray(client.nonSales) ? client.nonSales : [];
+    const activeNonSales = allNonSales.filter((ns) => !ns.supersededAt);
+    const pool = activeNonSales.length > 0 ? activeNonSales : allNonSales;
+    const latestNonSale =
+        pool.length > 0
+            ? [...pool].sort(
+                  (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+              )[0]
+            : null;
+
+    const normalizedReason = String(latestNonSale?.reason || '')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, ' ');
+    const normalizedCondition = String(requestedCondition || '')
+        .trim()
+        .toUpperCase();
+
+    if (normalizedReason === 'EM VIAGEM' || normalizedReason === 'EM_VIAGEM') {
+        return {
+            routingType: 'EM_VIAGEM',
+            nextBookStatus: 'IN_STOCK_VIRGIN',
+            nextCycle: client.commercialCycle || 1,
+            timelineAction: 'RECEIVE_RETURN_TRAVEL_VIRGIN',
+            auditAction: 'ADMIN_RECEIVE_RETURN_TRAVEL_VIRGIN',
+            routingLabel: 'Book Virgem (Em Viagem)',
+            timelineReason:
+                'Devolução física "Em Viagem" bipada na base; retornou como book virgem para novo lote (sem Rebolo).',
+        };
+    }
+
+    const isDefect =
+        normalizedCondition === 'DEFECT' ||
+        normalizedCondition === 'DAMAGED' ||
+        normalizedReason.includes('DEFEITO') ||
+        normalizedReason.includes('DANIFICAD') ||
+        normalizedReason.includes('AVARIA');
+    if (isDefect) {
+        return {
+            routingType: 'DEFECT',
+            nextBookStatus: 'DISCARDED',
+            nextCycle: client.commercialCycle || 1,
+            timelineAction: 'RECEIVE_RETURN_DEFECT',
+            auditAction: 'ADMIN_RECEIVE_RETURN_DEFECT',
+            routingLabel: 'Descarte por Defeito/Avaria',
+            timelineReason:
+                'Devolução física com defeito/avaria bipada na base; book baixado para descarte controlado.',
+        };
+    }
+
+    const currentCycle = client.commercialCycle || 1;
+    const nonSalesCount = allNonSales.length;
+    const isSecondNonSale = currentCycle >= 2 || nonSalesCount >= 2;
+    if (isSecondNonSale) {
+        return {
+            routingType: 'DISCARD_SECOND_CYCLE',
+            nextBookStatus: 'DISCARDED',
+            nextCycle: currentCycle,
+            timelineAction: 'RECEIVE_RETURN',
+            auditAction: 'ADMIN_RECEIVE_RETURN',
+            routingLabel: 'Descarte (2ª Não-Venda)',
+            timelineReason:
+                'Devolução física da 2ª não-venda bipada na base; ficha encerrada definitivamente (descarte).',
+        };
+    }
+
+    return {
+        routingType: 'REBOLO',
+        nextBookStatus: 'IN_STOCK_REBOLO',
+        nextCycle: 2,
+        timelineAction: 'RECEIVE_RETURN',
+        auditAction: 'ADMIN_RECEIVE_RETURN',
+        routingLabel: 'Estoque de Rebolo',
+        timelineReason:
+            'Devolução física da 1ª não-venda bipada na base; book direcionado ao Estoque de Rebolo.',
+    };
+}
+
+// Lista pendências de devolução física agrupadas por vendedor/lote com contador Bipados X de Y / Faltam Z
+router.get('/pending-returns', authMiddleware, requireAdminOrSupervisor, async (req: AuthRequest, res) => {
+    try {
+        const companyId = req.user?.companyId;
+        if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
+            return res.status(403).json({ error: 'Empresa não identificada' });
+        }
+
+        const pendingClients = await prisma.client.findMany({
+            where: {
+                ...(companyId ? { companyId } : {}),
+                bookStatus: 'AWAITING_RETURN',
+            },
+            include: {
+                batch: { select: { id: true, name: true, city: true } },
+                assignedSeller: { select: { id: true, name: true } },
+                nonSales: {
+                    orderBy: { date: 'asc' },
+                    include: { seller: { select: { id: true, name: true } } },
+                },
+            },
+            orderBy: [{ assignedSellerId: 'asc' }, { batchId: 'asc' }, { sequenceNumber: 'asc' }],
+        });
+
+        const activeGroupKeys = new Set<string>();
+        const batchIdsInPending = new Set<string>();
+        for (const c of pendingClients) {
+            const sId = c.assignedSellerId || 'SEM_VENDEDOR';
+            const bId = c.batchId || 'SEM_LOTE';
+            activeGroupKeys.add(`${sId}::${bId}`);
+            if (c.batchId) batchIdsInPending.add(c.batchId);
+        }
+
+        // Busca devoluções já bipadas pertencentes aos mesmos lotes/vendedores (para calcular Bipados X de Y)
+        const scannedClients =
+            batchIdsInPending.size > 0
+                ? await prisma.client.findMany({
+                      where: {
+                          ...(companyId ? { companyId } : {}),
+                          batchId: { in: Array.from(batchIdsInPending) },
+                          bookStatus: { in: ['IN_STOCK_REBOLO', 'IN_STOCK_VIRGIN', 'DISCARDED'] },
+                          timeline: {
+                              some: {
+                                  action: {
+                                      in: [
+                                          'RECEIVE_RETURN',
+                                          'RECEIVE_RETURN_TRAVEL_VIRGIN',
+                                          'RECEIVE_RETURN_DEFECT',
+                                      ],
+                                  },
+                              },
+                          },
+                      },
+                      include: {
+                          timeline: {
+                              where: {
+                                  action: {
+                                      in: [
+                                          'RECEIVE_RETURN',
+                                          'RECEIVE_RETURN_TRAVEL_VIRGIN',
+                                          'RECEIVE_RETURN_DEFECT',
+                                      ],
+                                  },
+                              },
+                              orderBy: { timestamp: 'desc' },
+                              take: 1,
+                          },
+                      },
+                  })
+                : [];
+
+        const scannedCountByGroup = new Map<string, number>();
+        for (const sc of scannedClients) {
+            const latestReturn = sc.timeline?.[0];
+            const prevSellerId = latestReturn?.previousSellerId || 'SEM_VENDEDOR';
+            const bId = sc.batchId || 'SEM_LOTE';
+            const gKey = `${prevSellerId}::${bId}`;
+            if (activeGroupKeys.has(gKey)) {
+                scannedCountByGroup.set(gKey, (scannedCountByGroup.get(gKey) || 0) + 1);
+            }
+        }
+
+        const groupsMap = new Map<
+            string,
+            {
+                groupKey: string;
+                sellerId: string | null;
+                sellerName: string;
+                batchId: string | null;
+                batchName: string;
+                city: string | null;
+                pendingCount: number;
+                scannedCount: number;
+                totalExpected: number;
+                items: any[];
+            }
+        >();
+
+        for (const c of pendingClients) {
+            const sId = c.assignedSellerId || null;
+            const sName =
+                c.assignedSeller?.name ||
+                c.nonSales?.[c.nonSales.length - 1]?.seller?.name ||
+                'Vendedor não identificado';
+            const bId = c.batchId || null;
+            const bName = c.batch?.name || 'Sem Lote';
+            const gKey = `${sId || 'SEM_VENDEDOR'}::${bId || 'SEM_LOTE'}`;
+
+            const classification = classifyNonSaleReturn(c);
+            const activeNs = c.nonSales?.filter((n) => !n.supersededAt) || c.nonSales || [];
+            const latestNs = activeNs.length > 0 ? activeNs[activeNs.length - 1] : null;
+
+            let group = groupsMap.get(gKey);
+            if (!group) {
+                const alreadyScanned = scannedCountByGroup.get(gKey) || 0;
+                group = {
+                    groupKey: gKey,
+                    sellerId: sId,
+                    sellerName: sName,
+                    batchId: bId,
+                    batchName: bName,
+                    city: c.city || c.batch?.city || null,
+                    pendingCount: 0,
+                    scannedCount: alreadyScanned,
+                    totalExpected: alreadyScanned,
+                    items: [],
+                };
+                groupsMap.set(gKey, group);
+            }
+
+            group.pendingCount += 1;
+            group.totalExpected += 1;
+            group.items.push({
+                id: c.id,
+                uuid: c.uuid,
+                visibleCode: c.visibleCode,
+                sequenceNumber: c.sequenceNumber,
+                name: c.name,
+                city: c.city,
+                bookStatus: c.bookStatus,
+                batchId: c.batchId,
+                batchName: bName,
+                assignedSellerId: c.assignedSellerId,
+                sellerName: sName,
+                nonSaleReason: latestNs?.reason || 'Não-venda',
+                expectedRoutingType: classification.routingType,
+                expectedRoutingLabel: classification.routingLabel,
+                rawClientData: c,
+            });
+        }
+
+        const groups = Array.from(groupsMap.values()).sort(
+            (a, b) => b.pendingCount - a.pendingCount || a.sellerName.localeCompare(b.sellerName)
+        );
+        const totalPending = groups.reduce((acc, g) => acc + g.pendingCount, 0);
+        const totalScanned = groups.reduce((acc, g) => acc + g.scannedCount, 0);
+        const totalExpected = totalPending + totalScanned;
+
+        res.json({
+            totalPending,
+            totalScanned,
+            totalExpected,
+            groups,
+        });
+    } catch (error: any) {
+        console.error('Error fetching pending returns:', error);
+        res.status(500).json({ error: error.message || 'Falha ao consultar pendências de devolução física' });
+    }
+});
+
+// Receive returned book (Admin QR scan or code at base)
 router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const { sequenceNumber, clientId } = req.body;
-        const rawIdentifier = clientId || sequenceNumber || req.body.identifier || req.body.uuid || '';
-        const identifier = String(rawIdentifier).trim();
+        const { sequenceNumber, clientId, qrCode, code, condition } = req.body;
+        const rawIdentifier =
+            clientId || qrCode || code || sequenceNumber || req.body.identifier || req.body.uuid || '';
+        const identifier = parseQrBookIdentifier(rawIdentifier);
         const companyId = req.user?.companyId;
 
         if (!companyId && req.user?.role !== 'SUPER_ADMIN') {
             return res.status(403).json({ error: 'Empresa não identificada' });
         }
+        if (!identifier) {
+            return res.status(400).json({ error: 'Código/QR Code da ficha é obrigatório.' });
+        }
 
-        const client = await prisma.client.findFirst({
+        const matchedClient = await prisma.client.findFirst({
             where: {
                 ...(companyId ? { companyId } : {}),
                 OR: [
@@ -414,91 +707,209 @@ router.post('/receive-return', authMiddleware, async (req: AuthRequest, res) => 
                     { uuid: identifier },
                     { visibleCode: identifier },
                     { sequenceNumber: identifier },
-                ]
+                ],
             },
-            include: { nonSales: true }
+            select: { id: true },
         });
 
-        if (!client) {
-            return res.status(404).json({ error: 'Book not found' });
-        }
-        if (client.bookStatus !== 'AWAITING_RETURN') return res.status(400).json({ error: 'Book is not awaiting return' });
-
-        const latestNonSale =
-          Array.isArray(client.nonSales) && client.nonSales.length > 0
-            ? [...client.nonSales].sort(
-                (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-              )[0]
-            : null;
-        const isTravelReturn =
-          String(latestNonSale?.reason || '')
-            .trim()
-            .toUpperCase()
-            .replace(/\s+/g, ' ') === 'EM VIAGEM';
-
-        if (isTravelReturn) {
-          const updated = await prisma.client.update({
-            where: { id: client.id },
-            data: {
-              bookStatus: 'IN_STOCK_VIRGIN',
-              assignedSellerId: null,
-            },
-          });
-
-          await prisma.clientTimeline.create({
-            data: {
-              clientId: client.id,
-              cycle: client.commercialCycle || 1,
-              previousStatus: client.bookStatus,
-              newStatus: 'IN_STOCK_VIRGIN',
-              previousSellerId: client.assignedSellerId,
-              newSellerId: null,
-              authorId: req.user?.id,
-              authorRole: req.user?.role,
-              action: 'RECEIVE_RETURN_TRAVEL_VIRGIN',
-              reason:
-                'Devolução "Em Viagem" recebida pelo Admin; ficha retornou como book virgem (sem envio para Rebolo)',
-            },
-          });
-
-          return res.json(updated);
+        if (!matchedClient) {
+            return res.status(404).json({ error: 'Book não encontrado na empresa.' });
         }
 
-        const currentCycle = client.commercialCycle || 1;
-        const nonSalesCount = client.nonSales ? client.nonSales.length : 0;
-        const isSecondNonSale = currentCycle >= 2 || nonSalesCount >= 2;
-        const nextBookStatus = isSecondNonSale ? 'DISCARDED' : 'IN_STOCK_REBOLO';
-        const nextCycle = isSecondNonSale ? currentCycle : 2;
+        const txOutcome = await prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`
+                SELECT id FROM "Client"
+                WHERE id = ${matchedClient.id}
+                FOR UPDATE
+            `;
 
-        const updated = await prisma.client.update({
-            where: { id: client.id },
-            data: {
-              bookStatus: nextBookStatus,
-              assignedSellerId: null,
-              commercialCycle: nextCycle,
+            const client = await tx.client.findUniqueOrThrow({
+                where: { id: matchedClient.id },
+                include: {
+                    batch: { select: { id: true, name: true } },
+                    assignedSeller: { select: { id: true, name: true } },
+                    nonSales: { orderBy: { date: 'asc' } },
+                    timeline: {
+                        where: {
+                            action: {
+                                in: [
+                                    'RECEIVE_RETURN',
+                                    'RECEIVE_RETURN_TRAVEL_VIRGIN',
+                                    'RECEIVE_RETURN_DEFECT',
+                                ],
+                            },
+                        },
+                        orderBy: { timestamp: 'desc' },
+                        take: 1,
+                    },
+                },
+            });
+
+            if (companyId && client.companyId !== companyId) {
+                throw { status: 403, message: 'Acesso negado: book pertence a outra empresa.' };
             }
+
+            // Idempotência para bipagem dupla do mesmo QR Code na base
+            if (
+                ['IN_STOCK_REBOLO', 'IN_STOCK_VIRGIN', 'DISCARDED'].includes(client.bookStatus) &&
+                client.timeline.length > 0
+            ) {
+                const classification = classifyNonSaleReturn(client, condition);
+                return {
+                    alreadyProcessed: true,
+                    updated: client,
+                    classification,
+                    previousSellerId: client.timeline[0]?.previousSellerId || null,
+                };
+            }
+
+            if (client.bookStatus !== 'AWAITING_RETURN') {
+                throw {
+                    status: 400,
+                    message: `Book em status "${client.bookStatus}" não está aguardando devolução física.`,
+                };
+            }
+
+            const classification = classifyNonSaleReturn(client, condition);
+            const updated = await tx.client.update({
+                where: { id: client.id },
+                data: {
+                    bookStatus: classification.nextBookStatus,
+                    assignedSellerId: null,
+                    commercialCycle: classification.nextCycle,
+                },
+                include: {
+                    batch: { select: { id: true, name: true } },
+                },
+            });
+
+            await tx.clientTimeline.create({
+                data: {
+                    clientId: client.id,
+                    cycle: client.commercialCycle || 1,
+                    previousStatus: client.bookStatus,
+                    newStatus: classification.nextBookStatus,
+                    previousSellerId: client.assignedSellerId,
+                    newSellerId: null,
+                    authorId: req.user?.id || null,
+                    authorRole: req.user?.role || null,
+                    action: classification.timelineAction,
+                    reason: classification.timelineReason,
+                    metadata: {
+                        scannedIdentifier: identifier,
+                        routingType: classification.routingType,
+                        routingLabel: classification.routingLabel,
+                        previousSellerId: client.assignedSellerId,
+                        previousSellerName: client.assignedSeller?.name || null,
+                        batchId: client.batchId,
+                        batchName: client.batch?.name || null,
+                    },
+                },
+            });
+
+            await recordOperationalAuditEvent(
+                {
+                    companyId: client.companyId,
+                    category: 'CONDITIONS',
+                    action: classification.auditAction,
+                    entityType: 'Client',
+                    entityId: client.id,
+                    entityReference: client.visibleCode || client.sequenceNumber || client.name,
+                    previousValues: {
+                        bookStatus: client.bookStatus,
+                        assignedSellerId: client.assignedSellerId,
+                        assignedSellerName: client.assignedSeller?.name || null,
+                    },
+                    newValues: {
+                        bookStatus: classification.nextBookStatus,
+                        assignedSellerId: null,
+                        routingType: classification.routingType,
+                        routingLabel: classification.routingLabel,
+                    },
+                    reason: classification.timelineReason,
+                    authorUserId: req.user?.id || null,
+                    authorName: req.user?.name || req.user?.cpf || 'Admin',
+                    authorRole: req.user?.role || null,
+                },
+                tx
+            );
+
+            return {
+                alreadyProcessed: false,
+                updated,
+                classification,
+                previousSellerId: client.assignedSellerId || null,
+            };
         });
 
-        await prisma.clientTimeline.create({
-          data: {
-            clientId: client.id,
-            cycle: currentCycle,
-            previousStatus: client.bookStatus,
-            newStatus: nextBookStatus,
-            previousSellerId: client.assignedSellerId,
-            newSellerId: null,
-            authorId: req.user?.id,
-            authorRole: req.user?.role,
-            action: 'RECEIVE_RETURN',
-            reason: isSecondNonSale
-              ? 'Devolução física da 2ª não-venda recebida pelo Admin; ficha encerrada definitivamente (descarte)'
-              : 'Devolução da 1ª não-venda recebida pelo Admin; ficha movida para estoque de rebolo',
-          },
-        });
+        let batchReturnProgress: {
+            sellerId: string | null;
+            batchId: string | null;
+            pendingCount: number;
+            scannedCount: number;
+            totalExpected: number;
+        } | null = null;
 
-        res.json(updated);
+        if (txOutcome.previousSellerId || txOutcome.updated.batchId) {
+            const effectiveCompanyId = txOutcome.updated.companyId;
+            const pendingCount = await prisma.client.count({
+                where: {
+                    ...(effectiveCompanyId ? { companyId: effectiveCompanyId } : {}),
+                    bookStatus: 'AWAITING_RETURN',
+                    ...(txOutcome.previousSellerId
+                        ? { assignedSellerId: txOutcome.previousSellerId }
+                        : {}),
+                    ...(txOutcome.updated.batchId ? { batchId: txOutcome.updated.batchId } : {}),
+                },
+            });
+            const scannedCount = await prisma.client.count({
+                where: {
+                    ...(effectiveCompanyId ? { companyId: effectiveCompanyId } : {}),
+                    ...(txOutcome.updated.batchId ? { batchId: txOutcome.updated.batchId } : {}),
+                    bookStatus: { in: ['IN_STOCK_REBOLO', 'IN_STOCK_VIRGIN', 'DISCARDED'] },
+                    timeline: {
+                        some: {
+                            action: {
+                                in: [
+                                    'RECEIVE_RETURN',
+                                    'RECEIVE_RETURN_TRAVEL_VIRGIN',
+                                    'RECEIVE_RETURN_DEFECT',
+                                ],
+                            },
+                            ...(txOutcome.previousSellerId
+                                ? { previousSellerId: txOutcome.previousSellerId }
+                                : {}),
+                        },
+                    },
+                },
+            });
+            batchReturnProgress = {
+                sellerId: txOutcome.previousSellerId,
+                batchId: txOutcome.updated.batchId,
+                pendingCount,
+                scannedCount,
+                totalExpected: pendingCount + scannedCount,
+            };
+        }
+
+        res.json({
+            ...txOutcome.updated,
+            success: true,
+            alreadyProcessed: txOutcome.alreadyProcessed,
+            routingType: txOutcome.classification.routingType,
+            routingLabel: txOutcome.classification.routingLabel,
+            message: txOutcome.alreadyProcessed
+                ? `Book já conferido anteriormente (${txOutcome.classification.routingLabel}).`
+                : `Devolução recebida: ${txOutcome.classification.routingLabel}.`,
+            client: txOutcome.updated,
+            batchReturnProgress,
+        });
     } catch (error: any) {
-        res.status(500).json({ error: error.message });
+        if (error && error.status && error.message) {
+            return res.status(error.status).json({ error: error.message });
+        }
+        console.error('Error in receive-return:', error);
+        res.status(500).json({ error: error.message || 'Erro ao receber devolução do book' });
     }
 });
 

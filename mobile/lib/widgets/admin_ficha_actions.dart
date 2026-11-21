@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
+import '../telas/tela_detalhes_cliente_vendedor.dart';
 
 const Color lumoraBgDark = Color(0xFF0D0714);
 const Color lumoraSurfaceDark = Color(0xFF160D24);
@@ -562,4 +563,111 @@ InputDecoration _dropdownDecoration() {
     ),
     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
   );
+}
+
+class AdminUniversalFichaMenu extends StatelessWidget {
+  final Map<String, dynamic> client;
+  final VoidCallback onActionDone;
+  final VoidCallback? onOpenHistory;
+  final bool showDelete;
+  final Color iconColor;
+  final double iconSize;
+
+  const AdminUniversalFichaMenu({
+    super.key,
+    required this.client,
+    required this.onActionDone,
+    this.onOpenHistory,
+    this.showDelete = true,
+    this.iconColor = Colors.white70,
+    this.iconSize = 18,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final canDelete = showDelete && isClientEligibleForIncompleteDeletion(client);
+
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_vert_rounded, color: iconColor, size: iconSize),
+      tooltip: 'Ações da Ficha',
+      color: lumoraSurfaceDark,
+      onSelected: (val) async {
+        if (val == 'view') {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SellerClientDetailScreen(
+                clientData: client,
+                isFotografo: true,
+                isAdmin: true,
+              ),
+            ),
+          );
+          onActionDone();
+        } else if (val == 'edit') {
+          await showAdminEditFichaDialog(context, client, onActionDone);
+        } else if (val == 'move') {
+          await showAdminMoveFichaDialog(context, client, onActionDone);
+        } else if (val == 'history') {
+          onOpenHistory?.call();
+        } else if (val == 'delete') {
+          await confirmAdminDeleteIncompleteFicha(context, client, onActionDone);
+        }
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'view',
+          child: Row(
+            children: [
+              Icon(Icons.visibility_rounded, size: 17, color: Color(0xFF4FC3F7)),
+              SizedBox(width: 8),
+              Text('Ver Ficha', style: TextStyle(color: Colors.white, fontSize: 13)),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'edit',
+          child: Row(
+            children: [
+              Icon(Icons.edit_outlined, size: 17, color: Color(0xFFD8B4FE)),
+              SizedBox(width: 8),
+              Text('Editar Dados', style: TextStyle(color: Colors.white, fontSize: 13)),
+            ],
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'move',
+          child: Row(
+            children: [
+              Icon(Icons.swap_horiz_rounded, size: 17, color: lumoraNeonPurple),
+              SizedBox(width: 8),
+              Text('Alterar / Mover', style: TextStyle(color: Colors.white, fontSize: 13)),
+            ],
+          ),
+        ),
+        if (onOpenHistory != null)
+          const PopupMenuItem(
+            value: 'history',
+            child: Row(
+              children: [
+                Icon(Icons.timeline_rounded, size: 17, color: Color(0xFF93C5FD)),
+                SizedBox(width: 8),
+                Text('Histórico / Rastreio', style: TextStyle(color: Colors.white, fontSize: 13)),
+              ],
+            ),
+          ),
+        if (canDelete)
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline_rounded, size: 17, color: Colors.redAccent),
+                SizedBox(width: 8),
+                Text('Excluir Ficha', style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }

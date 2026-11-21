@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 import '../utils/ui_helpers.dart';
 import '../widgets/authenticated_image.dart';
+import '../widgets/admin_ficha_actions.dart';
 
 class VisaoHistoricoVendasAdmin extends StatefulWidget {
   const VisaoHistoricoVendasAdmin({super.key});
@@ -236,6 +237,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
         sale: sale,
         currencyFormat: _currencyFormat,
         dateFormat: _dateFormat,
+        onActionDone: _executarBusca,
       ),
     );
   }
@@ -782,8 +784,23 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     );
   }
 
+  Map<String, dynamic> _normalizeClientForMenu(Map<String, dynamic> sale, Map<String, dynamic> client) {
+    final map = Map<String, dynamic>.from(client);
+    if ((map['id'] == null || map['id'].toString().isEmpty) && sale['clientId'] != null) {
+      map['id'] = sale['clientId'];
+    }
+    if ((map['city'] == null || map['city'].toString().isEmpty) && sale['city'] != null) {
+      map['city'] = sale['city'];
+    }
+    if (map['batchId'] == null && map['batch'] is Map && map['batch']['id'] != null) {
+      map['batchId'] = map['batch']['id'];
+    }
+    return map;
+  }
+
   Widget _buildSaleCard(Map<String, dynamic> sale) {
     final client = sale['client'] as Map<String, dynamic>? ?? {};
+    final clientForMenu = _normalizeClientForMenu(sale, client);
     final visibleCode = client['visibleCode']?.toString();
     final seq = client['sequenceNumber']?.toString();
     final fichaNum = sale['fichaNumber']?.toString();
@@ -869,6 +886,12 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                       fontSize: 14,
                     ),
                   ),
+                  if ((clientForMenu['id'] ?? '').toString().isNotEmpty)
+                    AdminUniversalFichaMenu(
+                      client: clientForMenu,
+                      onActionDone: _executarBusca,
+                      iconSize: 18,
+                    ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1038,11 +1061,13 @@ class _ModalDetalhesVenda extends StatelessWidget {
   final Map<String, dynamic> sale;
   final NumberFormat currencyFormat;
   final DateFormat dateFormat;
+  final VoidCallback? onActionDone;
 
   const _ModalDetalhesVenda({
     required this.sale,
     required this.currencyFormat,
     required this.dateFormat,
+    this.onActionDone,
   });
 
   void _abrirImagemEmZoom(BuildContext context, String url, String titulo) {
@@ -1094,6 +1119,16 @@ class _ModalDetalhesVenda extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final client = sale['client'] as Map<String, dynamic>? ?? {};
+    final clientForMenu = Map<String, dynamic>.from(client);
+    if ((clientForMenu['id'] == null || clientForMenu['id'].toString().isEmpty) && sale['clientId'] != null) {
+      clientForMenu['id'] = sale['clientId'];
+    }
+    if ((clientForMenu['city'] == null || clientForMenu['city'].toString().isEmpty) && sale['city'] != null) {
+      clientForMenu['city'] = sale['city'];
+    }
+    if (clientForMenu['batchId'] == null && clientForMenu['batch'] is Map && clientForMenu['batch']['id'] != null) {
+      clientForMenu['batchId'] = clientForMenu['batch']['id'];
+    }
     final visibleCode = client['visibleCode']?.toString();
     final seq = client['sequenceNumber']?.toString();
     final fichaNum = sale['fichaNumber']?.toString();
@@ -1196,6 +1231,16 @@ class _ModalDetalhesVenda extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if ((clientForMenu['id'] ?? '').toString().isNotEmpty)
+                      AdminUniversalFichaMenu(
+                        client: clientForMenu,
+                        onActionDone: () {
+                          if (Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                          }
+                          onActionDone?.call();
+                        },
+                      ),
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white54),
                       onPressed: () => Navigator.pop(context),

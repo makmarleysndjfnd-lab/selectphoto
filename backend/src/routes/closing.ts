@@ -93,6 +93,7 @@ interface CityPreviewCalculations {
   soldCount: number;
   totalSalesValue: number;
   pendingReceiptsCount: number;
+  pendingPhysicalReturnsCount: number;
   isAlreadyClosed: boolean;
   canClose: boolean;
   blockReason: string | null;
@@ -196,6 +197,10 @@ function calculateCityClosingStats(
     canClose = true;
   }
 
+  const pendingPhysicalReturnsCount = clients.filter(
+    (c) => c.bookStatus === 'AWAITING_RETURN'
+  ).length;
+
   return {
     city: trimmedCity,
     totalClients,
@@ -205,6 +210,7 @@ function calculateCityClosingStats(
     soldCount,
     totalSalesValue,
     pendingReceiptsCount,
+    pendingPhysicalReturnsCount,
     isAlreadyClosed,
     canClose,
     blockReason,
@@ -399,10 +405,19 @@ router.post('/cities', authenticateToken, async (req: AuthRequest, res: any) => 
       return closings;
     });
 
+    const pendingPhysicalReturnsCount = await prisma.client.count({
+      where: {
+        companyId,
+        assignedSellerId: sellerId,
+        bookStatus: 'AWAITING_RETURN',
+      },
+    });
+
     res.status(201).json({
       success: true,
       closings: result,
       count: result.length,
+      pendingPhysicalReturnsCount,
     });
   } catch (error: any) {
     if (error && error.status && error.message) {

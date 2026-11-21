@@ -19,12 +19,18 @@ import 'tela_sincronizacao.dart' as tela_sincronizacao;
 import '../widgets/authenticated_image.dart';
 import '../widgets/fullscreen_signature_screen.dart';
 import '../widgets/led_button.dart';
+import '../widgets/admin_ficha_actions.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
   final bool isFotografo;
-  const SellerClientDetailScreen(
-      {super.key, required this.clientData, this.isFotografo = false});
+  final bool isAdmin;
+  const SellerClientDetailScreen({
+    super.key,
+    required this.clientData,
+    this.isFotografo = false,
+    this.isAdmin = false,
+  });
 
   @override
   // ignore: library_private_types_in_public_api
@@ -154,6 +160,14 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                   ],
                 ),
               ),
+              if (widget.isAdmin)
+                AdminUniversalFichaMenu(
+                  client: client,
+                  iconColor: const Color(0xFF4FC3F7),
+                  onActionDone: () {
+                    if (mounted) Navigator.pop(context, true);
+                  },
+                ),
             ],
           ),
         ),
@@ -240,6 +254,14 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
                 }),
                 tooltip: 'Envios Pendentes',
               ),
+              if (widget.isAdmin)
+                AdminUniversalFichaMenu(
+                  client: client,
+                  iconColor: const Color(0xFF4FC3F7),
+                  onActionDone: () {
+                    if (mounted) Navigator.pop(context, true);
+                  },
+                ),
             ],
           ),
         ),

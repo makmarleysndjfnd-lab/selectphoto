@@ -774,7 +774,27 @@ router.get('/rebolos', authenticateToken, async (req: AuthRequest, res: Response
     const validityDays = normalizeReboloValidityDays(company?.reboloValidityDays);
     const now = new Date();
 
-    const enrichedRebolos = clients.map((client) => {
+    const filteredReboloClients = clients.filter((client) => {
+      if (client.bookStatus === 'AWAITING_RETURN') {
+        const activeNonSales = Array.isArray(client.nonSales)
+          ? client.nonSales.filter((ns: any) => !ns.supersededAt)
+          : [];
+        const latestNs =
+          activeNonSales.length > 0
+            ? activeNonSales[activeNonSales.length - 1]
+            : client.nonSales?.[client.nonSales.length - 1];
+        const normalizedReason = String(latestNs?.reason || '')
+          .trim()
+          .toUpperCase()
+          .replace(/\s+/g, ' ');
+        if (normalizedReason === 'EM VIAGEM' || normalizedReason === 'EM_VIAGEM') {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const enrichedRebolos = filteredReboloClients.map((client) => {
       const enteredAt = resolveReboloEnteredAt(client);
       const reboloValidity = calculateReboloValidityStatus(enteredAt, validityDays, now);
       const reboloOrigin = resolveReboloOrigin(client);

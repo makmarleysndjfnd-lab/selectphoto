@@ -4,7 +4,18 @@ import '../servicos/servico_api.dart';
 import '../widgets/admin_ficha_actions.dart';
 
 class VisaoRotasChegada extends StatefulWidget {
-  const VisaoRotasChegada({super.key});
+  final VoidCallback? onOpenFechamentos;
+  final VoidCallback? onOpenEventosIa;
+  final VoidCallback? onOpenCobrancasDia;
+  final VoidCallback? onOpenConferenciaDia;
+
+  const VisaoRotasChegada({
+    super.key,
+    this.onOpenFechamentos,
+    this.onOpenEventosIa,
+    this.onOpenCobrancasDia,
+    this.onOpenConferenciaDia,
+  });
 
   @override
   State<VisaoRotasChegada> createState() => _VisaoRotasChegadaState();
@@ -16,6 +27,11 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
   bool _isLoading = true;
   Timer? _pollTimer;
   bool _isScreenVisible = true;
+
+  // Contadores diários para os atalhos da Home (-03:00)
+  int _cobrancasDiaCount = 0;
+  int _conferenciaDivergentTodayCount = 0;
+  int _conferenciaTotalTodayCount = 0;
 
   // Key: batchId
   // Value: Map containing batch details, counts, cities, and its active clients list
@@ -70,10 +86,28 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
       final results = await Future.wait([
         _api.getBookBatches(),
         _api.getCompanyUsers(),
+        _api
+            .getCreditAgreements(status: 'DUE_TODAY')
+            .catchError((_) => <dynamic>[]),
+        _api
+            .listBuyerConfirmationsReview(todayOnly: true)
+            .catchError((_) => <String, dynamic>{}),
       ]);
 
-      final rawBatches = List<dynamic>.from(results[0]);
-      final users = List<dynamic>.from(results[1]);
+      final rawBatches = List<dynamic>.from(results[0] as List);
+      final users = List<dynamic>.from(results[1] as List);
+      final dueTodayAgreements = List<dynamic>.from(results[2] as List);
+      final reviewTodayRes = results[3] is Map
+          ? Map<String, dynamic>.from(results[3] as Map)
+          : <String, dynamic>{};
+      final reviewSummary = reviewTodayRes['summary'] is Map
+          ? Map<String, dynamic>.from(reviewTodayRes['summary'] as Map)
+          : <String, dynamic>{};
+      final int cobrancasCount = dueTodayAgreements.length;
+      final int divTodayCount =
+          int.tryParse((reviewSummary['divergentCount'] ?? 0).toString()) ?? 0;
+      final int totalTodayCount =
+          int.tryParse((reviewSummary['total'] ?? 0).toString()) ?? 0;
 
       final sellers = users.where((u) {
         final role = (u['role'] ?? '').toString().toUpperCase();
@@ -184,6 +218,9 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
         setState(() {
           _dadosPorLote = agrupado;
           _sellers = sellers;
+          _cobrancasDiaCount = cobrancasCount;
+          _conferenciaDivergentTodayCount = divTodayCount;
+          _conferenciaTotalTodayCount = totalTodayCount;
           _isLoading = false;
         });
       }
@@ -583,6 +620,9 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
             final awaitingClients = clients
                 .where((c) => c['bookStatus'] == 'AWAITING_RELEASE')
                 .toList();
+            final inProductionClients = clients
+                .where((c) => c['bookStatus'] == 'CREATED')
+                .toList();
             final inStockClients = clients
                 .where((c) => c['bookStatus'] == 'IN_STOCK')
                 .toList();
@@ -721,6 +761,60 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                                   ],
                                 ),
                               ),
+                            ],
+
+                            if (inProductionClients.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  const Icon(Icons.photo_camera_outlined,
+                                      color: Color(0xFFF59E0B), size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Em Produção (${inProductionClients.length})',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ...inProductionClients.map((client) {
+                                final code = client['visibleCode'] ??
+                                    client['sequenceNumber'] ??
+                                    'S/N';
+                                final name = client['name'] ?? 'Cliente';
+                                final city = client['city'] ?? 'Sem Cidade';
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: lumoraBgDark,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: const Color(0xFFF59E0B).withOpacity(0.25)),
+                                  ),
+                                  child: ListTile(
+                                    dense: true,
+                                    title: Text('$code · $name',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13)),
+                                    subtitle: Text('Em Produção · $city',
+                                        style: const TextStyle(
+                                            color: Color(0xFFF59E0B), fontSize: 11)),
+                                    trailing: _buildFichaPopupMenu(
+                                      client: client,
+                                      canDeleteIncomplete: true,
+                                      onActionDone: () async {
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        await _loadData(silent: true);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }),
                             ],
 
                             if (awaitingClients.isNotEmpty) ...[
@@ -918,6 +1012,60 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                               ),
                             ],
 
+                            if (inProductionClients.isNotEmpty) ...[
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  const Icon(Icons.photo_camera_outlined,
+                                      color: Color(0xFFF59E0B), size: 18),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Em Produção (${inProductionClients.length})',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              ...inProductionClients.map((client) {
+                                final code = client['visibleCode'] ??
+                                    client['sequenceNumber'] ??
+                                    'S/N';
+                                final name = client['name'] ?? 'Cliente';
+                                final city = client['city'] ?? 'Sem Cidade';
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: lumoraBgDark,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color: const Color(0xFFF59E0B).withOpacity(0.25)),
+                                  ),
+                                  child: ListTile(
+                                    dense: true,
+                                    title: Text('$code · $name',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13)),
+                                    subtitle: Text('Em Produção · $city',
+                                        style: const TextStyle(
+                                            color: Color(0xFFF59E0B), fontSize: 11)),
+                                    trailing: _buildFichaPopupMenu(
+                                      client: client,
+                                      canDeleteIncomplete: true,
+                                      onActionDone: () async {
+                                        if (ctx.mounted) Navigator.pop(ctx);
+                                        await _loadData(silent: true);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ],
+
                             if (awaitingClients.isNotEmpty) ...[
                               const SizedBox(height: 18),
                               Row(
@@ -1051,59 +1199,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     required bool canDeleteIncomplete,
     required Future<void> Function() onActionDone,
   }) {
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 18),
-      color: lumoraSurfaceDark,
-      onSelected: (value) async {
-        if (value == 'edit') {
-          await showAdminEditFichaDialog(context, client, () {
-            onActionDone();
-          });
-        } else if (value == 'move') {
-          await showAdminMoveFichaDialog(context, client, () {
-            onActionDone();
-          });
-        } else if (value == 'delete') {
-          await confirmAdminDeleteIncompleteFicha(context, client, () {
-            onActionDone();
-          });
-        }
+    return AdminUniversalFichaMenu(
+      client: client,
+      showDelete: canDeleteIncomplete,
+      onActionDone: () {
+        onActionDone();
       },
-      itemBuilder: (_) => [
-        const PopupMenuItem(
-          value: 'edit',
-          child: Row(
-            children: [
-              Icon(Icons.edit_outlined, color: lumoraNeonPurple, size: 16),
-              SizedBox(width: 8),
-              Text('Editar dados', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'move',
-          child: Row(
-            children: [
-              Icon(Icons.swap_horiz_rounded, color: Color(0xFFD8B4FE), size: 16),
-              SizedBox(width: 8),
-              Text('Mover (Lote / Vendedor)',
-                  style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-        if (canDeleteIncomplete)
-          const PopupMenuItem(
-            value: 'delete',
-            child: Row(
-              children: [
-                Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
-                SizedBox(width: 8),
-                Text('Excluir ficha',
-                    style: TextStyle(color: Colors.redAccent, fontSize: 13)),
-              ],
-            ),
-          ),
-      ],
     );
   }
 
@@ -1441,6 +1542,200 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     );
   }
 
+  Widget _buildQuickActionTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color accentColor,
+    String? badgeText,
+    VoidCallback? onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: lumoraSurfaceDark,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: accentColor.withOpacity(0.55),
+              width: 1.3,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: accentColor.withOpacity(0.16),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: accentColor.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: accentColor.withOpacity(0.4)),
+                    ),
+                    child: Icon(icon, color: accentColor, size: 20),
+                  ),
+                  if (badgeText != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: accentColor.withOpacity(0.22),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: accentColor.withOpacity(0.7)),
+                      ),
+                      child: Text(
+                        badgeText,
+                        style: TextStyle(
+                          color: accentColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFFD8B4FE),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHomeQuickActionsSection() {
+    final bool hasDivergence = _conferenciaDivergentTodayCount > 0;
+    final Color confColor =
+        hasDivergence ? const Color(0xFFEF4444) : const Color(0xFF38BDF8);
+    final String confBadge = hasDivergence
+        ? '$_conferenciaDivergentTodayCount div.'
+        : '$_conferenciaTotalTodayCount hoje';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10),
+            child: Text(
+              'ATALHOS OPERACIONAIS DO DIA',
+              style: TextStyle(
+                color: Color(0xFFD8B4FE),
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.1,
+              ),
+            ),
+          ),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1.32,
+            children: [
+              _buildQuickActionTile(
+                icon: Icons.account_balance_wallet_rounded,
+                title: 'Fechamentos',
+                subtitle: 'Cidades & Repasses',
+                accentColor: lumoraNeonPurple,
+                onTap: widget.onOpenFechamentos,
+              ),
+              _buildQuickActionTile(
+                icon: Icons.auto_awesome,
+                title: 'Eventos IA',
+                subtitle: 'Radar & Captação',
+                accentColor: const Color(0xFFC084FC),
+                onTap: widget.onOpenEventosIa,
+              ),
+              _buildQuickActionTile(
+                icon: Icons.payments_rounded,
+                title: 'Cobranças do Dia',
+                subtitle: 'Vence Hoje (-03:00)',
+                accentColor: _cobrancasDiaCount > 0
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF22C55E),
+                badgeText: '$_cobrancasDiaCount',
+                onTap: widget.onOpenCobrancasDia,
+              ),
+              _buildQuickActionTile(
+                icon: Icons.fact_check_rounded,
+                title: 'Conferência do Dia',
+                subtitle: hasDivergence
+                    ? '$_conferenciaTotalTodayCount atend. hoje'
+                    : 'Auditoria QR Hoje',
+                accentColor: confColor,
+                badgeText: confBadge,
+                onTap: widget.onOpenConferenciaDia,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Icon(Icons.local_shipping_rounded,
+                  color: lumoraNeonPurple, size: 18),
+              const SizedBox(width: 8),
+              const Text(
+                'ROTAS E CHEGADA DA GRÁFICA',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.9,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${_dadosPorLote.length} lote(s)',
+                style: const TextStyle(color: Colors.white54, fontSize: 11),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   // ── BUILD PRINCIPAL ───────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -1448,7 +1743,7 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
       backgroundColor: lumoraBgDark,
       appBar: AppBar(
         backgroundColor: lumoraSurfaceDark,
-        title: const Text('Rotas da Gráfica',
+        title: const Text('Rotas e Chegada',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
@@ -1465,11 +1760,17 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
         backgroundColor: const Color(0xFF1A1A2E),
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: Color(0xFFCE93D8)))
-            : _dadosPorLote.isEmpty
-                ? ListView(
-                    children: const [
-                      SizedBox(height: 80),
-                      Center(
+            : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: 1 + (_dadosPorLote.isEmpty ? 1 : _dadosPorLote.length),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return _buildHomeQuickActionsSection();
+                  }
+                  if (_dadosPorLote.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
                         child: Column(
                           children: [
                             Icon(Icons.check_circle_outline,
@@ -1478,22 +1779,18 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                             Text(
                               'Nenhum lote ativo em produção,\ngráfica ou estoque no momento.',
                               textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.white54, fontSize: 16),
+                              style: TextStyle(color: Colors.white54, fontSize: 15),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _dadosPorLote.length,
-                    itemBuilder: (context, index) {
-                      final batchId = _dadosPorLote.keys.elementAt(index);
-                      final data = _dadosPorLote[batchId]!;
-                      return _buildCompactBatchCard(batchId, data);
-                    },
-                  ),
+                    );
+                  }
+                  final batchId = _dadosPorLote.keys.elementAt(index - 1);
+                  final data = _dadosPorLote[batchId]!;
+                  return _buildCompactBatchCard(batchId, data);
+                },
+              ),
       ),
     );
   }

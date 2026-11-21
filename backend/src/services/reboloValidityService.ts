@@ -82,6 +82,16 @@ export function calculateReboloValidityStatus(
 }
 
 export function resolveReboloEnteredAt(client: any): Date {
+  const timeline = Array.isArray(client?.timeline) ? client.timeline : [];
+  const physicalReturnEntry = [...timeline]
+    .reverse()
+    .find(
+      (t: any) => t?.action === 'RECEIVE_RETURN' && t?.newStatus === 'IN_STOCK_REBOLO'
+    );
+  if (physicalReturnEntry?.timestamp || physicalReturnEntry?.createdAt) {
+    return new Date(physicalReturnEntry.timestamp || physicalReturnEntry.createdAt);
+  }
+
   const nonSales = Array.isArray(client?.nonSales) ? client.nonSales : [];
   if (nonSales.length > 0) {
     const sorted = [...nonSales]
@@ -92,7 +102,6 @@ export function resolveReboloEnteredAt(client: any): Date {
     }
   }
 
-  const timeline = Array.isArray(client?.timeline) ? client.timeline : [];
   const reboloEntry = timeline.find(
     (t: any) => t?.newStatus === 'AWAITING_RETURN' || t?.newStatus === 'IN_STOCK_REBOLO'
   );

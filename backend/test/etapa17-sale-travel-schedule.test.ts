@@ -315,12 +315,12 @@ test('Etapa 17 — Não-Venda Em Viagem (Book Virgem -> Novo Lote) e Agenda -03:
       nonSaleRes.status === 200 || nonSaleRes.status === 201,
       `Expected 200 or 201, got ${nonSaleRes.status}: ${JSON.stringify(nonSaleRes.json)}`
     );
-    assert.equal(nonSaleRes.json?.bookStatus, 'IN_STOCK_VIRGIN');
+    assert.equal(nonSaleRes.json?.bookStatus, 'AWAITING_RETURN');
 
     const afterNonSaleClient = await prisma.client.findUnique({
       where: { id: clientTravel.id },
     });
-    assert.equal(afterNonSaleClient?.bookStatus, 'IN_STOCK_VIRGIN');
+    assert.equal(afterNonSaleClient?.bookStatus, 'AWAITING_RETURN');
     assert.equal(afterNonSaleClient?.outcomeStatus, 'NON_SALE');
     assert.equal(afterNonSaleClient?.assignedSellerId, sellerAId);
 
@@ -331,7 +331,7 @@ test('Etapa 17 — Não-Venda Em Viagem (Book Virgem -> Novo Lote) e Agenda -03:
     assert.equal(closingRes.status, 200);
     assert.equal(Number(closingRes.json?.nonSalesCount || 0), 1);
 
-    // Nunca vai para a fila de Rebolo
+    // Nunca vai para a fila de Rebolo mesmo antes da bipagem física
     const reboloRes = await apiJson(baseUrl, '/api/clients/rebolos', {
       token: adminAToken,
     });
@@ -339,19 +339,32 @@ test('Etapa 17 — Não-Venda Em Viagem (Book Virgem -> Novo Lote) e Agenda -03:
     const reboloIds = (reboloRes.json || []).map((r: any) => r.id);
     assert.equal(reboloIds.includes(clientTravel.id), false);
 
-    // Conferência de retorno administrativo: como já foi direto para IN_STOCK_VIRGIN, não entra em AWAITING_RETURN/Rebolo (retorna 400)
+    // Aparece em pendências de devolução física aguardando leitura QR na base
+    const pendingRes = await apiJson(baseUrl, '/api/books/pending-returns', {
+      token: adminAToken,
+    });
+    assert.equal(pendingRes.status, 200);
+    assert.ok(
+      (pendingRes.json?.groups || []).some((g: any) =>
+        (g.items || []).some((i: any) => i.id === clientTravel.id)
+      ),
+      'Ficha Em Viagem deve aguardar bipagem física em /api/books/pending-returns'
+    );
+
+    // Admin bipa devolução física na base -> roteia automaticamente para Book Virgem (nunca Rebolo)
     const receiveReturnRes = await apiJson(baseUrl, '/api/books/receive-return', {
       method: 'POST',
       token: adminAToken,
       body: {
-        clientId: clientTravel.id,
-        condition: 'VIRGIN',
-        reason: 'Devolução após fechamento com motivo Em Viagem',
+        qrCode: clientTravel.uuid,
+        reason: 'Devolução física com motivo Em Viagem',
       },
     });
-    assert.equal(receiveReturnRes.status, 400);
-    const checkStillVirgin = await prisma.client.findUnique({ where: { id: clientTravel.id } });
-    assert.equal(checkStillVirgin?.bookStatus, 'IN_STOCK_VIRGIN');
+    assert.equal(receiveReturnRes.status, 200);
+    assert.equal(receiveReturnRes.json?.routingType, 'EM_VIAGEM');
+    const checkNowVirgin = await prisma.client.findUnique({ where: { id: clientTravel.id } });
+    assert.equal(checkNowVirgin?.bookStatus, 'IN_STOCK_VIRGIN');
+    assert.equal(checkNowVirgin?.assignedSellerId, null);
 
     // Aparece na fila de Em Viagem da Empresa A e NÃO na Empresa B
     const travelListARes = await apiJson(baseUrl, '/api/books/travel-virgin', {
@@ -412,7 +425,8 @@ test('Etapa 17 — Não-Venda Em Viagem (Book Virgem -> Novo Lote) e Agenda -03:
     const timeline = await prisma.clientTimeline.findMany({
       where: { clientId: clientTravel.id },
     });
-    assert.ok(timeline.some((t) => t.action === 'NON_SALE_TRAVEL_VIRGIN'));
+    assert.ok(timeline.some((t) => t.action === 'NON_SALE_TRAVEL_PENDING_RETURN'));
+    assert.ok(timeline.some((t) => t.action === 'RECEIVE_RETURN_TRAVEL_VIRGIN'));
     assert.ok(timeline.some((t) => t.action === 'TRAVEL_BATCH_CREATED'));
 
     const audit = await prisma.operationalAuditEvent.findFirst({

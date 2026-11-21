@@ -3,7 +3,8 @@ import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 
 class VisaoConferenciaAdmin extends StatefulWidget {
-  const VisaoConferenciaAdmin({super.key});
+  final bool initialTodayOnly;
+  const VisaoConferenciaAdmin({super.key, this.initialTodayOnly = false});
 
   @override
   State<VisaoConferenciaAdmin> createState() => _VisaoConferenciaAdminState();
@@ -17,6 +18,7 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   Map<String, dynamic>? _summary;
   String? _selectedSellerId;
   String _selectedFilter = 'ALL'; // ALL, DIVERGENT, CONFIRMED, SKIPPED, PENDING
+  bool _todayOnly = false;
 
   final NumberFormat _currencyFormat =
       NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
@@ -32,7 +34,17 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
   @override
   void initState() {
     super.initState();
+    _todayOnly = widget.initialTodayOnly;
     _carregarConferencias();
+  }
+
+  @override
+  void didUpdateWidget(covariant VisaoConferenciaAdmin oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialTodayOnly != oldWidget.initialTodayOnly) {
+      setState(() => _todayOnly = widget.initialTodayOnly);
+      _carregarConferencias();
+    }
   }
 
   @override
@@ -69,6 +81,7 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
         hasDivergence: hasDivergence,
         isSkipped: isSkipped,
         status: status,
+        todayOnly: _todayOnly ? true : null,
       );
 
       final groupsList = (res['sellerGroups'] as List<dynamic>?) ??
@@ -359,6 +372,26 @@ class _VisaoConferenciaAdminState extends State<VisaoConferenciaAdmin> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
+            FilterChip(
+              label: const Text('Somente Hoje (-03:00)'),
+              selected: _todayOnly,
+              selectedColor: const Color(0xFF38BDF8).withOpacity(0.28),
+              backgroundColor: const Color(0xFF221638),
+              checkmarkColor: const Color(0xFF38BDF8),
+              labelStyle: TextStyle(
+                color: _todayOnly ? const Color(0xFF38BDF8) : Colors.white70,
+                fontSize: 12,
+                fontWeight: _todayOnly ? FontWeight.bold : FontWeight.normal,
+              ),
+              side: BorderSide(
+                color: _todayOnly ? const Color(0xFF38BDF8) : Colors.white12,
+              ),
+              onSelected: (selected) {
+                setState(() => _todayOnly = selected);
+                _carregarConferencias();
+              },
+            ),
+            const SizedBox(width: 8),
             _buildFilterChip('Todos', 'ALL'),
             const SizedBox(width: 8),
             _buildFilterChip('Divergências', 'DIVERGENT', isAlert: true),

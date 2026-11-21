@@ -1651,11 +1651,8 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
 
       const isTravelReason = isTravelNonSaleReason(reason);
 
-      // 4. Idempotência: se já é não-venda aguardando devolução (ou Em Viagem virgem) neste ciclo para o mesmo vendedor
-      if (
-        client.outcomeStatus === 'NON_SALE' &&
-        (client.bookStatus === 'AWAITING_RETURN' || client.bookStatus === 'IN_STOCK_VIRGIN')
-      ) {
+      // 4. Idempotência: se já é não-venda aguardando devolução física neste ciclo para o mesmo vendedor
+      if (client.outcomeStatus === 'NON_SALE' && client.bookStatus === 'AWAITING_RETURN') {
         const activeNonSale = await tx.nonSale.findFirst({
           where: {
             clientId,
@@ -1697,8 +1694,9 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
         },
       });
 
-      // Regra "Em Viagem": NÃO vai para Rebolo; retorna como book virgem aguardando novo lote operacional
-      const targetBookStatus = isTravelReason ? 'IN_STOCK_VIRGIN' : 'AWAITING_RETURN';
+      // Etapa 21: Tanto não-venda comum quanto "Em Viagem" permanecem com pendência física aberta (AWAITING_RETURN)
+      // até serem bipados por QR Code na base (receive-return), evitando baixa antecipada em estoque.
+      const targetBookStatus = 'AWAITING_RETURN';
 
       // 7. Atualizar Client
       const updatedClient = await tx.client.update({
@@ -1721,9 +1719,9 @@ router.post('/non-sale', authenticateToken, async (req: AuthRequest, res: any) =
           newSellerId: client.assignedSellerId,
           authorId: sellerId,
           authorRole: req.user?.role,
-          action: isTravelReason ? 'NON_SALE_TRAVEL_VIRGIN' : 'NON_SALE',
+          action: isTravelReason ? 'NON_SALE_TRAVEL_PENDING_RETURN' : 'NON_SALE',
           reason: isTravelReason
-            ? 'Em Viagem — retorno como book virgem (sem envio para Rebolo)'
+            ? 'Em Viagem — aguardando devolução física na base (sem envio para Rebolo)'
             : String(reason).trim(),
         },
       });
@@ -2100,12 +2098,32 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
     return res.status(403).json({ error: 'Acesso restrito à administração da empresa' });
   }
 
-  const { status, batchId, sellerId, hasDivergence, isSkipped, groupBy } = req.query as Record<string, string | undefined>;
+  const { status, batchId, sellerId, hasDivergence, isSkipped, groupBy, todayOnly, date } = req.query as Record<string, string | undefined>;
 
   try {
+    const andConditions: Prisma.BuyerPurchaseConfirmationWhereInput[] = [{ companyId }];
     const whereClause: Prisma.BuyerPurchaseConfirmationWhereInput = {
-      companyId,
+      AND: andConditions,
     };
+
+    if (todayOnly === 'true' || (date && date.trim())) {
+      let brYmd: string;
+      const m = String(date || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) {
+        brYmd = `${m[1]}-${m[2]}-${m[3]}`;
+      } else {
+        const brNow = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        brYmd = `${brNow.getUTCFullYear()}-${String(brNow.getUTCMonth() + 1).padStart(2, '0')}-${String(brNow.getUTCDate()).padStart(2, '0')}`;
+      }
+      const dayStart = new Date(`${brYmd}T00:00:00.000-03:00`);
+      const dayEnd = new Date(`${brYmd}T23:59:59.999-03:00`);
+      andConditions.push({
+        OR: [
+          { usedAt: { gte: dayStart, lte: dayEnd } },
+          { createdAt: { gte: dayStart, lte: dayEnd } },
+        ],
+      });
+    }
 
     if (status) {
       const upperStatus = String(status).trim().toUpperCase();
@@ -2125,10 +2143,12 @@ router.get('/buyer-confirmations/review', authenticateToken, async (req: AuthReq
       whereClause.sellerId = sellerId;
     }
     if (batchId) {
-      whereClause.OR = [
-        { operationalBatchId: batchId },
-        { sale: { client: { batchId } } },
-      ];
+      andConditions.push({
+        OR: [
+          { operationalBatchId: batchId },
+          { sale: { client: { batchId } } },
+        ],
+      });
     }
 
     const records = await prisma.buyerPurchaseConfirmation.findMany({
