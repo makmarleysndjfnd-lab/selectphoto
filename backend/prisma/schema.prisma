@@ -34,6 +34,8 @@ model Company {
   reboloValidityDays      Int       @default(365)
   companyPixKey           String?
   companyPixKeyType       String?
+  advanceAlertLimitCents  Int       @default(50000)
+  advanceAlertDays        Int       @default(7)
 
   users                User[]
   teams                Team[]
@@ -83,6 +85,7 @@ model Company {
   buyerConfirmations           BuyerPurchaseConfirmation[]
   batchCommissionAdjustments   BatchCommissionAdjustment[]
   negativationRecords          CreditNegativationRecord[]
+  staffAdvances                StaffAdvanceEntry[]
 }
 
 model Team {
@@ -187,6 +190,8 @@ model User {
   bookTransfersFrom           BookTransfer[]                 @relation("BookTransfersFrom")
   bookTransfersTo             BookTransfer[]                 @relation("BookTransfersTo")
   bookTransfersInitiated      BookTransfer[]                 @relation("BookTransfersInitiated")
+  staffAdvancesOwned          StaffAdvanceEntry[]            @relation("StaffAdvanceOwner")
+  staffAdvancesCreated        StaffAdvanceEntry[]            @relation("StaffAdvanceCreator")
   sellerBlocked               Boolean                        @default(false)
   sellerBlockedReason         String?
   sellerBlockedAt             DateTime?
@@ -626,6 +631,7 @@ model BookBatch {
   company        Company? @relation(fields: [companyId], references: [id])
   clients        Client[]
   commissionAdjustments BatchCommissionAdjustment[]
+  staffAdvances         StaffAdvanceEntry[]
 }
 
 model StateRadarCache {
@@ -1868,6 +1874,34 @@ model CreditNegativationRecord {
   @@index([companyId, status])
   @@index([agreementId, status])
   @@index([agreementId, createdAt])
+}
+
+model StaffAdvanceEntry {
+  id               String    @id @default(uuid())
+  companyId        String
+  userId           String
+  profileRole      String    // SELLER | PHOTOGRAPHER
+  category         String    // CLOSING_SHORTFALL | PERSONAL_ADVANCE | ROUTE_ADVANCE | ADJUSTMENT_DIVERGENCE | TRIP_EVENT_ADVANCE | ROUTE_EXPENSE | SETTLEMENT
+  direction        String    // DEBIT | CREDIT
+  amountCents      Int
+  dueDate          DateTime?
+  notes            String?
+  receiptUrl       String?
+  signatureBase64  String?
+  batchId          String?
+  closingReference String?
+  createdById      String?
+  createdAt        DateTime  @default(now())
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      User       @relation("StaffAdvanceOwner", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?      @relation("StaffAdvanceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  batch     BookBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, profileRole, userId])
+  @@index([companyId, userId, createdAt])
+  @@index([closingReference])
+  @@unique([companyId, closingReference, direction])
 }
 
 

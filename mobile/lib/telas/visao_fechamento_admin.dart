@@ -47,7 +47,6 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
   List<String> _selectedSellersCustom = [];
   DateTimeRange? _selectedDateRangeCustom;
   String? _selectedCityCustom;
-  bool _isRepasseSubmitting = false;
   bool _hasExecutedCustomSearch = false;
   Future<Map<String, dynamic>>? _customMetricsFuture;
 
@@ -613,230 +612,15 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                           ? Colors.redAccent
                           : Colors.greenAccent),
                 const Divider(color: Colors.white24, height: 24),
-                if (direction == 'COMPANY_PAYS_SELLER' && saldoFinal > 0) ...[
-                  _infoRow('Comissão a Pagar ao Vendedor (Final)',
-                      'R\$ ${saldoFinal.toStringAsFixed(2)}',
-                      color: Colors.green),
-                  const SizedBox(height: 10),
-                  Builder(builder: (context) {
-                    final sellerPixKey =
-                        data['sellerPixKey']?.toString().trim() ?? '';
-                    return Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Container(
-                          constraints: BoxConstraints(
-                            maxWidth: MediaQuery.sizeOf(context).width - 104,
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withOpacity(0.14),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                                color: Colors.greenAccent.withOpacity(0.45)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.pix,
-                                  color: Colors.greenAccent, size: 15),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: Text(
-                                  'Pix do Vendedor: ${sellerPixKey.isNotEmpty ? sellerPixKey : 'não cadastrado'}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                              if (sellerPixKey.isNotEmpty) ...[
-                                const SizedBox(width: 8),
-                                InkWell(
-                                  onTap: () {
-                                    Clipboard.setData(
-                                        ClipboardData(text: sellerPixKey));
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                            content: Text(
-                                                'Pix do vendedor copiado!')));
-                                  },
-                                  child: const Icon(Icons.copy,
-                                      color: Colors.greenAccent, size: 15),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  }),
-                  const SizedBox(height: 16),
-                  LedButton(
-                      onPressed: () async {
-                        try {
-                          if (_isRepasseSubmitting) return;
-                          setState(() => _isRepasseSubmitting = true);
-                          await ApiService().payRepasse(
-                              _selectedSeller!, saldoFinal,
-                              direction: 'COMPANY_PAYS_SELLER');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      'Pagamento registrado com sucesso!')));
-                          setState(() {});
-                        } catch (e) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Erro: $e')));
-                        } finally {
-                          if (mounted)
-                            setState(() => _isRepasseSubmitting = false);
-                        }
-                      },
-                      style: LedButton.styleFrom(backgroundColor: Colors.green),
-                      child: const Text('Registrar Pagamento')),
-                ] else if (direction == 'SELLER_PAYS_COMPANY' &&
-                    saldoFinal > 0) ...[
-                  Builder(builder: (context) {
-                    final companyPixKey =
-                        (data['companyPixKey'] ?? data['adminPixKey'])
-                                ?.toString()
-                                .trim() ??
-                            '';
-                    final companyPixKeyType =
-                        data['companyPixKeyType']?.toString().trim() ?? '';
-                    final hasCompanyPix = companyPixKey.isNotEmpty;
-                    final typeLabel = companyPixKeyType.isNotEmpty
-                        ? ' ($companyPixKeyType)'
-                        : '';
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Repasse Pendente (Vendedor → Empresa)',
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 14)),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Container(
-                              constraints: BoxConstraints(
-                                maxWidth: MediaQuery.sizeOf(context).width - 104,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.white12,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                    color: const Color(0xFFA855F7)
-                                        .withOpacity(0.45)),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.pix,
-                                      color: Color(0xFFD8B4FE), size: 15),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      'Pix da Empresa$typeLabel: ${hasCompanyPix ? companyPixKey : 'não cadastrado'}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600),
-                                    ),
-                                  ),
-                                  if (hasCompanyPix) ...[
-                                    const SizedBox(width: 8),
-                                    InkWell(
-                                      onTap: () {
-                                        Clipboard.setData(ClipboardData(
-                                            text: companyPixKey));
-                                        ScaffoldMessenger.of(context)
-                                            .showSnackBar(const SnackBar(
-                                                content: Text(
-                                                    'Pix da Empresa copiado!')));
-                                      },
-                                      child: const Icon(Icons.copy,
-                                          color: Color(0xFFD8B4FE), size: 15),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            Text('R\$ ${saldoFinal.abs().toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                    color: Colors.redAccent,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold)),
-                            TextButton.icon(
-                              onPressed: () {
-                                showCompanyPixKeyDialog(
-                                  context,
-                                  initialKey: companyPixKey,
-                                  initialType: companyPixKeyType,
-                                  onSaved: () {
-                                    if (mounted) setState(() {});
-                                  },
-                                );
-                              },
-                              icon: const Icon(Icons.edit_outlined,
-                                  size: 15, color: Color(0xFFD8B4FE)),
-                              label: Text(
-                                hasCompanyPix
-                                    ? 'Editar Pix da Empresa'
-                                    : 'Cadastrar Pix da Empresa',
-                                style: const TextStyle(
-                                    color: Color(0xFFD8B4FE),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  }),
-                  const SizedBox(height: 16),
-                  LedButton(
-                      onPressed: () async {
-                        try {
-                          if (_isRepasseSubmitting) return;
-                          setState(() => _isRepasseSubmitting = true);
-                          await ApiService().payRepasse(
-                              _selectedSeller!, saldoFinal.abs(),
-                              direction: 'SELLER_PAYS_COMPANY');
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content:
-                                      Text('Repasse registrado com sucesso!')));
-                          setState(() {});
-                        } catch (e) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Erro: $e')));
-                        } finally {
-                          if (mounted)
-                            setState(() => _isRepasseSubmitting = false);
-                        }
-                      },
-                      style: LedButton.styleFrom(
-                          backgroundColor: Colors.redAccent),
-                      child: const Text('Confirmar Recebimento de Repasse',
-                          style: TextStyle(color: Colors.white))),
-                ] else ...[
-                  _infoRow('Status', 'Tudo Quitado', color: Colors.blueAccent),
-                ],
+                _VendedorClosingRepasseSection(
+                  sellerId: _selectedSeller!,
+                  data: data,
+                  direction: direction,
+                  saldoFinal: saldoFinal,
+                  onSubmitted: () {
+                    if (mounted) setState(() {});
+                  },
+                ),
                 const SizedBox(height: 24),
                 const Divider(color: Colors.white24, height: 1),
                 const SizedBox(height: 16),
@@ -1400,6 +1184,582 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _VendedorClosingRepasseSection extends StatefulWidget {
+  final String sellerId;
+  final Map<String, dynamic> data;
+  final String direction;
+  final double saldoFinal;
+  final VoidCallback onSubmitted;
+
+  const _VendedorClosingRepasseSection({
+    required this.sellerId,
+    required this.data,
+    required this.direction,
+    required this.saldoFinal,
+    required this.onSubmitted,
+  });
+
+  @override
+  State<_VendedorClosingRepasseSection> createState() =>
+      _VendedorClosingRepasseSectionState();
+}
+
+class _VendedorClosingRepasseSectionState
+    extends State<_VendedorClosingRepasseSection> {
+  late TextEditingController _paidNowCtrl;
+  late TextEditingController _partialDeductCtrl;
+  bool _registerShortfallAsAdvance = true;
+  String _deductionMode = 'NONE'; // NONE | PARTIAL | FULL
+  bool _submitting = false;
+
+  int get _openAdvancesCents =>
+      int.tryParse((widget.data['openAdvancesCents'] ??
+              widget.data['openAdvancesSummary']?['totalOpenCents'] ??
+              0)
+          .toString()) ??
+      0;
+
+  @override
+  void initState() {
+    super.initState();
+    _paidNowCtrl = TextEditingController(
+      text: widget.saldoFinal.abs().toStringAsFixed(2),
+    );
+    _partialDeductCtrl = TextEditingController();
+    if (widget.direction == 'COMPANY_PAYS_SELLER' && _openAdvancesCents > 0) {
+      _deductionMode = 'FULL';
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _VendedorClosingRepasseSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sellerId != widget.sellerId ||
+        oldWidget.saldoFinal != widget.saldoFinal ||
+        oldWidget.direction != widget.direction) {
+      _paidNowCtrl.text = widget.saldoFinal.abs().toStringAsFixed(2);
+      _partialDeductCtrl.clear();
+      _deductionMode =
+          (widget.direction == 'COMPANY_PAYS_SELLER' && _openAdvancesCents > 0)
+              ? 'FULL'
+              : 'NONE';
+    }
+  }
+
+  @override
+  void dispose() {
+    _paidNowCtrl.dispose();
+    _partialDeductCtrl.dispose();
+    super.dispose();
+  }
+
+  double _parseInput(String raw) {
+    return double.tryParse(raw.trim().replaceAll(',', '.')) ?? 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final openCents = _openAdvancesCents;
+    final openReais = openCents / 100.0;
+    final advSummary = widget.data['openAdvancesSummary'] is Map
+        ? Map<String, dynamic>.from(widget.data['openAdvancesSummary'] as Map)
+        : <String, dynamic>{};
+    final oldestDays =
+        int.tryParse((advSummary['oldestOpenDays'] ?? 0).toString()) ?? 0;
+
+    if (widget.direction == 'COMPANY_PAYS_SELLER' && widget.saldoFinal > 0) {
+      final sellerPixKey =
+          widget.data['sellerPixKey']?.toString().trim() ?? '';
+      final grossReais = widget.saldoFinal;
+
+      double deductReais = 0;
+      if (openCents > 0) {
+        if (_deductionMode == 'FULL') {
+          deductReais = grossReais < openReais ? grossReais : openReais;
+        } else if (_deductionMode == 'PARTIAL') {
+          final typed = _parseInput(_partialDeductCtrl.text);
+          final maxAllowed = grossReais < openReais ? grossReais : openReais;
+          deductReais = typed.clamp(0.0, maxAllowed);
+        }
+      }
+      final netTransferReais =
+          (grossReais - deductReais).clamp(0.0, grossReais);
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Comissão Bruta a Pagar',
+                  style: TextStyle(color: Colors.white70, fontSize: 13)),
+              Text('R\$ ${grossReais.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15)),
+            ],
+          ),
+          if (openCents > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF281242),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: const Color(0xFFF59E0B), width: 1.3),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded,
+                          color: Color(0xFFF59E0B), size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Vale em Aberto: R\$ ${openReais.toStringAsFixed(2)} (há $oldestDays dia(s))',
+                          style: const TextStyle(
+                              color: Color(0xFFFDE68A),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Abater Tudo'),
+                        selected: _deductionMode == 'FULL',
+                        selectedColor: const Color(0xFF16A34A),
+                        backgroundColor: const Color(0xFF160D24),
+                        labelStyle: TextStyle(
+                          color: _deductionMode == 'FULL'
+                              ? Colors.white
+                              : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        onSelected: (_) =>
+                            setState(() => _deductionMode = 'FULL'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Abater Parcial'),
+                        selected: _deductionMode == 'PARTIAL',
+                        selectedColor: const Color(0xFFA855F7),
+                        backgroundColor: const Color(0xFF160D24),
+                        labelStyle: TextStyle(
+                          color: _deductionMode == 'PARTIAL'
+                              ? Colors.white
+                              : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        onSelected: (_) =>
+                            setState(() => _deductionMode = 'PARTIAL'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Manter em Aberto'),
+                        selected: _deductionMode == 'NONE',
+                        selectedColor: const Color(0xFF475569),
+                        backgroundColor: const Color(0xFF160D24),
+                        labelStyle: TextStyle(
+                          color: _deductionMode == 'NONE'
+                              ? Colors.white
+                              : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        onSelected: (_) =>
+                            setState(() => _deductionMode = 'NONE'),
+                      ),
+                    ],
+                  ),
+                  if (_deductionMode == 'PARTIAL') ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _partialDeductCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        labelText:
+                            'Valor a abater do vale (máx. R\$ ${(grossReais < openReais ? grossReais : openReais).toStringAsFixed(2)})',
+                        labelStyle: const TextStyle(
+                            color: Color(0xFFD8B4FE), fontSize: 12),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                  const Divider(color: Colors.white12, height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('(-) Abatimento de vale:',
+                          style:
+                              TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text('R\$ ${deductReais.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                              color: Color(0xFFF59E0B),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('(=) Pix Líquido a Transferir:',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13.5)),
+                      Text('R\$ ${netTransferReais.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                              color: Color(0xFF22C55E),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.greenAccent.withOpacity(0.45)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.pix, color: Colors.greenAccent, size: 15),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Pix do Vendedor: ${sellerPixKey.isNotEmpty ? sellerPixKey : 'não cadastrado'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                if (sellerPixKey.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: sellerPixKey));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Pix do vendedor copiado!')));
+                    },
+                    child: const Icon(Icons.copy,
+                        color: Colors.greenAccent, size: 15),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          LedButton(
+            onPressed: _submitting
+                ? null
+                : () async {
+                    final deductCents = (deductReais * 100).round();
+                    if (_deductionMode == 'PARTIAL' && deductCents <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Informe um valor válido maior que zero para abatimento parcial.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    setState(() => _submitting = true);
+                    try {
+                      await ApiService().payRepasse(
+                        widget.sellerId,
+                        grossReais,
+                        direction: 'COMPANY_PAYS_SELLER',
+                        advanceDeductionMode:
+                            openCents > 0 ? _deductionMode : 'NONE',
+                        advanceDeductionCents:
+                            _deductionMode == 'PARTIAL' ? deductCents : null,
+                        closingReference:
+                            'closing_pay_${widget.sellerId}_${DateTime.now().millisecondsSinceEpoch}',
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(deductCents > 0
+                              ? 'Pagamento registrado! Abatido R\$ ${(deductCents / 100).toStringAsFixed(2)} em vales.'
+                              : 'Pagamento registrado com sucesso!'),
+                        ),
+                      );
+                      widget.onSubmitted();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro: $e')));
+                      }
+                    } finally {
+                      if (mounted) setState(() => _submitting = false);
+                    }
+                  },
+            style: LedButton.styleFrom(backgroundColor: Colors.green),
+            child: Text(
+              openCents > 0 && deductReais > 0
+                  ? 'Confirmar (Pix R\$ ${netTransferReais.toStringAsFixed(2)})'
+                  : 'Registrar Pagamento',
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (widget.direction == 'SELLER_PAYS_COMPANY' && widget.saldoFinal > 0) {
+      final expectedReais = widget.saldoFinal.abs();
+      final paidNow =
+          _parseInput(_paidNowCtrl.text).clamp(0.0, expectedReais);
+      final diffReais =
+          (expectedReais - paidNow) > 0.009 ? (expectedReais - paidNow) : 0.0;
+
+      final companyPixKey =
+          (widget.data['companyPixKey'] ?? widget.data['adminPixKey'])
+                  ?.toString()
+                  .trim() ??
+              '';
+      final companyPixKeyType =
+          widget.data['companyPixKeyType']?.toString().trim() ?? '';
+      final hasCompanyPix = companyPixKey.isNotEmpty;
+      final typeLabel =
+          companyPixKeyType.isNotEmpty ? ' ($companyPixKeyType)' : '';
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Repasse Pendente (Vendedor → Empresa)',
+              style: TextStyle(color: Colors.white70, fontSize: 14)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Container(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width - 104,
+                ),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white12,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: const Color(0xFFA855F7).withOpacity(0.45)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.pix,
+                        color: Color(0xFFD8B4FE), size: 15),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'Pix da Empresa$typeLabel: ${hasCompanyPix ? companyPixKey : 'não cadastrado'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    if (hasCompanyPix) ...[
+                      const SizedBox(width: 8),
+                      InkWell(
+                        onTap: () {
+                          Clipboard.setData(
+                              ClipboardData(text: companyPixKey));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Pix da Empresa copiado!')));
+                        },
+                        child: const Icon(Icons.copy,
+                            color: Color(0xFFD8B4FE), size: 15),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Text('Total Devido: R\$ ${expectedReais.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold)),
+              TextButton.icon(
+                onPressed: () {
+                  showCompanyPixKeyDialog(
+                    context,
+                    initialKey: companyPixKey,
+                    initialType: companyPixKeyType,
+                    onSaved: widget.onSubmitted,
+                  );
+                },
+                icon: const Icon(Icons.edit_outlined,
+                    size: 15, color: Color(0xFFD8B4FE)),
+                label: Text(
+                  hasCompanyPix
+                      ? 'Editar Pix da Empresa'
+                      : 'Cadastrar Pix da Empresa',
+                  style: const TextStyle(
+                      color: Color(0xFFD8B4FE),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _paidNowCtrl,
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold),
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              labelText: 'Valor repassado agora (R\$)',
+              labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+              filled: true,
+              fillColor: const Color(0xFF0D0714),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(
+                    color: const Color(0xFFA855F7).withOpacity(0.5)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFA855F7)),
+              ),
+            ),
+          ),
+          if (diffReais > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2B1018),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.redAccent),
+              ),
+              child: CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _registerShortfallAsAdvance,
+                activeColor: const Color(0xFFA855F7),
+                onChanged: (v) =>
+                    setState(() => _registerShortfallAsAdvance = v ?? true),
+                title: Text(
+                  'Lançar diferença (R\$ ${diffReais.toStringAsFixed(2)}) como Pendência de Repasse (Vale)',
+                  style: const TextStyle(
+                      color: Color(0xFFFCA5A5),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.bold),
+                ),
+                subtitle: const Text(
+                  'Transfere o saldo faltante para a conta corrente de Vales do vendedor e quita o fechamento.',
+                  style: TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          LedButton(
+            onPressed: _submitting
+                ? null
+                : () async {
+                    final rawTyped = _parseInput(_paidNowCtrl.text);
+                    if (rawTyped < 0 || rawTyped > expectedReais + 0.01) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Informe um valor entre R\$ 0,00 e o total devido.'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+                    final clampedPaid = rawTyped.clamp(0.0, expectedReais);
+                    setState(() => _submitting = true);
+                    try {
+                      await ApiService().payRepasse(
+                        widget.sellerId,
+                        clampedPaid,
+                        direction: 'SELLER_PAYS_COMPANY',
+                        paidAmount: clampedPaid,
+                        expectedAmount: expectedReais,
+                        registerShortfallAsAdvance:
+                            diffReais > 0 ? _registerShortfallAsAdvance : false,
+                        closingReference:
+                            'closing_shortfall_${widget.sellerId}_${DateTime.now().millisecondsSinceEpoch}',
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(diffReais > 0 && _registerShortfallAsAdvance
+                              ? 'Repasse de R\$ ${clampedPaid.toStringAsFixed(2)} confirmado e diferença de R\$ ${diffReais.toStringAsFixed(2)} lançada como Vale!'
+                              : 'Repasse registrado com sucesso!'),
+                        ),
+                      );
+                      widget.onSubmitted();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Erro: $e')));
+                      }
+                    } finally {
+                      if (mounted) setState(() => _submitting = false);
+                    }
+                  },
+            style: LedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: Text(
+              diffReais > 0
+                  ? 'Confirmar Parcial (R\$ ${paidNow.toStringAsFixed(2)})'
+                  : 'Confirmar Recebimento de Repasse',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return const Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text('Status', style: TextStyle(color: Colors.white70)),
+        Text('Tudo Quitado',
+            style: TextStyle(
+                color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }

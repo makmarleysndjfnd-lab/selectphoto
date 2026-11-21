@@ -26,6 +26,7 @@ import '../utils/ui_helpers.dart';
 import 'visao_estatisticas_admin.dart';
 import 'visao_crediario_admin.dart';
 import 'visao_conferencia_admin.dart';
+import 'tela_vales_admin.dart';
 import '../widgets/admin_ficha_actions.dart';
 import '../widgets/company_pix_dialog.dart';
 import '../utils/lumora_theme.dart';
@@ -230,12 +231,27 @@ class _AdminDashboardState extends State<AdminDashboard>
   List<Map<String, dynamic>> _pendingReleaseBatches = [];
   List<Map<String, dynamic>> _travelVirginBooks = [];
   List<Map<String, dynamic>> _companySellers = [];
+  Map<String, Map<String, dynamic>> _sellerAdvanceAlerts = {};
 
   final Map<String, List<Map<String, dynamic>>> _rebolosDistribuidos = {};
 
   Future<void> _loadCompanySellers() async {
     try {
-      final users = await ApiService().getCompanyUsers();
+      final results = await Future.wait([
+        ApiService().getCompanyUsers(),
+        ApiService()
+            .getAdvancesByRole('SELLER')
+            .catchError((_) => <String, dynamic>{}),
+      ]);
+      final users = results[0] as List<dynamic>;
+      final advRes = results[1] as Map<String, dynamic>;
+      final Map<String, Map<String, dynamic>> alertsMap = {};
+      final profs = (advRes['professionals'] as List?) ?? [];
+      for (final p in profs) {
+        if (p is Map && p['userId'] != null) {
+          alertsMap[p['userId'].toString()] = Map<String, dynamic>.from(p);
+        }
+      }
       final sellers = users
           .where((user) =>
               user is Map &&
@@ -243,10 +259,60 @@ class _AdminDashboardState extends State<AdminDashboard>
               ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'].contains(user['role']))
           .map((user) => Map<String, dynamic>.from(user as Map))
           .toList();
-      if (mounted) setState(() => _companySellers = sellers);
+      if (mounted) {
+        setState(() {
+          _companySellers = sellers;
+          _sellerAdvanceAlerts = alertsMap;
+        });
+      }
     } catch (e) {
       debugPrint('Erro ao carregar vendedores reais: $e');
     }
+  }
+
+  DropdownMenuItem<String> _buildSellerDropdownItemWithAdvanceAlert(
+      Map<String, dynamic> seller) {
+    final sid = seller['id'].toString();
+    final sname = (seller['name'] ?? 'Vendedor').toString();
+    final adv = _sellerAdvanceAlerts[sid];
+    final hasAlert = adv != null && adv['hasAlert'] == true;
+    final openCents =
+        int.tryParse((adv?['totalOpenCents'] ?? 0).toString()) ?? 0;
+
+    return DropdownMenuItem<String>(
+      value: sid,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              sname,
+              style: TextStyle(
+                color: hasAlert ? const Color(0xFFFCA5A5) : Colors.white,
+                fontWeight: hasAlert ? FontWeight.bold : FontWeight.normal,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (hasAlert)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withOpacity(0.25),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFEF4444)),
+              ),
+              child: Text(
+                '⚠️ ${formatCentsBRL(openCents)}',
+                style: const TextStyle(
+                  color: Color(0xFFFCA5A5),
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   String _sellerName(String sellerId) => _companySellers
@@ -1891,12 +1957,20 @@ class _AdminDashboardState extends State<AdminDashboard>
             _conferenciaTodayOnly = true;
             _navIndex = 14;
           }),
+          onOpenValesFotografos: () => setState(() => _navIndex = 15),
+          onOpenValesVendedores: () => setState(() => _navIndex = 16),
         );
         break;
       case 14:
         tabWidget = VisaoConferenciaAdmin(
           initialTodayOnly: _conferenciaTodayOnly,
         );
+        break;
+      case 15:
+        tabWidget = const TelaValesAdmin(profileRole: 'PHOTOGRAPHER');
+        break;
+      case 16:
+        tabWidget = const TelaValesAdmin(profileRole: 'SELLER');
         break;
       default:
         tabWidget = VisaoRotasChegada(
@@ -1910,6 +1984,8 @@ class _AdminDashboardState extends State<AdminDashboard>
             _conferenciaTodayOnly = true;
             _navIndex = 14;
           }),
+          onOpenValesFotografos: () => setState(() => _navIndex = 15),
+          onOpenValesVendedores: () => setState(() => _navIndex = 16),
         );
     }
 
@@ -2816,12 +2892,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                                     ),
                                     items: sellersList
                                         .map<DropdownMenuItem<String>>((s) {
-                                      return DropdownMenuItem<String>(
-                                        value: s['id'].toString(),
-                                        child: Text(s['name'] ?? 'Vendedor',
-                                            style: const TextStyle(
-                                                color: Colors.white)),
-                                      );
+                                      return _buildSellerDropdownItemWithAdvanceAlert(
+                                          Map<String, dynamic>.from(s as Map));
                                     }).toList(),
                                     onChanged: (val) {
                                       setModalState(
@@ -4566,12 +4638,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                     child: DropdownButton<String>(
                       value: selectedSeller,
                       items: _companySellers
-                          .map((seller) => DropdownMenuItem<String>(
-                                value: seller['id'].toString(),
-                                child: Text(seller['name'].toString(),
-                                    style:
-                                        const TextStyle(color: Colors.white)),
-                              ))
+                          .map((seller) =>
+                              _buildSellerDropdownItemWithAdvanceAlert(seller))
                           .toList(),
                       onChanged: (v) {
                         setDialogState(() => selectedSeller = v);
@@ -5404,12 +5472,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                         hint: const Text('Selecione o Vendedor',
                             style: TextStyle(color: Colors.white54)),
                         items: _companySellers
-                            .map((seller) => DropdownMenuItem<String>(
-                                  value: seller['id'].toString(),
-                                  child: Text(seller['name'].toString(),
-                                      style:
-                                          const TextStyle(color: Colors.white)),
-                                ))
+                            .map((seller) =>
+                                _buildSellerDropdownItemWithAdvanceAlert(seller))
                             .toList(),
                         onChanged: (v) =>
                             setDialogState(() => selectedSeller = v),
@@ -5487,12 +5551,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                         hint: const Text('Selecione o Vendedor',
                             style: TextStyle(color: Colors.white54)),
                         items: _companySellers
-                            .map((seller) => DropdownMenuItem<String>(
-                                  value: seller['id'].toString(),
-                                  child: Text(seller['name'].toString(),
-                                      style:
-                                          const TextStyle(color: Colors.white)),
-                                ))
+                            .map((seller) =>
+                                _buildSellerDropdownItemWithAdvanceAlert(seller))
                             .toList(),
                         onChanged: isSubmitting
                             ? null

@@ -2,12 +2,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/admin_ficha_actions.dart';
+import 'tela_vales_admin.dart';
 
 class VisaoRotasChegada extends StatefulWidget {
   final VoidCallback? onOpenFechamentos;
   final VoidCallback? onOpenEventosIa;
   final VoidCallback? onOpenCobrancasDia;
   final VoidCallback? onOpenConferenciaDia;
+  final VoidCallback? onOpenValesFotografos;
+  final VoidCallback? onOpenValesVendedores;
 
   const VisaoRotasChegada({
     super.key,
@@ -15,6 +18,8 @@ class VisaoRotasChegada extends StatefulWidget {
     this.onOpenEventosIa,
     this.onOpenCobrancasDia,
     this.onOpenConferenciaDia,
+    this.onOpenValesFotografos,
+    this.onOpenValesVendedores,
   });
 
   @override
@@ -32,6 +37,13 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
   int _cobrancasDiaCount = 0;
   int _conferenciaDivergentTodayCount = 0;
   int _conferenciaTotalTodayCount = 0;
+
+  // Resumo ao vivo de Vales (Fotógrafos e Vendedores) + alertas por sellerId
+  int _valesFotografosCount = 0;
+  int _valesFotografosTotalCents = 0;
+  int _valesVendedoresCount = 0;
+  int _valesVendedoresTotalCents = 0;
+  Map<String, Map<String, dynamic>> _sellerAdvanceAlerts = {};
 
   // Key: batchId
   // Value: Map containing batch details, counts, cities, and its active clients list
@@ -92,6 +104,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
         _api
             .listBuyerConfirmationsReview(todayOnly: true)
             .catchError((_) => <String, dynamic>{}),
+        _api
+            .getAdvancesByRole('PHOTOGRAPHER')
+            .catchError((_) => <String, dynamic>{}),
+        _api
+            .getAdvancesByRole('SELLER')
+            .catchError((_) => <String, dynamic>{}),
       ]);
 
       final rawBatches = List<dynamic>.from(results[0] as List);
@@ -103,11 +121,44 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
       final reviewSummary = reviewTodayRes['summary'] is Map
           ? Map<String, dynamic>.from(reviewTodayRes['summary'] as Map)
           : <String, dynamic>{};
+      final photogAdvRes = results[4] is Map
+          ? Map<String, dynamic>.from(results[4] as Map)
+          : <String, dynamic>{};
+      final sellerAdvRes = results[5] is Map
+          ? Map<String, dynamic>.from(results[5] as Map)
+          : <String, dynamic>{};
+
+      final photogAdvSum = photogAdvRes['summary'] is Map
+          ? Map<String, dynamic>.from(photogAdvRes['summary'] as Map)
+          : <String, dynamic>{};
+      final sellerAdvSum = sellerAdvRes['summary'] is Map
+          ? Map<String, dynamic>.from(sellerAdvRes['summary'] as Map)
+          : <String, dynamic>{};
+
+      final Map<String, Map<String, dynamic>> sellerAlertsMap = {};
+      final sellerProfs = (sellerAdvRes['professionals'] as List?) ?? [];
+      for (final item in sellerProfs) {
+        if (item is Map && item['userId'] != null) {
+          sellerAlertsMap[item['userId'].toString()] =
+              Map<String, dynamic>.from(item);
+        }
+      }
+
       final int cobrancasCount = dueTodayAgreements.length;
       final int divTodayCount =
           int.tryParse((reviewSummary['divergentCount'] ?? 0).toString()) ?? 0;
       final int totalTodayCount =
           int.tryParse((reviewSummary['total'] ?? 0).toString()) ?? 0;
+      final int valFotCount = int.tryParse(
+              (photogAdvSum['usersWithBalanceCount'] ?? 0).toString()) ??
+          0;
+      final int valFotCents =
+          int.tryParse((photogAdvSum['totalOpenCents'] ?? 0).toString()) ?? 0;
+      final int valVenCount = int.tryParse(
+              (sellerAdvSum['usersWithBalanceCount'] ?? 0).toString()) ??
+          0;
+      final int valVenCents =
+          int.tryParse((sellerAdvSum['totalOpenCents'] ?? 0).toString()) ?? 0;
 
       final sellers = users.where((u) {
         final role = (u['role'] ?? '').toString().toUpperCase();
@@ -221,6 +272,11 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
           _cobrancasDiaCount = cobrancasCount;
           _conferenciaDivergentTodayCount = divTodayCount;
           _conferenciaTotalTodayCount = totalTodayCount;
+          _valesFotografosCount = valFotCount;
+          _valesFotografosTotalCents = valFotCents;
+          _valesVendedoresCount = valVenCount;
+          _valesVendedoresTotalCents = valVenCents;
+          _sellerAdvanceAlerts = sellerAlertsMap;
           _isLoading = false;
         });
       }
@@ -470,11 +526,43 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                         ),
                         value: selectedSellerId,
                         items: _sellers.map((s) {
+                          final sid = s['id'].toString();
+                          final sname = s['name']?.toString() ?? 'Vendedor';
+                          final adv = _sellerAdvanceAlerts[sid];
+                          final hasAlert = adv != null && adv['hasAlert'] == true;
+                          final openCents = int.tryParse((adv?['totalOpenCents'] ?? 0).toString()) ?? 0;
                           return DropdownMenuItem<String>(
-                            value: s['id'].toString(),
-                            child: Text(
-                              s['name']?.toString() ?? 'Vendedor',
-                              style: const TextStyle(color: Colors.white),
+                            value: sid,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    sname,
+                                    style: TextStyle(
+                                      color: hasAlert ? const Color(0xFFFCA5A5) : Colors.white,
+                                      fontWeight: hasAlert ? FontWeight.bold : FontWeight.normal,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (hasAlert)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFEF4444).withOpacity(0.25),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: const Color(0xFFEF4444)),
+                                    ),
+                                    child: Text(
+                                      '⚠️ ${formatCentsBRL(openCents)}',
+                                      style: const TextStyle(
+                                        color: Color(0xFFFCA5A5),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           );
                         }).toList(),
@@ -1709,6 +1797,46 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _buildAdvanceShortcutButton(
+                  icon: Icons.camera_alt_rounded,
+                  title: 'Vales · Fotógrafos',
+                  countWithBalance: _valesFotografosCount,
+                  totalCents: _valesFotografosTotalCents,
+                  onTap: widget.onOpenValesFotografos ??
+                      () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const TelaValesAdmin(
+                                profileRole: 'PHOTOGRAPHER',
+                              ),
+                            ),
+                          ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildAdvanceShortcutButton(
+                  icon: Icons.badge_rounded,
+                  title: 'Vales · Vendedores',
+                  countWithBalance: _valesVendedoresCount,
+                  totalCents: _valesVendedoresTotalCents,
+                  onTap: widget.onOpenValesVendedores ??
+                      () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const TelaValesAdmin(
+                                profileRole: 'SELLER',
+                              ),
+                            ),
+                          ),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -1732,6 +1860,89 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAdvanceShortcutButton({
+    required IconData icon,
+    required String title,
+    required int countWithBalance,
+    required int totalCents,
+    required VoidCallback onTap,
+  }) {
+    final bool hasOpen = countWithBalance > 0 && totalCents > 0;
+    final Color accent = hasOpen ? const Color(0xFFF59E0B) : lumoraNeonPurple;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: lumoraSurfaceDark,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: accent.withOpacity(0.55), width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withOpacity(0.14),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Icon(icon, color: lumoraNeonPurple, size: 19),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: accent.withOpacity(0.75)),
+                    ),
+                    child: Text(
+                      '$countWithBalance pend.',
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                formatCentsBRL(totalCents),
+                style: TextStyle(
+                  color: hasOpen
+                      ? const Color(0xFFFBBF24)
+                      : const Color(0xFFD8B4FE),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

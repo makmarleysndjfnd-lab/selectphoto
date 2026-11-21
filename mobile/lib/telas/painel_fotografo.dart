@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 
 import 'lista_fichas_fotografo.dart';
+import 'tela_meus_vales.dart';
 import '../servicos/servico_api.dart';
 import '../servicos/servico_sincronizacao.dart';
 
@@ -1562,6 +1563,17 @@ class _PhotographerDashboardState extends State<PhotographerDashboard>
                     icon: const Icon(Icons.list_alt_rounded,
                         color: Color(0xFFCE93D8)),
                     tooltip: 'Fichas Produzidas',
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const TelaMeusVales()));
+                    },
+                    icon: const Icon(Icons.account_balance_wallet_rounded,
+                        color: Color(0xFF00E5FF)),
+                    tooltip: 'Meus Vales / Pendências',
                   ),
                   IconButton(
                     icon: const Icon(Icons.settings, color: Colors.white70),

@@ -1339,18 +1339,138 @@ class ApiService {
     }
   }
 
-  Future<void> payRepasse(String sellerId, double amount,
-      {required String direction}) async {
+  Future<Map<String, dynamic>> payRepasse(
+    String sellerId,
+    double amount, {
+    required String direction,
+    double? paidAmount,
+    double? expectedAmount,
+    bool? registerShortfallAsAdvance,
+    String? advanceDeductionMode,
+    int? advanceDeductionCents,
+    String? closingReference,
+    String? notes,
+  }) async {
     try {
-      await _dio.post('/closing/pay-repasse', data: {
+      final response = await _dio.post('/closing/pay-repasse', data: {
         'sellerId': sellerId,
         'amount': amount,
         'direction': direction,
+        if (paidAmount != null) 'paidAmount': paidAmount,
+        if (expectedAmount != null) 'expectedAmount': expectedAmount,
+        if (registerShortfallAsAdvance != null)
+          'registerShortfallAsAdvance': registerShortfallAsAdvance,
+        if (advanceDeductionMode != null)
+          'advanceDeductionMode': advanceDeductionMode,
+        if (advanceDeductionCents != null)
+          'advanceDeductionCents': advanceDeductionCents,
+        if (closingReference != null && closingReference.isNotEmpty)
+          'closingReference': closingReference,
+        if (notes != null && notes.isNotEmpty) 'notes': notes,
       });
+      return response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : <String, dynamic>{};
     } on DioException catch (e) {
       throw Exception(
           (e.response?.data is Map ? e.response?.data['error'] : null) ??
               'Erro ao pagar repasse');
+    }
+  }
+
+  Future<Map<String, dynamic>> getAdvancesByRole(String role) async {
+    try {
+      final response = await _dio.get('/advances', queryParameters: {'role': role});
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getUserAdvanceStatement(String userId) async {
+    try {
+      final response = await _dio.get('/advances/user/$userId');
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getMyAdvances() async {
+    try {
+      final response = await _dio.get('/advances/my');
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> createAdvance({
+    required String userId,
+    required String profileRole,
+    required String category,
+    required int amountCents,
+    String? dueDate,
+    String? notes,
+    String? receiptUrl,
+    String? signatureBase64,
+    String? batchId,
+  }) async {
+    try {
+      final response = await _dio.post('/advances', data: {
+        'userId': userId,
+        'profileRole': profileRole,
+        'category': category,
+        'amountCents': amountCents,
+        if (dueDate != null && dueDate.isNotEmpty) 'dueDate': dueDate,
+        if (notes != null && notes.isNotEmpty) 'notes': notes,
+        if (receiptUrl != null && receiptUrl.isNotEmpty) 'receiptUrl': receiptUrl,
+        if (signatureBase64 != null && signatureBase64.isNotEmpty)
+          'signatureBase64': signatureBase64,
+        if (batchId != null && batchId.isNotEmpty) 'batchId': batchId,
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> settleAdvance({
+    required String userId,
+    required int amountCents,
+    String? category,
+    String? notes,
+    String? receiptUrl,
+    String? batchId,
+  }) async {
+    try {
+      final response = await _dio.post('/advances/settle', data: {
+        'userId': userId,
+        'amountCents': amountCents,
+        if (category != null && category.isNotEmpty) 'category': category,
+        if (notes != null && notes.isNotEmpty) 'notes': notes,
+        if (receiptUrl != null && receiptUrl.isNotEmpty) 'receiptUrl': receiptUrl,
+        if (batchId != null && batchId.isNotEmpty) 'batchId': batchId,
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateAdvanceConfig({
+    int? advanceAlertLimitCents,
+    int? advanceAlertDays,
+  }) async {
+    try {
+      final response = await _dio.patch('/advances/config', data: {
+        if (advanceAlertLimitCents != null)
+          'advanceAlertLimitCents': advanceAlertLimitCents,
+        if (advanceAlertDays != null) 'advanceAlertDays': advanceAlertDays,
+      });
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
     }
   }
 

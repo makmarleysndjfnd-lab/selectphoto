@@ -191,6 +191,8 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
         const SizedBox(height: 12),
         _buildOperationalSummaryRow(s),
         const SizedBox(height: 16),
+        _buildValesEmAbertoCard(s),
+        const SizedBox(height: 16),
         _buildTeamRatingsSection(s),
         const SizedBox(height: 16),
         _buildClientRanking(s),
@@ -323,6 +325,54 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
         _kpiCard('Fichas na Rede', '$totalClientes', Icons.folder_shared_rounded, _blue),
         const SizedBox(width: 10),
         _kpiCard('Nao-Vendas', '$totalNaoVendas', Icons.assignment_return_rounded, const Color(0xFFF59E0B)),
+      ],
+    );
+  }
+
+  Widget _buildValesEmAbertoCard(Map<String, dynamic> s) {
+    final v = s['valesEmAberto'] as Map? ?? {};
+    final totalVendedoresCents =
+        int.tryParse((v['totalVendedoresCents'] ?? 0).toString()) ?? 0;
+    final totalFotografosCents =
+        int.tryParse((v['totalFotografosCents'] ?? 0).toString()) ?? 0;
+    final totalGeralCents =
+        int.tryParse((v['totalGeralCents'] ?? 0).toString()) ?? 0;
+    final qtdVendedores =
+        int.tryParse((v['qtdVendedoresComSaldo'] ?? 0).toString()) ?? 0;
+    final qtdFotografos =
+        int.tryParse((v['qtdFotografosComSaldo'] ?? 0).toString()) ?? 0;
+
+    String brl(int cents) => 'R\$ ${(cents / 100.0).toStringAsFixed(2).replaceAll('.', ',')}';
+
+    return _statsCard(
+      'Vales em Aberto (Vendedores × Fotógrafos)',
+      Icons.account_balance_wallet_rounded,
+      const Color(0xFFF59E0B),
+      children: [
+        Row(
+          children: [
+            _kpiCard(
+              'Total Geral',
+              brl(totalGeralCents),
+              Icons.summarize_rounded,
+              const Color(0xFFF59E0B),
+            ),
+            const SizedBox(width: 8),
+            _kpiCard(
+              'Vendedores ($qtdVendedores)',
+              brl(totalVendedoresCents),
+              Icons.badge_rounded,
+              _accent,
+            ),
+            const SizedBox(width: 8),
+            _kpiCard(
+              'Fotógrafos ($qtdFotografos)',
+              brl(totalFotografosCents),
+              Icons.camera_alt_rounded,
+              _blue,
+            ),
+          ],
+        ),
       ],
     );
   }

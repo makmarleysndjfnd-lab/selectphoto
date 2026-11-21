@@ -16,6 +16,7 @@ import 'tela_agenda.dart';
 import 'tela_cadastro_custos.dart';
 import 'tela_sincronizacao.dart';
 import 'tela_carteira_crediario_vendedor.dart';
+import 'tela_meus_vales.dart';
 import '../utils/lumora_theme.dart';
 import '../widgets/transfer_capas_dialog.dart';
 
@@ -1177,6 +1178,24 @@ class _SellerDashboardState extends State<SellerDashboard>
                 label: 'Distribuição\nVendedor',
                 accentColor: const Color(0xFFCE93D8),
                 onTap: _showDistribuicaoVendedorModal,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildTopActionButton(
+                icon: Icons.account_balance_rounded,
+                label: 'Meus Vales /\nPendências',
+                accentColor: const Color(0xFF00E5FF),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TelaMeusVales()),
+                  );
+                },
               ),
             ),
           ],

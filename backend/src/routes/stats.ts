@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { translatePaymentMethodPt } from '../services/buyerConfirmationService';
+import { getOpenAdvancesStatsSummary } from '../services/staffAdvanceService';
 
 const router = Router();
 
@@ -487,11 +488,25 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
       console.error('Error in filtrosDisponiveis:', e);
     }
 
+    let valesEmAberto: any = {
+      totalVendedoresCents: 0,
+      totalFotografosCents: 0,
+      totalGeralCents: 0,
+      qtdVendedoresComSaldo: 0,
+      qtdFotografosComSaldo: 0,
+    };
+    try {
+      valesEmAberto = await getOpenAdvancesStatsSummary(companyId);
+    } catch (e) {
+      console.error('Error in valesEmAberto:', e);
+    }
+
     return res.json({
       rankingClientes, rankingCidades, analiseChildrens, rankingEventos,
       analiseValores, analiseHorarios, rankingVendedores, rankingFotografos, formasPagamento,
       avaliacoesEquipe,
       resumoOperacional,
+      valesEmAberto,
       filtrosDisponiveis: {
         cidades: allCities.map(c => c.city).filter(Boolean),
         eventos: allEvents,

@@ -132,6 +132,7 @@ import integrationsRoutes from './routes/integrations';
 import supportRoutes from './routes/support';
 import ownerSupportRoutes from './routes/ownerSupport';
 import companyIntegrationsRoutes from './routes/companyIntegrations';
+import advancesRoutes from './routes/advances';
 import { initWarrantyCron } from './jobs/warrantyCron';
 import { initBackupCron } from './jobs/backupCron';
 import { initAsaasQueueCron } from './jobs/asaasQueueCron';
@@ -141,6 +142,7 @@ import { initMonthlyCreditClosingCron } from './jobs/monthlyCreditClosingCron';
 app.use('/api/clients', express.json({ limit: '50mb' }), clientRoutes);
 app.use('/api/sales', express.json({ limit: '50mb' }), salesRoutes);
 app.use('/api/credit', express.json({ limit: '20mb' }), creditRoutes);
+app.use('/api/advances', express.json({ limit: '20mb' }), advancesRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/teams', teamRoutes);

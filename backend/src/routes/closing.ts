@@ -1,8 +1,15 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { resolveSellerCommissionRate } from '../utils/commission';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import {
+  computeUserAdvanceSummary,
+  createDebitAdvance,
+  getCompanyAdvanceConfig,
+  settleAdvance,
+} from '../services/staffAdvanceService';
 
 const router = Router();
 
@@ -931,6 +938,36 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             clientName: s.client?.name || null,
         }));
 
+        const advanceCompanyId = seller?.companyId || userCompanyId || null;
+        let openAdvancesSummary = {
+            totalDebitsCents: 0,
+            totalCreditsCents: 0,
+            totalOpenCents: 0,
+            oldestOpenDays: 0,
+            oldestOpenCreatedAt: null as string | null,
+            hasPastDueDate: false,
+            isOverLimit: false,
+            isOverdue: false,
+            hasAlert: false,
+            advanceAlertLimitCents: 50000,
+            advanceAlertDays: 7,
+        };
+        if (advanceCompanyId) {
+            const [advCfg, advEntries] = await Promise.all([
+                getCompanyAdvanceConfig(advanceCompanyId),
+                prisma.staffAdvanceEntry.findMany({
+                    where: { companyId: advanceCompanyId, userId: sellerId },
+                    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                }),
+            ]);
+            const computed = computeUserAdvanceSummary(advEntries, advCfg);
+            openAdvancesSummary = {
+                ...computed,
+                advanceAlertLimitCents: advCfg.advanceAlertLimitCents,
+                advanceAlertDays: advCfg.advanceAlertDays,
+            };
+        }
+
         res.json({
             salesCount: sales.length,
             nonSalesCount: nonSales.length,
@@ -966,6 +1003,9 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
             sellerPixKey,
             adminPixKey: companyPixKey,
             directionalPix,
+            openAdvancesSummary,
+            openAdvancesCents: openAdvancesSummary.totalOpenCents,
+            openAdvancesValue: Number((openAdvancesSummary.totalOpenCents / 100).toFixed(2)),
             // Aliases de compatibilidade retroativa
             calculatedCommission: commissionAmount,
             commission: commissionAmount,
@@ -1099,10 +1139,22 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
     }
 });
 
-// Pay/Clear repasse (Admin or Supervisor)
+// Pay/Clear repasse (Admin or Supervisor) com suporte a repasse parcial -> CLOSING_SHORTFALL e abatimento de vales
 router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (req: AuthRequest, res: Response) => {
     try {
-        const { sellerId, amount, direction = 'SELLER_PAYS_COMPANY' } = req.body;
+        const {
+            sellerId,
+            amount,
+            paidAmount,
+            expectedAmount,
+            direction = 'SELLER_PAYS_COMPANY',
+            registerShortfallAsAdvance,
+            advanceDeductionMode = 'NONE',
+            advanceDeductionCents,
+            advanceDeductionAmount,
+            closingReference,
+            notes,
+        } = req.body;
         const userCompanyId = req.user?.companyId;
         if (!userCompanyId && req.user?.role !== 'SUPER_ADMIN') {
           return res.status(403).json({ error: 'Empresa não identificada' });
@@ -1111,7 +1163,7 @@ router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (
         const seller = await prisma.user.findFirst({
             where: {
                 id: sellerId,
-                companyId: userCompanyId,
+                ...(userCompanyId ? { companyId: userCompanyId } : {}),
             },
         });
 
@@ -1120,51 +1172,268 @@ router.post('/pay-repasse', authenticateToken, requireAdminOrSupervisor, async (
             return;
         }
 
-        const parsedAmount = parseFloat(amount || 0);
-        if (isNaN(parsedAmount) || parsedAmount <= 0) {
-            return res.status(400).json({ error: 'Valor inválido para repasse' });
-        }
+        const effectiveCompanyId = seller.companyId || userCompanyId!;
         if (!['SELLER_PAYS_COMPANY', 'COMPANY_PAYS_SELLER'].includes(direction)) {
             return res.status(400).json({ error: 'Direção de repasse inválida' });
         }
 
-        const result = await prisma.$transaction(async (tx) => {
-            const closing = await tx.dailyClosing.create({
-                data: {
-                    sellerId,
-                    totalSalesValue: 0,
-                    cashValue: 0,
-                    pixValue: 0,
-                    debitValue: 0,
-                    creditValue: 0,
-                    commission: 0,
-                    repasseDebt: direction === 'SELLER_PAYS_COMPANY' ? -parsedAmount : parsedAmount,
-                    closingType: 'REPASSE_SETTLEMENT',
-                }
-            });
+        const actor = req.user?.id
+            ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { name: true } })
+            : null;
+        const actorName = actor?.name || req.user?.role || 'Administrador';
+        const cleanClosingRef =
+            typeof closingReference === 'string' && closingReference.trim().length > 0
+                ? closingReference.trim()
+                : null;
 
-            // Somente o pagamento feito pela empresa ao vendedor é uma saída
-            // real de caixa. Recebimento do vendedor apenas quita o repasse.
-            if (direction === 'COMPANY_PAYS_SELLER') {
-                await tx.cost.create({
-                    data: {
-                        companyId: seller.companyId || userCompanyId,
-                        userId: sellerId,
-                        amount: parsedAmount,
-                        category: 'COMMISSION',
-                        description: `Comissão fechamento de ${seller.name}`,
-                        date: new Date(),
-                        paymentMethod: 'PIX',
-                        status: 'APPROVED'
-                    }
-                });
+        if (direction === 'SELLER_PAYS_COMPANY') {
+            const rawPaid = paidAmount !== undefined && paidAmount !== null ? paidAmount : amount;
+            const parsedPaid = Number(rawPaid ?? 0);
+            if (!Number.isFinite(parsedPaid) || parsedPaid < 0) {
+                return res.status(400).json({ error: 'Valor repassado inválido' });
             }
 
-            return closing;
-        });
+            const hasExpected = expectedAmount !== undefined && expectedAmount !== null;
+            const parsedExpected = hasExpected ? Number(expectedAmount) : parsedPaid;
+            if (!Number.isFinite(parsedExpected) || parsedExpected <= 0) {
+                return res.status(400).json({ error: 'Valor inválido para repasse' });
+            }
 
-        res.status(201).json(result);
+            const paidCents = Math.round(parsedPaid * 100);
+            const expectedCents = Math.round(parsedExpected * 100);
+            if (paidCents > expectedCents) {
+                return res.status(400).json({ error: 'Valor repassado agora não pode exceder o total devido.' });
+            }
+
+            const shortfallCents = Math.max(0, expectedCents - paidCents);
+            const shouldRegisterShortfall =
+                shortfallCents > 0 && registerShortfallAsAdvance !== false;
+            if (paidCents === 0 && !shouldRegisterShortfall) {
+                return res.status(400).json({ error: 'Informe um valor repassado maior que zero ou habilite lançamento como pendência.' });
+            }
+
+            const txResult = await prisma.$transaction(
+                async (tx) => {
+                    if (cleanClosingRef && shouldRegisterShortfall) {
+                        const existingEntry = await tx.staffAdvanceEntry.findFirst({
+                            where: {
+                                companyId: effectiveCompanyId,
+                                closingReference: cleanClosingRef,
+                                direction: 'DEBIT',
+                            },
+                        });
+                        if (existingEntry) {
+                            return {
+                                alreadyProcessed: true,
+                                closing: null,
+                                advanceEntry: existingEntry,
+                            };
+                        }
+                    }
+
+                    // Quando a diferença vai para a conta de vales (CLOSING_SHORTFALL), quitamos o valor esperado integral no DailyClosing
+                    // para evitar contagem dupla entre DailyClosing e StaffAdvanceEntry.
+                    const closingSettlementReais = shouldRegisterShortfall
+                        ? Number((expectedCents / 100).toFixed(2))
+                        : Number((paidCents / 100).toFixed(2));
+
+                    const closing = await tx.dailyClosing.create({
+                        data: {
+                            sellerId,
+                            totalSalesValue: 0,
+                            cashValue: 0,
+                            pixValue: 0,
+                            debitValue: 0,
+                            creditValue: 0,
+                            commission: 0,
+                            repasseDebt: -closingSettlementReais,
+                            closingType: 'REPASSE_SETTLEMENT',
+                        },
+                    });
+
+                    let advanceEntry: any = null;
+                    if (shouldRegisterShortfall) {
+                        const created = await createDebitAdvance({
+                            companyId: effectiveCompanyId,
+                            userId: sellerId,
+                            profileRole: 'SELLER',
+                            category: 'CLOSING_SHORTFALL',
+                            amountCents: shortfallCents,
+                            notes:
+                                (typeof notes === 'string' && notes.trim()) ||
+                                `Diferença de repasse no fechamento (Esperado R$ ${(expectedCents / 100).toFixed(2)} · Repassado R$ ${(paidCents / 100).toFixed(2)})`,
+                            closingReference: cleanClosingRef || `closing_shortfall_${closing.id}`,
+                            createdById: req.user?.id || null,
+                            createdByName: actorName,
+                            tx,
+                        });
+                        advanceEntry = created.entry;
+                    }
+
+                    return {
+                        alreadyProcessed: false,
+                        closing,
+                        advanceEntry,
+                    };
+                },
+                { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+            );
+
+            return res.status(txResult.alreadyProcessed ? 200 : 201).json({
+                ...(txResult.closing || {}),
+                alreadyProcessed: txResult.alreadyProcessed,
+                expectedAmountCents: expectedCents,
+                paidAmountCents: paidCents,
+                shortfallCents,
+                registeredShortfallAsAdvance: shouldRegisterShortfall,
+                advanceEntry: txResult.advanceEntry,
+            });
+        }
+
+        // COMPANY_PAYS_SELLER com suporte a abatimento NONE | PARTIAL | FULL de vales em aberto
+        const parsedAmount = parseFloat(amount || 0);
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+            return res.status(400).json({ error: 'Valor inválido para repasse' });
+        }
+        const grossAmountCents = Math.round(parsedAmount * 100);
+        const mode = String(advanceDeductionMode || 'NONE').trim().toUpperCase();
+        if (!['NONE', 'PARTIAL', 'FULL'].includes(mode)) {
+            return res.status(400).json({ error: 'Modo de abatimento inválido. Use NONE, PARTIAL ou FULL.' });
+        }
+
+        const txResult = await prisma.$transaction(
+            async (tx) => {
+                if (cleanClosingRef && mode !== 'NONE') {
+                    const existingCredit = await tx.staffAdvanceEntry.findFirst({
+                        where: {
+                            companyId: effectiveCompanyId,
+                            closingReference: cleanClosingRef,
+                            direction: 'CREDIT',
+                        },
+                    });
+                    if (existingCredit) {
+                        return {
+                            alreadyProcessed: true,
+                            closing: null,
+                            deductCents: existingCredit.amountCents,
+                            netTransferCents: Math.max(0, grossAmountCents - existingCredit.amountCents),
+                            remainingOpenCents: null as number | null,
+                            advanceEntry: existingCredit,
+                        };
+                    }
+                }
+
+                const existingEntries = await tx.staffAdvanceEntry.findMany({
+                    where: { companyId: effectiveCompanyId, userId: sellerId },
+                    select: { direction: true, amountCents: true },
+                });
+                let openCents = 0;
+                for (const e of existingEntries) {
+                    openCents += e.direction === 'DEBIT' ? e.amountCents : -e.amountCents;
+                }
+                openCents = Math.max(0, openCents);
+
+                let deductCents = 0;
+                if (mode === 'FULL') {
+                    deductCents = Math.min(grossAmountCents, openCents);
+                } else if (mode === 'PARTIAL') {
+                    const reqCents =
+                        advanceDeductionCents !== undefined && advanceDeductionCents !== null
+                            ? Math.round(Number(advanceDeductionCents))
+                            : Math.round(Number(advanceDeductionAmount || 0) * 100);
+                    if (!Number.isFinite(reqCents) || reqCents <= 0) {
+                        throw { status: 400, message: 'Informe um valor de abatimento parcial maior que zero.' };
+                    }
+                    if (reqCents > openCents) {
+                        throw { status: 400, message: 'Abatimento parcial excede o saldo de vale em aberto.' };
+                    }
+                    if (reqCents > grossAmountCents) {
+                        throw { status: 400, message: 'Abatimento parcial não pode exceder a comissão a pagar.' };
+                    }
+                    deductCents = reqCents;
+                }
+
+                const netTransferCents = Math.max(0, grossAmountCents - deductCents);
+                const netTransferReais = Number((netTransferCents / 100).toFixed(2));
+                const grossReais = Number((grossAmountCents / 100).toFixed(2));
+
+                const closing = await tx.dailyClosing.create({
+                    data: {
+                        sellerId,
+                        totalSalesValue: 0,
+                        cashValue: 0,
+                        pixValue: 0,
+                        debitValue: 0,
+                        creditValue: 0,
+                        commission: 0,
+                        repasseDebt: grossReais,
+                        closingType: 'REPASSE_SETTLEMENT',
+                    },
+                });
+
+                if (netTransferCents > 0) {
+                    await tx.cost.create({
+                        data: {
+                            companyId: effectiveCompanyId,
+                            userId: sellerId,
+                            amount: netTransferReais,
+                            category: 'COMMISSION',
+                            description:
+                                deductCents > 0
+                                    ? `Comissão fechamento de ${seller.name} (bruto R$ ${grossReais.toFixed(2)} - abatimento vale R$ ${(deductCents / 100).toFixed(2)})`
+                                    : `Comissão fechamento de ${seller.name}`,
+                            date: new Date(),
+                            paymentMethod: 'PIX',
+                            status: 'APPROVED',
+                        },
+                    });
+                }
+
+                let advanceEntry: any = null;
+                let remainingOpenCents = openCents;
+                if (deductCents > 0) {
+                    const settled = await settleAdvance({
+                        companyId: effectiveCompanyId,
+                        userId: sellerId,
+                        amountCents: deductCents,
+                        category: 'SETTLEMENT',
+                        notes:
+                            (typeof notes === 'string' && notes.trim()) ||
+                            `Abatimento automático no pagamento de comissão do fechamento (Pix líquido R$ ${netTransferReais.toFixed(2)})`,
+                        closingReference: cleanClosingRef || `closing_settle_${closing.id}`,
+                        createdById: req.user?.id || null,
+                        createdByName: actorName,
+                        tx,
+                    });
+                    advanceEntry = settled.entry;
+                    remainingOpenCents = settled.remainingOpenCents ?? Math.max(0, openCents - deductCents);
+                }
+
+                return {
+                    alreadyProcessed: false,
+                    closing,
+                    deductCents,
+                    netTransferCents,
+                    remainingOpenCents,
+                    advanceEntry,
+                };
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+        );
+
+        res.status(txResult.alreadyProcessed ? 200 : 201).json({
+            ...(txResult.closing || {}),
+            alreadyProcessed: txResult.alreadyProcessed,
+            grossAmountCents,
+            advanceDeductedCents: txResult.deductCents,
+            netTransferCents: txResult.netTransferCents,
+            openAdvancesRemainingCents: txResult.remainingOpenCents,
+            advanceEntry: txResult.advanceEntry,
+        });
     } catch (error: any) {
+        if (error && error.status && error.message) {
+            return res.status(error.status).json({ error: error.message });
+        }
         res.status(500).json({ error: error.message || 'Erro ao registrar pagamento de repasse' });
     }
 });
