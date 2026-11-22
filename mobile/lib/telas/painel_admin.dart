@@ -30,6 +30,7 @@ import 'tela_vales_admin.dart';
 import '../widgets/admin_ficha_actions.dart';
 import '../widgets/company_pix_dialog.dart';
 import '../utils/lumora_theme.dart';
+import 'painel_proprietario_empresas.dart';
 
 // ── Constantes visuais ────────────────────────────────────────────────────────
 const _accentPurple = Color(0xFF9C27B0);
@@ -208,6 +209,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   String _userName = '';
   String _greeting = 'Olá';
   String _verse = '';
+  bool _isSupportMode = false;
+  String? _supportCompanyName;
+  String? _governanceWarningMessage;
 
   // Mock Rotas Inteligentes -> Nova Estrutura
   List<Map<String, dynamic>> _rotasManuais = [];
@@ -681,6 +685,110 @@ class _AdminDashboardState extends State<AdminDashboard>
     _loadClients();
     _checkAutomaticBackup();
     _loadUserData();
+    _checkSupportAndGovernanceStatus();
+  }
+
+  Future<void> _checkSupportAndGovernanceStatus() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final localSupport = prefs.getBool('support_mode_active') == true;
+      final localSupportName = prefs.getString('support_mode_company_name');
+      final session = await ApiService().getSessionStatus();
+
+      if (!mounted) return;
+
+      final isSupport =
+          localSupport || (session?['isTemporarySupportSession'] == true);
+      final supportCompany = session?['companyName']?.toString() ??
+          session?['companyTradeName']?.toString() ??
+          localSupportName;
+
+      String? warningMsg;
+      if (session?['commercialStatus'] == 'WARNING') {
+        final rawReason = session?['commercialStatusReason']?.toString().trim();
+        final govWarn = session?['governanceWarning'];
+        if (govWarn is Map &&
+            govWarn['message'] != null &&
+            govWarn['message'].toString().trim().isNotEmpty) {
+          warningMsg = govWarn['message'].toString().trim();
+        } else if (rawReason != null && rawReason.isNotEmpty) {
+          warningMsg = 'Aviso Comercial da Plataforma: $rawReason';
+        } else {
+          warningMsg =
+              'Aviso Comercial: Há pendência administrativa com a Lumora. Regularize para evitar suspensão.';
+        }
+      }
+
+      setState(() {
+        _isSupportMode = isSupport;
+        _supportCompanyName = supportCompany;
+        _governanceWarningMessage = warningMsg;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _voltarAoSuperAdmin() async {
+    try {
+      await ApiService().endSuperAdminSupportLogin();
+    } catch (_) {}
+
+    final prefs = await SharedPreferences.getInstance();
+    final restoreToken = prefs.getString('support_restore_token');
+    final restoreRole = prefs.getString('support_restore_role');
+    final restoreUserId = prefs.getString('support_restore_user_id');
+    final restoreUserName = prefs.getString('support_restore_user_name');
+    final restoreCompanyId = prefs.getString('support_restore_company_id');
+    final restoreCompanyName = prefs.getString('support_restore_company_name');
+    final restoreOwnerSession = prefs.getString('support_restore_owner_session');
+
+    if (restoreToken != null && restoreToken.isNotEmpty) {
+      await prefs.setString('jwt_token', restoreToken);
+      ApiService().setToken(restoreToken);
+    } else {
+      await prefs.remove('jwt_token');
+      ApiService().setToken(null);
+    }
+
+    if (restoreRole != null && restoreRole.isNotEmpty) {
+      await prefs.setString('user_role', restoreRole);
+    } else {
+      await prefs.setString('user_role', 'PLATFORM_OWNER');
+    }
+    if (restoreUserId != null && restoreUserId.isNotEmpty) {
+      await prefs.setString('user_id', restoreUserId);
+    }
+    if (restoreUserName != null && restoreUserName.isNotEmpty) {
+      await prefs.setString('user_name', restoreUserName);
+    }
+    if (restoreCompanyId != null && restoreCompanyId.isNotEmpty) {
+      await prefs.setString('company_id', restoreCompanyId);
+    } else {
+      await prefs.remove('company_id');
+    }
+    if (restoreCompanyName != null && restoreCompanyName.isNotEmpty) {
+      await prefs.setString('company_name', restoreCompanyName);
+    } else {
+      await prefs.remove('company_name');
+    }
+    if (restoreOwnerSession != null && restoreOwnerSession.isNotEmpty) {
+      await prefs.setString('owner_session', restoreOwnerSession);
+    }
+
+    await prefs.remove('support_mode_active');
+    await prefs.remove('support_mode_company_name');
+    await prefs.remove('support_restore_token');
+    await prefs.remove('support_restore_role');
+    await prefs.remove('support_restore_user_id');
+    await prefs.remove('support_restore_user_name');
+    await prefs.remove('support_restore_company_id');
+    await prefs.remove('support_restore_company_name');
+    await prefs.remove('support_restore_owner_session');
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const PainelProprietarioEmpresas()),
+      (route) => false,
+    );
   }
 
   Future<void> _showEditProfileDialog() async {
@@ -847,7 +955,99 @@ class _AdminDashboardState extends State<AdminDashboard>
                 opacity: _fadeAnim,
                 child: Column(
                   children: [
+                    if (_isSupportMode)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF160D24),
+                          border: Border(
+                            bottom: BorderSide(
+                                color: Color(0xFFA855F7), width: 1.5),
+                          ),
+                        ),
+                        child: SafeArea(
+                          bottom: false,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.admin_panel_settings_rounded,
+                                  color: Color(0xFFA855F7), size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'MODO SUPORTE AUDITADO • ${_supportCompanyName ?? 'Empresa'}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFA855F7),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
+                                  minimumSize: const Size(0, 30),
+                                ),
+                                icon: const Icon(Icons.exit_to_app_rounded,
+                                    size: 14),
+                                label: const Text(
+                                  'Voltar ao SuperAdmin',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                                onPressed: _voltarAoSuperAdmin,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     _buildHeader(isDesktop: isDesktop),
+                    if (_governanceWarningMessage != null)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: const Color(0xFFF59E0B).withOpacity(0.65)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_rounded,
+                                color: Color(0xFFFBBF24), size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _governanceWarningMessage!,
+                                style: const TextStyle(
+                                  color: Color(0xFFFDE68A),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                  minWidth: 28, minHeight: 28),
+                              icon: const Icon(Icons.close_rounded,
+                                  color: Color(0xFFFBBF24), size: 16),
+                              onPressed: () => setState(
+                                  () => _governanceWarningMessage = null),
+                            ),
+                          ],
+                        ),
+                      ),
                     Expanded(child: _buildBody()),
                   ],
                 ),

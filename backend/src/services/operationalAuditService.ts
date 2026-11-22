@@ -8,7 +8,10 @@ export type OperationalAuditCategory =
   | 'BUYER_PHONE'
   | 'PAYMENT'
   | 'REVERSAL'
-  | 'CONTRACT';
+  | 'CONTRACT'
+  | 'INTEGRATION'
+  | 'GOVERNANCE'
+  | 'SUPPORT';
 
 export const VALID_AUDIT_CATEGORIES: readonly OperationalAuditCategory[] = [
   'PRICE',
@@ -18,6 +21,9 @@ export const VALID_AUDIT_CATEGORIES: readonly OperationalAuditCategory[] = [
   'PAYMENT',
   'REVERSAL',
   'CONTRACT',
+  'INTEGRATION',
+  'GOVERNANCE',
+  'SUPPORT',
 ] as const;
 
 export type ReviewAlertStatus = 'PENDING_REVIEW' | 'REVIEWED_OK' | 'ADJUSTMENT_OPENED';

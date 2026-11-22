@@ -7,6 +7,7 @@ import express from 'express';
 import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
+import { disconnectPrisma } from '../src/services/prisma';
 import { inspectDatabaseTargetSafety } from '../src/services/asaasSandboxHarness';
 import {
   parsePercentageToMilliPercent,
@@ -56,7 +57,11 @@ async function startTestApiServer(): Promise<{
       const addr = srv.address() as { port: number };
       resolve({
         baseUrl: `http://127.0.0.1:${addr.port}`,
-        close: () => new Promise<void>((r) => srv.close(() => r())),
+        close: () =>
+          new Promise<void>((r) => {
+            srv.closeAllConnections?.();
+            srv.close(() => r());
+          }),
       });
     });
   });
@@ -391,6 +396,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
   t.after(async () => {
     if (apiServer) await apiServer.close();
     await prisma.$disconnect();
+    await disconnectPrisma();
   });
 
   await t.test(
@@ -682,7 +688,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
   );
 
   await t.test(
-    '4. Exclusão pré-contrato, mudança de taxa no meio do mês (vigências discriminadas), crediário sem reincidência em parcelas e preservação de 20%/25% + 10% dos vendedores',
+    '4. Exclusão pré-contrato, mudança de taxa no meio do mês (vigências discriminadas), crediário em regime de caixa real (entrada + parcelas pagas) e preservação de 20%/25% + 10% dos vendedores',
     async () => {
       await apiJson(
         apiServer!.baseUrl,
@@ -889,6 +895,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         {
           token: adminMidMonthJwt,
           body: {
+            idempotencyKey: `etapa3-pay-1-${suffix}`,
             amountCents: 50_000,
             paymentMethod: 'PIX',
             destination: 'COMPANY_ACCOUNT',
@@ -913,9 +920,14 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       assert.equal(closeMid.status, 201);
       const st = closeMid.data.statement;
 
-      assert.equal(st.eligibleSalesCount, 2);
-      assert.equal(st.eligibleSalesBaseCents, 300_000);
-      assert.equal(st.grossPlatformFeeCents, 9_000);
+      // Etapa 25 (Regime de Caixa Real Pago):
+      // - Venda 1 (12/10 @ 2.0%): R$ 1.000 à vista -> base 100.000, taxa 2.000
+      // - Venda 2 (22/10 @ 3.5%): entrada R$ 500 -> base 50.000, taxa 1.750
+      // - Parcela 1 paga (26/10 @ 3.5%): R$ 500 -> base 50.000, taxa 1.750
+      // Base total paga = R$ 2.000 (200.000 cents), NUNCA os R$ 3.000 brutos com parcelas em aberto!
+      assert.equal(st.eligibleSalesCount, 3);
+      assert.equal(st.eligibleSalesBaseCents, 200_000);
+      assert.equal(st.grossPlatformFeeCents, 5_500);
 
       assert.equal(st.vigenciaBreakdown.length, 2);
       assert.equal(st.vigenciaBreakdown[0].version, 1);
@@ -925,16 +937,16 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
 
       assert.equal(st.vigenciaBreakdown[1].version, 2);
       assert.equal(st.vigenciaBreakdown[1].ratePercentage, '3.500');
-      assert.equal(st.vigenciaBreakdown[1].baseCents, 200_000);
-      assert.equal(st.vigenciaBreakdown[1].feeCents, 7_000);
+      assert.equal(st.vigenciaBreakdown[1].baseCents, 100_000);
+      assert.equal(st.vigenciaBreakdown[1].feeCents, 3_500);
 
       const sep = st.financialSeparation;
       assert.equal(sep.companyCreditReceivedPrincipalCents, 50_000);
-      assert.equal(sep.lumoraFeeOnCreditInstallmentsCents, 0);
+      assert.equal(sep.lumoraFeeOnCreditInstallmentsCents, 1_750);
       assert.equal(sep.sellerInitialCommissions20Or25Cents, 55_000);
       assert.equal(sep.sellerInstallmentCommissions10Cents, 5_000);
 
-      // Receber 2ª parcela em novembro (2026-11) sem nenhuma venda nova -> taxa Lumora em 2026-11 = ZERO!
+      // Receber 2ª parcela em novembro (2026-11) sem venda nova -> incide sobre os R$ 500 pagos em novembro (50_000 @ 3.5% = 1_750)
       const payNov = await apiJson(
         apiServer!.baseUrl,
         'POST',
@@ -942,6 +954,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         {
           token: adminMidMonthJwt,
           body: {
+            idempotencyKey: `etapa3-pay-2-${suffix}`,
             amountCents: 50_000,
             paymentMethod: 'PIX',
             destination: 'COMPANY_ACCOUNT',
@@ -960,13 +973,14 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         { token: ownerFinanceJwt }
       );
       assert.equal(pvNov.status, 200);
-      assert.equal(pvNov.data.preview.eligibleSalesCount, 0);
-      assert.equal(pvNov.data.preview.grossPlatformFeeCents, 0);
+      assert.equal(pvNov.data.preview.eligibleSalesCount, 1);
+      assert.equal(pvNov.data.preview.creditInstallmentsPaidCents, 50_000);
+      assert.equal(pvNov.data.preview.grossPlatformFeeCents, 1_750);
       assert.equal(
         pvNov.data.preview.financialSeparation.companyCreditReceivedPrincipalCents,
         50_000
       );
-      assert.equal(pvNov.data.preview.financialSeparation.lumoraFeeOnCreditInstallmentsCents, 0);
+      assert.equal(pvNov.data.preview.financialSeparation.lumoraFeeOnCreditInstallmentsCents, 1_750);
     }
   );
 
@@ -1602,13 +1616,13 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
       );
       assert.equal(sumAllocatedShares, 16_000);
 
-      // Receitas 2026-10: Alpha (250_000, pago 250_000) + Beta (300_000) + Delta (0) + Épsilon (9_000) = 559_000
-      assert.equal(p.revenues.closedContractedRevenueCents, 559_000);
+      // Receitas 2026-10 (Regime de Caixa Real): Alpha (250_000, pago 250_000) + Beta (300_000) + Delta (0) + Épsilon (5_500) = 555_500
+      assert.equal(p.revenues.closedContractedRevenueCents, 555_500);
       assert.equal(p.revenues.statementReceivedRevenueCents, 250_000);
 
-      // Margem Real = 250_000 - 16_000 = 234_000 | Margem Estimada = 559_000 - 18_500 = 540_500
+      // Margem Real = 250_000 - 16_000 = 234_000 | Margem Estimada = 555_500 - 18_500 = 537_000
       assert.equal(p.margins.realMarginCents, 234_000);
-      assert.equal(p.margins.estimatedMarginCents, 540_500);
+      assert.equal(p.margins.estimatedMarginCents, 537_000);
 
       const storePolicyRes = await apiJson(
         apiServer!.baseUrl,
@@ -2058,6 +2072,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         {
           token: adminOmegaJwt,
           body: {
+            idempotencyKey: `etapa3-omega-1-${suffix}`,
             amountCents: 10_000,
             paymentMethod: 'PIX',
             paidAt: '2026-10-15T10:00:00.000Z',
@@ -2097,6 +2112,7 @@ test('Etapa 3 — Faturamento Variável, Separação Financeira, Auditoria Masca
         {
           token: adminOmegaJwt,
           body: {
+            idempotencyKey: `etapa3-omega-23-${suffix}`,
             amountCents: 20_000, // paga parcelas 2 e 3
             paymentMethod: 'PIX',
             paidAt: '2026-10-20T10:00:00.000Z',

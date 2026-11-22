@@ -281,6 +281,47 @@ export const authenticateToken = async (
     }
 
     // =========================================================================
+    // 0. MODO SUPORTE SUPERADMIN AUDITADO (ACESSO COMO ADMIN DA EMPRESA)
+    // =========================================================================
+    if (
+      decoded.isSuperAdminSupportSession === true &&
+      typeof decoded.supportAdminId === 'string' &&
+      typeof decoded.companyId === 'string'
+    ) {
+      const [actor, targetCompany] = await Promise.all([
+        getPrisma().user.findUnique({ where: { id: decoded.supportAdminId } }),
+        getPrisma().company.findUnique({ where: { id: decoded.companyId } }),
+      ]);
+      if (!actor || !actor.active || actor.role !== 'SUPER_ADMIN') {
+        res.status(403).json({
+          error: 'SUPPORT_ACTOR_INVALID',
+          message: 'Credencial de suporte SuperAdmin inválida ou inativa.',
+        });
+        return;
+      }
+      if (!targetCompany) {
+        res.status(404).json({ error: 'Empresa alvo não encontrada para sessão de suporte.' });
+        return;
+      }
+      req.user = {
+        id: actor.id,
+        cpf: actor.cpf,
+        role: 'ADMIN',
+        companyId: targetCompany.id,
+        teamId: null,
+        name: `${actor.name} (Suporte)`,
+        photographerCode: null,
+        actorId: actor.id,
+        actorRole: 'SUPER_ADMIN',
+        effectiveCompanyId: targetCompany.id,
+        effectiveRole: 'ADMIN',
+        isTemporarySupportSession: true,
+      };
+      next();
+      return;
+    }
+
+    // =========================================================================
     // 1. SESSÃO DE SUPORTE TEMPORÁRIO AUTORIZADO (CONTEXTO EXPLÍCITO E SEGURO)
     // =========================================================================
     if (
@@ -517,10 +558,24 @@ export const authenticateToken = async (
       }
     }
 
-    // Para qualquer papel que não seja SUPER_ADMIN, exige empresa existente e ativa
+    // Para qualquer papel que não seja SUPER_ADMIN, exige empresa existente, ativa e não suspensa
     if (user.role !== 'SUPER_ADMIN') {
-      if (!user.companyId || !user.company || user.company.isActive === false) {
-        res.status(403).json({ error: 'Company account is inactive' });
+      if (
+        !user.companyId ||
+        !user.company ||
+        user.company.isActive === false ||
+        user.company.status === 'SUSPENDED' ||
+        user.company.commercialStatus === 'SUSPENDED'
+      ) {
+        const isSuspended =
+          user.company?.commercialStatus === 'SUSPENDED' ||
+          user.company?.status === 'SUSPENDED';
+        res.status(403).json({
+          error: isSuspended
+            ? `Company account is inactive (SUSPENDED): ${user.company?.commercialStatusReason || user.company?.suspensionReason || 'Empresa suspensa comercialmente.'}`
+            : 'Company account is inactive',
+          ...(isSuspended ? { code: 'COMPANY_SUSPENDED', commercialStatus: 'SUSPENDED' } : {}),
+        });
         return;
       }
     }

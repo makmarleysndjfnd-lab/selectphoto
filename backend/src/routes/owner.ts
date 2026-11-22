@@ -230,6 +230,21 @@ router.get(
             orderBy: { version: 'desc' },
             take: 1, // Taxa mais recente
           },
+          integrations: {
+            select: {
+              category: true,
+              provider: true,
+              scope: true,
+              status: true,
+              environment: true,
+              secretMasked: true,
+              lastValidatedAt: true,
+              lastValidationStatus: true,
+            },
+          },
+          asaasConfig: {
+            select: { mode: true },
+          },
         },
         orderBy: { name: 'asc' },
       });
@@ -243,6 +258,32 @@ router.get(
           new Date(latestRate.effectiveFrom) <= now &&
           (latestRate.effectiveTo === null || new Date(latestRate.effectiveTo) > now);
 
+        const activeAsaas =
+          c.integrations.find(
+            (i) => i.category === 'PAYMENT_GATEWAY' && i.provider === 'ASAAS' && i.status === 'ACTIVE'
+          ) ||
+          c.integrations.find((i) => i.category === 'PAYMENT_GATEWAY' && i.provider === 'ASAAS') ||
+          null;
+        const activeGemini =
+          c.integrations.find(
+            (i) =>
+              i.category === 'AI_RESEARCH' &&
+              i.provider === 'GEMINI' &&
+              i.status === 'ACTIVE' &&
+              i.scope !== 'PLATFORM_SHARED'
+          ) || null;
+        const asaasConfigured =
+          Boolean(activeAsaas && activeAsaas.status === 'ACTIVE') ||
+          Boolean(c.asaasConfig && c.asaasConfig.mode !== 'DISABLED');
+        const asaasEnv =
+          activeAsaas?.environment ||
+          (c.asaasConfig?.mode === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX');
+        const geminiConfigured =
+          Boolean(c.geminiApiKeyEncrypted && c.geminiApiKeyIv && c.geminiApiKeyTag) ||
+          Boolean(activeGemini);
+        const feeBps = typeof c.platformFeeBps === 'number' ? c.platformFeeBps : 250;
+        const commStatus = c.commercialStatus || c.status || 'ACTIVE';
+
         return {
           id: c.id,
           name: c.name,
@@ -250,6 +291,10 @@ router.get(
           legalName: c.legalName,
           tradeName: c.tradeName,
           status: c.status,
+          commercialStatus: commStatus,
+          commercialStatusReason: c.commercialStatusReason || null,
+          platformFeeBps: feeBps,
+          platformFeePercent: Number((feeBps / 100).toFixed(2)),
           classification: (c as any).classification || 'OPERATIONAL',
           isTestExample: (c as any).classification === 'TEST_DEMO' || isConfirmedTestCompany(c.id),
           isActive: c.isActive,
@@ -261,6 +306,32 @@ router.get(
           suspendedAt: c.suspendedAt,
           userCount: c._count.users,
           isRateConfigured: latestRate !== null,
+          integrationsSummary: {
+            asaas: {
+              configured: asaasConfigured,
+              environment: asaasEnv,
+              maskedKey: activeAsaas?.secretMasked || null,
+              connectionStatus: c.asaasConnectionStatus || (asaasConfigured ? 'PENDING' : 'UNCONFIGURED'),
+              lastTestedAt: c.asaasLastTestedAt || null,
+              connectionMessage: c.asaasConnectionMessage || null,
+            },
+            serasa: {
+              configured: asaasConfigured,
+              ready: asaasConfigured,
+              environment: asaasEnv,
+            },
+            gemini: {
+              configured: geminiConfigured,
+              maskedKey: c.geminiApiKeyMasked || activeGemini?.secretMasked || null,
+              connectionStatus: c.geminiConnectionStatus || (geminiConfigured ? 'PENDING' : 'UNCONFIGURED'),
+              lastTestedAt: c.geminiLastTestedAt || null,
+              connectionMessage: c.geminiConnectionMessage || null,
+            },
+            companyPix: {
+              configured: Boolean(c.companyPixKey && c.companyPixKey.trim()),
+              type: c.companyPixKeyType || null,
+            },
+          },
           currentRate: latestRate
             ? {
                 id: latestRate.id,
@@ -443,7 +514,9 @@ router.post(
           adminContactPhone: adminContactPhone ? adminContactPhone.trim() : null,
           contractNotes: contractNotes ? contractNotes.trim() : null,
           planLimit: typeof planLimit === 'number' && planLimit > 0 ? planLimit : 500,
+          platformFeeBps: initialRatePercentage !== undefined && initialRatePercentage !== null ? Math.round(Number(initialRatePercentage) * 100) : 250,
           status: 'ACTIVE',
+          commercialStatus: 'ACTIVE',
           isActive: true,
         },
       });
@@ -507,6 +580,10 @@ router.put(
         adminContactPhone,
         contractNotes,
         planLimit,
+        platformFeeBps,
+        platformFeePercent,
+        commercialStatus,
+        commercialStatusReason,
       } = req.body;
 
       const prisma = getPrisma();
@@ -523,6 +600,41 @@ router.put(
         }
       }
 
+      let nextFeeBps = existing.platformFeeBps;
+      if (platformFeeBps !== undefined && platformFeeBps !== null && platformFeeBps !== '') {
+        const parsed = Math.round(Number(platformFeeBps));
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 10000) {
+          return res.status(400).json({ error: 'platformFeeBps deve estar entre 0 e 10000.' });
+        }
+        nextFeeBps = parsed;
+      } else if (platformFeePercent !== undefined && platformFeePercent !== null && platformFeePercent !== '') {
+        const parsedPct = Number(String(platformFeePercent).replace(',', '.'));
+        if (!Number.isFinite(parsedPct) || parsedPct < 0 || parsedPct > 100) {
+          return res.status(400).json({ error: 'Percentual da taxa Lumora deve estar entre 0 e 100%.' });
+        }
+        nextFeeBps = Math.round(parsedPct * 100);
+      }
+
+      let nextCommStatus = existing.commercialStatus || existing.status || 'ACTIVE';
+      let nextCommReason = existing.commercialStatusReason;
+      let nextStatus = existing.status;
+      let nextIsActive = existing.isActive;
+      if (commercialStatus !== undefined) {
+        const upper = String(commercialStatus).toUpperCase();
+        if (!['ACTIVE', 'WARNING', 'SUSPENDED'].includes(upper)) {
+          return res.status(400).json({ error: 'commercialStatus deve ser ACTIVE, WARNING ou SUSPENDED.' });
+        }
+        nextCommStatus = upper;
+        nextStatus = upper === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE';
+        nextIsActive = upper !== 'SUSPENDED';
+        nextCommReason =
+          upper === 'ACTIVE'
+            ? null
+            : typeof commercialStatusReason === 'string' && commercialStatusReason.trim()
+              ? commercialStatusReason.trim()
+              : existing.commercialStatusReason;
+      }
+
       const updated = await prisma.company.update({
         where: { id: id as string },
         data: {
@@ -535,8 +647,45 @@ router.put(
           adminContactPhone: adminContactPhone !== undefined ? (adminContactPhone ? adminContactPhone.trim() : null) : existing.adminContactPhone,
           contractNotes: contractNotes !== undefined ? (contractNotes ? contractNotes.trim() : null) : existing.contractNotes,
           planLimit: typeof planLimit === 'number' && planLimit > 0 ? planLimit : existing.planLimit,
+          platformFeeBps: nextFeeBps,
+          commercialStatus: nextCommStatus,
+          commercialStatusReason: nextCommReason,
+          status: nextStatus,
+          isActive: nextIsActive,
+          ...(nextCommStatus === 'SUSPENDED'
+            ? {
+                suspensionReason: nextCommReason || 'Suspensão comercial',
+                suspendedAt: existing.suspendedAt || new Date(),
+                suspendedByUserId: req.user?.id || null,
+              }
+            : commercialStatus !== undefined
+              ? { suspensionReason: null, suspendedAt: null, suspendedByUserId: null }
+              : {}),
         },
       });
+
+      if (nextFeeBps !== existing.platformFeeBps) {
+        const latestRate = await prisma.companyPlatformRate.findFirst({
+          where: { companyId: updated.id },
+          orderBy: { version: 'desc' },
+        });
+        await prisma.companyPlatformRate.updateMany({
+          where: { companyId: updated.id, effectiveTo: null },
+          data: { effectiveTo: new Date() },
+        });
+        await prisma.companyPlatformRate.create({
+          data: {
+            companyId: updated.id,
+            version: (latestRate?.version || 0) + 1,
+            ratePercentage: new Prisma.Decimal((nextFeeBps / 100).toFixed(3)),
+            effectiveFrom: new Date('2020-01-01T00:00:00.000Z'),
+            effectiveTo: null,
+            reason: 'Taxa Lumora ajustada na edição da empresa pelo SuperAdmin',
+            createdByUserId: req.user!.id,
+            createdByName: req.user!.name || 'Proprietário',
+          },
+        });
+      }
 
       await logContractAudit({
         companyId: updated.id,
@@ -567,31 +716,34 @@ router.post(
       const { id } = req.params;
       const { status, reason } = req.body;
 
-      if (!status || !['ACTIVE', 'SUSPENDED'].includes(status)) {
-        return res.status(400).json({ error: 'Status deve ser "ACTIVE" ou "SUSPENDED".' });
-      }
+    const isWarning = status === 'WARNING';
+    const isSuspending = status === 'SUSPENDED';
+    if (!status || !['ACTIVE', 'WARNING', 'SUSPENDED'].includes(status)) {
+      return res.status(400).json({ error: 'Status deve ser "ACTIVE", "WARNING" ou "SUSPENDED".' });
+    }
 
-      if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
-        return res.status(400).json({ error: 'Justificativa é obrigatória (mínimo 5 caracteres).' });
-      }
+    if ((isSuspending || isWarning) && (!reason || typeof reason !== 'string' || reason.trim().length < 5)) {
+      return res.status(400).json({ error: 'Justificativa é obrigatória (mínimo 5 caracteres).' });
+    }
 
-      const prisma = getPrisma();
-      const company = await prisma.company.findUnique({ where: { id: id as string } });
-      if (!company) {
-        return res.status(404).json({ error: 'Empresa não encontrada.' });
-      }
+    const prisma = getPrisma();
+    const company = await prisma.company.findUnique({ where: { id: id as string } });
+    if (!company) {
+      return res.status(404).json({ error: 'Empresa não encontrada.' });
+    }
 
-      const isSuspending = status === 'SUSPENDED';
-      const updated = await prisma.company.update({
-        where: { id: id as string },
-        data: {
-          status,
-          isActive: !isSuspending,
-          suspensionReason: isSuspending ? reason.trim() : null,
-          suspendedAt: isSuspending ? new Date() : null,
-          suspendedByUserId: isSuspending ? req.user!.id : null,
-        },
-      });
+    const updated = await prisma.company.update({
+      where: { id: id as string },
+      data: {
+        status: isSuspending ? 'SUSPENDED' : 'ACTIVE',
+        commercialStatus: status,
+        commercialStatusReason: status === 'ACTIVE' ? null : (reason ? reason.trim() : null),
+        isActive: !isSuspending,
+        suspensionReason: isSuspending ? reason.trim() : null,
+        suspendedAt: isSuspending ? new Date() : null,
+        suspendedByUserId: isSuspending ? req.user!.id : null,
+      },
+    });
 
       await logContractAudit({
         companyId: updated.id,

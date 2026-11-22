@@ -124,7 +124,7 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
       final results = await Future.wait([
         widget.loadStatementsOverride != null
             ? widget.loadStatementsOverride!(_competence)
-            : _api.getOwnerBillingStatements(competence: _competence),
+            : _api.getSuperAdminBillingOverview(competence: _competence),
         widget.loadCostsOverride != null
             ? widget.loadCostsOverride!(_competence)
             : _api.getOwnerCostsAndMargin(competence: _competence),
@@ -783,20 +783,20 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFF0D0714),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
+        backgroundColor: const Color(0xFF160D24),
         foregroundColor: Colors.white,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Faturamento, Custos e Auditoria',
+              'Faturamento Caixa Real, Custos e Auditoria',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             Text(
-              'Competência $_competence • Liquidação B2B Externa',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF38BDF8)),
+              'Competência $_competence • Taxa sobre Caixa Real Pago',
+              style: const TextStyle(fontSize: 11, color: Color(0xFFA855F7)),
             ),
           ],
         ),
@@ -820,8 +820,8 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
-          indicatorColor: const Color(0xFF38BDF8),
-          labelColor: const Color(0xFF38BDF8),
+          indicatorColor: const Color(0xFFA855F7),
+          labelColor: const Color(0xFFD8B4FE),
           unselectedLabelColor: const Color(0xFF94A3B8),
           tabs: const [
             Tab(icon: Icon(Icons.receipt_long_rounded, size: 18), text: 'Demonstrativos'),
@@ -833,7 +833,7 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
       ),
       body: _loading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF38BDF8)),
+              child: CircularProgressIndicator(color: Color(0xFFA855F7)),
             )
           : _error != null
               ? Center(
@@ -871,21 +871,28 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E293B),
+            color: const Color(0xFF160D24),
             borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.35)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Consolidado Fechado ($_competence)',
+                'Consolidado Caixa Real ($_competence)',
                 style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
                     fontSize: 14),
               ),
               const SizedBox(height: 8),
-              _row('Base Confirmada Elegível',
+              _row('À Vista Pago no Período',
+                  _formatCents(totals['cashSalesPaidCents'] ?? 0)),
+              _row('Entradas Crediário Pagas',
+                  _formatCents(totals['creditDownPaymentsPaidCents'] ?? 0)),
+              _row('Parcelas/Boletos Pagos',
+                  _formatCents(totals['creditInstallmentsPaidCents'] ?? 0)),
+              _row('Base Líquida Paga Elegível',
                   _formatCents(totals['eligibleSalesBaseCents'])),
               _row('Taxa Contratada Bruta',
                   _formatCents(totals['grossPlatformFeeCents'])),
@@ -917,12 +924,17 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
           final st = Map<String, dynamic>.from(raw as Map);
           final comp = (st['company'] as Map<String, dynamic>?) ?? {};
           final rem = (st['remainingBalanceCents'] as num?)?.toInt() ?? 0;
+          final ratePct = st['appliedRatePercentage'] ??
+              (st['appliedRateBps'] != null
+                  ? ((st['appliedRateBps'] as num) / 100.0)
+                  : null);
           return Container(
             margin: const EdgeInsets.only(bottom: 10),
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
+              color: const Color(0xFF160D24),
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.25)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -952,8 +964,12 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
                   ],
                 ),
                 const SizedBox(height: 6),
-                _row('Base Elegível (${st['eligibleSalesCount']} vendas)',
+                _row('À Vista / Entradas / Parcelas Pagas',
+                    '${_formatCents(st['cashSalesPaidCents'] ?? 0)} / ${_formatCents(st['creditDownPaymentsPaidCents'] ?? 0)} / ${_formatCents(st['creditInstallmentsPaidCents'] ?? 0)}'),
+                _row('Base Elegível (${st['eligibleSalesCount']} movs)',
                     _formatCents(st['eligibleSalesBaseCents'])),
+                if (ratePct != null)
+                  _row('Taxa Lumora Aplicada', '${(ratePct as num).toStringAsFixed(2)}%'),
                 _row('Taxa Bruta / Ajustes',
                     '${_formatCents(st['grossPlatformFeeCents'])} / ${_formatCents(st['adjustmentsCents'])}'),
                 _row('Devido / Pago / Saldo',
@@ -986,12 +1002,14 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
           final comp = (pv['company'] as Map<String, dynamic>?) ?? {};
           final canClose = pv['canClose'] == true;
           final contractStatus = pv['contractStatus']?.toString() ?? '';
+          final pvRatePct = pv['appliedRatePercentage'];
           return Container(
             margin: const EdgeInsets.only(bottom: 10),
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
+              color: const Color(0xFF160D24),
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.25)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1004,23 +1022,33 @@ class _PainelProprietarioFaturamentoAuditoriaCustosState
                       fontSize: 14),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  !canClose
-                      ? 'Não configurado ($contractStatus) — sem cobrança automática'
-                      : 'Prévia elegível: ${pv['eligibleSalesCount']} venda(s) • Taxa prevista: ${_formatCents(pv['netDueCents'])}',
-                  style: TextStyle(
-                    color: !canClose ? Colors.orangeAccent : Colors.white70,
-                    fontSize: 12,
+                if (!canClose)
+                  Text(
+                    'Não configurado ($contractStatus) — sem cobrança automática',
+                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                  )
+                else ...[
+                  _row('À Vista Pago', _formatCents(pv['cashSalesPaidCents'] ?? 0)),
+                  _row('Entradas Crediário Pagas',
+                      _formatCents(pv['creditDownPaymentsPaidCents'] ?? 0)),
+                  _row('Parcelas/Boletos Pagos',
+                      _formatCents(pv['creditInstallmentsPaidCents'] ?? 0)),
+                  _row('Base Líquida Paga (${pv['eligibleSalesCount']} itens)',
+                      _formatCents(pv['eligibleSalesBaseCents'])),
+                  _row(
+                    'Taxa Prevista${pvRatePct != null ? ' (${(pvRatePct as num).toStringAsFixed(2)}%)' : ''}',
+                    _formatCents(pv['netDueCents']),
+                    bold: true,
                   ),
-                ),
+                ],
                 if (canClose) ...[
                   const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerRight,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF38BDF8),
-                        foregroundColor: const Color(0xFF0F172A),
+                        backgroundColor: const Color(0xFFA855F7),
+                        foregroundColor: Colors.white,
                       ),
                       icon: const Icon(Icons.lock_clock_rounded, size: 16),
                       label: const Text('Fechar Competência'),

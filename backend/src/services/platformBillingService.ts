@@ -257,7 +257,8 @@ export async function findNextOpenCompetence(
 async function computeFinancialBucketsAndPreviewData(
   companyId: string,
   competence: string,
-  db: Prisma.TransactionClient | PrismaClient
+  db: Prisma.TransactionClient | PrismaClient,
+  options?: { useCompanyBpsIfNoRate?: boolean }
 ) {
   const { startDate, endDate } = getCompetenceRange(competence);
 
@@ -270,6 +271,9 @@ async function computeFinancialBucketsAndPreviewData(
       tradeName: true,
       cnpj: true,
       status: true,
+      platformFeeBps: true,
+      commercialStatus: true,
+      commercialStatusReason: true,
     },
   });
   if (!company) {
@@ -406,7 +410,7 @@ async function computeFinancialBucketsAndPreviewData(
     priorClosedCompetences.has(getCompetenceForDate(new Date(s.date)))
   );
 
-  // Recebimentos de parcelas de crediário no período (Bucket 2 & 4 — NUNCA geram nova taxa Lumora!)
+  // Recebimentos de parcelas de crediário no período (Regime de Caixa Real Pago)
   const creditPaymentsInPeriod = await db.creditPayment.findMany({
     where: {
       companyId,
@@ -419,12 +423,77 @@ async function computeFinancialBucketsAndPreviewData(
     include: {
       agreement: {
         select: {
+          id: true,
+          saleId: true,
+          status: true,
           client: {
             select: { sequenceNumber: true, name: true },
+          },
+          sale: {
+            select: {
+              id: true,
+              date: true,
+              city: true,
+              product: true,
+              fichaNumber: true,
+              saleStatus: true,
+              status: true,
+              paymentStatus: true,
+              refundedAmountCents: true,
+            },
           },
         },
       },
     },
+    orderBy: [{ paidAt: 'asc' }, { id: 'asc' }],
+  });
+
+  // Parcelas marcadas como PAID diretamente dentro da competência sem registro em CreditPayment
+  const standalonePaidInstallments = await db.creditInstallment.findMany({
+    where: {
+      status: 'PAID',
+      paidAt: {
+        gte: startDate,
+        lt: endDate,
+      },
+      agreement: {
+        companyId,
+        status: { not: 'CANCELLED' },
+      },
+      allocations: {
+        none: {
+          payment: {
+            isReversed: false,
+          },
+        },
+      },
+    },
+    include: {
+      agreement: {
+        select: {
+          id: true,
+          saleId: true,
+          status: true,
+          client: {
+            select: { sequenceNumber: true, name: true },
+          },
+          sale: {
+            select: {
+              id: true,
+              date: true,
+              city: true,
+              product: true,
+              fichaNumber: true,
+              saleStatus: true,
+              status: true,
+              paymentStatus: true,
+              refundedAmountCents: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: [{ paidAt: 'asc' }, { installmentNumber: 'asc' }],
   });
 
   // Comissões de 10% sobre principal das parcelas do crediário geradas no período (Bucket 3)
@@ -517,7 +586,28 @@ async function computeFinancialBucketsAndPreviewData(
     orderBy: { createdAt: 'asc' },
   });
 
-  if (rates.length === 0) {
+  const effectiveRates =
+    rates.length > 0
+      ? rates
+      : options?.useCompanyBpsIfNoRate
+        ? [
+            {
+              id: `company-bps-${company.id}`,
+              companyId: company.id,
+              version: 0,
+              ratePercentage: new Prisma.Decimal(((company.platformFeeBps ?? 250) / 100).toFixed(3)),
+              effectiveFrom: new Date('2020-01-01T00:00:00.000Z'),
+              effectiveTo: null,
+              reason: 'Taxa configurada na empresa (platformFeeBps)',
+              createdByUserId: 'system',
+              createdByName: 'SuperAdmin',
+              createdAt: new Date('2020-01-01T00:00:00.000Z'),
+              updatedAt: new Date('2020-01-01T00:00:00.000Z'),
+            },
+          ]
+        : [];
+
+  if (effectiveRates.length === 0) {
     // Sem contrato/taxa aprovada: mostrar NÃO CONFIGURADO, sem cobrar automaticamente
     let confirmedSalesBaseWithoutContractCents = 0;
     let confirmedSalesCountWithoutContract = 0;
@@ -531,10 +621,15 @@ async function computeFinancialBucketsAndPreviewData(
         continue;
       }
       const rawSaleCents = s.creditAgreement
-        ? s.creditAgreement.totalSaleCents
+        ? Math.min(s.creditAgreement.totalSaleCents, s.creditAgreement.downPaymentCents || 0)
         : Math.round(Number(s.value) * 100);
       const refundedCents = Math.max(0, Math.round(Number(s.refundedAmountCents || 0)));
-      const saleCents = Math.max(0, rawSaleCents - refundedCents);
+      const saleCents = s.creditAgreement
+        ? Math.min(
+            Math.max(0, s.creditAgreement.totalSaleCents - refundedCents),
+            s.creditAgreement.downPaymentCents || 0
+          )
+        : Math.max(0, rawSaleCents - refundedCents);
       if (saleCents <= 0) {
         excludedTestOrUnconfirmedCount += 1;
         continue;
@@ -543,9 +638,8 @@ async function computeFinancialBucketsAndPreviewData(
       confirmedSalesCountWithoutContract += 1;
 
       if (s.creditAgreement) {
-        const downCents = Math.min(saleCents, s.creditAgreement.downPaymentCents || 0);
         sellerInitialCommissionsCents += Math.round(
-          downCents * s.creditAgreement.initialCommissionRate
+          saleCents * s.creditAgreement.initialCommissionRate
         );
       } else {
         const rate = s.seller?.usesOwnCar ? 25 : 20;
@@ -566,6 +660,12 @@ async function computeFinancialBucketsAndPreviewData(
       vigenciaBreakdown: [] as VigenciaBucketSummary[],
       eligibleSalesCount: 0,
       eligibleSalesBaseCents: 0,
+      cashSalesPaidCents: 0,
+      creditDownPaymentsPaidCents: 0,
+      creditInstallmentsPaidCents: 0,
+      appliedRateBps: company.platformFeeBps ?? 250,
+      installmentFeesCents: 0,
+      refundCreditsCents: pendingAdjustments.filter((a) => a.amountCents < 0).reduce((acc, a) => acc + Math.abs(a.amountCents), 0) + incomingCreditCents,
       grossPlatformFeeCents: 0,
       pendingAdjustments,
       adjustmentsCents: pendingAdjustmentsCents,
@@ -591,6 +691,11 @@ async function computeFinancialBucketsAndPreviewData(
   let excludedTestOrUnconfirmedCount = 0;
   let companyConfirmedSalesCents = 0;
   let sellerInitialCommissionsCents = 0;
+  let cashSalesPaidCents = 0;
+  let creditDownPaymentsPaidCents = 0;
+  let creditInstallmentsPaidCents = 0;
+  let installmentFeesCents = 0;
+  let installmentPaidCount = 0;
 
   const eligibleItems: Array<{
     saleId: string;
@@ -611,7 +716,7 @@ async function computeFinancialBucketsAndPreviewData(
 
   const vigenciaMap = new Map<string, VigenciaBucketSummary>();
 
-  // Processa vendas da competência corrente e vendas tardias extemporâneas de competências já fechadas
+  // Processa vendas à vista pagas e entradas pagas de crediário (Regime de Caixa Real Pago)
   const allSalesToConsider = [...rawSales, ...lateUnbilledSales];
 
   for (const s of allSalesToConsider) {
@@ -621,35 +726,49 @@ async function computeFinancialBucketsAndPreviewData(
       continue;
     }
 
-    // Se a venda já constar em algum demonstrativo anterior (garantia de incidência única por venda), ignorar nova cobrança
+    // Se a venda já constar em algum demonstrativo anterior, não cobra novamente a entrada/à vista
     if (s.platformStatementItem) {
       continue;
     }
 
-    const rawSaleBaseCents = s.creditAgreement
-      ? s.creditAgreement.totalSaleCents
-      : Math.round(Number(s.value) * 100);
     const refundedCents = Math.max(0, Math.round(Number(s.refundedAmountCents || 0)));
-    const saleBaseCents = Math.max(0, rawSaleBaseCents - refundedCents);
-    if (saleBaseCents <= 0) {
-      excludedTestOrUnconfirmedCount += 1;
-      continue;
-    }
-
-    companyConfirmedSalesCents += saleBaseCents;
+    let saleBaseCents = 0;
 
     if (s.creditAgreement) {
-      const downCents = Math.min(saleBaseCents, s.creditAgreement.downPaymentCents || 0);
+      if ((s.creditAgreement as any).status === 'CANCELLED') {
+        excludedTestOrUnconfirmedCount += 1;
+        continue;
+      }
+      // Regime de caixa: apenas entrada efetivamente paga no ato (NUNCA o valor financiado!)
+      const netTotalCents = Math.max(0, s.creditAgreement.totalSaleCents - refundedCents);
+      const netDownCents = Math.min(netTotalCents, s.creditAgreement.downPaymentCents || 0);
+      saleBaseCents = netDownCents;
+      if (saleBaseCents <= 0) {
+        continue; // Sem entrada paga no ato; parcelas serão apuradas conforme pagas
+      }
       sellerInitialCommissionsCents += Math.round(
-        downCents * s.creditAgreement.initialCommissionRate
+        saleBaseCents * s.creditAgreement.initialCommissionRate
       );
     } else {
+      const payStatusUpper = String(s.paymentStatus || '').toUpperCase();
+      if (payStatusUpper === 'UNPAID') {
+        excludedTestOrUnconfirmedCount += 1;
+        continue;
+      }
+      const rawCashCents = Math.round(Number(s.value) * 100);
+      saleBaseCents = Math.max(0, rawCashCents - refundedCents);
+      if (saleBaseCents <= 0) {
+        excludedTestOrUnconfirmedCount += 1;
+        continue;
+      }
       const sellerPct = s.seller?.usesOwnCar ? 25 : 20;
       sellerInitialCommissionsCents += Math.round((saleBaseCents * sellerPct) / 100);
     }
 
+    companyConfirmedSalesCents += saleBaseCents;
+
     // Taxa correspondente à DATA COMERCIAL ORIGINAL da venda (preserva versão mesmo em venda extemporânea)
-    const matchingRate = resolveRateForSaleDate(rates, new Date(s.date));
+    const matchingRate = resolveRateForSaleDate(effectiveRates, new Date(s.date));
     if (!matchingRate) {
       // Venda ocorrida antes do início contratado (effectiveFrom): nunca aplicar taxa retroativamente
       excludedPreContractCount += 1;
@@ -657,10 +776,16 @@ async function computeFinancialBucketsAndPreviewData(
       continue;
     }
 
+    if (s.creditAgreement) {
+      creditDownPaymentsPaidCents += saleBaseCents;
+    } else {
+      cashSalesPaidCents += saleBaseCents;
+    }
+
     const rateMilliPercent = parsePercentageToMilliPercent(matchingRate.ratePercentage);
     const calculatedFeeCents = calculateFeeCentsHalfUp(saleBaseCents, rateMilliPercent);
     const paymentModality = s.creditAgreement
-      ? 'CREDIARIO'
+      ? 'CREDIARIO_ENTRADA'
       : String(s.paymentMethod || 'CASH').toUpperCase();
 
     const isLate = new Date(s.date).getTime() < startDate.getTime();
@@ -710,12 +835,96 @@ async function computeFinancialBucketsAndPreviewData(
     }
   }
 
+  // Parcelas e boletos de crediário efetivamente PAGOS dentro da competência (Regime de Caixa Real)
+  const paidInstallmentEntries: Array<{
+    amountCents: number;
+    paidAt: Date;
+    agreement: any;
+  }> = [
+    ...creditPaymentsInPeriod.map((cp) => ({
+      amountCents: cp.amountCents,
+      paidAt: cp.paidAt,
+      agreement: cp.agreement,
+    })),
+    ...standalonePaidInstallments.map((inst) => ({
+      amountCents: inst.paidCents > 0 ? inst.paidCents : inst.amountCents,
+      paidAt: inst.paidAt || inst.updatedAt,
+      agreement: inst.agreement,
+    })),
+  ];
+
+  for (const entry of paidInstallmentEntries) {
+    const agr = entry.agreement;
+    if (!agr || agr.status === 'CANCELLED') continue;
+    const origSale = agr.sale;
+    if (
+      origSale &&
+      (String(origSale.saleStatus || '').toUpperCase() === 'CANCELLED' ||
+        CANCELED_OR_UNCONFIRMED_SALE_STATUSES.has(String(origSale.status || '').toUpperCase()))
+    ) {
+      continue;
+    }
+    if (
+      isTestOrSimulationMarker(agr.client?.sequenceNumber) ||
+      isTestOrSimulationMarker(agr.client?.name) ||
+      isTestOrSimulationMarker(origSale?.fichaNumber)
+    ) {
+      continue;
+    }
+
+    const instCents = Math.max(0, Math.round(Number(entry.amountCents || 0)));
+    if (instCents <= 0) continue;
+
+    const matchingRate =
+      resolveRateForSaleDate(effectiveRates, new Date(entry.paidAt)) ||
+      (origSale?.date ? resolveRateForSaleDate(effectiveRates, new Date(origSale.date)) : null);
+    if (!matchingRate) {
+      excludedPreContractCount += 1;
+      excludedPreContractBaseCents += instCents;
+      continue;
+    }
+
+    const rateMilliPercent = parsePercentageToMilliPercent(matchingRate.ratePercentage);
+    const feeCents = calculateFeeCentsHalfUp(instCents, rateMilliPercent);
+
+    creditInstallmentsPaidCents += instCents;
+    companyConfirmedSalesCents += instCents;
+    installmentFeesCents += feeCents;
+    installmentPaidCount += 1;
+
+    const existingBucket = vigenciaMap.get(matchingRate.id);
+    if (existingBucket) {
+      existingBucket.salesCount += 1;
+      existingBucket.baseCents += instCents;
+      existingBucket.feeCents += feeCents;
+      existingBucket.theoreticalAggregateFeeCents = calculateFeeCentsHalfUp(
+        existingBucket.baseCents,
+        existingBucket.rateMilliPercent
+      );
+    } else {
+      vigenciaMap.set(matchingRate.id, {
+        rateId: matchingRate.id,
+        version: matchingRate.version,
+        ratePercentage: formatMilliPercentToDecimalString(rateMilliPercent),
+        rateMilliPercent,
+        effectiveFrom: new Date(matchingRate.effectiveFrom).toISOString(),
+        effectiveTo: matchingRate.effectiveTo
+          ? new Date(matchingRate.effectiveTo).toISOString()
+          : null,
+        salesCount: 1,
+        baseCents: instCents,
+        feeCents,
+        theoreticalAggregateFeeCents: calculateFeeCentsHalfUp(instCents, rateMilliPercent),
+      });
+    }
+  }
+
   const vigenciaBreakdown = Array.from(vigenciaMap.values()).sort(
     (a, b) => a.version - b.version
   );
 
   // Caso não haja vendas no período mas haja taxa vigente no período, identificar se todas as taxas vigentes no mês são 0%
-  const activeRatesInMonth = rates.filter((r) => {
+  const activeRatesInMonth = effectiveRates.filter((r) => {
     const rFrom = new Date(r.effectiveFrom).getTime();
     const rTo = r.effectiveTo ? new Date(r.effectiveTo).getTime() : null;
     return rFrom < endDate.getTime() && (rTo === null || rTo > startDate.getTime());
@@ -734,6 +943,12 @@ async function computeFinancialBucketsAndPreviewData(
       vigenciaBreakdown: [] as VigenciaBucketSummary[],
       eligibleSalesCount: 0,
       eligibleSalesBaseCents: 0,
+      cashSalesPaidCents: 0,
+      creditDownPaymentsPaidCents: 0,
+      creditInstallmentsPaidCents: 0,
+      appliedRateBps: company.platformFeeBps ?? 250,
+      installmentFeesCents: 0,
+      refundCreditsCents: pendingAdjustments.filter((a) => a.amountCents < 0).reduce((acc, a) => acc + Math.abs(a.amountCents), 0) + incomingCreditCents,
       grossPlatformFeeCents: 0,
       pendingAdjustments,
       adjustmentsCents: pendingAdjustmentsCents,
@@ -777,9 +992,14 @@ async function computeFinancialBucketsAndPreviewData(
     }
   }
 
-  const eligibleSalesCount = eligibleItems.length;
-  const eligibleSalesBaseCents = eligibleItems.reduce((acc, i) => acc + i.saleBaseCents, 0);
-  const grossPlatformFeeCents = eligibleItems.reduce((acc, i) => acc + i.calculatedFeeCents, 0);
+  const eligibleSalesCount = eligibleItems.length + installmentPaidCount;
+  const eligibleSalesBaseCents = cashSalesPaidCents + creditDownPaymentsPaidCents + creditInstallmentsPaidCents;
+  const grossPlatformFeeCents =
+    eligibleItems.reduce((acc, i) => acc + i.calculatedFeeCents, 0) + installmentFeesCents;
+  const appliedRateBps =
+    activeRatesInMonth.length > 0
+      ? Math.round(parsePercentageToMilliPercent(activeRatesInMonth[0].ratePercentage) / 10)
+      : (company.platformFeeBps ?? 250);
 
   const pendingAdjustmentsCents = pendingAdjustments.reduce((acc, a) => acc + a.amountCents, 0);
   const subtotalBeforePoolCents = grossPlatformFeeCents + pendingAdjustmentsCents;
@@ -799,6 +1019,11 @@ async function computeFinancialBucketsAndPreviewData(
   }
 
   const adjustmentsCents = pendingAdjustmentsCents - consumedCarryForwardCreditCents;
+  const refundCreditsCents =
+    pendingAdjustments
+      .filter((a) => a.amountCents < 0)
+      .reduce((acc, a) => acc + Math.abs(a.amountCents), 0) +
+    consumedCarryForwardCreditCents;
 
   return {
     company,
@@ -811,6 +1036,12 @@ async function computeFinancialBucketsAndPreviewData(
     vigenciaBreakdown,
     eligibleSalesCount,
     eligibleSalesBaseCents,
+    cashSalesPaidCents,
+    creditDownPaymentsPaidCents,
+    creditInstallmentsPaidCents,
+    appliedRateBps,
+    installmentFeesCents,
+    refundCreditsCents,
     grossPlatformFeeCents,
     pendingAdjustments,
     adjustmentsCents,
@@ -916,6 +1147,17 @@ export function formatStatementResponse(
     eligibleSalesCount: statement.eligibleSalesCount,
     eligibleSalesBaseCents: statement.eligibleSalesBaseCents,
     eligibleSalesBaseBrl: centsToBrlNumber(statement.eligibleSalesBaseCents),
+    cashSalesPaidCents: statement.cashSalesPaidCents ?? 0,
+    cashSalesPaidBrl: centsToBrlNumber(statement.cashSalesPaidCents ?? 0),
+    creditDownPaymentsPaidCents: statement.creditDownPaymentsPaidCents ?? 0,
+    creditDownPaymentsPaidBrl: centsToBrlNumber(statement.creditDownPaymentsPaidCents ?? 0),
+    creditInstallmentsPaidCents: statement.creditInstallmentsPaidCents ?? 0,
+    creditInstallmentsPaidBrl: centsToBrlNumber(statement.creditInstallmentsPaidCents ?? 0),
+    appliedRateBps: statement.appliedRateBps ?? null,
+    appliedRatePercentage:
+      statement.appliedRateBps !== null && statement.appliedRateBps !== undefined
+        ? Number((statement.appliedRateBps / 100).toFixed(2))
+        : null,
     grossPlatformFeeCents: statement.grossPlatformFeeCents,
     grossPlatformFeeBrl: centsToBrlNumber(statement.grossPlatformFeeCents),
     adjustmentsCents: statement.adjustmentsCents,
@@ -948,7 +1190,20 @@ export function formatStatementResponse(
       lumoraPlatformRevenuePaidCents: statement.paidAmountCents,
       companyConfirmedSalesCents: statement.companyConfirmedSalesCents,
       companyCreditReceivedPrincipalCents: statement.companyCreditReceivedPrincipalCents,
-      lumoraFeeOnCreditInstallmentsCents: 0,
+      lumoraFeeOnCreditInstallmentsCents: Array.isArray(statement.items)
+        ? Math.max(
+            0,
+            statement.grossPlatformFeeCents -
+              statement.items.reduce((acc: number, it: any) => acc + (it.calculatedFeeCents || 0), 0)
+          )
+        : (statement.creditInstallmentsPaidCents ?? 0) > 0 &&
+            statement.appliedRateBps !== null &&
+            statement.appliedRateBps !== undefined
+          ? calculateFeeCentsHalfUp(
+              statement.creditInstallmentsPaidCents,
+              statement.appliedRateBps * 10
+            )
+          : 0,
       sellerInitialCommissions20Or25Cents: statement.sellerInitialCommissionsCents,
       sellerInstallmentCommissions10Cents: statement.sellerInstallmentCommissionsCents,
       paymentProviderFeesCents: statement.providerFeesCents,
@@ -970,6 +1225,7 @@ export async function previewOrGetCompanyStatement(
     companyId: string;
     competence: string;
     forCompanySelfService?: boolean;
+    useCompanyBpsIfNoRate?: boolean;
   },
   dbClient: PrismaClient = defaultPrisma
 ) {
@@ -1004,7 +1260,8 @@ export async function previewOrGetCompanyStatement(
   const preview = await computeFinancialBucketsAndPreviewData(
     params.companyId,
     params.competence,
-    dbClient
+    dbClient,
+    { useCompanyBpsIfNoRate: params.useCompanyBpsIfNoRate }
   );
 
   const netDueCents = preview.netDueCents;
@@ -1038,6 +1295,16 @@ export async function previewOrGetCompanyStatement(
       eligibleSalesCount: preview.eligibleSalesCount,
       eligibleSalesBaseCents: preview.eligibleSalesBaseCents,
       eligibleSalesBaseBrl: centsToBrlNumber(preview.eligibleSalesBaseCents),
+      cashSalesPaidCents: preview.cashSalesPaidCents,
+      cashSalesPaidBrl: centsToBrlNumber(preview.cashSalesPaidCents),
+      creditDownPaymentsPaidCents: preview.creditDownPaymentsPaidCents,
+      creditDownPaymentsPaidBrl: centsToBrlNumber(preview.creditDownPaymentsPaidCents),
+      creditInstallmentsPaidCents: preview.creditInstallmentsPaidCents,
+      creditInstallmentsPaidBrl: centsToBrlNumber(preview.creditInstallmentsPaidCents),
+      appliedRateBps: preview.appliedRateBps,
+      appliedRatePercentage: Number((preview.appliedRateBps / 100).toFixed(2)),
+      refundCreditsCents: preview.refundCreditsCents,
+      refundCreditsBrl: centsToBrlNumber(preview.refundCreditsCents),
       grossPlatformFeeCents: preview.grossPlatformFeeCents,
       grossPlatformFeeBrl: centsToBrlNumber(preview.grossPlatformFeeCents),
       adjustmentsCents: preview.adjustmentsCents,
@@ -1062,7 +1329,7 @@ export async function previewOrGetCompanyStatement(
         lumoraPlatformRevenuePaidCents: 0,
         companyConfirmedSalesCents: preview.companyConfirmedSalesCents,
         companyCreditReceivedPrincipalCents: preview.companyCreditReceivedPrincipalCents,
-        lumoraFeeOnCreditInstallmentsCents: 0,
+        lumoraFeeOnCreditInstallmentsCents: preview.installmentFeesCents,
         sellerInitialCommissions20Or25Cents: preview.sellerInitialCommissionsCents,
         sellerInstallmentCommissions10Cents: preview.sellerInstallmentCommissionsCents,
         paymentProviderFeesCents: preview.providerFeesCents,
@@ -1255,6 +1522,10 @@ export async function closeCompanyMonthlyStatement(
           roundingPolicy: ROUNDING_POLICY_ITEM_HALF_UP_SUM,
           eligibleSalesCount: calc.eligibleSalesCount,
           eligibleSalesBaseCents: calc.eligibleSalesBaseCents,
+          cashSalesPaidCents: calc.cashSalesPaidCents,
+          creditDownPaymentsPaidCents: calc.creditDownPaymentsPaidCents,
+          creditInstallmentsPaidCents: calc.creditInstallmentsPaidCents,
+          appliedRateBps: calc.appliedRateBps,
           grossPlatformFeeCents: calc.grossPlatformFeeCents,
           adjustmentsCents: calc.adjustmentsCents,
           netDueCents,
@@ -1312,6 +1583,7 @@ export async function closeCompanyMonthlyStatement(
             rateMilliPercent: item.rateMilliPercent,
             calculatedFeeCents: item.calculatedFeeCents,
           })),
+          skipDuplicates: true,
         });
       }
 
@@ -1907,6 +2179,7 @@ export async function listPlatformStatementsOverview(
     competence?: string;
     companyId?: string;
     status?: string;
+    useCompanyBpsIfNoRate?: boolean;
   },
   dbClient: PrismaClient = defaultPrisma
 ) {
@@ -1947,7 +2220,11 @@ export async function listPlatformStatementsOverview(
       if (!params.companyId && isTestOrSimulationMarker(comp.name)) continue;
 
       const prev = await previewOrGetCompanyStatement(
-        { companyId: comp.id, competence: params.competence },
+        {
+          companyId: comp.id,
+          competence: params.competence,
+          useCompanyBpsIfNoRate: params.useCompanyBpsIfNoRate,
+        },
         dbClient
       );
       if (!prev.isClosed && prev.preview) {
@@ -1964,6 +2241,9 @@ export async function listPlatformStatementsOverview(
   const totals = formattedStatements.reduce(
     (acc, s) => {
       acc.closedCount += 1;
+      acc.cashSalesPaidCents += s.cashSalesPaidCents ?? 0;
+      acc.creditDownPaymentsPaidCents += s.creditDownPaymentsPaidCents ?? 0;
+      acc.creditInstallmentsPaidCents += s.creditInstallmentsPaidCents ?? 0;
       acc.eligibleSalesBaseCents += s.eligibleSalesBaseCents;
       acc.grossPlatformFeeCents += s.grossPlatformFeeCents;
       acc.adjustmentsCents += s.adjustmentsCents;
@@ -1974,6 +2254,9 @@ export async function listPlatformStatementsOverview(
     },
     {
       closedCount: 0,
+      cashSalesPaidCents: 0,
+      creditDownPaymentsPaidCents: 0,
+      creditInstallmentsPaidCents: 0,
       eligibleSalesBaseCents: 0,
       grossPlatformFeeCents: 0,
       adjustmentsCents: 0,
@@ -1988,6 +2271,9 @@ export async function listPlatformStatementsOverview(
     roundingPolicy: ROUNDING_POLICY_ITEM_HALF_UP_SUM,
     totals: {
       ...totals,
+      cashSalesPaidBrl: centsToBrlNumber(totals.cashSalesPaidCents),
+      creditDownPaymentsPaidBrl: centsToBrlNumber(totals.creditDownPaymentsPaidCents),
+      creditInstallmentsPaidBrl: centsToBrlNumber(totals.creditInstallmentsPaidCents),
       eligibleSalesBaseBrl: centsToBrlNumber(totals.eligibleSalesBaseCents),
       grossPlatformFeeBrl: centsToBrlNumber(totals.grossPlatformFeeCents),
       adjustmentsBrl: centsToBrlNumber(totals.adjustmentsCents),

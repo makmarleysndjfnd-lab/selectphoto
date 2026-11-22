@@ -9,6 +9,7 @@ import {
   recordApiUsage,
   checkCompanyApiBudget,
 } from '../services/integrationResolver';
+import { resolveExclusiveCompanyGeminiKey } from '../services/companyApiKeyService';
 import { authorizeCompanyAdmin } from './companyIntegrations';
 import {
   reserveApiQuota,
@@ -164,24 +165,24 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     let providerName = 'GEMINI';
 
     if (companyId) {
-      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
-      if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
-        if (!isExternalServicesDisabled()) {
-          res.status(403).json({
-            error: 'Pesquisa de eventos por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
-          });
-          return;
-        }
+      const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
+      if (exclusiveGemini.configured && exclusiveGemini.key) {
+        providerName = 'GEMINI';
+        activeAiClient = new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
-        providerName = resolved.provider;
-        resolvedIntegrationId = resolved.integration?.id;
-        if (providerName === 'GROK') {
+        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
+        if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
             error: 'Provedor Grok (xAI) configurado, mas o radar e pesquisa de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
           });
           return;
         }
-        activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+        res.status(403).json({
+          error:
+            'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
+          code: 'COMPANY_GEMINI_KEY_REQUIRED',
+        });
+        return;
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
       if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
@@ -599,24 +600,24 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     let activeAiClient: GoogleGenAI | null = null;
 
     if (companyId) {
-      const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
-      if (!resolved || resolved.status !== 'ACTIVE' || !resolved.secret) {
-        if (!isExternalServicesDisabled()) {
-          res.status(403).json({
-            error: 'Pesquisa de radar por IA desabilitada para esta empresa. Cadastre uma chave própria ou contrate o compartilhamento da plataforma na Central.',
-          });
-          return;
-        }
+      const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
+      if (exclusiveGemini.configured && exclusiveGemini.key) {
+        providerName = 'GEMINI';
+        activeAiClient = new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
-        providerName = resolved.provider;
-        resolvedIntegrationId = resolved.integration?.id;
-        if (providerName === 'GROK') {
+        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
+        if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
             error: 'Provedor Grok (xAI) configurado, mas o radar de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
           });
           return;
         }
-        activeAiClient = new GoogleGenAI({ apiKey: resolved.secret });
+        res.status(403).json({
+          error:
+            'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
+          code: 'COMPANY_GEMINI_KEY_REQUIRED',
+        });
+        return;
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
       if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {

@@ -5,6 +5,7 @@ import '../servicos/servico_api.dart';
 import 'painel_proprietario_integracoes.dart';
 import 'painel_proprietario_faturamento.dart';
 import 'painel_proprietario_suporte.dart';
+import 'painel_admin.dart';
 import 'tela_login.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
@@ -409,97 +410,251 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     );
   }
 
-  // ── Modal de Suspensão / Reativação ───────────────────────────────────────
+  // ── Acesso de Suporte Auditado como Admin da Empresa ──────────────────────
 
-  void _abrirModalStatus(Map<String, dynamic> empresa) async {
-    final isSuspenso = empresa['status'] == 'SUSPENDED';
-    final novoStatus = isSuspenso ? 'ACTIVE' : 'SUSPENDED';
-    final acaoTitulo = isSuspenso ? 'Reativar Empresa' : 'Suspender Empresa';
+  Future<void> _acessarComoAdminSuporte(Map<String, dynamic> empresa) async {
+    final compId = empresa['id']?.toString() ?? '';
+    if (compId.isEmpty) return;
+    final compName = (empresa['tradeName']?.toString().trim().isNotEmpty == true)
+        ? empresa['tradeName'].toString()
+        : (empresa['name'] ?? 'Empresa').toString();
 
-    final authed = await _garantirStepUpAuth('$acaoTitulo ${empresa['name']}');
-    if (!authed || !mounted) return;
-
-    final motivoController = TextEditingController();
-
-    showDialog(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          '$acaoTitulo — ${empresa['name']}',
-          style: TextStyle(color: isSuspenso ? Colors.greenAccent : const Color(0xFFF87171), fontSize: 18),
+        backgroundColor: const Color(0xFF160D24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.5)),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: const Row(
           children: [
-            Text(
-              isSuspenso
-                ? 'A reativação restabelece a operação integral da empresa na plataforma.'
-                : 'A suspensão bloqueia novas vendas na empresa. A recuperação de dados pendentes do aparelho continua preservada.',
-              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: motivoController,
-              maxLines: 2,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                labelText: 'Motivo / Justificativa *',
-                labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
-                hintText: isSuspenso ? 'Ex: Acordo formalizado e débitos quitados' : 'Ex: Notificação de inadimplência sem resposta',
-                hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                filled: true,
-                fillColor: const Color(0xFF0F172A),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            Icon(Icons.support_agent_rounded, color: Color(0xFFA855F7)),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Acessar como Admin (Suporte)',
+                style: TextStyle(color: Colors.white, fontSize: 16),
               ),
             ),
           ],
         ),
+        content: Text(
+          'Você entrará em modo suporte auditado na empresa "$compName" sem desconectar o administrador real.\n\nUma barra superior fixa permitirá voltar ao SuperAdmin a qualquer momento.',
+          style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 13),
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: isSuspenso ? Colors.green : const Color(0xFFEF4444),
+              backgroundColor: const Color(0xFFA855F7),
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: () async {
-              if (motivoController.text.trim().length < 5) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Informe uma justificativa válida com no mínimo 5 caracteres')),
-                );
-                return;
-              }
-
-              try {
-                await _api.setOwnerCompanyStatus(
-                  empresa['id'],
-                  status: novoStatus,
-                  reason: motivoController.text.trim(),
-                  stepUpToken: _stepUpToken,
-                );
-                Navigator.of(ctx).pop();
-                _carregarDados();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Status de ${empresa['name']} atualizado para $novoStatus com sucesso.'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Erro ao atualizar status: $e'), backgroundColor: Colors.redAccent),
-                );
-              }
-            },
-            child: Text(isSuspenso ? 'Reativar' : 'Confirmar Suspensão'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Entrar como Suporte'),
           ),
         ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    setState(() => _carregando = true);
+    try {
+      final res = await _api.startSuperAdminSupportLogin(
+        compId,
+        reason: 'Acesso técnico de suporte via SuperAdmin',
+      );
+      final supportToken = res['token']?.toString() ?? '';
+      if (supportToken.isEmpty) {
+        throw Exception('Token de suporte não retornado pelo servidor.');
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      final prevToken = prefs.getString('jwt_token');
+      final prevRole = prefs.getString('user_role');
+      final prevUserId = prefs.getString('user_id');
+      final prevUserName = prefs.getString('user_name');
+      final prevCompanyId = prefs.getString('company_id');
+      final prevCompanyName = prefs.getString('company_name');
+      final prevOwnerSession = prefs.getString('owner_session');
+
+      if (prevToken != null) {
+        await prefs.setString('support_restore_token', prevToken);
+      }
+      if (prevRole != null) {
+        await prefs.setString('support_restore_role', prevRole);
+      }
+      if (prevUserId != null) {
+        await prefs.setString('support_restore_user_id', prevUserId);
+      }
+      if (prevUserName != null) {
+        await prefs.setString('support_restore_user_name', prevUserName);
+      }
+      if (prevCompanyId != null) {
+        await prefs.setString('support_restore_company_id', prevCompanyId);
+      }
+      if (prevCompanyName != null) {
+        await prefs.setString('support_restore_company_name', prevCompanyName);
+      }
+      if (prevOwnerSession != null) {
+        await prefs.setString('support_restore_owner_session', prevOwnerSession);
+      }
+
+      await prefs.setString('jwt_token', supportToken);
+      await prefs.setString('user_role', 'ADMIN');
+      await prefs.setString('user_name', '${prevUserName ?? 'SuperAdmin'} (Suporte)');
+      await prefs.setString('company_id', compId);
+      await prefs.setString('company_name', compName);
+      await prefs.setBool('support_mode_active', true);
+      await prefs.setString('support_mode_company_name', compName);
+
+      _api.setToken(supportToken);
+      _api.setCompanyDisplayName(compName);
+
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminDashboard()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Falha ao iniciar modo suporte: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _carregando = false);
+    }
+  }
+
+  // ── Modal de Suspensão / Reativação ───────────────────────────────────────
+
+  void _abrirModalStatus(Map<String, dynamic> empresa) async {
+    final currentCommercial =
+        (empresa['commercialStatus'] ?? (empresa['status'] == 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE')).toString();
+    final isSuspenso = currentCommercial == 'SUSPENDED' || empresa['status'] == 'SUSPENDED';
+    String selectedStatus = isSuspenso ? 'ACTIVE' : 'SUSPENDED';
+
+    final authed = await _garantirStepUpAuth('Governança Comercial de ${empresa['name']}');
+    if (!authed || !mounted) return;
+
+    final motivoController = TextEditingController(
+      text: empresa['commercialStatusReason']?.toString() ?? '',
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.4)),
+          ),
+          title: Text(
+            'Governança Comercial — ${empresa['name']}',
+            style: const TextStyle(color: Colors.white, fontSize: 17),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButtonFormField<String>(
+                value: selectedStatus,
+                dropdownColor: const Color(0xFF160D24),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Situação Comercial',
+                  labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                  filled: true,
+                  fillColor: const Color(0xFF0D0714),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'ACTIVE', child: Text('Ativa (Operação Normal)')),
+                  DropdownMenuItem(value: 'WARNING', child: Text('Em Aviso (Banner no Admin)')),
+                  DropdownMenuItem(value: 'SUSPENDED', child: Text('Suspensa (Bloqueia Login e App)')),
+                ],
+                onChanged: (val) {
+                  if (val != null) setDialogState(() => selectedStatus = val);
+                },
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: motivoController,
+                maxLines: 2,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Motivo / Justificativa *',
+                  labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                  hintText: 'Ex: Pendência financeira ou acordo regularizado',
+                  hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  filled: true,
+                  fillColor: const Color(0xFF0D0714),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: selectedStatus == 'ACTIVE'
+                    ? Colors.green
+                    : selectedStatus == 'WARNING'
+                        ? const Color(0xFFF59E0B)
+                        : const Color(0xFFEF4444),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                if (motivoController.text.trim().length < 5) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(content: Text('Informe uma justificativa válida com no mínimo 5 caracteres')),
+                  );
+                  return;
+                }
+
+                try {
+                  await _api.setOwnerCompanyStatus(
+                    empresa['id'],
+                    status: selectedStatus,
+                    reason: motivoController.text.trim(),
+                    stepUpToken: _stepUpToken,
+                  );
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  _carregarDados();
+                  if (mounted) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(
+                        content: Text('Situação de ${empresa['name']} atualizada para $selectedStatus.'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(content: Text('Erro ao atualizar status: $e'), backgroundColor: Colors.redAccent),
+                    );
+                  }
+                }
+              },
+              child: const Text('Salvar Status'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -709,115 +864,143 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     final contatoTelefoneController = TextEditingController();
     final taxaInicialController = TextEditingController(text: '2.50');
     final justificativaController = TextEditingController(text: 'Contrato de adesão inicial');
+    String selectedCommercialStatus = 'ACTIVE';
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Nova Empresa Contratante', style: TextStyle(color: Colors.white, fontSize: 18)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nomeController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Nome de Identificação *', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: fantasiaController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Nome Comercial / Fantasia (White-label)',
-                  hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
-                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                  labelStyle: TextStyle(color: Color(0xFF38BDF8)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Nova Empresa Contratante', style: TextStyle(color: Colors.white, fontSize: 18)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nomeController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Nome de Identificação *', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
                 ),
-              ),
-              TextField(
-                controller: razaoController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Razão Social', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: cnpjController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'CNPJ', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoNomeController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Contato Administrativo', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoEmailController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'E-mail do Contato', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoTelefoneController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Telefone / WhatsApp', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: taxaInicialController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Taxa Lumora Inicial (%)',
-                  labelStyle: TextStyle(color: Color(0xFF38BDF8)),
-                  suffixText: '%',
+                TextField(
+                  controller: fantasiaController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Nome Comercial / Fantasia (White-label)',
+                    hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
+                    hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                    labelStyle: TextStyle(color: Color(0xFFA855F7)),
+                  ),
                 ),
-              ),
-              TextField(
-                controller: justificativaController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: 'Justificativa Contratual', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-            ],
+                TextField(
+                  controller: razaoController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Razão Social', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: cnpjController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'CNPJ', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoNomeController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Contato Administrativo', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoEmailController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'E-mail do Contato', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoTelefoneController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Telefone / WhatsApp', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: taxaInicialController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Taxa Lumora Caixa Real (%)',
+                    labelStyle: TextStyle(color: Color(0xFFA855F7)),
+                    suffixText: '%',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: selectedCommercialStatus,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'Status Comercial',
+                    labelStyle: TextStyle(color: Color(0xFFD8B4FE)),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'ACTIVE', child: Text('Ativa')),
+                    DropdownMenuItem(value: 'WARNING', child: Text('Em Aviso (Banner no Admin)')),
+                    DropdownMenuItem(value: 'SUSPENDED', child: Text('Suspensa (Bloqueio Total)')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDialogState(() => selectedCommercialStatus = v);
+                  },
+                ),
+                TextField(
+                  controller: justificativaController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Justificativa Contratual / Aviso', labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7), foregroundColor: Colors.white),
+              onPressed: () async {
+                if (nomeController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nome é obrigatório')));
+                  return;
+                }
+
+                try {
+                  final taxa = double.tryParse(taxaInicialController.text.replaceAll(',', '.')) ?? 2.5;
+                  await _api.createOwnerCompany({
+                    'name': nomeController.text.trim(),
+                    'tradeName': fantasiaController.text.trim(),
+                    'legalName': razaoController.text.trim(),
+                    'cnpj': cnpjController.text.trim(),
+                    'adminContactName': contatoNomeController.text.trim(),
+                    'adminContactEmail': contatoEmailController.text.trim(),
+                    'adminContactPhone': contatoTelefoneController.text.trim(),
+                    'initialRatePercentage': taxa,
+                    'platformFeePercent': taxa,
+                    'commercialStatus': selectedCommercialStatus,
+                    'commercialStatusReason': justificativaController.text.trim(),
+                    'initialRateReason': justificativaController.text.trim(),
+                  }, stepUpToken: _stepUpToken);
+
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                  _carregarDados();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Empresa cadastrada com sucesso!'), backgroundColor: Colors.green),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.redAccent));
+                  }
+                }
+              },
+              child: const Text('Cadastrar'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF0F172A)),
-            onPressed: () async {
-              if (nomeController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nome é obrigatório')));
-                return;
-              }
-
-              try {
-                final taxa = double.tryParse(taxaInicialController.text.replaceAll(',', '.'));
-                await _api.createOwnerCompany({
-                  'name': nomeController.text.trim(),
-                  'tradeName': fantasiaController.text.trim(),
-                  'legalName': razaoController.text.trim(),
-                  'cnpj': cnpjController.text.trim(),
-                  'adminContactName': contatoNomeController.text.trim(),
-                  'adminContactEmail': contatoEmailController.text.trim(),
-                  'adminContactPhone': contatoTelefoneController.text.trim(),
-                  'initialRatePercentage': taxa,
-                  'initialRateReason': justificativaController.text.trim(),
-                }, stepUpToken: _stepUpToken);
-
-                Navigator.of(ctx).pop();
-                _carregarDados();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Empresa cadastrada com sucesso!'), backgroundColor: Colors.green),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.redAccent));
-              }
-            },
-            child: const Text('Cadastrar'),
-          ),
-        ],
       ),
     );
   }
@@ -835,102 +1018,152 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     final contatoNomeController = TextEditingController(text: empresa['adminContactName']?.toString() ?? '');
     final contatoEmailController = TextEditingController(text: empresa['adminContactEmail']?.toString() ?? '');
     final contatoTelefoneController = TextEditingController(text: empresa['adminContactPhone']?.toString() ?? '');
+    final initialFee = empresa['platformFeePercent'] ?? empresa['currentRate']?['ratePercentage'] ?? 2.50;
+    final taxaController = TextEditingController(text: initialFee.toString());
+    String selectedCommercialStatus =
+        (empresa['commercialStatus'] ?? (empresa['status'] == 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE')).toString();
+    if (!['ACTIVE', 'WARNING', 'SUSPENDED'].contains(selectedCommercialStatus)) {
+      selectedCommercialStatus = 'ACTIVE';
+    }
+    final motivoComercialController =
+        TextEditingController(text: empresa['commercialStatusReason']?.toString() ?? '');
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Editar Empresa — ${empresa['tradeName'] ?? empresa['name'] ?? ''}',
-            style: const TextStyle(color: Colors.white, fontSize: 17)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nomeController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'Nome de Identificação *',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: fantasiaController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Nome Comercial / White-label',
-                  hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
-                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                  labelStyle: TextStyle(color: Color(0xFF38BDF8)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Editar Empresa — ${empresa['tradeName'] ?? empresa['name'] ?? ''}',
+              style: const TextStyle(color: Colors.white, fontSize: 17)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nomeController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'Nome de Identificação *',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
                 ),
-              ),
-              TextField(
-                controller: razaoController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'Razão Social',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: cnpjController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'CNPJ',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoNomeController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'Contato Administrativo',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoEmailController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'E-mail do Contato',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-              TextField(
-                controller: contatoTelefoneController,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                    labelText: 'Telefone / WhatsApp',
-                    labelStyle: TextStyle(color: Color(0xFF94A3B8))),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF38BDF8),
-                foregroundColor: const Color(0xFF0F172A)),
-            onPressed: () async {
-              if (nomeController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Nome é obrigatório')));
-                return;
-              }
-              try {
-                await _api.updateOwnerCompany(
-                  empresa['id'].toString(),
-                  {
-                    'name': nomeController.text.trim(),
-                    'tradeName': fantasiaController.text.trim(),
-                    'legalName': razaoController.text.trim(),
-                    'cnpj': cnpjController.text.trim(),
-                    'adminContactName': contatoNomeController.text.trim(),
-                    'adminContactEmail': contatoEmailController.text.trim(),
-                    'adminContactPhone': contatoTelefoneController.text.trim(),
+                TextField(
+                  controller: fantasiaController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Nome Comercial / White-label',
+                    hintText: 'Ex: Hyper Fotos, Moura Select Fotos',
+                    hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                    labelStyle: TextStyle(color: Color(0xFFA855F7)),
+                  ),
+                ),
+                TextField(
+                  controller: razaoController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'Razão Social',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: cnpjController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'CNPJ',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoNomeController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'Contato Administrativo',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoEmailController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'E-mail do Contato',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                TextField(
+                  controller: contatoTelefoneController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'Telefone / WhatsApp',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: taxaController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: 'Taxa Lumora Caixa Real (%)',
+                    labelStyle: TextStyle(color: Color(0xFFA855F7)),
+                    suffixText: '%',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  value: selectedCommercialStatus,
+                  dropdownColor: const Color(0xFF160D24),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: const InputDecoration(
+                    labelText: 'Status Comercial',
+                    labelStyle: TextStyle(color: Color(0xFFD8B4FE)),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'ACTIVE', child: Text('Ativa')),
+                    DropdownMenuItem(value: 'WARNING', child: Text('Em Aviso (Banner)')),
+                    DropdownMenuItem(value: 'SUSPENDED', child: Text('Suspensa (Bloqueio Total)')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDialogState(() => selectedCommercialStatus = v);
                   },
-                  stepUpToken: _stepUpToken,
-                );
+                ),
+                TextField(
+                  controller: motivoComercialController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                      labelText: 'Motivo / Observação Comercial',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white),
+              onPressed: () async {
+                if (nomeController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nome é obrigatório')));
+                  return;
+                }
+                final parsedFee = double.tryParse(taxaController.text.replaceAll(',', '.'));
+                try {
+                  await _api.updateOwnerCompany(
+                    empresa['id'].toString(),
+                    {
+                      'name': nomeController.text.trim(),
+                      'tradeName': fantasiaController.text.trim(),
+                      'legalName': razaoController.text.trim(),
+                      'cnpj': cnpjController.text.trim(),
+                      'adminContactName': contatoNomeController.text.trim(),
+                      'adminContactEmail': contatoEmailController.text.trim(),
+                      'adminContactPhone': contatoTelefoneController.text.trim(),
+                      if (parsedFee != null) 'platformFeePercent': parsedFee,
+                      'commercialStatus': selectedCommercialStatus,
+                      'commercialStatusReason': motivoComercialController.text.trim(),
+                    },
+                    stepUpToken: _stepUpToken,
+                  );
                 if (ctx.mounted) Navigator.of(ctx).pop();
                 _carregarDados();
                 if (mounted) {
@@ -953,6 +1186,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -961,15 +1195,15 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFF0D0714),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
+        backgroundColor: const Color(0xFF160D24),
         elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Central do Proprietário',
+              'SuperAdmin • Empresas & Governança',
               style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
             ),
             Text(
@@ -977,7 +1211,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   ? '🔒 Sessão Reforçada Ativa (${_stepUpExpiresAt!.difference(DateTime.now()).inMinutes}m)'
                   : '🔓 Ações sensíveis exigem senha',
               style: TextStyle(
-                color: _temStepUpAtivo ? const Color(0xFF38BDF8) : const Color(0xFF94A3B8),
+                color: _temStepUpAtivo ? const Color(0xFFA855F7) : const Color(0xFF94A3B8),
                 fontSize: 11,
               ),
             ),
@@ -1024,8 +1258,8 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
         ],
         bottom: TabBar(
           controller: _tabController,
-          indicatorColor: const Color(0xFF38BDF8),
-          labelColor: const Color(0xFF38BDF8),
+          indicatorColor: const Color(0xFFA855F7),
+          labelColor: const Color(0xFFD8B4FE),
           unselectedLabelColor: const Color(0xFF94A3B8),
           tabs: const [
             Tab(icon: Icon(Icons.corporate_fare_rounded, size: 20), text: 'Empresas'),
@@ -1035,7 +1269,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
         ),
       ),
       body: _carregando
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF38BDF8)))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)))
           : Column(
               children: [
                 _buildQuickNavBar(),
@@ -1053,8 +1287,8 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             ),
       floatingActionButton: _tabController.index == 0
           ? FloatingActionButton.extended(
-              backgroundColor: const Color(0xFF38BDF8),
-              foregroundColor: const Color(0xFF0F172A),
+              backgroundColor: const Color(0xFFA855F7),
+              foregroundColor: Colors.white,
               icon: const Icon(Icons.add_business_rounded),
               label: const Text('Nova Empresa', style: TextStyle(fontWeight: FontWeight.bold)),
               onPressed: _abrirModalNovaEmpresa,
@@ -1269,23 +1503,90 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
     );
   }
 
+  Widget _buildSemaphoreBadge({
+    required String label,
+    required bool configured,
+    String? status,
+  }) {
+    final normalized = (status ?? '').toUpperCase();
+    final Color color;
+    final IconData icon;
+    if (!configured || normalized == 'NOT_CONFIGURED') {
+      color = const Color(0xFF64748B);
+      icon = Icons.circle_outlined;
+    } else if (normalized == 'ERROR' || normalized == 'FAILED') {
+      color = const Color(0xFFEF4444);
+      icon = Icons.error_outline_rounded;
+    } else if (normalized == 'CONNECTED' || normalized == 'ACTIVE') {
+      color = const Color(0xFF10B981);
+      icon = Icons.check_circle_rounded;
+    } else {
+      color = const Color(0xFFF59E0B);
+      icon = Icons.schedule_rounded;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.45)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEmpresaCard(Map<String, dynamic> empresa) {
-    final isSuspensa = empresa['status'] == 'SUSPENDED';
+    final commercialStatus =
+        (empresa['commercialStatus'] ?? (empresa['status'] == 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE')).toString();
+    final isSuspensa = commercialStatus == 'SUSPENDED' || empresa['status'] == 'SUSPENDED';
+    final isWarning = !isSuspensa && commercialStatus == 'WARNING';
     final currentRate = empresa['currentRate'];
-    final isRateConfigured = empresa['isRateConfigured'] == true;
+    final feePercent = empresa['platformFeePercent'] ?? currentRate?['ratePercentage'] ?? 2.50;
+    final isRateConfigured = empresa['isRateConfigured'] == true || empresa['platformFeePercent'] != null;
     final isTestDemo = empresa['isTestExample'] == true || empresa['classification'] == 'TEST_DEMO';
+    final integrationsSummary = empresa['integrationsSummary'] is Map
+        ? Map<String, dynamic>.from(empresa['integrationsSummary'] as Map)
+        : <String, dynamic>{};
+    final asaasSummary = integrationsSummary['asaas'] is Map
+        ? Map<String, dynamic>.from(integrationsSummary['asaas'] as Map)
+        : <String, dynamic>{};
+    final geminiSummary = integrationsSummary['gemini'] is Map
+        ? Map<String, dynamic>.from(integrationsSummary['gemini'] as Map)
+        : <String, dynamic>{};
+    final pixConfigured =
+        integrationsSummary['pixConfigured'] == true || empresa['pixConfigured'] == true;
+    final asaasConfigured = asaasSummary['configured'] == true;
+    final asaasEnv = (asaasSummary['environment'] ?? 'SANDBOX').toString();
+    final asaasStatus = asaasSummary['connectionStatus']?.toString();
+    final geminiConfigured = geminiSummary['configured'] == true;
+    final geminiStatus = geminiSummary['connectionStatus']?.toString();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: const Color(0xFF160D24),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: isSuspensa
-              ? const Color(0xFFEF4444).withOpacity(0.4)
-              : isTestDemo
-                  ? const Color(0xFFF59E0B).withOpacity(0.35)
-                  : const Color(0xFF334155),
+              ? const Color(0xFFEF4444).withOpacity(0.55)
+              : isWarning
+                  ? const Color(0xFFF59E0B).withOpacity(0.55)
+                  : const Color(0xFFA855F7).withOpacity(0.35),
         ),
       ),
       child: Padding(
@@ -1343,14 +1644,32 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isSuspensa ? const Color(0xFFEF4444).withOpacity(0.15) : Colors.green.withOpacity(0.15),
+                        color: isSuspensa
+                            ? const Color(0xFFEF4444).withOpacity(0.15)
+                            : isWarning
+                                ? const Color(0xFFF59E0B).withOpacity(0.15)
+                                : Colors.green.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: isSuspensa ? const Color(0xFFEF4444) : Colors.green),
+                        border: Border.all(
+                          color: isSuspensa
+                              ? const Color(0xFFEF4444)
+                              : isWarning
+                                  ? const Color(0xFFF59E0B)
+                                  : Colors.green,
+                        ),
                       ),
                       child: Text(
-                        isSuspensa ? 'SUSPENSA' : 'ATIVA',
+                        isSuspensa
+                            ? 'SUSPENSA'
+                            : isWarning
+                                ? 'EM AVISO'
+                                : 'ATIVA',
                         style: TextStyle(
-                          color: isSuspensa ? const Color(0xFFEF4444) : Colors.greenAccent,
+                          color: isSuspensa
+                              ? const Color(0xFFEF4444)
+                              : isWarning
+                                  ? const Color(0xFFFBBF24)
+                                  : Colors.greenAccent,
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
                         ),
@@ -1362,6 +1681,62 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             ),
             if (empresa['legalName'] != null)
               Text(empresa['legalName'], style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            if (isWarning &&
+                empresa['commercialStatusReason']?.toString().trim().isNotEmpty == true)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Aviso: ${empresa['commercialStatusReason']}',
+                  style: const TextStyle(color: Color(0xFFFBBF24), fontSize: 11),
+                ),
+              ),
+            const SizedBox(height: 10),
+
+            // Semáforo Visual de APIs & Taxa
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _buildSemaphoreBadge(
+                  label: asaasConfigured
+                      ? (asaasEnv == 'PRODUCTION' ? 'Asaas Prod' : 'Asaas Sandbox')
+                      : 'Asaas Off',
+                  configured: asaasConfigured,
+                  status: asaasStatus,
+                ),
+                _buildSemaphoreBadge(
+                  label: asaasConfigured ? 'Serasa' : 'Serasa Off',
+                  configured: asaasConfigured,
+                  status: asaasStatus,
+                ),
+                _buildSemaphoreBadge(
+                  label: geminiConfigured ? 'Gemini Própria' : 'Gemini Off',
+                  configured: geminiConfigured,
+                  status: geminiStatus,
+                ),
+                _buildSemaphoreBadge(
+                  label: pixConfigured ? 'Pix Empresa' : 'Pix Off',
+                  configured: pixConfigured,
+                  status: pixConfigured ? 'ACTIVE' : 'NOT_CONFIGURED',
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFA855F7).withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.55)),
+                  ),
+                  child: Text(
+                    'Taxa: ${(feePercent as num).toStringAsFixed(2)}%',
+                    style: const TextStyle(
+                      color: Color(0xFFD8B4FE),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
 
             // Informações Contratuais e Contato
@@ -1386,17 +1761,17 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF0F172A),
+                color: const Color(0xFF0D0714),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: isRateConfigured ? const Color(0xFF38BDF8).withOpacity(0.3) : const Color(0xFFFBBF24).withOpacity(0.3),
+                  color: isRateConfigured ? const Color(0xFFA855F7).withOpacity(0.4) : const Color(0xFFFBBF24).withOpacity(0.35),
                 ),
               ),
               child: Row(
                 children: [
                   Icon(
                     isRateConfigured ? Icons.receipt_long_rounded : Icons.warning_amber_rounded,
-                    color: isRateConfigured ? const Color(0xFF38BDF8) : const Color(0xFFFBBF24),
+                    color: isRateConfigured ? const Color(0xFFA855F7) : const Color(0xFFFBBF24),
                     size: 24,
                   ),
                   const SizedBox(width: 12),
@@ -1406,7 +1781,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                       children: [
                         Text(
                           isRateConfigured
-                              ? 'Remuneração Lumora: ${currentRate?['ratePercentage']}% ao mês'
+                              ? 'Remuneração Lumora Caixa Real: ${(feePercent as num).toStringAsFixed(2)}%'
                               : 'Contrato não configurado',
                           style: TextStyle(
                             color: isRateConfigured ? Colors.white : const Color(0xFFFBBF24),
@@ -1419,7 +1794,12 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                             'Vigência: a partir de ${_dateFormat.format(DateTime.parse(currentRate['effectiveFrom']))}',
                             style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
                           )
-                        else if (!isRateConfigured)
+                        else if (isRateConfigured)
+                          const Text(
+                            'Incidência apenas sobre valores efetivamente pagos (regime de caixa real).',
+                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                          )
+                        else
                           const Text('Sem cobrança ativa até configuração contratual.', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
                       ],
                     ),
@@ -1436,6 +1816,16 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
               alignment: WrapAlignment.end,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFA855F7),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(Icons.support_agent_rounded, size: 15),
+                  label: const Text('Acessar como Admin (Suporte)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  onPressed: () => _acessarComoAdminSuporte(empresa),
+                ),
                 TextButton.icon(
                   icon: const Icon(Icons.info_outline_rounded, size: 16),
                   label: const Text('Detalhes & Vigências', style: TextStyle(fontSize: 12)),
@@ -1448,7 +1838,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   ),
                   icon: const Icon(Icons.edit_rounded, size: 16),
-                  label: const Text('Editar Nome', style: TextStyle(fontSize: 12)),
+                  label: const Text('Editar & Taxa', style: TextStyle(fontSize: 12)),
                   onPressed: () => _abrirModalEditarEmpresa(empresa),
                 ),
                 OutlinedButton.icon(
@@ -1480,10 +1870,14 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                 ),
                 IconButton(
                   icon: Icon(
-                    isSuspensa ? Icons.play_arrow_rounded : Icons.pause_circle_outline_rounded,
-                    color: isSuspensa ? Colors.greenAccent : const Color(0xFFF87171),
+                    isSuspensa ? Icons.play_arrow_rounded : Icons.gavel_rounded,
+                    color: isSuspensa
+                        ? Colors.greenAccent
+                        : isWarning
+                            ? const Color(0xFFFBBF24)
+                            : const Color(0xFFF87171),
                   ),
-                  tooltip: isSuspensa ? 'Reativar' : 'Suspender',
+                  tooltip: 'Alterar Governança (Ativa / Aviso / Suspensa)',
                   onPressed: () => _abrirModalStatus(empresa),
                 ),
               ],

@@ -15,22 +15,61 @@ router.get('/session', authenticateToken, async (req: AuthRequest, res: Response
   const companyId = req.user?.companyId || null;
   let companyName: string | null = null;
   let companyTradeName: string | null = null;
+  let commercialStatus: string = 'ACTIVE';
+  let commercialStatusReason: string | null = null;
+  let governanceWarning: string | null = null;
   if (companyId) {
     const company = await prisma.company.findUnique({
       where: { id: companyId },
-      select: { name: true, tradeName: true },
+      select: {
+        name: true,
+        tradeName: true,
+        status: true,
+        isActive: true,
+        commercialStatus: true,
+        commercialStatusReason: true,
+        suspensionReason: true,
+      },
     });
     if (company) {
+      if (
+        req.user?.role !== 'SUPER_ADMIN' &&
+        !req.user?.isTemporarySupportSession &&
+        (company.isActive === false ||
+          company.status === 'SUSPENDED' ||
+          company.commercialStatus === 'SUSPENDED')
+      ) {
+        return res.status(403).json({
+          error:
+            company.commercialStatusReason ||
+            company.suspensionReason ||
+            'Company account is inactive (suspended).',
+          code: 'COMPANY_SUSPENDED',
+          commercialStatus: 'SUSPENDED',
+        });
+      }
       companyTradeName = company.tradeName || null;
       companyName = resolveCompanyDisplayName(company, company.name);
+      commercialStatus = company.commercialStatus || company.status || 'ACTIVE';
+      commercialStatusReason = company.commercialStatusReason || null;
+      if (commercialStatus === 'WARNING') {
+        governanceWarning =
+          commercialStatusReason ||
+          'Aviso financeiro Lumora: regularize pendências para evitar suspensão do acesso.';
+      }
     }
   }
   res.json({
     valid: true,
     userId: req.user?.id || null,
+    role: req.user?.role || null,
     companyId,
     companyName,
     companyTradeName,
+    commercialStatus,
+    commercialStatusReason,
+    governanceWarning,
+    isTemporarySupportSession: Boolean(req.user?.isTemporarySupportSession),
   });
 });
 
@@ -66,9 +105,27 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    // Para qualquer papel que não seja SUPER_ADMIN, rejeite se companyId for ausente ou empresa inativa
+    // Para qualquer papel que não seja SUPER_ADMIN, rejeite se companyId for ausente, inativa ou suspensa
     if (user.role !== 'SUPER_ADMIN') {
-      if (!user.companyId || !user.company || user.company.isActive === false) {
+      if (!user.companyId || !user.company) {
+        res.status(401).json({ error: 'Company account is inactive' });
+        return;
+      }
+      if (
+        user.company.commercialStatus === 'SUSPENDED' ||
+        user.company.status === 'SUSPENDED'
+      ) {
+        res.status(403).json({
+          error:
+            user.company.commercialStatusReason ||
+            user.company.suspensionReason ||
+            'Acesso bloqueado: empresa suspensa comercialmente. Seus dados permanecem preservados.',
+          code: 'COMPANY_SUSPENDED',
+          commercialStatus: 'SUSPENDED',
+        });
+        return;
+      }
+      if (user.company.isActive === false) {
         res.status(401).json({ error: 'Company account is inactive' });
         return;
       }
@@ -140,6 +197,13 @@ router.post('/login', loginRateLimiter, async (req: Request, res: Response) => {
           : null,
         companyLegalName: user.company?.name || null,
         companyTradeName: user.company?.tradeName || null,
+        commercialStatus: user.company?.commercialStatus || user.company?.status || 'ACTIVE',
+        commercialStatusReason: user.company?.commercialStatusReason || null,
+        governanceWarning:
+          user.company?.commercialStatus === 'WARNING'
+            ? (user.company.commercialStatusReason ||
+                'Aviso financeiro Lumora: regularize pendências para evitar suspensão do acesso.')
+            : null,
         photographerCode: user.photographerCode,
         sessionId,
       }

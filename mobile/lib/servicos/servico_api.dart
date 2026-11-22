@@ -3053,6 +3053,161 @@ class ApiService {
     }
   }
 
+  /// Etapa 25: Integrações exclusivas por empresa (Asaas/Serasa e Gemini) mascaradas
+  Future<Map<String, dynamic>> getSuperAdminCompanyIntegrations(String companyId) async {
+    try {
+      final resp = await _dio.get('/superadmin/companies/$companyId/integrations');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveCompanyGeminiIntegration(
+    String companyId, {
+    required String? apiKey,
+  }) async {
+    try {
+      final resp = await _dio.put(
+        '/superadmin/companies/$companyId/integrations/gemini',
+        data: {'apiKey': apiKey},
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveCompanyAsaasIntegration(
+    String companyId, {
+    required String? apiKey,
+    String environment = 'SANDBOX',
+    String? accountName,
+  }) async {
+    try {
+      final resp = await _dio.put(
+        '/superadmin/companies/$companyId/integrations/asaas',
+        data: {
+          'apiKey': apiKey,
+          'environment': environment,
+          if (accountName != null) 'accountName': accountName,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> testCompanyGeminiIntegration(String companyId) async {
+    try {
+      final resp = await _dio.post('/superadmin/companies/$companyId/integrations/gemini/test');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> testCompanyAsaasIntegration(
+    String companyId, {
+    String? environment,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/superadmin/companies/$companyId/integrations/asaas/test',
+        data: {
+          if (environment != null) 'environment': environment,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateSuperAdminCompanySettings(
+    String companyId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final resp = await _dio.put('/superadmin/companies/$companyId', data: data);
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getSuperAdminBillingOverview({
+    String? competence,
+    String? companyId,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        '/superadmin/billing/overview',
+        queryParameters: {
+          if (competence != null) 'competence': competence,
+          if (companyId != null) 'companyId': companyId,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getSuperAdminBillingPreview({
+    required String companyId,
+    String? competence,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        '/superadmin/billing/preview',
+        queryParameters: {
+          'companyId': companyId,
+          if (competence != null) 'competence': competence,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> startSuperAdminSupportLogin(
+    String companyId, {
+    String? reason,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/superadmin/companies/$companyId/support-login',
+        data: {
+          if (reason != null) 'reason': reason,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<void> endSuperAdminSupportLogin() async {
+    try {
+      await _dio.post('/superadmin/support-logout');
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> getSessionStatus() async {
+    try {
+      final resp = await _dio.get('/auth/session');
+      if (resp.data is Map) {
+        return Map<String, dynamic>.from(resp.data as Map);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Configurar nova taxa de remuneração do Lumora com vigência
   Future<Map<String, dynamic>> setOwnerCompanyRate(
     String companyId, {

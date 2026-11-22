@@ -39,6 +39,11 @@ class _PainelProprietarioIntegracoesState
   String? _period;
   Map<String, dynamic>? _harnessReport;
   Map<String, dynamic>? _liveReadinessReport;
+  Map<String, dynamic>? _exclusiveIntegrations;
+  bool _testingAsaas = false;
+  bool _testingGemini = false;
+  Map<String, dynamic>? _asaasTestResult;
+  Map<String, dynamic>? _geminiTestResult;
 
   final DateFormat _dateFormat = DateFormat('dd/MM/yyyy HH:mm');
 
@@ -114,6 +119,10 @@ class _PainelProprietarioIntegracoesState
       final unlinked = payload['unlinkedUsage'] as Map<String, dynamic>?;
       final period = payload['period']?.toString();
       final readiness = await _api.getAsaasLiveReadinessReport(companyId: companyId);
+      Map<String, dynamic>? exclusive;
+      try {
+        exclusive = await _api.getSuperAdminCompanyIntegrations(companyId);
+      } catch (_) {}
 
       if (mounted) {
         setState(() {
@@ -123,6 +132,9 @@ class _PainelProprietarioIntegracoesState
           _companyUnlinkedUsage = unlinked;
           _period = period;
           _liveReadinessReport = readiness;
+          _exclusiveIntegrations = exclusive;
+          _asaasTestResult = null;
+          _geminiTestResult = null;
         });
       }
     } catch (e) {
@@ -1153,16 +1165,16 @@ class _PainelProprietarioIntegracoesState
   Widget build(BuildContext context) {
     final bool liveLocked = _liveReadinessReport?['productionSafetyLocked'] ?? true;
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFF0D0714),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
+        backgroundColor: const Color(0xFF160D24),
         elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Central de Integrações e APIs',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              'Central de APIs Exclusivas por Empresa',
+              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
             ),
             Row(
               children: [
@@ -1188,7 +1200,7 @@ class _PainelProprietarioIntegracoesState
         ),
         bottom: TabBar(
           controller: _tabController,
-          indicatorColor: const Color(0xFF38BDF8),
+          indicatorColor: const Color(0xFFA855F7),
           tabs: const [
             Tab(icon: Icon(Icons.hub_rounded), text: 'Catálogo & Chaves'),
             Tab(icon: Icon(Icons.fact_check_rounded), text: 'Homologação Sandbox'),
@@ -1196,7 +1208,7 @@ class _PainelProprietarioIntegracoesState
         ),
       ),
       body: _carregando
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF38BDF8)))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFA855F7)))
           : Column(
               children: [
                 _buildEmpresaHeader(),
@@ -1279,11 +1291,409 @@ class _PainelProprietarioIntegracoesState
       children: [
         _buildPlatformOverviewCard(),
         _buildCompanyConsumptionSummary(),
+        _buildLumoraExclusiveApisSection(),
         if (_companyUnlinkedUsage != null && _companyUnlinkedUsage!['hasUnlinkedRecords'] == true)
           _buildUnlinkedUsageCard(_companyUnlinkedUsage!),
         ..._catalogos.map((cat) => _buildCategoriaCard(cat)),
       ],
     );
+  }
+
+  Widget _buildLumoraExclusiveApisSection() {
+    final compId = _empresaSelecionada?['id']?.toString();
+    if (compId == null || compId.isEmpty) return const SizedBox.shrink();
+
+    final asaasMap = _exclusiveIntegrations?['asaas'] is Map
+        ? Map<String, dynamic>.from(_exclusiveIntegrations!['asaas'] as Map)
+        : <String, dynamic>{};
+    final geminiMap = _exclusiveIntegrations?['gemini'] is Map
+        ? Map<String, dynamic>.from(_exclusiveIntegrations!['gemini'] as Map)
+        : <String, dynamic>{};
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.vpn_key_rounded, color: Color(0xFFA855F7), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'APIs Exclusivas Isoladas (Asaas/Serasa & Gemini)',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Cada empresa possui chaves próprias criptografadas no Vault. Chaves salvas retornam apenas mascaramento ••••XXXX.',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+          ),
+          const SizedBox(height: 14),
+          _buildExclusiveProviderBox(
+            title: 'Asaas / Serasa (Gateway + Consultas)',
+            subtitle:
+                'Ambiente ativo: ${asaasMap['environment'] ?? 'SANDBOX'} • Chave: ${asaasMap['maskedKey'] ?? 'Não configurada'}',
+            configured: asaasMap['configured'] == true,
+            status: (asaasMap['connectionStatus'] ?? 'NOT_CONFIGURED').toString(),
+            statusMessage: asaasMap['connectionMessage']?.toString(),
+            isTesting: _testingAsaas,
+            testResult: _asaasTestResult,
+            onConfigure: () => _openExclusiveAsaasModal(compId, asaasMap),
+            onTest: () => _runExclusiveAsaasTest(compId, (asaasMap['environment'] ?? 'SANDBOX').toString()),
+          ),
+          const SizedBox(height: 12),
+          _buildExclusiveProviderBox(
+            title: 'Google Gemini (Eventos IA Exclusivo)',
+            subtitle: 'Chave: ${geminiMap['maskedKey'] ?? 'Não configurada'}',
+            configured: geminiMap['configured'] == true,
+            status: (geminiMap['connectionStatus'] ?? 'NOT_CONFIGURED').toString(),
+            statusMessage: geminiMap['connectionMessage']?.toString(),
+            isTesting: _testingGemini,
+            testResult: _geminiTestResult,
+            onConfigure: () => _openExclusiveGeminiModal(compId),
+            onTest: () => _runExclusiveGeminiTest(compId),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExclusiveProviderBox({
+    required String title,
+    required String subtitle,
+    required bool configured,
+    required String status,
+    String? statusMessage,
+    required bool isTesting,
+    Map<String, dynamic>? testResult,
+    required VoidCallback onConfigure,
+    required VoidCallback onTest,
+  }) {
+    final upper = status.toUpperCase();
+    final Color statusColor = !configured
+        ? const Color(0xFF64748B)
+        : (upper == 'CONNECTED' || upper == 'ACTIVE')
+            ? const Color(0xFF10B981)
+            : upper == 'ERROR'
+                ? const Color(0xFFEF4444)
+                : const Color(0xFFF59E0B);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0714),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: statusColor.withOpacity(0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: statusColor.withOpacity(0.5)),
+                ),
+                child: Text(
+                  configured ? upper : 'NÃO CONFIGURADA',
+                  style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle, style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 12)),
+          if (statusMessage != null && statusMessage.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                statusMessage,
+                style: TextStyle(color: statusColor, fontSize: 11),
+              ),
+            ),
+          if (testResult != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: (testResult['success'] == true
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFFEF4444))
+                    .withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: (testResult['success'] == true
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444))
+                      .withOpacity(0.45),
+                ),
+              ),
+              child: Text(
+                '${testResult['success'] == true ? 'OK' : 'FALHA'}: ${testResult['message'] ?? ''} ${testResult['latencyMs'] != null ? '(${testResult['latencyMs']}ms)' : ''}',
+                style: TextStyle(
+                  color: testResult['success'] == true ? const Color(0xFF34D399) : const Color(0xFFFCA5A5),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFA855F7)),
+                  foregroundColor: const Color(0xFFD8B4FE),
+                ),
+                icon: const Icon(Icons.edit_rounded, size: 15),
+                label: Text(configured ? 'Trocar Chave' : 'Configurar Chave', style: const TextStyle(fontSize: 12)),
+                onPressed: onConfigure,
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                ),
+                icon: isTesting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.wifi_tethering_rounded, size: 15),
+                label: Text(isTesting ? 'Testando...' : 'Testar Conexão', style: const TextStyle(fontSize: 12)),
+                onPressed: (!configured || isTesting) ? null : onTest,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openExclusiveAsaasModal(String companyId, Map<String, dynamic> current) async {
+    final keyCtrl = TextEditingController();
+    final accountNameCtrl = TextEditingController(text: current['accountName']?.toString() ?? '');
+    String env = (current['environment'] ?? 'SANDBOX').toString();
+    if (env != 'SANDBOX' && env != 'PRODUCTION') env = 'SANDBOX';
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _ControllerDisposer(
+        controllers: [keyCtrl, accountNameCtrl],
+        child: StatefulBuilder(
+          builder: (dialogCtx, setDialogState) => AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Chave Asaas / Serasa Exclusiva', style: TextStyle(color: Colors.white, fontSize: 16)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: env,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: const InputDecoration(
+                      labelText: 'Ambiente Asaas',
+                      labelStyle: TextStyle(color: Color(0xFFD8B4FE)),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'SANDBOX', child: Text('SANDBOX (Homologação)')),
+                      DropdownMenuItem(value: 'PRODUCTION', child: Text('PRODUCTION (Produção)')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => env = v);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: keyCtrl,
+                    obscureText: true,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'API Key Asaas *',
+                      hintText: r'Ex: $aact_...',
+                      hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: accountNameCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Nome da Conta (opcional)',
+                      labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7), foregroundColor: Colors.white),
+                onPressed: () async {
+                  if (keyCtrl.text.trim().length < 6) {
+                    _mostrarErro('Informe uma chave Asaas válida.');
+                    return;
+                  }
+                  try {
+                    await _api.saveCompanyAsaasIntegration(
+                      companyId,
+                      apiKey: keyCtrl.text.trim(),
+                      environment: env,
+                      accountName: accountNameCtrl.text.trim().isNotEmpty ? accountNameCtrl.text.trim() : null,
+                    );
+                    if (ctx.mounted) Navigator.of(ctx).pop(true);
+                  } catch (e) {
+                    _mostrarErro('$e');
+                  }
+                },
+                child: const Text('Salvar no Vault'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (saved == true && mounted) {
+      _mostrarSucesso('Chave Asaas / Serasa criptografada e salva para a empresa.');
+      await _carregarIntegracoesEmpresa(companyId);
+    }
+  }
+
+  Future<void> _openExclusiveGeminiModal(String companyId) async {
+    final keyCtrl = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => _ControllerDisposer(
+        controllers: [keyCtrl],
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Chave Google Gemini Exclusiva', style: TextStyle(color: Colors.white, fontSize: 16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Sem chave Gemini exclusiva cadastrada, a busca de Eventos IA fica bloqueada para esta empresa.',
+                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: keyCtrl,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Gemini API Key *',
+                  hintText: 'AIza...',
+                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7), foregroundColor: Colors.white),
+              onPressed: () async {
+                if (keyCtrl.text.trim().length < 6) {
+                  _mostrarErro('Informe uma chave Gemini válida.');
+                  return;
+                }
+                try {
+                  await _api.saveCompanyGeminiIntegration(companyId, apiKey: keyCtrl.text.trim());
+                  if (ctx.mounted) Navigator.of(ctx).pop(true);
+                } catch (e) {
+                  _mostrarErro('$e');
+                }
+              },
+              child: const Text('Salvar no Vault'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true && mounted) {
+      _mostrarSucesso('Chave Gemini exclusiva salva para a empresa.');
+      await _carregarIntegracoesEmpresa(companyId);
+    }
+  }
+
+  Future<void> _runExclusiveAsaasTest(String companyId, String environment) async {
+    setState(() => _testingAsaas = true);
+    try {
+      final result = await _api.testCompanyAsaasIntegration(companyId, environment: environment);
+      if (!mounted) return;
+      setState(() => _asaasTestResult = result);
+      await _carregarIntegracoesEmpresa(companyId);
+      if (mounted) {
+        setState(() => _asaasTestResult = result);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _asaasTestResult = {'success': false, 'message': '$e'});
+      }
+    } finally {
+      if (mounted) setState(() => _testingAsaas = false);
+    }
+  }
+
+  Future<void> _runExclusiveGeminiTest(String companyId) async {
+    setState(() => _testingGemini = true);
+    try {
+      final result = await _api.testCompanyGeminiIntegration(companyId);
+      if (!mounted) return;
+      setState(() => _geminiTestResult = result);
+      await _carregarIntegracoesEmpresa(companyId);
+      if (mounted) {
+        setState(() => _geminiTestResult = result);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _geminiTestResult = {'success': false, 'message': '$e'});
+      }
+    } finally {
+      if (mounted) setState(() => _testingGemini = false);
+    }
   }
 
   Widget _buildCompanyConsumptionSummary() {
