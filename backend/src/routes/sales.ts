@@ -6,6 +6,9 @@ import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../m
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
 import { resolveSellerCommissionRate } from '../utils/commission';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import { getSaleNetCents, isSaleCancelled } from '../utils/saleNetHelper';
+import { createDebitAdvance } from '../services/staffAdvanceService';
+import { recordStatementAdjustmentOrReturnCredit } from '../services/platformBillingService';
 import {
   resolveSaleHasCover,
   deductCoverForSellerSale,
@@ -1927,6 +1930,9 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
           select: { id: true, name: true },
         },
         payments: true,
+        adjustments: {
+          orderBy: { createdAt: 'desc' },
+        },
         creditAgreement: {
           include: {
             installments: {
@@ -1938,7 +1944,12 @@ router.get('/history', authenticateToken, async (req: AuthRequest, res: any) => 
       orderBy: { date: 'desc' },
     });
 
-    res.json(sales);
+    const enrichedSales = sales.map((s) => ({
+      ...s,
+      netValue: Number((getSaleNetCents(s) / 100).toFixed(2)),
+    }));
+
+    res.json(enrichedSales);
   } catch (error) {
     console.error('Get sales history error:', error);
     res.status(500).json({ error: 'Erro ao carregar histórico de vendas' });
@@ -2600,6 +2611,541 @@ router.post('/:id/buyer-confirmation/resolve', authenticateToken, async (req: Au
     }
     console.error('[SALES] Erro ao concluir revisão da conferência:', error);
     res.status(500).json({ error: 'Erro ao concluir revisão' });
+  }
+});
+
+// Roles com permissão exclusiva para Cancelamento, Estorno ou Desconto com Devolução (Admin exclusivo; bloqueia vendedor/fotógrafo)
+const ADMIN_REFUND_ROLES = new Set(['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN', 'SUPERVISOR']);
+
+function getSaoPauloYmd(date: Date = new Date()): string {
+  const br = new Date(date.getTime() - 3 * 60 * 60 * 1000);
+  return br.toISOString().slice(0, 10);
+}
+
+// GET /api/sales/:id/adjustments — Lista os ajustes/estornos/cancelamentos de uma venda
+router.get('/:id/adjustments', authenticateToken, async (req: AuthRequest, res: any) => {
+  try {
+    const roleUpper = String(req.user?.role || '').toUpperCase();
+    if (!ADMIN_REFUND_ROLES.has(roleUpper)) {
+      return res.status(403).json({
+        error: 'Acesso restrito a administradores para consulta de estornos/cancelamentos.',
+      });
+    }
+
+    const saleId = String(req.params.id || '').trim();
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && roleUpper !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const sale = await prisma.sale.findFirst({
+      where: {
+        id: saleId,
+        ...(roleUpper !== 'SUPER_ADMIN' ? { companyId: userCompanyId } : {}),
+      },
+      include: {
+        adjustments: {
+          orderBy: { createdAt: 'desc' },
+          include: {
+            sellerAdvanceEntry: {
+              select: {
+                id: true,
+                direction: true,
+                category: true,
+                amountCents: true,
+                closingReference: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Venda não encontrada na sua empresa' });
+    }
+
+    const originalCents = Math.max(0, Math.round(Number(sale.value || 0) * 100));
+    const refundedCents = Math.max(0, sale.refundedAmountCents || 0);
+    const netCents = isSaleCancelled(sale) ? 0 : Math.max(0, originalCents - refundedCents);
+
+    return res.json({
+      saleId: sale.id,
+      saleStatus: sale.saleStatus,
+      originalAmountCents: originalCents,
+      refundedAmountCents: refundedCents,
+      netAmountCents: netCents,
+      cancelledAt: sale.cancelledAt,
+      cancelReason: sale.cancelReason,
+      adjustments: sale.adjustments,
+    });
+  } catch (error) {
+    console.error('[SALES] Erro ao listar ajustes da venda:', error);
+    return res.status(500).json({ error: 'Erro ao carregar histórico de estornos da venda' });
+  }
+});
+
+// POST /api/sales/:id/refund-or-cancel — Cancelamento Total, Estorno ou Desconto com Devolução (Exclusivo Admin)
+router.post('/:id/refund-or-cancel', authenticateToken, async (req: AuthRequest, res: any) => {
+  try {
+    const roleUpper = String(req.user?.role || '').toUpperCase();
+    if (!ADMIN_REFUND_ROLES.has(roleUpper)) {
+      return res.status(403).json({
+        error: 'Ação exclusiva de administradores. Vendedores e fotógrafos não podem estornar ou cancelar vendas.',
+      });
+    }
+
+    const userCompanyId = req.user?.companyId;
+    if (!userCompanyId && roleUpper !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Empresa não identificada' });
+    }
+
+    const saleId = String(req.params.id || '').trim();
+    const rawType = String(req.body?.type || '').trim().toUpperCase();
+    const normalizedType =
+      rawType === 'FULL_CANCELLATION' || rawType === 'FULL' || rawType === 'CANCEL'
+        ? 'FULL_CANCELLATION'
+        : rawType === 'PARTIAL_REFUND_DISCOUNT' || rawType === 'PARTIAL' || rawType === 'DISCOUNT'
+          ? 'PARTIAL_REFUND_DISCOUNT'
+          : '';
+
+    if (!normalizedType) {
+      return res.status(400).json({
+        error: 'Tipo inválido. Use FULL_CANCELLATION ou PARTIAL_REFUND_DISCOUNT.',
+      });
+    }
+
+    const cleanReason = String(req.body?.reason || '').trim();
+    if (cleanReason.length < 3) {
+      return res.status(400).json({
+        error: 'Informe uma justificativa com pelo menos 3 caracteres.',
+      });
+    }
+
+    const cleanReceiptUrl =
+      typeof req.body?.receiptUrl === 'string' && req.body.receiptUrl.trim()
+        ? req.body.receiptUrl.trim()
+        : null;
+
+    let requestedAmountCents: number | null = null;
+    if (req.body?.amountCents !== undefined && req.body?.amountCents !== null && req.body?.amountCents !== '') {
+      const parsedCents = Math.round(Number(req.body.amountCents));
+      if (!Number.isFinite(parsedCents) || parsedCents <= 0) {
+        return res.status(400).json({ error: 'amountCents deve ser um inteiro positivo em centavos.' });
+      }
+      requestedAmountCents = parsedCents;
+    } else if (req.body?.amount !== undefined && req.body?.amount !== null && req.body?.amount !== '') {
+      const parsedBrl = Number(String(req.body.amount).replace(',', '.'));
+      if (!Number.isFinite(parsedBrl) || parsedBrl <= 0) {
+        return res.status(400).json({ error: 'O valor do estorno/desconto deve ser maior que zero.' });
+      }
+      requestedAmountCents = Math.round(parsedBrl * 100);
+    }
+
+    if (normalizedType === 'PARTIAL_REFUND_DISCOUNT' && (requestedAmountCents === null || requestedAmountCents <= 0)) {
+      return res.status(400).json({
+        error: 'Informe o valor do desconto/estorno parcial (amount ou amountCents).',
+      });
+    }
+
+    const actorId = req.user?.id!;
+    const actorName = req.user?.name || 'Administrador';
+    const ipAddress = (req.ip || req.socket?.remoteAddress || null) as string | null;
+
+    const txResult = await prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Sale" WHERE "id" = ${saleId} FOR UPDATE`;
+
+        const sale = await tx.sale.findUnique({
+          where: { id: saleId },
+          include: {
+            client: true,
+            seller: {
+              select: { id: true, name: true, usesOwnCar: true, companyId: true },
+            },
+            creditAgreement: {
+              include: {
+                installments: { orderBy: { installmentNumber: 'asc' } },
+                commissions: { where: { isReversed: false } },
+              },
+            },
+            platformStatementItem: true,
+            adjustments: { orderBy: { createdAt: 'desc' } },
+          },
+        });
+
+        if (!sale) {
+          throw { status: 404, message: 'Venda não encontrada.' };
+        }
+        if (roleUpper !== 'SUPER_ADMIN' && sale.companyId !== userCompanyId) {
+          throw { status: 403, message: 'Venda não pertence à sua empresa.' };
+        }
+
+        const effectiveCompanyId = sale.companyId || userCompanyId!;
+        if (isSaleCancelled(sale)) {
+          throw { status: 409, message: 'Esta venda já se encontra totalmente cancelada.' };
+        }
+
+        const originalCents = Math.max(0, Math.round(Number(sale.value || 0) * 100));
+        const alreadyRefundedCents = Math.max(0, sale.refundedAmountCents || 0);
+        const remainingNetCents = Math.max(0, originalCents - alreadyRefundedCents);
+
+        if (remainingNetCents <= 0) {
+          throw { status: 409, message: 'Saldo líquido da venda já é zero.' };
+        }
+
+        const effectiveAmountCents =
+          normalizedType === 'FULL_CANCELLATION' ? remainingNetCents : requestedAmountCents!;
+
+        if (effectiveAmountCents <= 0) {
+          throw { status: 400, message: 'Valor de estorno deve ser maior que zero.' };
+        }
+        if (effectiveAmountCents > remainingNetCents) {
+          throw {
+            status: 400,
+            message: `Valor de estorno (R$ ${(effectiveAmountCents / 100).toFixed(2)}) excede o saldo líquido restante da venda (R$ ${(remainingNetCents / 100).toFixed(2)}).`,
+          };
+        }
+
+        const newRefundedAmountCents = alreadyRefundedCents + effectiveAmountCents;
+        const newRemainingNetCents = Math.max(0, originalCents - newRefundedAmountCents);
+        const becomesFullyCancelled =
+          normalizedType === 'FULL_CANCELLATION' || newRemainingNetCents <= 0;
+        const newSaleStatus = becomesFullyCancelled ? 'CANCELLED' : 'PARTIALLY_REFUNDED';
+        const now = new Date();
+
+        // Cálculo proporcional da comissão do vendedor a estornar
+        const sellerRate =
+          sale.creditAgreement?.initialCommissionRate ?? resolveSellerCommissionRate(sale.seller);
+        const installmentRate = sale.creditAgreement?.installmentCommissionRate ?? 0.10;
+        const alreadyDebitedCommCents = (sale.adjustments || []).reduce(
+          (acc, adj) => acc + Math.max(0, adj.commissionDebitCents || 0),
+          0
+        );
+
+        let commissionDebitCents = 0;
+        let paidInstallmentRefundCents = 0;
+
+        if (!sale.creditAgreement || sale.creditAgreement.status === 'CANCELLED') {
+          const maxTotalCommCents = Math.round(originalCents * sellerRate);
+          const remainingCommPool = Math.max(0, maxTotalCommCents - alreadyDebitedCommCents);
+          commissionDebitCents = becomesFullyCancelled
+            ? remainingCommPool
+            : Math.min(remainingCommPool, Math.round(effectiveAmountCents * sellerRate));
+        } else {
+          const agr = sale.creditAgreement;
+          const openInstallments = (agr.installments || []).filter((inst) =>
+            ['PENDING', 'PARTIALLY_PAID'].includes(String(inst.status || '').toUpperCase())
+          );
+          const unpaidInstallmentsCents = openInstallments.reduce(
+            (acc, inst) => acc + Math.max(0, inst.amountCents - inst.paidCents),
+            0
+          );
+
+          // Primeiro abate parcelas futuras não pagas (que não geraram comissão paga).
+          const excessOverUnpaidCents = Math.max(0, effectiveAmountCents - unpaidInstallmentsCents);
+          const paidInstPrincipalCents = Math.max(0, agr.paidPrincipalCents || 0);
+          paidInstallmentRefundCents = Math.min(excessOverUnpaidCents, paidInstPrincipalCents);
+          const downPaymentRefundCents = Math.max(0, excessOverUnpaidCents - paidInstallmentRefundCents);
+
+          const rawDebitCents =
+            Math.round(paidInstallmentRefundCents * installmentRate) +
+            Math.round(downPaymentRefundCents * sellerRate);
+          commissionDebitCents = Math.max(0, rawDebitCents);
+
+          if (becomesFullyCancelled) {
+            if (openInstallments.length > 0) {
+              await tx.creditInstallment.updateMany({
+                where: {
+                  id: { in: openInstallments.map((i) => i.id) },
+                },
+                data: { status: 'CANCELLED' },
+              });
+            }
+            const noteLine = `[Cancelamento Admin ${getSaoPauloYmd(now)} por ${actorName}]: ${cleanReason}`;
+            await tx.creditAgreement.update({
+              where: { id: agr.id },
+              data: {
+                status: 'CANCELLED',
+                remainingPrincipalCents: 0,
+                remainingChargesCents: 0,
+                notes: agr.notes ? `${agr.notes}\n${noteLine}` : noteLine,
+              },
+            });
+          } else {
+            // Desconto/estorno parcial em venda no crediário: abate primeiro das parcelas finais em aberto
+            let toReduceCents = Math.min(effectiveAmountCents, unpaidInstallmentsCents);
+            const descInstallments = [...openInstallments].sort(
+              (a, b) => b.installmentNumber - a.installmentNumber
+            );
+            for (const inst of descInstallments) {
+              if (toReduceCents <= 0) break;
+              const unpaidHere = Math.max(0, inst.amountCents - inst.paidCents);
+              if (unpaidHere <= 0) continue;
+              const cutHere = Math.min(toReduceCents, unpaidHere);
+              const nextAmt = Math.max(inst.paidCents, inst.amountCents - cutHere);
+              const nextPrincipal =
+                inst.principalCents != null
+                  ? Math.max(0, inst.principalCents - cutHere)
+                  : undefined;
+              const nextStatus =
+                nextAmt <= inst.paidCents
+                  ? inst.paidCents > 0
+                    ? 'PAID'
+                    : 'CANCELLED'
+                  : inst.status;
+              await tx.creditInstallment.update({
+                where: { id: inst.id },
+                data: {
+                  amountCents: nextAmt,
+                  ...(nextPrincipal !== undefined ? { principalCents: nextPrincipal } : {}),
+                  status: nextStatus,
+                },
+              });
+              toReduceCents -= cutHere;
+            }
+            const nextRemainingPrincipal = Math.max(
+              0,
+              agr.remainingPrincipalCents - Math.min(agr.remainingPrincipalCents, effectiveAmountCents)
+            );
+            const noteLine = `[Estorno Parcial Admin R$ ${(effectiveAmountCents / 100).toFixed(2)} por ${actorName}]: ${cleanReason}`;
+            await tx.creditAgreement.update({
+              where: { id: agr.id },
+              data: {
+                remainingPrincipalCents: nextRemainingPrincipal,
+                notes: agr.notes ? `${agr.notes}\n${noteLine}` : noteLine,
+              },
+            });
+          }
+        }
+
+        // Verifica se a comissão já foi contabilizada/fechada para evitar dupla cobrança no fechamento aberto do mesmo dia
+        const saleYmd = getSaoPauloYmd(new Date(sale.date));
+        const nowYmd = getSaoPauloYmd(now);
+        const saleDayStart = new Date(`${saleYmd}T00:00:00.000-03:00`);
+        const saleDayEnd = new Date(`${saleYmd}T23:59:59.999-03:00`);
+
+        const closingForSaleDay = await tx.dailyClosing.findFirst({
+          where: {
+            sellerId: sale.sellerId,
+            date: { gte: saleDayStart, lte: saleDayEnd },
+          },
+          select: { id: true },
+        });
+
+        const commissionAlreadyAccounted = Boolean(
+          closingForSaleDay ||
+            saleYmd < nowYmd ||
+            sale.client?.cityClosedAt != null ||
+            paidInstallmentRefundCents > 0
+        );
+
+        const adjustmentId = uuidv4();
+        const ref = sale.fichaNumber || `VND-${String(sale.id).slice(0, 8).toUpperCase()}`;
+
+        let sellerAdvanceEntry: any = null;
+        if (commissionAlreadyAccounted && commissionDebitCents > 0) {
+          const advRes = await createDebitAdvance({
+            companyId: effectiveCompanyId,
+            userId: sale.sellerId,
+            profileRole: 'SELLER',
+            category: 'ADJUSTMENT_DIVERGENCE',
+            amountCents: commissionDebitCents,
+            notes: `[${becomesFullyCancelled ? 'Cancelamento' : 'Estorno/Desconto'} Venda ${ref}] ${cleanReason}`,
+            receiptUrl: cleanReceiptUrl,
+            batchId: sale.client?.batchId || null,
+            closingReference: `sale_adj_${adjustmentId}`,
+            createdById: actorId,
+            createdByName: actorName,
+            tx,
+          });
+          sellerAdvanceEntry = advRes.entry;
+        }
+
+        const adjustment = await tx.saleAdjustment.create({
+          data: {
+            id: adjustmentId,
+            companyId: effectiveCompanyId,
+            saleId: sale.id,
+            type: normalizedType,
+            amountCents: effectiveAmountCents,
+            commissionDebitCents,
+            reason: cleanReason,
+            receiptUrl: cleanReceiptUrl,
+            sellerAdvanceEntryId: sellerAdvanceEntry?.id || null,
+            createdById: actorId,
+            createdByName: actorName,
+          },
+        });
+
+        // Restaurar capa do vendedor quando cancelamento total
+        let updatedCoverDeducted = sale.coverDeducted;
+        if (becomesFullyCancelled && sale.coverDeducted) {
+          await restoreCoverForCanceledSale(tx, {
+            saleId: sale.id,
+            sellerId: sale.sellerId,
+            wasDeducted: sale.coverDeducted,
+          });
+          updatedCoverDeducted = false;
+        }
+
+        const updatedSale = await tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            saleStatus: newSaleStatus,
+            refundedAmountCents: newRefundedAmountCents,
+            coverDeducted: updatedCoverDeducted,
+            ...(becomesFullyCancelled
+              ? {
+                  status: 'CANCELLED',
+                  paymentStatus: 'CANCELLED',
+                  cancelledAt: now,
+                  cancelReason: cleanReason,
+                }
+              : {}),
+          },
+          include: {
+            adjustments: { orderBy: { createdAt: 'desc' } },
+          },
+        });
+
+        // Se não restou nenhuma outra venda ativa para a ficha no cancelamento total, atualiza outcomeStatus do cliente
+        if (becomesFullyCancelled) {
+          const otherActiveSalesCount = await tx.sale.count({
+            where: {
+              clientId: sale.clientId,
+              id: { not: sale.id },
+              saleStatus: { not: 'CANCELLED' },
+              receiptUrl: { not: null },
+            },
+          });
+          if (otherActiveSalesCount === 0) {
+            const activeNonSalesCount = await tx.nonSale.count({
+              where: {
+                clientId: sale.clientId,
+                supersededAt: null,
+              },
+            });
+            await tx.client.update({
+              where: { id: sale.clientId },
+              data: {
+                outcomeStatus: activeNonSalesCount > 0 ? 'NON_SALE' : 'PENDING',
+              },
+            });
+          }
+        }
+
+        // Base de Pagamento / Demonstrativo Mensal da Plataforma
+        let platformAdjustment: any = null;
+        if (sale.platformStatementItem) {
+          const item = sale.platformStatementItem;
+          const remainingCreditableBase = Math.max(
+            0,
+            item.saleBaseCents - (item.creditedBaseCents || 0)
+          );
+          const returnBaseForPlatform = Math.min(effectiveAmountCents, remainingCreditableBase);
+          if (returnBaseForPlatform > 0) {
+            const platRes = await recordStatementAdjustmentOrReturnCredit(
+              {
+                companyId: effectiveCompanyId,
+                type: becomesFullyCancelled ? 'SALE_CANCELLATION_CREDIT' : 'PARTIAL_RETURN_CREDIT',
+                originSaleId: sale.id,
+                returnedBaseCents: returnBaseForPlatform,
+                reason: `[${becomesFullyCancelled ? 'Cancelamento' : 'Estorno/Desconto'} Venda ${ref}] ${cleanReason}`,
+                idempotencyKey: `sale_adj_${adjustmentId}`,
+                authorUserId: actorId,
+                authorName: actorName,
+                ipAddress: ipAddress || undefined,
+              },
+              tx
+            );
+            platformAdjustment = platRes.adjustment;
+          }
+        }
+
+        // Timeline da Ficha
+        await tx.clientTimeline.create({
+          data: {
+            clientId: sale.clientId,
+            cycle: sale.client?.commercialCycle || 1,
+            action: becomesFullyCancelled ? 'SALE_CANCELLED' : 'SALE_ADJUSTED',
+            previousStatus: sale.saleStatus || 'ACTIVE',
+            newStatus: newSaleStatus,
+            authorId: actorId,
+            authorRole: roleUpper,
+            metadata: {
+              saleId: sale.id,
+              adjustmentId: adjustment.id,
+              type: normalizedType,
+              amountCents: effectiveAmountCents,
+              commissionDebitCents,
+              commissionAlreadyAccounted,
+              reason: cleanReason,
+              receiptUrl: cleanReceiptUrl,
+            },
+          },
+        });
+
+        // Trilha imutável de auditoria operacional
+        await recordOperationalAuditEvent(
+          {
+            companyId: effectiveCompanyId,
+            category: 'REVERSAL',
+            action: becomesFullyCancelled
+              ? 'SALE_CANCELLED_BY_ADMIN'
+              : 'SALE_PARTIAL_REFUND_BY_ADMIN',
+            entityType: 'SALE',
+            entityReference: ref,
+            entityId: sale.id,
+            previousValues: {
+              saleStatus: sale.saleStatus,
+              refundedAmountCents: alreadyRefundedCents,
+              netAmountCents: remainingNetCents,
+            },
+            newValues: {
+              saleStatus: newSaleStatus,
+              refundedAmountCents: newRefundedAmountCents,
+              netAmountCents: newRemainingNetCents,
+              commissionDebitCents,
+              commissionAlreadyAccounted,
+              sellerAdvanceEntryId: sellerAdvanceEntry?.id || null,
+            },
+            reason: cleanReason,
+            authorUserId: actorId,
+            authorName: actorName,
+            authorRole: roleUpper,
+            ipAddress,
+          },
+          tx
+        );
+
+        return {
+          adjustment,
+          sale: updatedSale,
+          netAmountCents: becomesFullyCancelled ? 0 : newRemainingNetCents,
+          commissionDebitCents,
+          commissionAlreadyAccounted,
+          sellerAdvanceEntry,
+          platformAdjustment,
+        };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 30000,
+      }
+    );
+
+    return res.status(201).json({
+      success: true,
+      ...txResult,
+    });
+  } catch (error: any) {
+    if (error && error.status && error.message) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('[SALES] Erro ao processar estorno/cancelamento:', error);
+    return res.status(500).json({ error: 'Erro interno ao processar estorno/cancelamento da venda.' });
   }
 });
 

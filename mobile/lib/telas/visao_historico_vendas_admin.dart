@@ -4,6 +4,7 @@ import '../servicos/servico_api.dart';
 import '../utils/ui_helpers.dart';
 import '../widgets/authenticated_image.dart';
 import '../widgets/admin_ficha_actions.dart';
+import '../widgets/admin_sale_adjustment_modal.dart';
 
 class VisaoHistoricoVendasAdmin extends StatefulWidget {
   const VisaoHistoricoVendasAdmin({super.key});
@@ -245,7 +246,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
   Widget _buildSellerGroup(String sellerName, List<Map<String, dynamic>> sales) {
     final subtotal = sales.fold<double>(
       0.0,
-      (acc, s) => acc + (double.tryParse(s['value']?.toString() ?? '0') ?? 0.0),
+      (acc, s) => acc + (computeSaleNetCents(s) / 100.0),
     );
     final isUnidentified = sellerName == 'Vendedor não identificado';
 
@@ -322,7 +323,7 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     final sortedSellerKeys = _sortedSellerKeys;
     final grandTotal = filtered.fold<double>(
       0.0,
-      (acc, item) => acc + (double.tryParse(item['value']?.toString() ?? '0') ?? 0.0),
+      (acc, item) => acc + (computeSaleNetCents(item) / 100.0),
     );
 
     return Scaffold(
@@ -817,8 +818,13 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
     final locationStr = (state != null && state.isNotEmpty) ? '$city - $state' : city;
     final sellerName = (sale['seller']?['name'] ?? 'Vendedor').toString();
 
-    final rawVal = double.tryParse(sale['value']?.toString() ?? '0') ?? 0.0;
-    final formattedValue = _currencyFormat.format(rawVal);
+    final netCents = computeSaleNetCents(sale);
+    final origCents = computeSaleOriginalCents(sale);
+    final isCancelled = isSaleFullyCancelled(sale);
+    final isPartialRefund = isSalePartiallyRefunded(sale);
+    final formattedValue = _currencyFormat.format(netCents / 100.0);
+    final formattedOrigValue = _currencyFormat.format(origCents / 100.0);
+    final adjBadge = buildSaleAdjustmentBadge(sale);
 
     DateTime? saleDate;
     if (sale['date'] != null) {
@@ -878,13 +884,35 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                       ),
                     ),
                   ),
-                  Text(
-                    formattedValue,
-                    style: const TextStyle(
-                      color: Color(0xFF00C853),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (isCancelled || isPartialRefund)
+                        Text(
+                          formattedOrigValue,
+                          style: const TextStyle(
+                            color: Colors.white38,
+                            fontSize: 10,
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                        ),
+                      Text(
+                        formattedValue,
+                        style: TextStyle(
+                          color: isCancelled
+                              ? Colors.redAccent
+                              : (isPartialRefund
+                                  ? Colors.amberAccent
+                                  : const Color(0xFF00C853)),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      if (adjBadge != null) ...[
+                        const SizedBox(height: 3),
+                        adjBadge,
+                      ],
+                    ],
                   ),
                   if ((clientForMenu['id'] ?? '').toString().isNotEmpty)
                     AdminUniversalFichaMenu(
@@ -1146,8 +1174,17 @@ class _ModalDetalhesVenda extends StatelessWidget {
     final sellerName = (sale['seller']?['name'] ?? 'Vendedor').toString();
     final paymentMethod = (sale['paymentMethod'] ?? 'Não informado').toString();
 
-    final rawVal = double.tryParse(sale['value']?.toString() ?? '0') ?? 0.0;
-    final formattedValue = currencyFormat.format(rawVal);
+    final origCents = computeSaleOriginalCents(sale);
+    final refundedCents = computeSaleRefundedCents(sale);
+    final netCents = computeSaleNetCents(sale);
+    final isCancelled = isSaleFullyCancelled(sale);
+    final adjBadge = buildSaleAdjustmentBadge(sale);
+    final adjustmentsList = (sale['adjustments'] is List)
+        ? (sale['adjustments'] as List)
+        : <dynamic>[];
+    final formattedOrigValue = currencyFormat.format(origCents / 100.0);
+    final formattedRefundedValue = currencyFormat.format(refundedCents / 100.0);
+    final formattedValue = currencyFormat.format(netCents / 100.0);
 
     DateTime? saleDate;
     if (sale['date'] != null) {
@@ -1267,17 +1304,38 @@ class _ModalDetalhesVenda extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'DADOS DA VENDA',
-                            style: TextStyle(
-                              color: Color(0xFF80DEEA),
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
-                            ),
+                          Row(
+                            children: [
+                              const Text(
+                                'DADOS DA VENDA',
+                                style: TextStyle(
+                                  color: Color(0xFF80DEEA),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const Spacer(),
+                              if (adjBadge != null) adjBadge,
+                            ],
                           ),
                           const SizedBox(height: 10),
-                          _infoRow(Icons.monetization_on_outlined, 'Valor Total', formattedValue, valueColor: const Color(0xFF00C853)),
+                          if (refundedCents > 0 || isCancelled) ...[
+                            _infoRow(Icons.receipt_outlined, 'Valor Original', formattedOrigValue),
+                            _infoRow(
+                              Icons.money_off_csred_outlined,
+                              'Já Estornado / Descontado',
+                              '-$formattedRefundedValue',
+                              valueColor: Colors.redAccent,
+                            ),
+                            _infoRow(
+                              Icons.monetization_on_outlined,
+                              'Valor Líquido Atual',
+                              formattedValue,
+                              valueColor: isCancelled ? Colors.redAccent : Colors.amberAccent,
+                            ),
+                          ] else
+                            _infoRow(Icons.monetization_on_outlined, 'Valor Total', formattedValue, valueColor: const Color(0xFF00C853)),
                           _infoRow(Icons.payment_outlined, 'Forma de Pagamento', paymentMethod),
                           if (sale['payments'] != null && (sale['payments'] as List).isNotEmpty) ...[
                             const SizedBox(height: 4),
@@ -1313,9 +1371,48 @@ class _ModalDetalhesVenda extends StatelessWidget {
                               (client['children'] as List).length == 1 ? 'Criança' : 'Crianças',
                               UIHelpers.formatChildren(client['children']),
                             ),
+                          if (!isCancelled) ...[
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () async {
+                                  final res = await showAdminSaleAdjustmentModal(
+                                    context,
+                                    sale: sale,
+                                  );
+                                  if (res != null) {
+                                    if (context.mounted && Navigator.canPop(context)) {
+                                      Navigator.pop(context);
+                                    }
+                                    onActionDone?.call();
+                                  }
+                                },
+                                icon: const Icon(Icons.assignment_return_rounded,
+                                    color: Colors.white, size: 18),
+                                label: const Text(
+                                  'Cancelar / Estornar / Desconto',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF6B21A8),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side: const BorderSide(color: Color(0xFFA855F7)),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
+                    if (adjustmentsList.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      buildSaleAdjustmentsHistoryCard(adjustmentsList),
+                    ],
                     const SizedBox(height: 16),
 
                     // Relatório e notas

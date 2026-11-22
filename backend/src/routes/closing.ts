@@ -5,6 +5,11 @@ import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../mid
 import { resolveSellerCommissionRate } from '../utils/commission';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import {
+  getSaleEffectivePayments,
+  getSaleNetValue,
+  isSaleCancelled,
+} from '../utils/saleNetHelper';
+import {
   computeUserAdvanceSummary,
   createDebitAdvance,
   getCompanyAdvanceConfig,
@@ -138,7 +143,9 @@ function calculateCityClosingStats(
 
   for (const c of clients) {
     const isOpen = c.cityClosedAt === null;
-    const sellerSales = (c.sales || []).filter((s: any) => s.sellerId === sellerId);
+    const sellerSales = (c.sales || []).filter(
+      (s: any) => s.sellerId === sellerId && !isSaleCancelled(s)
+    );
     const validFinishedSale = sellerSales.find((s: any) => Boolean(s.receiptUrl));
 
     if (isOpen) {
@@ -160,7 +167,7 @@ function calculateCityClosingStats(
 
     if (validFinishedSale) {
       if (isOpen) {
-        totalSalesValue += validFinishedSale.value;
+        totalSalesValue += getSaleNetValue(validFinishedSale);
       }
       // Vendas antigas/incompletas nesta mesma ficha são legados ignorados
       const legacyWithoutReceipt = sellerSales.filter((s: any) => !s.receiptUrl && s.id !== validFinishedSale.id);
@@ -698,12 +705,13 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
 
         const { startDate, endDate } = parseDateRange(dateParam);
 
-        // Fetch sales for this day
-        const sales = await prisma.sale.findMany({
+        // Fetch sales for this day (excluindo vendas canceladas)
+        const rawSales = await prisma.sale.findMany({
             where: {
                 sellerId: sellerId as string,
                 companyId: userCompanyId,
                 receiptUrl: { not: null },
+                saleStatus: { not: 'CANCELLED' },
                 date: {
                     gte: startDate,
                     lte: endDate
@@ -721,6 +729,7 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 creditAgreement: true,
             }
         });
+        const sales = rawSales.filter((s) => !isSaleCancelled(s));
 
         // Fetch credit payments collected by or for this seller on this day
         const creditPaymentsCollected = await prisma.creditPayment.findMany({
@@ -806,13 +815,17 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const commissionRate = resolveSellerCommissionRate(seller);
 
         sales.forEach(sale => {
-            totalSalesValue += sale.value;
+            const effectiveValue = getSaleNetValue(sale);
+            totalSalesValue += effectiveValue;
 
-            if (sale.creditAgreement) {
+            if (sale.creditAgreement && sale.creditAgreement.status !== 'CANCELLED') {
                 crediarioSalesCount += 1;
-                crediarioTotalValue += sale.value;
-                const downPaymentVal = Number((sale.creditAgreement.downPaymentCents / 100).toFixed(2));
-                const financedVal = Number((sale.creditAgreement.financedPrincipalCents / 100).toFixed(2));
+                crediarioTotalValue += effectiveValue;
+                const netSaleCents = Math.round(effectiveValue * 100);
+                const netDownCents = Math.min(netSaleCents, sale.creditAgreement.downPaymentCents || 0);
+                const netFinancedCents = Math.max(0, netSaleCents - netDownCents);
+                const downPaymentVal = Number((netDownCents / 100).toFixed(2));
+                const financedVal = Number((netFinancedCents / 100).toFixed(2));
                 crediarioDownPaymentValue += downPaymentVal;
                 crediarioFinancedValue += financedVal;
                 // Utilizar a taxa histórica salva no contrato de crediário
@@ -820,26 +833,17 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
             } else {
                 aVistaSalesCount += 1;
-                aVistaSalesValue += sale.value;
-                aVistaCommission += Number((sale.value * commissionRate).toFixed(2));
+                aVistaSalesValue += effectiveValue;
+                aVistaCommission += Number((effectiveValue * commissionRate).toFixed(2));
             }
 
-            if (sale.payments && sale.payments.length > 0) {
-                for (const p of sale.payments) {
-                    const m = (p.method || '').toUpperCase();
-                    if (m === 'CASH' || m === 'DINHEIRO') cashValue += p.amount;
-                    else if (m === 'PIX') pixValue += p.amount;
-                    else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitValue += p.amount;
-                    else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditValue += p.amount;
-                    else pixValue += p.amount;
-                }
-            } else {
-                const pm = (sale.paymentMethod || '').toUpperCase();
-                if (pm === 'CASH' || pm === 'DINHEIRO') cashValue += sale.value;
-                else if (pm === 'PIX') pixValue += sale.value;
-                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitValue += sale.value;
-                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditValue += sale.value;
-                else pixValue += sale.value; // fallback
+            for (const p of getSaleEffectivePayments(sale)) {
+                const m = (p.method || '').toUpperCase();
+                if (m === 'CASH' || m === 'DINHEIRO') cashValue += p.amount;
+                else if (m === 'PIX') pixValue += p.amount;
+                else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitValue += p.amount;
+                else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditValue += p.amount;
+                else pixValue += p.amount;
             }
         });
 
@@ -1048,12 +1052,13 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
 
         const { startDate, endDate } = parseDateRange(date);
 
-        // Recalcular no servidor
-        const sales = await prisma.sale.findMany({
+        // Recalcular no servidor (excluindo vendas canceladas e considerando estornos líquidos)
+        const rawSales = await prisma.sale.findMany({
             where: {
                 sellerId,
                 companyId: userCompanyId,
                 receiptUrl: { not: null },
+                saleStatus: { not: 'CANCELLED' },
                 date: { gte: startDate, lte: endDate }
             },
             include: {
@@ -1061,6 +1066,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
                 creditAgreement: true,
             }
         });
+        const sales = rawSales.filter((s) => !isSaleCancelled(s));
 
         const creditPaymentsCollected = await prisma.creditPayment.findMany({
             where: {
@@ -1085,33 +1091,27 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
         const commRate = resolveSellerCommissionRate(seller);
 
         sales.forEach(s => {
-            totalSalesVal += s.value;
+            const effectiveValue = getSaleNetValue(s);
+            totalSalesVal += effectiveValue;
 
-            if (s.creditAgreement) {
-                const downPaymentVal = Number((s.creditAgreement.downPaymentCents / 100).toFixed(2));
+            if (s.creditAgreement && s.creditAgreement.status !== 'CANCELLED') {
+                const netSaleCents = Math.round(effectiveValue * 100);
+                const netDownCents = Math.min(netSaleCents, s.creditAgreement.downPaymentCents || 0);
+                const downPaymentVal = Number((netDownCents / 100).toFixed(2));
                 // Utilizar a taxa histórica salva no contrato de crediário
                 const downPaymentRate = s.creditAgreement.initialCommissionRate ?? commRate;
                 crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
             } else {
-                aVistaCommission += Number((s.value * commRate).toFixed(2));
+                aVistaCommission += Number((effectiveValue * commRate).toFixed(2));
             }
 
-            if (s.payments && s.payments.length > 0) {
-                for (const p of s.payments) {
-                    const m = (p.method || '').toUpperCase();
-                    if (m === 'CASH' || m === 'DINHEIRO') cashVal += p.amount;
-                    else if (m === 'PIX') pixVal += p.amount;
-                    else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitVal += p.amount;
-                    else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditVal += p.amount;
-                    else pixVal += p.amount;
-                }
-            } else {
-                const pm = (s.paymentMethod || '').toUpperCase();
-                if (pm === 'CASH' || pm === 'DINHEIRO') cashVal += s.value;
-                else if (pm === 'PIX') pixVal += s.value;
-                else if (pm === 'DEBIT' || pm === 'DEBITO' || pm === 'DEBIT_CARD') debitVal += s.value;
-                else if (pm === 'CREDIT' || pm === 'CREDITO' || pm === 'CREDIT_CARD') creditVal += s.value;
-                else pixVal += s.value;
+            for (const p of getSaleEffectivePayments(s)) {
+                const m = (p.method || '').toUpperCase();
+                if (m === 'CASH' || m === 'DINHEIRO') cashVal += p.amount;
+                else if (m === 'PIX') pixVal += p.amount;
+                else if (m === 'DEBIT' || m === 'DEBITO' || m === 'DEBIT_CARD') debitVal += p.amount;
+                else if (m === 'CREDIT' || m === 'CREDITO' || m === 'CREDIT_CARD') creditVal += p.amount;
+                else pixVal += p.amount;
             }
         });
 
@@ -1491,6 +1491,7 @@ router.get('/custom', authenticateToken, async (req: AuthRequest, res: Response)
         let whereSale: any = {
             companyId: userCompanyId,
             receiptUrl: { not: null },
+            saleStatus: { not: 'CANCELLED' },
         };
         let whereNonSale: any = {
             companyId: userCompanyId,
@@ -1517,11 +1518,12 @@ router.get('/custom', authenticateToken, async (req: AuthRequest, res: Response)
             whereNonSale.date = { gte: startDate, lte: endDate };
         }
 
-        const sales = await prisma.sale.findMany({
+        const rawSales = await prisma.sale.findMany({
             where: whereSale,
             include: { client: true },
             orderBy: { date: 'asc' },
         });
+        const sales = rawSales.filter((s) => !isSaleCancelled(s));
         const nonSales = await prisma.nonSale.findMany({
             where: whereNonSale,
             include: { client: true },
@@ -1537,7 +1539,7 @@ router.get('/custom', authenticateToken, async (req: AuthRequest, res: Response)
         }
         const distinctSales = Array.from(salesByClient.values());
 
-        const totalSalesValue = distinctSales.reduce((acc, curr) => acc + curr.value, 0);
+        const totalSalesValue = Number(distinctSales.reduce((acc, curr) => acc + getSaleNetValue(curr), 0).toFixed(2));
         const salesCount = distinctSales.length;
         const nonSalesCount = nonSales.length;
         const totalFichas = salesCount + nonSalesCount;
@@ -1581,6 +1583,7 @@ router.get('/city/:city', authenticateToken, async (req: AuthRequest, res: Respo
             city,
             companyId: userCompanyId,
             receiptUrl: { not: null },
+            saleStatus: { not: 'CANCELLED' },
         };
         let whereNonSale: any = {
             client: { city },
@@ -1600,10 +1603,11 @@ router.get('/city/:city', authenticateToken, async (req: AuthRequest, res: Respo
             whereNonSale.date = { gte: startDate, lte: endDate };
         }
 
-        const sales = await prisma.sale.findMany({ where: whereSale });
+        const rawCitySales = await prisma.sale.findMany({ where: whereSale });
+        const sales = rawCitySales.filter((s) => !isSaleCancelled(s));
         const nonSales = await prisma.nonSale.findMany({ where: whereNonSale });
 
-        const totalSalesValue = sales.reduce((acc, curr) => acc + curr.value, 0);
+        const totalSalesValue = Number(sales.reduce((acc, curr) => acc + getSaleNetValue(curr), 0).toFixed(2));
         const totalFichas = sales.length + nonSales.length;
         const averageTicket = totalFichas > 0 ? (totalSalesValue / totalFichas) : 0;
 

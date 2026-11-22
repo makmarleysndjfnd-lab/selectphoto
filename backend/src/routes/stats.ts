@@ -3,6 +3,7 @@ import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { translatePaymentMethodPt } from '../services/buyerConfirmationService';
 import { getOpenAdvancesStatsSummary } from '../services/staffAdvanceService';
+import { getSaleNetValue, isSaleCancelled } from '../utils/saleNetHelper';
 
 const router = Router();
 
@@ -29,37 +30,65 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     const dateFilter: any = {};
     if (from) dateFilter.gte = new Date(from as string);
     if (to) dateFilter.lte = new Date(to as string);
-    const saleWhere: any = { companyId, receiptUrl: { not: null } };
+    const saleWhere: any = {
+      companyId,
+      receiptUrl: { not: null },
+      saleStatus: { not: 'CANCELLED' },
+    };
     if (Object.keys(dateFilter).length) saleWhere.date = dateFilter;
     if (city && String(city).trim()) saleWhere.city = String(city).trim();
     if (event && String(event).trim()) {
       saleWhere.client = { event: String(event).trim() };
     }
 
+    // Carregar vendas ativas uma única vez e calcular sempre pelo valor líquido efetivo (Etapa 24)
+    const activeSalesRaw = await prisma.sale.findMany({
+      where: saleWhere,
+      select: {
+        id: true,
+        clientId: true,
+        sellerId: true,
+        value: true,
+        saleStatus: true,
+        status: true,
+        paymentStatus: true,
+        refundedAmountCents: true,
+        city: true,
+        date: true,
+        paymentMethod: true,
+        client: {
+          select: {
+            id: true,
+            name: true,
+            city: true,
+            createdAt: true,
+            event: true,
+            photographerId: true,
+          },
+        },
+      },
+    });
+    const activeSales = activeSalesRaw.filter((s) => !isSaleCancelled(s));
+
     // 1. Ranking de Clientes
     let rankingClientes: any[] = [];
     try {
-      const salesByClient = await prisma.sale.groupBy({
-        by: ['clientId'],
-        where: saleWhere,
-        _count: { id: true },
-        _sum: { value: true },
-      });
-      salesByClient.sort((a, b) => (b._sum.value ?? 0) - (a._sum.value ?? 0));
-      const topSalesByClient = salesByClient.slice(0, 15);
-      const clientIds = topSalesByClient.map(s => s.clientId);
-      const clientsData = await prisma.client.findMany({
-        where: { id: { in: clientIds } },
-        select: { id: true, name: true, city: true, createdAt: true },
-      });
-      const clientMap = Object.fromEntries(clientsData.map(c => [c.id, c]));
-      rankingClientes = topSalesByClient.map(s => ({
-        clientId: s.clientId,
-        name: clientMap[s.clientId]?.name ?? 'Desconhecido',
-        city: clientMap[s.clientId]?.city ?? '',
-        since: clientMap[s.clientId]?.createdAt?.getFullYear() ?? null,
-        books: s._count.id,
-        totalValue: Math.round((s._sum.value ?? 0) * 100) / 100,
+      const byClient = new Map<string, { count: number; total: number; client: any }>();
+      for (const s of activeSales) {
+        const net = getSaleNetValue(s);
+        const cur = byClient.get(s.clientId) || { count: 0, total: 0, client: s.client };
+        cur.count += 1;
+        cur.total += net;
+        byClient.set(s.clientId, cur);
+      }
+      const sorted = Array.from(byClient.entries()).sort((a, b) => b[1].total - a[1].total).slice(0, 15);
+      rankingClientes = sorted.map(([clientId, d]) => ({
+        clientId,
+        name: d.client?.name ?? 'Desconhecido',
+        city: d.client?.city ?? '',
+        since: d.client?.createdAt?.getFullYear() ?? null,
+        books: d.count,
+        totalValue: Math.round(d.total * 100) / 100,
       }));
     } catch (e) {
       console.error('Error in rankingClientes:', e);
@@ -68,30 +97,33 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 2. Ranking por Cidade
     let rankingCidades: any[] = [];
     try {
-      const salesByCity = await prisma.sale.groupBy({
-        by: ['city'],
-        where: saleWhere,
-        _count: { id: true },
-        _sum: { value: true },
-        _avg: { value: true },
-      });
-      salesByCity.sort((a, b) => (b._sum.value ?? 0) - (a._sum.value ?? 0));
+      const byCity = new Map<string, { count: number; total: number }>();
+      for (const s of activeSales) {
+        const cName = s.city || 'Sem Cidade';
+        const net = getSaleNetValue(s);
+        const cur = byCity.get(cName) || { count: 0, total: 0 };
+        cur.count += 1;
+        cur.total += net;
+        byCity.set(cName, cur);
+      }
       const clientsByCity = await prisma.client.groupBy({
         by: ['city'],
         where: { companyId },
         _count: { id: true },
       });
       const clientCityMap = Object.fromEntries(clientsByCity.map(c => [c.city ?? '', c._count.id]));
-      rankingCidades = salesByCity.map(s => ({
-        city: s.city,
-        books: s._count.id,
-        faturamento: Math.round((s._sum.value ?? 0) * 100) / 100,
-        ticketMedio: Math.round((s._avg.value ?? 0) * 100) / 100,
-        totalClientes: clientCityMap[s.city] ?? 0,
-        conversao: clientCityMap[s.city]
-          ? Math.round((s._count.id / clientCityMap[s.city]) * 10000) / 100
-          : 0,
-      }));
+      rankingCidades = Array.from(byCity.entries())
+        .sort((a, b) => b[1].total - a[1].total)
+        .map(([cName, d]) => ({
+          city: cName,
+          books: d.count,
+          faturamento: Math.round(d.total * 100) / 100,
+          ticketMedio: d.count > 0 ? Math.round((d.total / d.count) * 100) / 100 : 0,
+          totalClientes: clientCityMap[cName] ?? 0,
+          conversao: clientCityMap[cName]
+            ? Math.round((d.count / clientCityMap[cName]) * 10000) / 100
+            : 0,
+        }));
     } catch (e) {
       console.error('Error in rankingCidades:', e);
     }
@@ -99,15 +131,13 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 3. Analise de Criancas
     let analiseChildrens: any = { totalChildrenInSales: 0, idadeRanking: [], topNomes: [], faixaEtariaLucrativa: null };
     try {
-      const soldSales = await prisma.sale.findMany({
-        where: saleWhere,
-        select: { clientId: true },
-      });
-      const soldClientIds = Array.from(new Set(soldSales.map(s => s.clientId)));
-      const children = await prisma.child.findMany({
-        where: { clientId: { in: soldClientIds } },
-        select: { name: true, age: true },
-      });
+      const soldClientIds = Array.from(new Set(activeSales.map(s => s.clientId)));
+      const children = soldClientIds.length
+        ? await prisma.child.findMany({
+            where: { clientId: { in: soldClientIds } },
+            select: { name: true, age: true },
+          })
+        : [];
       const ageMap: Record<number, number> = {};
       const nameCount: Record<string, number> = {};
       children.forEach(c => {
@@ -127,23 +157,17 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 4. Ranking de Eventos
     let rankingEventos: any[] = [];
     try {
-      const salesWithEvent = await prisma.sale.findMany({ where: saleWhere, select: { value: true, clientId: true } });
-      const soldClientEventData = await prisma.client.findMany({
-        where: { id: { in: salesWithEvent.map(s => s.clientId) } },
-        select: { id: true, event: true },
-      });
-      const eventClientMap = Object.fromEntries(soldClientEventData.map(c => [c.id, c.event ?? 'Sem Evento']));
       const eventAgg: Record<string, { books: number; faturamento: number }> = {};
-      salesWithEvent.forEach(s => {
-        const ev = eventClientMap[s.clientId] ?? 'Sem Evento';
+      activeSales.forEach(s => {
+        const ev = s.client?.event ?? 'Sem Evento';
         if (!eventAgg[ev]) eventAgg[ev] = { books: 0, faturamento: 0 };
         eventAgg[ev].books++;
-        eventAgg[ev].faturamento += s.value;
+        eventAgg[ev].faturamento += getSaleNetValue(s);
       });
       rankingEventos = Object.entries(eventAgg).map(([evName, d]) => ({
         event: evName, books: d.books,
         faturamento: Math.round(d.faturamento * 100) / 100,
-        ticketMedio: Math.round((d.faturamento / d.books) * 100) / 100,
+        ticketMedio: d.books > 0 ? Math.round((d.faturamento / d.books) * 100) / 100 : 0,
       })).sort((a, b) => b.faturamento - a.faturamento);
     } catch (e) {
       console.error('Error in rankingEventos:', e);
@@ -152,17 +176,15 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 5. Analise de Valores
     let analiseValores: any = { ticketMedio: 0, valorMaximo: 0, valorMinimo: 0, faturamentoTotal: 0, totalVendas: 0 };
     try {
-      const valuesAgg = await prisma.sale.aggregate({
-        where: saleWhere,
-        _avg: { value: true }, _max: { value: true }, _min: { value: true },
-        _sum: { value: true }, _count: { id: true },
-      });
+      const netVals = activeSales.map((s) => getSaleNetValue(s));
+      const totalVendas = netVals.length;
+      const sumVal = netVals.reduce((acc, v) => acc + v, 0);
       analiseValores = {
-        ticketMedio: Math.round((valuesAgg._avg?.value ?? 0) * 100) / 100,
-        valorMaximo: valuesAgg._max?.value ?? 0,
-        valorMinimo: valuesAgg._min?.value ?? 0,
-        faturamentoTotal: Math.round((valuesAgg._sum?.value ?? 0) * 100) / 100,
-        totalVendas: valuesAgg._count?.id ?? 0,
+        ticketMedio: totalVendas > 0 ? Math.round((sumVal / totalVendas) * 100) / 100 : 0,
+        valorMaximo: totalVendas > 0 ? Math.max(...netVals) : 0,
+        valorMinimo: totalVendas > 0 ? Math.min(...netVals) : 0,
+        faturamentoTotal: Math.round(sumVal * 100) / 100,
+        totalVendas,
       };
     } catch (e) {
       console.error('Error in analiseValores:', e);
@@ -171,14 +193,13 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 6. Analise de Horarios
     let analiseHorarios: any = { porHora: [], porDiaSemana: [], porMes: [], porSemanaDoMes: [], melhorDia: 'N/A', melhorHora: 0 };
     try {
-      const allSalesWithDate = await prisma.sale.findMany({ where: saleWhere, select: { date: true } });
       const weekDayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
       const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
       const hourAgg: Record<number, number> = {};
       const weekdayAgg: Record<number, number> = {};
       const monthAgg: Record<number, number> = {};
       const weekOfMonthAgg: Record<number, number> = {};
-      allSalesWithDate.forEach(s => {
+      activeSales.forEach(s => {
         if (!s.date) return;
         const br = new Date(new Date(s.date).getTime() - 3 * 60 * 60 * 1000);
         hourAgg[br.getUTCHours()] = (hourAgg[br.getUTCHours()] ?? 0) + 1;
@@ -204,25 +225,32 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 7. Ranking de Vendedores
     let rankingVendedores: any[] = [];
     try {
-      const salesBySeller = await prisma.sale.groupBy({
-        by: ['sellerId'], where: saleWhere,
-        _count: { id: true }, _sum: { value: true }, _avg: { value: true },
-      });
-      salesBySeller.sort((a, b) => (b._sum.value ?? 0) - (a._sum.value ?? 0));
-      const sellerIds = salesBySeller.map(s => s.sellerId);
-      const sellersInfo = await prisma.user.findMany({ where: { id: { in: sellerIds } }, select: { id: true, name: true } });
+      const sellerAgg = new Map<string, { count: number; total: number }>();
+      for (const s of activeSales) {
+        const cur = sellerAgg.get(s.sellerId) || { count: 0, total: 0 };
+        cur.count += 1;
+        cur.total += getSaleNetValue(s);
+        sellerAgg.set(s.sellerId, cur);
+      }
+      const salesBySeller = Array.from(sellerAgg.entries()).sort((a, b) => b[1].total - a[1].total);
+      const sellerIds = salesBySeller.map(([sid]) => sid);
+      const sellersInfo = sellerIds.length
+        ? await prisma.user.findMany({ where: { id: { in: sellerIds } }, select: { id: true, name: true } })
+        : [];
       const sellerInfoMap = Object.fromEntries(sellersInfo.map(u => [u.id, u.name]));
-      const clientsBySeller = await prisma.client.groupBy({
-        by: ['assignedSellerId'], where: { companyId, assignedSellerId: { in: sellerIds } }, _count: { id: true },
-      });
+      const clientsBySeller = sellerIds.length
+        ? await prisma.client.groupBy({
+            by: ['assignedSellerId'], where: { companyId, assignedSellerId: { in: sellerIds } }, _count: { id: true },
+          })
+        : [];
       const clientSellerMap = Object.fromEntries(clientsBySeller.map(c => [c.assignedSellerId ?? '', c._count.id]));
-      rankingVendedores = salesBySeller.map(s => ({
-        sellerId: s.sellerId, name: sellerInfoMap[s.sellerId] ?? 'Desconhecido',
-        books: s._count.id,
-        faturamento: Math.round((s._sum.value ?? 0) * 100) / 100,
-        ticketMedio: Math.round((s._avg.value ?? 0) * 100) / 100,
-        clientesAtribuidos: clientSellerMap[s.sellerId] ?? 0,
-        conversao: clientSellerMap[s.sellerId] ? Math.round((s._count.id / clientSellerMap[s.sellerId]) * 10000) / 100 : 0,
+      rankingVendedores = salesBySeller.map(([sid, d]) => ({
+        sellerId: sid, name: sellerInfoMap[sid] ?? 'Desconhecido',
+        books: d.count,
+        faturamento: Math.round(d.total * 100) / 100,
+        ticketMedio: d.count > 0 ? Math.round((d.total / d.count) * 100) / 100 : 0,
+        clientesAtribuidos: clientSellerMap[sid] ?? 0,
+        conversao: clientSellerMap[sid] ? Math.round((d.count / clientSellerMap[sid]) * 10000) / 100 : 0,
       }));
     } catch (e) {
       console.error('Error in rankingVendedores:', e);
@@ -231,18 +259,19 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 8. Ranking de Fotografos
     let rankingFotografos: any[] = [];
     try {
-      const photogSales = await prisma.sale.findMany({ where: saleWhere, select: { value: true, client: { select: { photographerId: true } } } });
       const allClientsPhotog = await prisma.client.findMany({ where: { companyId }, select: { photographerId: true } });
       const photogValueAgg: Record<string, { count: number; sum: number }> = {};
-      photogSales.forEach(s => {
+      activeSales.forEach(s => {
         const pid = s.client?.photographerId;
         if (!pid) return;
         if (!photogValueAgg[pid]) photogValueAgg[pid] = { count: 0, sum: 0 };
         photogValueAgg[pid].count++;
-        photogValueAgg[pid].sum += s.value;
+        photogValueAgg[pid].sum += getSaleNetValue(s);
       });
       const photogIds = Object.keys(photogValueAgg);
-      const photogInfo = await prisma.user.findMany({ where: { id: { in: photogIds } }, select: { id: true, name: true } });
+      const photogInfo = photogIds.length
+        ? await prisma.user.findMany({ where: { id: { in: photogIds } }, select: { id: true, name: true } })
+        : [];
       const photogInfoMap = Object.fromEntries(photogInfo.map(u => [u.id, u.name]));
       const allClientPhotogMap: Record<string, number> = {};
       allClientsPhotog.forEach(c => {
@@ -264,18 +293,22 @@ router.get('/books', authenticateToken, async (req: AuthRequest, res: Response) 
     // 9. Formas de Pagamento
     let formasPagamento: any[] = [];
     try {
-      const salesByPayment = await prisma.sale.groupBy({
-        by: ['paymentMethod'], where: saleWhere,
-        _count: { id: true }, _sum: { value: true },
-      });
-      salesByPayment.sort((a, b) => b._count.id - a._count.id);
-      const totalSaleCount = salesByPayment.reduce((a, b) => a + b._count.id, 0);
-      formasPagamento = salesByPayment.map(s => ({
-        method: s.paymentMethod,
-        methodLabel: translatePaymentMethodPt(s.paymentMethod),
-        count: s._count.id,
-        value: Math.round((s._sum.value ?? 0) * 100) / 100,
-        percentual: totalSaleCount > 0 ? Math.round((s._count.id / totalSaleCount) * 10000) / 100 : 0,
+      const pmAgg = new Map<string, { count: number; value: number }>();
+      for (const s of activeSales) {
+        const m = s.paymentMethod || 'DINHEIRO';
+        const cur = pmAgg.get(m) || { count: 0, value: 0 };
+        cur.count += 1;
+        cur.value += getSaleNetValue(s);
+        pmAgg.set(m, cur);
+      }
+      const salesByPayment = Array.from(pmAgg.entries()).sort((a, b) => b[1].count - a[1].count);
+      const totalSaleCount = salesByPayment.reduce((a, b) => a + b[1].count, 0);
+      formasPagamento = salesByPayment.map(([method, d]) => ({
+        method,
+        methodLabel: translatePaymentMethodPt(method),
+        count: d.count,
+        value: Math.round(d.value * 100) / 100,
+        percentual: totalSaleCount > 0 ? Math.round((d.count / totalSaleCount) * 10000) / 100 : 0,
       }));
     } catch (e) {
       console.error('Error in formasPagamento:', e);

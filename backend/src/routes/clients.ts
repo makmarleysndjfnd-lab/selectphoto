@@ -976,7 +976,13 @@ router.get('/ficha/:identifier', authenticateToken, async (req: AuthRequest, res
         appointments: true,
         assignedSeller: true,
         photographer: true,
-        sales: { orderBy: { date: 'desc' } },
+        sales: {
+          include: {
+            payments: true,
+            adjustments: { orderBy: { createdAt: 'desc' } },
+          },
+          orderBy: { date: 'desc' },
+        },
         nonSales: { where: { supersededAt: null }, orderBy: { date: 'desc' } },
         bookTransfers: { orderBy: { createdAt: 'desc' } },
       },
@@ -1028,6 +1034,10 @@ router.get('/seller', authenticateToken, async (req: AuthRequest, res: Response)
         assignedSeller: true,
         photographer: true,
         sales: {
+          include: {
+            payments: true,
+            adjustments: { orderBy: { createdAt: 'desc' } },
+          },
           orderBy: { date: 'desc' },
         },
         nonSales: {

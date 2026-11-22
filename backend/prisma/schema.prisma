@@ -86,6 +86,7 @@ model Company {
   batchCommissionAdjustments   BatchCommissionAdjustment[]
   negativationRecords          CreditNegativationRecord[]
   staffAdvances                StaffAdvanceEntry[]
+  saleAdjustments              SaleAdjustment[]
 }
 
 model Team {
@@ -192,6 +193,7 @@ model User {
   bookTransfersInitiated      BookTransfer[]                 @relation("BookTransfersInitiated")
   staffAdvancesOwned          StaffAdvanceEntry[]            @relation("StaffAdvanceOwner")
   staffAdvancesCreated        StaffAdvanceEntry[]            @relation("StaffAdvanceCreator")
+  saleAdjustmentsCreated      SaleAdjustment[]               @relation("SaleAdjustmentsCreated")
   sellerBlocked               Boolean                        @default(false)
   sellerBlockedReason         String?
   sellerBlockedAt             DateTime?
@@ -390,6 +392,10 @@ model Sale {
   sellerRating       Int?
   photographerRating Int?
   contactRating      Int?
+  saleStatus         String    @default("ACTIVE")
+  refundedAmountCents Int      @default(0)
+  cancelledAt        DateTime?
+  cancelReason       String?
   company            Company?         @relation(fields: [companyId], references: [id])
   client             Client           @relation(fields: [clientId], references: [id])
   seller             User             @relation(fields: [sellerId], references: [id])
@@ -399,6 +405,7 @@ model Sale {
   platformStatementItem        PlatformStatementItem?
   platformStatementAdjustments PlatformStatementAdjustment[] @relation("OriginSaleAdjustments")
   buyerConfirmations           BuyerPurchaseConfirmation[]
+  adjustments                  SaleAdjustment[]
 }
 
 model SalePayment {
@@ -1893,15 +1900,39 @@ model StaffAdvanceEntry {
   createdById      String?
   createdAt        DateTime  @default(now())
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user      User       @relation("StaffAdvanceOwner", fields: [userId], references: [id], onDelete: Cascade)
-  createdBy User?      @relation("StaffAdvanceCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  batch     BookBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user           User            @relation("StaffAdvanceOwner", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy      User?           @relation("StaffAdvanceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  batch          BookBatch?      @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  saleAdjustment SaleAdjustment? @relation("SaleAdjustmentAdvance")
 
   @@index([companyId, profileRole, userId])
   @@index([companyId, userId, createdAt])
   @@index([closingReference])
   @@unique([companyId, closingReference, direction])
+}
+
+model SaleAdjustment {
+  id                   String   @id @default(uuid())
+  companyId            String
+  saleId               String
+  type                 String   // FULL_CANCELLATION | PARTIAL_REFUND_DISCOUNT
+  amountCents          Int
+  commissionDebitCents Int      @default(0)
+  reason               String
+  receiptUrl           String?
+  sellerAdvanceEntryId String?  @unique
+  createdById          String
+  createdByName        String
+  createdAt            DateTime @default(now())
+
+  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sale               Sale               @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  createdBy          User               @relation("SaleAdjustmentsCreated", fields: [createdById], references: [id], onDelete: Restrict)
+  sellerAdvanceEntry StaffAdvanceEntry? @relation("SaleAdjustmentAdvance", fields: [sellerAdvanceEntryId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, saleId])
+  @@index([companyId, createdAt])
 }
 
 

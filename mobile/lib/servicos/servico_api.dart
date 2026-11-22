@@ -1493,6 +1493,43 @@ class ApiService {
     }
   }
 
+  /// Etapa 24: Cancelamento, Estorno ou Desconto com Devolução de Venda (Exclusivo Admin)
+  Future<Map<String, dynamic>> refundOrCancelSale({
+    required String saleId,
+    required String type,
+    double? amount,
+    int? amountCents,
+    required String reason,
+    String? receiptUrl,
+  }) async {
+    try {
+      final response = await _dio.post(
+        '/sales/$saleId/refund-or-cancel',
+        data: {
+          'type': type,
+          if (amount != null) 'amount': amount,
+          if (amountCents != null) 'amountCents': amountCents,
+          'reason': reason.trim(),
+          if (receiptUrl != null && receiptUrl.trim().isNotEmpty)
+            'receiptUrl': receiptUrl.trim(),
+        },
+      );
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  /// Etapa 24: Lista o histórico de cancelamentos/estornos/descontos de uma venda
+  Future<Map<String, dynamic>> getSaleAdjustments(String saleId) async {
+    try {
+      final response = await _dio.get('/sales/$saleId/adjustments');
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> getCompanyPixKey() async {
     try {
       final response = await _dio.get('/closing/company-pix');

@@ -20,6 +20,7 @@ import '../widgets/authenticated_image.dart';
 import '../widgets/fullscreen_signature_screen.dart';
 import '../widgets/led_button.dart';
 import '../widgets/admin_ficha_actions.dart';
+import '../widgets/admin_sale_adjustment_modal.dart';
 
 class SellerClientDetailScreen extends StatefulWidget {
   final Map<String, dynamic> clientData;
@@ -867,7 +868,11 @@ class _SellerClientDetailScreenState extends State<SellerClientDetailScreen>
       physics: const NeverScrollableScrollPhysics(),
       controller: _tabController,
       children: [
-        _SaleTab(client: client, onSuccess: _showSuccess),
+        _SaleTab(
+          client: client,
+          isAdmin: widget.isAdmin,
+          onSuccess: _showSuccess,
+        ),
         _NonSaleTab(client: client, onSuccess: _showSuccess),
         _ScheduleTab(client: client, onSuccess: _showSuccess),
         _PhotosTab(clientId: client['id'], onSuccess: _showSuccess),
@@ -958,9 +963,11 @@ Widget _confirmButton(
 
 class _SaleTab extends StatefulWidget {
   final Map<String, dynamic> client;
+  final bool isAdmin;
   final void Function(String) onSuccess;
   const _SaleTab({
     required this.client,
+    this.isAdmin = false,
     required this.onSuccess,
   });
 
@@ -1515,19 +1522,34 @@ class _SaleTabState extends State<_SaleTab> {
         .where((sale) =>
             sale is Map &&
             sale['receiptUrl'] != null &&
-            sale['receiptUrl'].toString().trim().isNotEmpty)
+            sale['receiptUrl'].toString().trim().isNotEmpty &&
+            !isSaleFullyCancelled(Map<String, dynamic>.from(sale)))
         .toList();
     final Map<String, dynamic>? activeSale = completedSales.isNotEmpty
         ? Map<String, dynamic>.from(completedSales.first as Map)
         : null;
+    final cancelledSales = sales
+        .where((sale) =>
+            sale is Map &&
+            isSaleFullyCancelled(Map<String, dynamic>.from(sale)))
+        .map((s) => Map<String, dynamic>.from(s as Map))
+        .toList();
 
     final keyboardPadding = MediaQuery.of(context).viewInsets.bottom;
 
     if (isSold && activeSale != null) {
       final receiptUrl = activeSale['receiptUrl']?.toString();
       final hasReceipt = receiptUrl != null && receiptUrl.trim().isNotEmpty;
-      final saleVal =
-          activeSale['value'] != null ? activeSale['value'].toString() : '---';
+      final origCents = computeSaleOriginalCents(activeSale);
+      final refundedCents = computeSaleRefundedCents(activeSale);
+      final netCents = computeSaleNetCents(activeSale);
+      final adjBadge = buildSaleAdjustmentBadge(activeSale);
+      final activeAdjustments = (activeSale['adjustments'] is List)
+          ? (activeSale['adjustments'] as List)
+          : <dynamic>[];
+      final saleVal = (netCents / 100.0).toStringAsFixed(2);
+      final origVal = (origCents / 100.0).toStringAsFixed(2);
+      final refundedVal = (refundedCents / 100.0).toStringAsFixed(2);
       final saleProd = activeSale['product']?.toString() ?? 'Book';
       final saleDate = activeSale['date'] != null
           ? activeSale['date'].toString().split('T')[0]
@@ -1547,28 +1569,91 @@ class _SaleTabState extends State<_SaleTab> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
-                children: const [
-                  Icon(Icons.check_circle_rounded,
+                children: [
+                  const Icon(Icons.check_circle_rounded,
                       color: Color(0xFF00E676), size: 28),
-                  SizedBox(width: 10),
-                  Text('Venda Já Registrada',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold)),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text('Venda Já Registrada',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                  if (adjBadge != null) adjBadge,
                 ],
               ),
               const SizedBox(height: 16),
               const Divider(color: Colors.white12),
               const SizedBox(height: 12),
-              _buildDetailRow('Valor da Venda', 'R\$ $saleVal',
-                  highlight: true),
+              if (refundedCents > 0) ...[
+                _buildDetailRow('Valor Original', 'R\$ $origVal'),
+                const SizedBox(height: 8),
+                _buildDetailRow('Já Estornado / Descontado', '-R\$ $refundedVal'),
+                const SizedBox(height: 8),
+                _buildDetailRow('Valor Líquido Atual', 'R\$ $saleVal',
+                    highlight: true),
+              ] else
+                _buildDetailRow('Valor da Venda', 'R\$ $saleVal',
+                    highlight: true),
               const SizedBox(height: 8),
               _buildDetailRow('Produto', saleProd),
               const SizedBox(height: 8),
               _buildDetailRow('Data', saleDate),
               const SizedBox(height: 8),
               _buildDetailRow('Forma de Pagamento', salePay),
+              if (widget.isAdmin && !isSaleFullyCancelled(activeSale)) ...[
+                const SizedBox(height: 14),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    final result = await showAdminSaleAdjustmentModal(
+                      context,
+                      sale: activeSale,
+                    );
+                    if (result != null && mounted) {
+                      setState(() {
+                        final updatedSaleRaw = result['sale'];
+                        if (updatedSaleRaw is Map && widget.client['sales'] is List) {
+                          final updatedSale = Map<String, dynamic>.from(updatedSaleRaw);
+                          final list = widget.client['sales'] as List;
+                          final idx = list.indexWhere(
+                              (item) => item is Map && item['id'] == updatedSale['id']);
+                          if (idx != -1) {
+                            list[idx] = updatedSale;
+                          }
+                          if ((updatedSale['saleStatus'] ?? '')
+                                  .toString()
+                                  .toUpperCase() ==
+                              'CANCELLED') {
+                            widget.client['outcomeStatus'] = 'PENDING';
+                          }
+                        }
+                      });
+                      widget.onSuccess(
+                          'Estorno / cancelamento registrado com sucesso!');
+                    }
+                  },
+                  icon: const Icon(Icons.assignment_return_rounded,
+                      color: Colors.white, size: 18),
+                  label: const Text(
+                    'Cancelar / Estornar / Desconto',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6B21A8),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: Color(0xFFA855F7)),
+                    ),
+                  ),
+                ),
+              ],
+              if (activeAdjustments.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                buildSaleAdjustmentsHistoryCard(activeAdjustments),
+              ],
               const SizedBox(height: 16),
               const Divider(color: Colors.white12),
               const SizedBox(height: 12),
@@ -1718,6 +1803,54 @@ class _SaleTabState extends State<_SaleTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (widget.isAdmin && cancelledSales.isNotEmpty) ...[
+            ...cancelledSales.map((cs) {
+              final badge = buildSaleAdjustmentBadge(cs);
+              final adjs = (cs['adjustments'] is List)
+                  ? (cs['adjustments'] as List)
+                  : <dynamic>[];
+              final origBrl =
+                  (computeSaleOriginalCents(cs) / 100.0).toStringAsFixed(2);
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.redAccent.withOpacity(0.45)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.cancel_outlined,
+                              color: Colors.redAccent, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Venda anterior (R\$ $origBrl) cancelada',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          if (badge != null) badge,
+                        ],
+                      ),
+                    ),
+                    if (adjs.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      buildSaleAdjustmentsHistoryCard(adjs),
+                    ],
+                  ],
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 4),
           const Text('Registrar Venda',
               style: TextStyle(

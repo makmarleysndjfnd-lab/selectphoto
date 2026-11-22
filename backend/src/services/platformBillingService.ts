@@ -121,6 +121,8 @@ export function isSaleConfirmedAndReal(sale: {
   value: number;
   status: string;
   paymentStatus: string;
+  saleStatus?: string | null;
+  refundedAmountCents?: number | null;
   fichaNumber?: string | null;
   reportNotes?: string | null;
   client?: {
@@ -131,7 +133,11 @@ export function isSaleConfirmedAndReal(sale: {
 }): { eligible: boolean; reason?: string } {
   const statusUpper = String(sale.status || '').toUpperCase();
   const paymentStatusUpper = String(sale.paymentStatus || '').toUpperCase();
+  const saleStatusUpper = String(sale.saleStatus || '').toUpperCase();
 
+  if (saleStatusUpper === 'CANCELLED') {
+    return { eligible: false, reason: 'SALE_STATUS_CANCELLED' };
+  }
   if (CANCELED_OR_UNCONFIRMED_SALE_STATUSES.has(statusUpper)) {
     return { eligible: false, reason: `SALE_STATUS_${statusUpper}` };
   }
@@ -148,8 +154,10 @@ export function isSaleConfirmedAndReal(sale: {
     return { eligible: false, reason: 'SANDBOX_OR_SIMULATION_FIXTURE' };
   }
 
-  const cents = Math.round(Number(sale.value || 0) * 100);
-  if (cents <= 0) {
+  const rawCents = Math.round(Number(sale.value || 0) * 100);
+  const refundedCents = Math.max(0, Math.round(Number(sale.refundedAmountCents || 0)));
+  const netCents = Math.max(0, rawCents - refundedCents);
+  if (netCents <= 0) {
     return { eligible: false, reason: 'NON_POSITIVE_SALE_VALUE' };
   }
 
@@ -522,15 +530,22 @@ async function computeFinancialBucketsAndPreviewData(
         excludedTestOrUnconfirmedCount += 1;
         continue;
       }
-      const saleCents = s.creditAgreement
+      const rawSaleCents = s.creditAgreement
         ? s.creditAgreement.totalSaleCents
         : Math.round(Number(s.value) * 100);
+      const refundedCents = Math.max(0, Math.round(Number(s.refundedAmountCents || 0)));
+      const saleCents = Math.max(0, rawSaleCents - refundedCents);
+      if (saleCents <= 0) {
+        excludedTestOrUnconfirmedCount += 1;
+        continue;
+      }
       confirmedSalesBaseWithoutContractCents += saleCents;
       confirmedSalesCountWithoutContract += 1;
 
       if (s.creditAgreement) {
+        const downCents = Math.min(saleCents, s.creditAgreement.downPaymentCents || 0);
         sellerInitialCommissionsCents += Math.round(
-          s.creditAgreement.downPaymentCents * s.creditAgreement.initialCommissionRate
+          downCents * s.creditAgreement.initialCommissionRate
         );
       } else {
         const rate = s.seller?.usesOwnCar ? 25 : 20;
@@ -611,15 +626,22 @@ async function computeFinancialBucketsAndPreviewData(
       continue;
     }
 
-    const saleBaseCents = s.creditAgreement
+    const rawSaleBaseCents = s.creditAgreement
       ? s.creditAgreement.totalSaleCents
       : Math.round(Number(s.value) * 100);
+    const refundedCents = Math.max(0, Math.round(Number(s.refundedAmountCents || 0)));
+    const saleBaseCents = Math.max(0, rawSaleBaseCents - refundedCents);
+    if (saleBaseCents <= 0) {
+      excludedTestOrUnconfirmedCount += 1;
+      continue;
+    }
 
     companyConfirmedSalesCents += saleBaseCents;
 
     if (s.creditAgreement) {
+      const downCents = Math.min(saleBaseCents, s.creditAgreement.downPaymentCents || 0);
       sellerInitialCommissionsCents += Math.round(
-        s.creditAgreement.downPaymentCents * s.creditAgreement.initialCommissionRate
+        downCents * s.creditAgreement.initialCommissionRate
       );
     } else {
       const sellerPct = s.seller?.usesOwnCar ? 25 : 20;
@@ -1413,7 +1435,7 @@ export async function recordStatementAdjustmentOrReturnCredit(
     authorName: string;
     ipAddress?: string;
   },
-  dbClient: PrismaClient = defaultPrisma
+  dbClient: PrismaClient | Prisma.TransactionClient = defaultPrisma
 ) {
   const cleanKey = String(params.idempotencyKey || '').trim();
   if (cleanKey.length < 4) {
@@ -1428,8 +1450,7 @@ export async function recordStatementAdjustmentOrReturnCredit(
     throw err;
   }
 
-  return dbClient.$transaction(
-    async (tx) => {
+  const runAdjustmentTx = async (tx: Prisma.TransactionClient) => {
       const existingAdj = await tx.platformStatementAdjustment.findUnique({
         where: { idempotencyKey: cleanKey },
       });
@@ -1695,9 +1716,12 @@ export async function recordStatementAdjustmentOrReturnCredit(
         idempotentReplay: false,
         adjustment: createdManualAdj,
       };
-    },
-    { timeout: 30000 }
-  );
+  };
+
+  if ('$transaction' in dbClient && typeof (dbClient as any).$transaction === 'function') {
+    return (dbClient as PrismaClient).$transaction(runAdjustmentTx, { timeout: 30000 });
+  }
+  return runAdjustmentTx(dbClient as Prisma.TransactionClient);
 }
 
 const VALID_SETTLEMENT_METHODS = new Set([

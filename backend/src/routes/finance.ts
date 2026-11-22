@@ -2,6 +2,7 @@ import express, { Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { resolveSellerCommissionRate } from '../utils/commission';
+import { getSaleNetCents, getSaleNetValue, isSaleCancelled } from '../utils/saleNetHelper';
 
 const router = express.Router();
 
@@ -59,15 +60,20 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
       ...(userCompanyId ? { companyId: userCompanyId } : {}),
       ...(cleanSellerId ? { sellerId: cleanSellerId } : {}),
       ...(dateRangeFilter ? { date: dateRangeFilter } : {}),
+      saleStatus: { not: 'CANCELLED' },
     };
 
-    // 1. Vendas do período: separa Faturamento Contratado vs Entradas À Vista e Entradas de Crediário em centavos
+    // 1. Vendas do período: separa Faturamento Contratado vs Entradas À Vista e Entradas de Crediário em centavos (considerando estornos líquidos)
     const salesInPeriod = await prisma.sale.findMany({
       where: salesFilter,
       orderBy: { date: 'desc' },
       select: {
         id: true,
         value: true,
+        saleStatus: true,
+        status: true,
+        paymentStatus: true,
+        refundedAmountCents: true,
         date: true,
         sellerId: true,
         paymentMethod: true,
@@ -92,20 +98,25 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     let cashSalesCommissionsCents = 0;
 
     for (const s of salesInPeriod) {
-      const saleNominalCents = brlToCents(s.value);
+      if (isSaleCancelled(s)) continue;
+      const netSaleCents = getSaleNetCents(s);
+      if (netSaleCents <= 0) continue;
       if (s.creditAgreement) {
         if (s.creditAgreement.status !== 'CANCELLED') {
-          const agreementTotalCents = s.creditAgreement.totalSaleCents || saleNominalCents;
-          contractedRevenueCents += agreementTotalCents;
-          creditSalesContractedCents += agreementTotalCents;
-          downPaymentsReceivedCents += s.creditAgreement.downPaymentCents || 0;
+          const origNominalCents = Math.max(1, brlToCents(s.value));
+          const agreementTotalCents = s.creditAgreement.totalSaleCents || origNominalCents;
+          const netAgreementCents = Math.max(0, agreementTotalCents - Math.max(0, Number(s.refundedAmountCents || 0)));
+          const downCents = Math.min(netAgreementCents, s.creditAgreement.downPaymentCents || 0);
+          contractedRevenueCents += netAgreementCents;
+          creditSalesContractedCents += netAgreementCents;
+          downPaymentsReceivedCents += downCents;
         }
       } else {
-        contractedRevenueCents += saleNominalCents;
-        cashSalesContractedCents += saleNominalCents;
-        cashSalesReceivedCents += saleNominalCents;
+        contractedRevenueCents += netSaleCents;
+        cashSalesContractedCents += netSaleCents;
+        cashSalesReceivedCents += netSaleCents;
         const rate = resolveSellerCommissionRate(s.seller);
-        cashSalesCommissionsCents += Math.round(saleNominalCents * rate);
+        cashSalesCommissionsCents += Math.round(netSaleCents * rate);
       }
     }
 
@@ -334,7 +345,9 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
     const totalOutflowsCents = brlToCents(costsAggregate._sum.amount);
     const saldoCents = realCashReceivedCents - totalOutflowsCents;
     const totalFuturo = prospectsAggregate._sum.expectedRevenue || 0;
-    const recentSales = salesInPeriod.slice(0, 50);
+    const recentSales = salesInPeriod
+      .filter((s) => !isSaleCancelled(s))
+      .slice(0, 50);
 
     const totalEntradas = centsToBrl(realCashReceivedCents);
     const totalSaidas = centsToBrl(totalOutflowsCents);
@@ -409,7 +422,7 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         id: s.id,
         desc: `Venda - ${s.client?.name || 'Cliente'}`,
         user: s.seller?.name || 'Vendedor',
-        amount: s.value,
+        amount: getSaleNetValue(s),
         date: s.date,
         method: s.paymentMethod
       })),
@@ -511,7 +524,11 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
     }
 
     const sales = await prisma.sale.findMany({
-      where: { companyId: userCompanyId, receiptUrl: { not: null } },
+      where: {
+        companyId: userCompanyId,
+        receiptUrl: { not: null },
+        saleStatus: { not: 'CANCELLED' },
+      },
       include: {
         seller: { select: { name: true } },
         creditAgreement: true,
@@ -541,10 +558,14 @@ router.get('/health', authenticateToken, requireAdminOrSupervisor, async (req: A
     // KPI Calculations
     const creditPaymentsSum = creditPayments.reduce((acc, cp) => acc + (cp.amountCents / 100), 0);
     const receita = sales.reduce((acc, s) => {
+      if (isSaleCancelled(s)) return acc;
       if (s.creditAgreement) {
-        return acc + (s.creditAgreement.downPaymentCents / 100);
+        if (s.creditAgreement.status === 'CANCELLED') return acc;
+        const netCents = getSaleNetCents(s);
+        const downCents = Math.min(netCents, s.creditAgreement.downPaymentCents || 0);
+        return acc + (downCents / 100);
       }
-      return s.paymentStatus === 'PAID' ? acc + s.value : acc;
+      return s.paymentStatus === 'PAID' ? acc + getSaleNetValue(s) : acc;
     }, 0) + creditPaymentsSum;
 
     const crediarioVencido = openInstallments
