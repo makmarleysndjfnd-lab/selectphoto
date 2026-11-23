@@ -16,7 +16,7 @@ import appRoutes, {
   createAppRouter,
 } from '../src/routes/app';
 
-describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.35+51)', { concurrency: 1 }, () => {
+describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.36+52)', { concurrency: 1 }, () => {
   const tmpDir = path.join(__dirname, `tmp_apk_test_${Date.now()}`);
   let server: http.Server;
   let baseUrl: string;
@@ -239,9 +239,9 @@ describe('VALIDAÇÃO DO APK — Endpoint de atualização e download (1.0.35+51
 
   it('10. Manifesto confiável da release possui versão, build, pacote e hash auditados', () => {
     assert.deepEqual(RELEASE_APK, {
-      version: '1.0.35',
-      buildNumber: 51,
-      sha256: '8659051922027952C0AFD921D96D246EFFD2A19AA70EFD18C8F372C2A63B5CA0',
+      version: '1.0.36',
+      buildNumber: 52,
+      sha256: 'A82EF544E3AB875C87775381589F4243B44FC5B150C7C5C106A322B102606E1D',
       packageName: 'com.example.mobile',
     });
   });
