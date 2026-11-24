@@ -5,6 +5,7 @@ import { prisma, Prisma } from '../services/prisma';
 import { authenticateToken as authMiddleware, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { isClientClosedForPhotographer } from '../utils/photographerIsolation';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 
 const router = express.Router();
 
@@ -527,7 +528,7 @@ router.get('/pending-returns', authMiddleware, requireAdminOrSupervisor, async (
                 bookStatus: 'AWAITING_RETURN',
             },
             include: {
-                batch: { select: { id: true, name: true, city: true } },
+                batch: { select: { id: true, name: true, city: true, date: true } },
                 assignedSeller: { select: { id: true, name: true } },
                 nonSales: {
                     orderBy: { date: 'asc' },
@@ -664,14 +665,47 @@ router.get('/pending-returns', authMiddleware, requireAdminOrSupervisor, async (
             });
         }
 
-        const groups = Array.from(groupsMap.values()).sort(
-            (a, b) => b.pendingCount - a.pendingCount || a.sellerName.localeCompare(b.sellerName)
-        );
+        const opCfgForReturns = companyId ? await getCompanyOperationalConfig(companyId) : null;
+        const maxBatchReturnDays = opCfgForReturns?.maxBatchReturnDays ?? 15;
+        const nowMs = Date.now();
+
+        const groups = Array.from(groupsMap.values())
+            .map((g) => {
+                let oldestRefMs: number | null = null;
+                for (const item of g.items) {
+                    const cRaw = item.rawClientData;
+                    const nsDate = cRaw?.nonSales?.[cRaw.nonSales.length - 1]?.date;
+                    const batchDate = cRaw?.batch?.date;
+                    const refDate = nsDate || batchDate || cRaw?.createdAt;
+                    if (refDate) {
+                        const ms = new Date(refDate).getTime();
+                        if (!isNaN(ms) && (oldestRefMs === null || ms < oldestRefMs)) {
+                            oldestRefMs = ms;
+                        }
+                    }
+                }
+                const daysOpen =
+                    oldestRefMs !== null
+                        ? Math.max(0, Math.floor((nowMs - oldestRefMs) / (24 * 3600 * 1000)))
+                        : 0;
+                const isOverdueReturn = g.pendingCount > 0 && daysOpen > maxBatchReturnDays;
+                return {
+                    ...g,
+                    daysOpen,
+                    maxBatchReturnDays,
+                    isOverdueReturn,
+                    overdueReturnDays: Math.max(0, daysOpen - maxBatchReturnDays),
+                };
+            })
+            .sort(
+                (a, b) => b.pendingCount - a.pendingCount || a.sellerName.localeCompare(b.sellerName)
+            );
         const totalPending = groups.reduce((acc, g) => acc + g.pendingCount, 0);
         const totalScanned = groups.reduce((acc, g) => acc + g.scannedCount, 0);
         const totalExpected = totalPending + totalScanned;
 
         res.json({
+            maxBatchReturnDays,
             totalPending,
             totalScanned,
             totalExpected,
@@ -1487,6 +1521,12 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
         });
 
         const includeConcluded = req.query.includeConcluded === 'true';
+        const opCfgByCompany = new Map<string, number>();
+        if (companyId) {
+            const cfg = await getCompanyOperationalConfig(companyId);
+            opCfgByCompany.set(companyId, cfg.maxBatchReturnDays);
+        }
+        const nowBatchMs = Date.now();
 
         const formattedBatches = batches.map(batch => {
             const allClients = batch.clients || [];
@@ -1548,9 +1588,24 @@ router.get('/batch', authMiddleware, async (req: AuthRequest, res) => {
                 ? []
                 : (includeConcluded ? allClients : activePrimaryClients);
 
+            const maxReturnDaysForBatch =
+                (batch.companyId ? opCfgByCompany.get(batch.companyId) : undefined) ?? 15;
+            const daysOpen = Math.max(
+                0,
+                Math.floor((nowBatchMs - new Date(batch.date).getTime()) / (24 * 3600 * 1000))
+            );
+            const hasPendingOperationalBooks =
+                activePrimaryClients.length > 0 || reboloCount > 0;
+            const isOverdueReturn =
+                hasPendingOperationalBooks && daysOpen > maxReturnDaysForBatch;
+
             return {
                 ...batch,
                 totalProduced,
+                daysOpen,
+                maxBatchReturnDays: maxReturnDaysForBatch,
+                isOverdueReturn,
+                overdueReturnDays: Math.max(0, daysOpen - maxReturnDaysForBatch),
                 cities: distinctCities,
                 assignedSellers,
                 clients: clientsForResponse,

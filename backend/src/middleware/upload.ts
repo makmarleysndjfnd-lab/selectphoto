@@ -106,7 +106,8 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
 
 const diskStorage = multer.diskStorage({
   destination: (req: any, file, cb) => {
-    const companyDir = path.join(uploadDir, req.user?.companyId || 'global');
+    const folderCompanyId = req.resolvedUploadCompanyId || req.user?.companyId || 'global';
+    const companyDir = path.join(uploadDir, folderCompanyId);
     if (!fs.existsSync(companyDir)) {
       fs.mkdirSync(companyDir, { recursive: true });
     }
@@ -115,7 +116,7 @@ const diskStorage = multer.diskStorage({
   filename: (req: any, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
     const fileId = uuidv4();
-    const companyId = req.user?.companyId || 'global';
+    const companyId = req.resolvedUploadCompanyId || req.user?.companyId || 'global';
     const relativeKey = `${companyId}/${fileId}${ext}`;
     (file as any).key = relativeKey;
     cb(null, `${fileId}${ext}`);
@@ -219,7 +220,7 @@ export function createB2S3Storage(
         try {
           const body = Buffer.concat(chunks, totalBytes);
           const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-          const companyId = req.user?.companyId || 'global';
+          const companyId = req.resolvedUploadCompanyId || req.user?.companyId || 'global';
           const key = `${companyId}/${uuidv4()}${ext}`;
           const result = await uploadBufferViaPresignedUrl(
             client,

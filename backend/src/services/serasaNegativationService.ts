@@ -7,6 +7,7 @@ import {
   AsaasDualBalanceResult,
 } from './asaasService';
 import { recordOperationalAuditEvent } from './operationalAuditService';
+import { getCompanyOperationalConfig } from './companyOperationalConfigService';
 
 export const SERASA_STATES = [
   'ELEGIVEL',
@@ -190,8 +191,10 @@ export type LoadedAgreementForSerasa = Prisma.CreditAgreementGetPayload<{
  */
 export function evaluateAgreementSerasaEligibility(
   agreement: LoadedAgreementForSerasa,
-  referenceNow: Date = new Date()
+  referenceNow: Date = new Date(),
+  minOverdueDays: number = MIN_OVERDUE_DAYS_FOR_SERASA
 ): SerasaEligibilityReport {
+  const effectiveMinOverdueDays = Math.max(1, Math.round(minOverdueDays || MIN_OVERDUE_DAYS_FOR_SERASA));
   const reasons: string[] = [];
   const blockCodes: string[] = [];
 
@@ -308,7 +311,7 @@ export function evaluateAgreementSerasaEligibility(
     if (daysPastDue > maxOverdueDays) {
       maxOverdueDays = daysPastDue;
     }
-    if (daysPastDue >= MIN_OVERDUE_DAYS_FOR_SERASA) {
+    if (daysPastDue >= effectiveMinOverdueDays) {
       overdue30PlusInstallmentsCount++;
       overdue30PlusAmountCents += Math.max(0, inst.amountCents - inst.paidCents);
       if (!earliestOverdue30PlusInstallmentId) {
@@ -320,7 +323,7 @@ export function evaluateAgreementSerasaEligibility(
   if (overdue30PlusInstallmentsCount === 0 || overdue30PlusAmountCents <= 0) {
     blockCodes.push('MIN_30_DAYS_OVERDUE_NOT_MET');
     reasons.push(
-      `A negativação exige ao menos 30 dias corridos de atraso no vencimento (atraso máximo atual: ${Math.max(0, maxOverdueDays)} dia(s)).`
+      `A negativação exige ao menos ${effectiveMinOverdueDays} dias corridos de atraso no vencimento (atraso máximo atual: ${Math.max(0, maxOverdueDays)} dia(s)).`
     );
   }
 
@@ -485,14 +488,18 @@ export async function listSerasaAgreements(
   companyId: string,
   options?: { status?: string; search?: string }
 ) {
-  const agreements = await prisma.creditAgreement.findMany({
-    where: { companyId },
-    include: AGREEMENT_SERASA_INCLUDE,
-    orderBy: { updatedAt: 'desc' },
-    take: 250,
-  });
+  const [agreements, opCfg] = await Promise.all([
+    prisma.creditAgreement.findMany({
+      where: { companyId },
+      include: AGREEMENT_SERASA_INCLUDE,
+      orderBy: { updatedAt: 'desc' },
+      take: 250,
+    }),
+    getCompanyOperationalConfig(companyId),
+  ]);
 
   const now = new Date();
+  const minOverdueDays = opCfg.creditDaysToSerasaEligible || MIN_OVERDUE_DAYS_FOR_SERASA;
   const counts: Record<string, number> = {
     ELEGIVEL: 0,
     SOLICITACAO_ENVIADA: 0,
@@ -505,7 +512,7 @@ export async function listSerasaAgreements(
   };
 
   const summaries = agreements.map((ag) => {
-    const eligibility = evaluateAgreementSerasaEligibility(ag, now);
+    const eligibility = evaluateAgreementSerasaEligibility(ag, now, minOverdueDays);
     const item = serializeAgreementSummary(ag, eligibility);
     counts[item.effectiveSerasaStatus] = (counts[item.effectiveSerasaStatus] || 0) + 1;
     return item;
@@ -551,7 +558,12 @@ export async function getAgreementSerasaDetails(companyId: string, agreementId: 
     throw err;
   }
 
-  const eligibility = evaluateAgreementSerasaEligibility(agreement, new Date());
+  const opCfg = await getCompanyOperationalConfig(companyId);
+  const eligibility = evaluateAgreementSerasaEligibility(
+    agreement,
+    new Date(),
+    opCfg.creditDaysToSerasaEligible || MIN_OVERDUE_DAYS_FOR_SERASA
+  );
   const dualBalance = await performDualBalanceVerification(companyId, agreement, eligibility);
 
   return {
@@ -625,7 +637,9 @@ export async function requestSerasaNegativation(params: {
     throw err;
   }
 
-  const preEligibility = evaluateAgreementSerasaEligibility(preAgreement, new Date());
+  const opCfg = await getCompanyOperationalConfig(params.companyId);
+  const minOverdueDays = opCfg.creditDaysToSerasaEligible || MIN_OVERDUE_DAYS_FOR_SERASA;
+  const preEligibility = evaluateAgreementSerasaEligibility(preAgreement, new Date(), minOverdueDays);
   if (preEligibility.hasActiveNegativation) {
     const err: any = new Error(
       'Já existe uma solicitação ou negativação ativa/pendente para este contrato.'
@@ -683,7 +697,7 @@ export async function requestSerasaNegativation(params: {
           throw err;
         }
 
-        const freshEligibility = evaluateAgreementSerasaEligibility(freshAgreement, new Date());
+        const freshEligibility = evaluateAgreementSerasaEligibility(freshAgreement, new Date(), minOverdueDays);
         if (freshEligibility.hasActiveNegativation) {
           const err: any = new Error(
             'Solicitação concorrente detectada: este contrato já possui negativação em curso.'

@@ -834,6 +834,8 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
 
     final hasReceipt = (sale['receiptUrl'] != null && sale['receiptUrl'].toString().trim().isNotEmpty);
     final hasSheetPhoto = (client['sheetPhotoUrl'] != null && client['sheetPhotoUrl'].toString().trim().isNotEmpty);
+    final hasPriceDivergence = sale['priceDivergenceAlert'] == true;
+    final priceDivergenceDetail = (sale['priceDivergenceDetail'] ?? '').toString().trim();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -912,6 +914,25 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                         const SizedBox(height: 3),
                         adjBadge,
                       ],
+                      if (hasPriceDivergence) ...[
+                        const SizedBox(height: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.amberAccent.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.amberAccent.withOpacity(0.55)),
+                          ),
+                          child: const Text(
+                            'Divergência Preço/Desc.',
+                            style: TextStyle(
+                              color: Colors.amberAccent,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   if ((clientForMenu['id'] ?? '').toString().isNotEmpty)
@@ -982,6 +1003,18 @@ class _VisaoHistoricoVendasAdminState extends State<VisaoHistoricoVendasAdmin> {
                   ),
                 ],
               ),
+              if (hasPriceDivergence && priceDivergenceDetail.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  priceDivergenceDetail,
+                  style: const TextStyle(
+                    color: Colors.amberAccent,
+                    fontSize: 10.5,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
               const SizedBox(height: 8),
               const Divider(color: Colors.white10, height: 1),
               const SizedBox(height: 6),

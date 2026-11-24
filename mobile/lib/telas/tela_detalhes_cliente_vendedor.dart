@@ -3580,8 +3580,29 @@ class _SaleTabState extends State<_SaleTab> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () async {
+                                final tplRes = await api
+                                    .getCompanyWhatsAppTemplates()
+                                    .catchError((_) => <String, dynamic>{});
+                                final postSaleTpl =
+                                    tplRes['whatsappPostSaleTemplate']
+                                        ?.toString()
+                                        .trim();
+                                final baseMsg = (postSaleTpl != null &&
+                                        postSaleTpl.isNotEmpty)
+                                    ? ApiService.renderWhatsAppTemplate(
+                                        postSaleTpl,
+                                        cliente: clientName ??
+                                            widget.clientData['name']
+                                                ?.toString() ??
+                                            'Cliente',
+                                        valor: '',
+                                        empresa: tplRes['companyDisplayName']
+                                                ?.toString() ??
+                                            companyDisplayName,
+                                      )
+                                    : 'Olá! Confira e confirme as condições da sua compra ($companyDisplayName)';
                                 final shareText =
-                                    'Olá! Confira e confirme as condições da sua compra ($companyDisplayName) pelo link seguro: $confirmationUrl';
+                                    '$baseMsg pelo link seguro: $confirmationUrl';
                                 final waUri = Uri.parse(
                                     'whatsapp://send?text=${Uri.encodeComponent(shareText)}');
                                 if (await canLaunchUrl(waUri)) {

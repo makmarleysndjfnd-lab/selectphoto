@@ -5,6 +5,7 @@ import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../mid
 import {
     resolveSellerCommissionRate,
     resolveHistoricalSaleCommissionRate,
+    resolvePhotographerCommission,
 } from '../utils/commission';
 import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
@@ -819,8 +820,9 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const opCfg = effectiveCompanyId
             ? await getCompanyOperationalConfig(effectiveCompanyId)
             : null;
-        const commissionRate = opCfg
-            ? Number((opCfg.virginBookCommissionPercent / 100).toFixed(4))
+        const defaultSellerPct = seller?.customVirginCommissionPercent ?? opCfg?.virginBookCommissionPercent;
+        const commissionRate = defaultSellerPct !== undefined && defaultSellerPct !== null
+            ? Number((defaultSellerPct / 100).toFixed(4))
             : resolveSellerCommissionRate(seller);
 
         sales.forEach(sale => {
@@ -1486,11 +1488,51 @@ router.get('/photographer/:photographerId', authenticateToken, async (req: AuthR
                     gte: startDate,
                     lte: endDate
                 }
+            },
+            include: {
+                clients: {
+                    select: {
+                        id: true,
+                        bookStatus: true,
+                        sales: {
+                            where: { saleStatus: { not: 'CANCELLED' }, receiptUrl: { not: null } },
+                            select: { id: true, value: true, refundedAmountCents: true, saleStatus: true }
+                        }
+                    }
+                }
             }
+        });
+
+        let soldBooksCount = 0;
+        let netSalesCents = 0;
+        let producedClientsCount = 0;
+        for (const b of books) {
+            producedClientsCount += b.clients.length;
+            for (const c of b.clients) {
+                const validSale = c.sales?.[0];
+                if (validSale && !isSaleCancelled(validSale)) {
+                    soldBooksCount++;
+                    netSalesCents += Math.round(getSaleNetValue(validSale) * 100);
+                }
+            }
+        }
+
+        const photoOpCfg = userCompanyId ? await getCompanyOperationalConfig(userCompanyId) : null;
+        const photoComm = resolvePhotographerCommission({
+            operationalConfig: photoOpCfg,
+            booksCount: soldBooksCount > 0 ? soldBooksCount : producedClientsCount,
+            netSalesCents,
         });
 
         res.json({
             booksCount: books.length,
+            producedClientsCount,
+            soldBooksCount,
+            netSalesValue: Number((netSalesCents / 100).toFixed(2)),
+            commissionType: photoComm.type,
+            commissionConfigValue: photoComm.value,
+            commissionCents: photoComm.commissionCents,
+            commissionAmount: Number((photoComm.commissionCents / 100).toFixed(2)),
             books
         });
     } catch (error: any) {

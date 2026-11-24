@@ -5,6 +5,7 @@ import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../mid
 import { getNextVisibleCode } from '../utils/visibleCode';
 import { isClientClosedForPhotographer, sanitizeClientForPhotographer } from '../utils/photographerIsolation';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import {
   calculateReboloValidityStatus,
   MAX_REBOLO_VALIDITY_DAYS,
@@ -868,6 +869,34 @@ router.post('/assign-seller', authenticateToken, requireAdminOrSupervisor, async
       });
     }
 
+    if (existingClient.companyId) {
+      const opCfg = await getCompanyOperationalConfig(existingClient.companyId);
+      const maxSimultaneous = opCfg.maxSimultaneousBooksPerSeller;
+      if (
+        maxSimultaneous !== null &&
+        maxSimultaneous > 0 &&
+        existingClient.assignedSellerId !== sellerId
+      ) {
+        const currentActiveCount = await prisma.client.count({
+          where: {
+            companyId: existingClient.companyId,
+            assignedSellerId: sellerId,
+            bookStatus: { in: ['DISTRIBUTED', 'DISTRIBUTED_REBOLO'] },
+            outcomeStatus: 'PENDING',
+            cityClosedAt: null,
+          },
+        });
+        if (currentActiveCount + 1 > maxSimultaneous) {
+          return res.status(400).json({
+            error: `Limite simultâneo excedido: o vendedor já possui ${currentActiveCount} book(s) ativo(s) e o máximo configurado da empresa é ${maxSimultaneous}.`,
+            code: 'MAX_SIMULTANEOUS_BOOKS_EXCEEDED',
+            currentActiveBooks: currentActiveCount,
+            maxSimultaneousBooksPerSeller: maxSimultaneous,
+          });
+        }
+      }
+    }
+
     let updateData: any = { assignedSellerId: sellerId };
     let newBookStatus = existingClient.bookStatus;
     if (existingClient.bookStatus === 'IN_STOCK_REBOLO') {
@@ -1102,7 +1131,28 @@ const batchAssignHandler = async (req: AuthRequest, res: Response) => {
     }
 
     // Transactional validation and atomic update
+    const opCfg = await getCompanyOperationalConfig(userCompanyId);
     const updatedCount = await prisma.$transaction(async (tx) => {
+      if (opCfg.maxSimultaneousBooksPerSeller !== null && opCfg.maxSimultaneousBooksPerSeller > 0) {
+        const currentActiveCount = await tx.client.count({
+          where: {
+            companyId: userCompanyId,
+            assignedSellerId,
+            bookStatus: { in: ['DISTRIBUTED', 'DISTRIBUTED_REBOLO'] },
+            outcomeStatus: 'PENDING',
+            cityClosedAt: null,
+            id: { notIn: uniqueClientIds },
+          },
+        });
+        if (currentActiveCount + uniqueClientIds.length > opCfg.maxSimultaneousBooksPerSeller) {
+          throw {
+            status: 400,
+            error: `Limite simultâneo excedido: ${seller.name} já possui ${currentActiveCount} book(s) e esta distribuição levaria a ${currentActiveCount + uniqueClientIds.length} (máximo da empresa: ${opCfg.maxSimultaneousBooksPerSeller}).`,
+            code: 'MAX_SIMULTANEOUS_BOOKS_EXCEEDED',
+          };
+        }
+      }
+
       // 1. Rejeitar imediatamente se qualquer ficha já estiver encerrada (SOLD, REBOLO_SOLD, DISCARDED)
       const closedStatuses = ['SOLD', 'REBOLO_SOLD', 'DISCARDED'];
       const finalizedClients = await tx.client.findMany({

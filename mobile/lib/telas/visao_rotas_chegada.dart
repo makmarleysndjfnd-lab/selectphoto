@@ -259,6 +259,10 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
           'awaitingRelease': awaitingRelease,
           'inStock': inStock,
           'distributed': distributed,
+          'daysOpen': b['daysOpen'] ?? 0,
+          'maxBatchReturnDays': b['maxBatchReturnDays'] ?? 15,
+          'isOverdueReturn': b['isOverdueReturn'] == true,
+          'overdueReturnDays': b['overdueReturnDays'] ?? 0,
           'cities': cities,
           'assignedSellers': assignedSellers,
           'clients': activeClients,
@@ -1480,6 +1484,10 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
     final List<String> cities = List<String>.from(data['cities'] ?? []);
     final List<Map<String, dynamic>> assignedSellers =
         List<Map<String, dynamic>>.from(data['assignedSellers'] ?? []);
+    final bool isOverdueReturn = data['isOverdueReturn'] == true;
+    final int daysOpen = int.tryParse((data['daysOpen'] ?? 0).toString()) ?? 0;
+    final int maxBatchReturnDays =
+        int.tryParse((data['maxBatchReturnDays'] ?? 15).toString()) ?? 15;
 
     // Formatar cidades
     String cityIndicator;
@@ -1510,7 +1518,12 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
       decoration: BoxDecoration(
         color: lumoraSurfaceDark,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: lumoraNeonPurple.withOpacity(0.28)),
+        border: Border.all(
+          color: isOverdueReturn
+              ? Colors.redAccent
+              : lumoraNeonPurple.withOpacity(0.28),
+          width: isOverdueReturn ? 1.6 : 1.0,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
@@ -1585,6 +1598,38 @@ class _VisaoRotasChegadaState extends State<VisaoRotasChegada>
                   ],
                 ),
                 const SizedBox(height: 16),
+
+                if (isOverdueReturn) ...[
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.16),
+                      borderRadius: BorderRadius.circular(8),
+                      border:
+                          Border.all(color: Colors.redAccent.withOpacity(0.7)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            color: Colors.redAccent, size: 16),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Prazo de devolução excedido: ${daysOpen}d em campo (máx. ${maxBatchReturnDays}d)',
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 // Stepper de 4 etapas
                 _buildStepper(status, totalProduced, inStock, distributed),

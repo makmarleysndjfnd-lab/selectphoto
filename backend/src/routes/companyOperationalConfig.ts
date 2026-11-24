@@ -5,9 +5,14 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, s3 } from '../middleware/upload';
 import { isExternalServicesDisabled } from '../utils/externalServices';
+import { prisma } from '../services/prisma';
 import {
+  DEFAULT_WHATSAPP_TEMPLATES,
   getCompanyOperationalConfig,
+  listSellerCommissionOverrides,
+  renderWhatsAppTemplate,
   upsertCompanyOperationalConfig,
+  upsertSellerCommissionOverride,
 } from '../services/companyOperationalConfigService';
 
 const router = Router();
@@ -51,6 +56,91 @@ function resolveAuthorizedCompanyScope(req: AuthRequest, res: Response): string 
   }
   return targetCompanyId;
 }
+
+// GET /api/company/whatsapp-templates
+// Leitura segura (sem dados sensíveis de comissão) para fluxos do vendedor/admin (Cobrança, Vales e Pós-Venda)
+router.get('/whatsapp-templates', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+      res.status(403).json({ error: 'Empresa do usuário não identificada.' });
+      return;
+    }
+    const [cfg, company] = await Promise.all([
+      getCompanyOperationalConfig(companyId),
+      prisma.company.findUnique({
+        where: { id: companyId },
+        select: { name: true, tradeName: true, companyPixKey: true, companyPixKeyType: true },
+      }),
+    ]);
+
+    const rawName = String(company?.tradeName || company?.name || '').trim();
+    const companyDisplayName =
+      rawName && rawName !== 'Select Photo Default' ? rawName : 'Lumora';
+
+    res.json({
+      companyId,
+      companyDisplayName,
+      companyPixKey: company?.companyPixKey || null,
+      companyPixKeyType: company?.companyPixKeyType || null,
+      whatsappCreditCollectionTemplate:
+        cfg.whatsappCreditCollectionTemplate || DEFAULT_WHATSAPP_TEMPLATES.creditCollection,
+      whatsappAdvanceNoticeTemplate:
+        cfg.whatsappAdvanceNoticeTemplate || DEFAULT_WHATSAPP_TEMPLATES.advanceNotice,
+      whatsappPostSaleTemplate:
+        cfg.whatsappPostSaleTemplate || DEFAULT_WHATSAPP_TEMPLATES.postSale,
+      defaultTemplates: DEFAULT_WHATSAPP_TEMPLATES,
+    });
+  } catch (error) {
+    console.error('Erro ao consultar modelos de WhatsApp:', error);
+    res.status(500).json({ error: 'Erro ao consultar modelos de WhatsApp da empresa.' });
+  }
+});
+
+// POST /api/company/operational-config/whatsapp-preview
+router.post('/operational-config/whatsapp-preview', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedCompanyScope(req, res);
+    if (!companyId) return;
+
+    const cfg = await getCompanyOperationalConfig(companyId);
+    const kind = String(req.body?.kind || 'CREDIT_COLLECTION').trim().toUpperCase();
+    const fallback =
+      kind === 'ADVANCE_NOTICE'
+        ? DEFAULT_WHATSAPP_TEMPLATES.advanceNotice
+        : kind === 'POST_SALE'
+          ? DEFAULT_WHATSAPP_TEMPLATES.postSale
+          : DEFAULT_WHATSAPP_TEMPLATES.creditCollection;
+    const configuredTemplate =
+      kind === 'ADVANCE_NOTICE'
+        ? cfg.whatsappAdvanceNoticeTemplate
+        : kind === 'POST_SALE'
+          ? cfg.whatsappPostSaleTemplate
+          : cfg.whatsappCreditCollectionTemplate;
+
+    const templateToUse =
+      typeof req.body?.template === 'string' && req.body.template.trim().length > 0
+        ? req.body.template
+        : configuredTemplate || fallback;
+
+    const rendered = renderWhatsAppTemplate(
+      templateToUse,
+      {
+        cliente: req.body?.cliente,
+        valor: req.body?.valor,
+        vencimento: req.body?.vencimento,
+        pix: req.body?.pix,
+        empresa: req.body?.empresa,
+      },
+      fallback
+    );
+
+    res.json({ kind, rendered });
+  } catch (error) {
+    console.error('Erro ao renderizar prévia WhatsApp:', error);
+    res.status(500).json({ error: 'Erro ao renderizar prévia do WhatsApp.' });
+  }
+});
 
 // GET /api/company/operational-config
 router.get('/operational-config', authenticateToken, async (req: AuthRequest, res: Response) => {
@@ -96,6 +186,51 @@ router.put('/operational-config', authenticateToken, async (req: AuthRequest, re
   }
 });
 
+// GET /api/company/operational-config/seller-overrides
+router.get('/operational-config/seller-overrides', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedCompanyScope(req, res);
+    if (!companyId) return;
+
+    const data = await listSellerCommissionOverrides(companyId);
+    res.json(data);
+  } catch (error: any) {
+    if (error?.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    console.error('Erro ao listar exceções individuais de comissão:', error);
+    res.status(500).json({ error: 'Erro ao listar exceções individuais de comissão.' });
+  }
+});
+
+// PUT /api/company/operational-config/seller-overrides/:sellerId
+router.put('/operational-config/seller-overrides/:sellerId', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedCompanyScope(req, res);
+    if (!companyId) return;
+
+    const updated = await upsertSellerCommissionOverride({
+      companyId,
+      sellerId: String(req.params.sellerId || '').trim(),
+      payload: req.body || {},
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'Admin',
+      actorRole: String(req.user!.role || 'ADMIN'),
+      ipAddress: req.ip || null,
+    });
+
+    res.json(updated);
+  } catch (error: any) {
+    if (error?.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    console.error('Erro ao salvar exceção individual de comissão:', error);
+    res.status(500).json({ error: 'Erro ao salvar exceção individual de comissão.' });
+  }
+});
+
 // POST /api/company/operational-config/logo
 router.post(
   '/operational-config/logo',
@@ -104,6 +239,7 @@ router.post(
     const companyId = resolveAuthorizedCompanyScope(req, res);
     if (!companyId) return;
     (req as any).resolvedOperationalCompanyId = companyId;
+    (req as any).resolvedUploadCompanyId = companyId;
     next();
   },
   safeUpload(upload.single('logo')),
@@ -117,15 +253,16 @@ router.post(
 
       const fileKey =
         (req.file as any).key ||
-        (req.file.filename ? `${req.user?.companyId || companyId}/${req.file.filename}` : null);
+        (req.file.filename ? `${companyId}/${req.file.filename}` : null);
       const rawUrl = getUploadedFileUrl(req.file);
       let publicLogoUrl = rawUrl;
 
       if (!publicLogoUrl || publicLogoUrl.startsWith('/api/upload/file/')) {
         const cleanFileName = fileKey ? path.basename(String(fileKey)) : req.file.filename;
-        const folderCompany = fileKey && String(fileKey).includes('/')
-          ? String(fileKey).split('/')[0]
-          : companyId;
+        const folderCompany =
+          fileKey && String(fileKey).includes('/')
+            ? String(fileKey).split('/')[0]
+            : companyId;
         publicLogoUrl = `/api/company/public/logo/${encodeURIComponent(folderCompany)}/${encodeURIComponent(cleanFileName)}`;
       }
 
@@ -138,8 +275,14 @@ router.post(
         ipAddress: req.ip || null,
       });
 
+      const usingB2 =
+        !isExternalServicesDisabled() &&
+        Boolean(process.env.B2_KEY_ID && process.env.B2_APPLICATION_KEY);
+
       res.json({
         logoUrl: updated.companyLogoUrl,
+        storageProvider: usingB2 ? 'BACKBLAZE_B2' : 'LOCAL_TEST_FALLBACK',
+        storageKey: fileKey,
         config: updated,
       });
     } catch (error: any) {

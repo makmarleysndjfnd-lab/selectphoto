@@ -31,9 +31,12 @@ import {
 import { clearCompanyCityScoutCache } from './events';
 import {
   getCompanyOperationalConfig,
+  listSellerCommissionOverrides,
   upsertCompanyOperationalConfig,
+  upsertSellerCommissionOverride,
 } from '../services/companyOperationalConfigService';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
+import { isExternalServicesDisabled } from '../utils/externalServices';
 import path from 'path';
 
 const router = Router();
@@ -753,10 +756,57 @@ router.put('/companies/:id/operational-config', authenticateToken, requireSuperA
   }
 });
 
+router.get('/companies/:id/operational-config/seller-overrides', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const data = await listSellerCommissionOverrides(company.id);
+    return res.json(data);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error listing company seller commission overrides:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao listar exceções individuais.' });
+  }
+});
+
+router.put('/companies/:id/operational-config/seller-overrides/:sellerId', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const updated = await upsertSellerCommissionOverride({
+      companyId: company.id,
+      sellerId: String(req.params.sellerId || '').trim(),
+      payload: req.body || {},
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'SuperAdmin',
+      actorRole: 'SUPER_ADMIN',
+      ipAddress: req.ip || null,
+    });
+    return res.json(updated);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error updating company seller commission override:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao salvar exceção individual.' });
+  }
+});
+
 router.post(
   '/companies/:id/operational-config/logo',
   authenticateToken,
   requireSuperAdmin,
+  async (req: AuthRequest, res: Response, next) => {
+    const targetId = String(req.params.id || '').trim();
+    const company = await prisma.company.findUnique({ where: { id: targetId }, select: { id: true } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    (req as any).resolvedUploadCompanyId = company.id;
+    next();
+  },
   safeUpload(upload.single('logo')),
   async (req: AuthRequest, res: Response) => {
     try {
@@ -768,7 +818,7 @@ router.post(
 
       const fileKey =
         (req.file as any).key ||
-        (req.file.filename ? `${req.user?.companyId || company.id}/${req.file.filename}` : null);
+        (req.file.filename ? `${company.id}/${req.file.filename}` : null);
       const rawUrl = getUploadedFileUrl(req.file);
       let publicLogoUrl = rawUrl;
 
@@ -788,8 +838,14 @@ router.post(
         ipAddress: req.ip || null,
       });
 
+      const usingB2 =
+        !isExternalServicesDisabled() &&
+        Boolean(process.env.B2_KEY_ID && process.env.B2_APPLICATION_KEY);
+
       return res.json({
         logoUrl: updated.companyLogoUrl,
+        storageProvider: usingB2 ? 'BACKBLAZE_B2' : 'LOCAL_TEST_FALLBACK',
+        storageKey: fileKey,
         config: updated,
       });
     } catch (error: any) {

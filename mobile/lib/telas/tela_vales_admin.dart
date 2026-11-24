@@ -1038,12 +1038,35 @@ class _TelaExtratoValeAdminState extends State<TelaExtratoValeAdmin> {
     final rawPhone = (user['phone'] ?? '').toString().replaceAll(RegExp(r'\D'), '');
     final openCents = int.tryParse((summary['totalOpenCents'] ?? 0).toString()) ?? 0;
 
+    final waTplMap = await _api
+        .getCompanyWhatsAppTemplates()
+        .catchError((_) => <String, dynamic>{});
+    final customAdvanceTpl =
+        waTplMap['whatsappAdvanceNoticeTemplate']?.toString().trim();
+    final effectivePix = pixKey.isNotEmpty
+        ? pixKey
+        : (waTplMap['companyPixKey']?.toString().trim() ?? '');
+
     final df = DateFormat('dd/MM/yyyy HH:mm');
     final buf = StringBuffer();
-    buf.writeln('*$companyName — Extrato de Vales e Pendências*');
-    buf.writeln('Profissional: *$userName*');
-    buf.writeln('Saldo atual em aberto: *${formatCentsBRL(openCents)}*');
-    buf.writeln('');
+    if (customAdvanceTpl != null && customAdvanceTpl.isNotEmpty) {
+      buf.writeln(
+        ApiService.renderWhatsAppTemplate(
+          customAdvanceTpl,
+          cliente: userName,
+          valor: formatCentsBRL(openCents),
+          vencimento: df.format(DateTime.now()),
+          pix: effectivePix,
+          empresa: companyName,
+        ),
+      );
+      buf.writeln('');
+    } else {
+      buf.writeln('*$companyName — Extrato de Vales e Pendências*');
+      buf.writeln('Profissional: *$userName*');
+      buf.writeln('Saldo atual em aberto: *${formatCentsBRL(openCents)}*');
+      buf.writeln('');
+    }
 
     if (entries.isEmpty) {
       buf.writeln('Sem movimentações registradas.');

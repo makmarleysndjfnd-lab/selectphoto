@@ -14,6 +14,7 @@ import {
 import { processAsaasWebhookEvent } from '../services/asaasWebhookProcessor';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import { invalidateAndReissueConfirmationOnSaleChange } from '../services/buyerConfirmationService';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import { resolveCompanyDisplayName } from '../constants/companyClassification';
 import {
   listSerasaAgreements,
@@ -483,7 +484,7 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
     };
 
     if (status && status !== 'ALL') {
-      if (status === 'OVERDUE') {
+      if (status === 'OVERDUE' || status === 'COLLECTION_QUEUE') {
         where.status = { in: ['ACTIVE', 'RENEGOTIATED'] };
         where.installments = {
           some: {
@@ -604,18 +605,48 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
     });
 
     const now = new Date();
+    const companyIdsForCfg = Array.from(
+      new Set(
+        [companyId, ...agreements.map((a) => a.companyId)].filter(
+          (id): id is string => Boolean(id)
+        )
+      )
+    );
+    const opCfgByCompany = new Map<string, Awaited<ReturnType<typeof getCompanyOperationalConfig>>>();
+    await Promise.all(
+      companyIdsForCfg.map(async (cid) => {
+        opCfgByCompany.set(cid, await getCompanyOperationalConfig(cid));
+      })
+    );
 
     const formatted = agreements.map((a) => {
       const pendingInsts = a.installments.filter((i) => i.status === 'PENDING' || i.status === 'PARTIALLY_PAID' || i.status === 'OVERDUE');
       const nextPending = pendingInsts[0];
+      const opCfg = opCfgByCompany.get(a.companyId);
+      const daysToCollectionQueue = opCfg?.creditDaysToCollectionQueue ?? 5;
+      const daysToSerasaEligible = opCfg?.creditDaysToSerasaEligible ?? 30;
+      const lateFinePercent = opCfg?.creditLateFinePercent ?? 2.0;
+      const lateInterestMonthlyPercent = opCfg?.creditLateInterestMonthlyPercent ?? 2.0;
 
       let overdueCount = 0;
       let oldestOverdueDate: Date | null = null;
+      let overduePrincipalCents = 0;
+      let estimatedFineCents = 0;
+      let estimatedInterestCents = 0;
+
       for (const inst of pendingInsts) {
-        if (new Date(inst.dueDate) < now) {
+        const dueDateObj = new Date(inst.dueDate);
+        if (dueDateObj < now) {
           overdueCount++;
-          if (!oldestOverdueDate || new Date(inst.dueDate) < oldestOverdueDate) {
-            oldestOverdueDate = new Date(inst.dueDate);
+          const unpaidInstCents = Math.max(0, inst.amountCents - inst.paidCents);
+          overduePrincipalCents += unpaidInstCents;
+          const instDaysOverdue = Math.max(0, Math.floor((now.getTime() - dueDateObj.getTime()) / (1000 * 3600 * 24)));
+          estimatedFineCents += Math.round(unpaidInstCents * (lateFinePercent / 100));
+          estimatedInterestCents += Math.round(
+            unpaidInstCents * (lateInterestMonthlyPercent / 100) * (instDaysOverdue / 30)
+          );
+          if (!oldestOverdueDate || dueDateObj < oldestOverdueDate) {
+            oldestOverdueDate = dueDateObj;
           }
         }
       }
@@ -623,6 +654,17 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
       const daysOverdue = oldestOverdueDate
         ? Math.floor((now.getTime() - oldestOverdueDate.getTime()) / (1000 * 3600 * 24))
         : 0;
+
+      const inCollectionQueue =
+        (a.status === 'ACTIVE' || a.status === 'RENEGOTIATED') &&
+        overduePrincipalCents > 0 &&
+        daysOverdue >= daysToCollectionQueue;
+      const serasaEligibleByDays =
+        (a.status === 'ACTIVE' || a.status === 'RENEGOTIATED') &&
+        overduePrincipalCents > 0 &&
+        daysOverdue >= daysToSerasaEligible;
+      const estimatedLateChargesCents = estimatedFineCents + estimatedInterestCents;
+      const estimatedUpdatedOverdueBalanceCents = overduePrincipalCents + estimatedLateChargesCents;
 
       const daysUntilNext = nextPending
         ? Math.ceil((new Date(nextPending.dueDate).getTime() - now.getTime()) / (1000 * 3600 * 24))
@@ -659,6 +701,16 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
         overdueCount,
         daysOverdue,
         daysUntilNext,
+        inCollectionQueue,
+        serasaEligibleByDays,
+        daysToCollectionQueue,
+        daysToSerasaEligible,
+        lateFinePercent,
+        lateInterestMonthlyPercent,
+        lateFineCents: estimatedFineCents,
+        lateInterestCents: estimatedInterestCents,
+        estimatedLateChargesCents,
+        estimatedUpdatedOverdueBalanceCents,
         installments: a.installments.map((inst) => ({
           id: inst.id,
           installmentNumber: inst.installmentNumber,
@@ -686,7 +738,12 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
       };
     });
 
-    res.json(formatted);
+    const finalAgreements =
+      status === 'COLLECTION_QUEUE'
+        ? formatted.filter((a) => a.inCollectionQueue)
+        : formatted;
+
+    res.json(finalAgreements);
   } catch (error: any) {
     console.error('Error listing credit agreements:', error);
     res.status(500).json({ error: error.message || 'Erro ao listar contratos de crediário' });

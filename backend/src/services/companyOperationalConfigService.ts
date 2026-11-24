@@ -2,10 +2,29 @@ import { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from './prisma';
 import { recordOperationalAuditEvent } from './operationalAuditService';
 
+export type PhotographerCommissionType = 'FIXED_PER_BOOK' | 'PERCENT_OF_SALE';
+export type DiscountPolicyMode = 'SILENT_AUDIT_ALERT' | 'HARD_BLOCK';
+
 export interface CompanyOperationalConfigValues {
   virginBookCommissionPercent: number;
   reboloBookCommissionPercent: number;
   creditInstallmentCommissionPercent: number;
+  photographerCommissionType: PhotographerCommissionType;
+  photographerCommissionValue: number;
+  defaultBookPriceCents: number | null;
+  maxSellerDiscountPercent: number;
+  discountPolicyMode: DiscountPolicyMode;
+  creditMinDownPaymentPercent: number;
+  creditMaxInstallments: number;
+  creditLateInterestMonthlyPercent: number;
+  creditLateFinePercent: number;
+  creditDaysToCollectionQueue: number;
+  creditDaysToSerasaEligible: number;
+  maxBatchReturnDays: number;
+  maxSimultaneousBooksPerSeller: number | null;
+  whatsappCreditCollectionTemplate: string | null;
+  whatsappAdvanceNoticeTemplate: string | null;
+  whatsappPostSaleTemplate: string | null;
   companyLogoUrl: string | null;
   sacPhone: string | null;
   sacWhatsapp: string | null;
@@ -23,17 +42,55 @@ export interface CompanyOperationalConfigValues {
   qrShowFooterText: boolean;
 }
 
+export interface WhatsAppDefaultTemplates {
+  creditCollection: string;
+  advanceNotice: string;
+  postSale: string;
+}
+
 export interface CompanyOperationalConfigDTO extends CompanyOperationalConfigValues {
   companyId: string;
   isDefault: boolean;
+  defaultTemplates: WhatsAppDefaultTemplates;
   updatedById: string | null;
   updatedAt: string | null;
 }
+
+export const DEFAULT_WHATSAPP_CREDIT_COLLECTION_TEMPLATE =
+  'Olá, {cliente}! Aqui é da equipe {empresa}. Passando para lembrar da parcela no valor de {valor}, com vencimento em {vencimento}. Para pagamento via Pix, utilize a chave: {pix}. Qualquer dúvida estamos à disposição!';
+
+export const DEFAULT_WHATSAPP_ADVANCE_NOTICE_TEMPLATE =
+  'Olá, {cliente}! Segue a atualização da sua conta corrente de vales/pendências com a {empresa}. Saldo atual em aberto: {valor} (referência: {vencimento}). Caso precise acertar via Pix, utilize a chave: {pix}.';
+
+export const DEFAULT_WHATSAPP_POST_SALE_TEMPLATE =
+  'Olá, {cliente}! Obrigado pela sua compra de {valor} com a {empresa}! Caso precise de atendimento ou segunda via, estamos à disposição.';
+
+export const DEFAULT_WHATSAPP_TEMPLATES: WhatsAppDefaultTemplates = {
+  creditCollection: DEFAULT_WHATSAPP_CREDIT_COLLECTION_TEMPLATE,
+  advanceNotice: DEFAULT_WHATSAPP_ADVANCE_NOTICE_TEMPLATE,
+  postSale: DEFAULT_WHATSAPP_POST_SALE_TEMPLATE,
+};
 
 export const DEFAULT_COMPANY_OPERATIONAL_CONFIG: CompanyOperationalConfigValues = {
   virginBookCommissionPercent: 25.0,
   reboloBookCommissionPercent: 20.0,
   creditInstallmentCommissionPercent: 10.0,
+  photographerCommissionType: 'FIXED_PER_BOOK',
+  photographerCommissionValue: 0,
+  defaultBookPriceCents: null,
+  maxSellerDiscountPercent: 15.0,
+  discountPolicyMode: 'SILENT_AUDIT_ALERT',
+  creditMinDownPaymentPercent: 20.0,
+  creditMaxInstallments: 6,
+  creditLateInterestMonthlyPercent: 2.0,
+  creditLateFinePercent: 2.0,
+  creditDaysToCollectionQueue: 5,
+  creditDaysToSerasaEligible: 30,
+  maxBatchReturnDays: 15,
+  maxSimultaneousBooksPerSeller: null,
+  whatsappCreditCollectionTemplate: null,
+  whatsappAdvanceNoticeTemplate: null,
+  whatsappPostSaleTemplate: null,
   companyLogoUrl: null,
   sacPhone: null,
   sacWhatsapp: null,
@@ -82,15 +139,183 @@ function parsePercent(
   return Number(num.toFixed(2));
 }
 
+function parseNonNegativeFloat(
+  raw: unknown,
+  fallback: number,
+  max: number,
+  field: string,
+  strict: boolean
+): number {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return fallback;
+  }
+  const num = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(num) || num < 0 || num > max) {
+    if (strict) {
+      throw Object.assign(
+        new Error(`${field} deve estar entre 0 e ${max}.`),
+        { status: 400 }
+      );
+    }
+    return fallback;
+  }
+  return Number(num.toFixed(2));
+}
+
+function parseOptionalPositiveInt(
+  raw: unknown,
+  min: number,
+  max: number,
+  field: string,
+  strict: boolean
+): number | null {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return null;
+  }
+  const num = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(num) || !Number.isInteger(num) || num < min || num > max) {
+    if (strict) {
+      throw Object.assign(
+        new Error(`${field} deve ser um número inteiro entre ${min} e ${max}.`),
+        { status: 400 }
+      );
+    }
+    return null;
+  }
+  return num;
+}
+
+function parseBoundedInt(
+  raw: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+  field: string,
+  strict: boolean
+): number {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return fallback;
+  }
+  const num = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(num) || !Number.isInteger(num) || num < min || num > max) {
+    if (strict) {
+      throw Object.assign(
+        new Error(`${field} deve ser um número inteiro entre ${min} e ${max}.`),
+        { status: 400 }
+      );
+    }
+    return fallback;
+  }
+  return num;
+}
+
 function parseBool(raw: unknown, fallback: boolean): boolean {
   if (raw === undefined || raw === null) return fallback;
   return Boolean(raw);
+}
+
+/**
+ * Renderiza com segurança um modelo de WhatsApp substituindo as variáveis:
+ * {cliente}, {valor}, {vencimento}, {pix} e {empresa}.
+ */
+export function renderWhatsAppTemplate(
+  template: string | null | undefined,
+  variables: {
+    cliente?: string | null;
+    valor?: string | null;
+    vencimento?: string | null;
+    pix?: string | null;
+    empresa?: string | null;
+  },
+  fallbackTemplate: string = DEFAULT_WHATSAPP_CREDIT_COLLECTION_TEMPLATE
+): string {
+  const source =
+    typeof template === 'string' && template.trim().length > 0
+      ? template.trim()
+      : fallbackTemplate;
+
+  const safeVal = (val: string | null | undefined, fallback: string) => {
+    const cleaned = val ? String(val).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim() : '';
+    return cleaned.length > 0 ? cleaned : fallback;
+  };
+
+  const replacements: Record<string, string> = {
+    '{cliente}': safeVal(variables.cliente, 'Cliente'),
+    '{valor}': safeVal(variables.valor, 'R$ 0,00'),
+    '{vencimento}': safeVal(variables.vencimento, 'a combinar'),
+    '{pix}': safeVal(variables.pix, 'solicite com a equipe'),
+    '{empresa}': safeVal(variables.empresa, 'Lumora'),
+  };
+
+  return source.replace(/\{(cliente|valor|vencimento|pix|empresa)\}/gi, (match) => {
+    const key = match.toLowerCase();
+    return replacements[key] ?? match;
+  });
 }
 
 export function normalizeCompanyOperationalConfigValues(
   raw: any,
   strict = false
 ): CompanyOperationalConfigValues {
+  const rawPhotogType = String(
+    raw?.photographerCommissionType ||
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.photographerCommissionType
+  )
+    .trim()
+    .toUpperCase();
+  let photographerCommissionType: PhotographerCommissionType = 'FIXED_PER_BOOK';
+  if (rawPhotogType === 'FIXED_PER_BOOK' || rawPhotogType === 'PERCENT_OF_SALE') {
+    photographerCommissionType = rawPhotogType;
+  } else if (strict && raw?.photographerCommissionType !== undefined) {
+    throw Object.assign(
+      new Error('photographerCommissionType inválido. Utilize FIXED_PER_BOOK ou PERCENT_OF_SALE.'),
+      { status: 400 }
+    );
+  }
+
+  const rawDiscountMode = String(
+    raw?.discountPolicyMode || DEFAULT_COMPANY_OPERATIONAL_CONFIG.discountPolicyMode
+  )
+    .trim()
+    .toUpperCase();
+  let discountPolicyMode: DiscountPolicyMode = 'SILENT_AUDIT_ALERT';
+  if (rawDiscountMode === 'SILENT_AUDIT_ALERT' || rawDiscountMode === 'HARD_BLOCK') {
+    discountPolicyMode = rawDiscountMode;
+  } else if (strict && raw?.discountPolicyMode !== undefined) {
+    throw Object.assign(
+      new Error('discountPolicyMode inválido. Utilize SILENT_AUDIT_ALERT ou HARD_BLOCK.'),
+      { status: 400 }
+    );
+  }
+
+  const maxPhotoVal = photographerCommissionType === 'PERCENT_OF_SALE' ? 100 : 10000;
+  const photographerCommissionValue = parseNonNegativeFloat(
+    raw?.photographerCommissionValue,
+    DEFAULT_COMPANY_OPERATIONAL_CONFIG.photographerCommissionValue,
+    maxPhotoVal,
+    'photographerCommissionValue',
+    strict
+  );
+
+  // Suporte conveniente se payload enviar defaultBookPriceBrl em R$ além de defaultBookPriceCents
+  let rawDefaultPriceCents = raw?.defaultBookPriceCents;
+  if (
+    (rawDefaultPriceCents === undefined || rawDefaultPriceCents === null) &&
+    raw?.defaultBookPriceBrl !== undefined &&
+    raw?.defaultBookPriceBrl !== null &&
+    String(raw.defaultBookPriceBrl).trim() !== ''
+  ) {
+    const brl = Number(String(raw.defaultBookPriceBrl).replace(',', '.'));
+    if (Number.isFinite(brl) && brl > 0) {
+      rawDefaultPriceCents = Math.round(brl * 100);
+    } else if (strict && brl <= 0) {
+      throw Object.assign(
+        new Error('Preço padrão do book deve ser maior que zero.'),
+        { status: 400 }
+      );
+    }
+  }
+
   return {
     virginBookCommissionPercent: parsePercent(
       raw?.virginBookCommissionPercent,
@@ -110,6 +335,97 @@ export function normalizeCompanyOperationalConfigValues(
       'creditInstallmentCommissionPercent',
       strict
     ),
+    photographerCommissionType,
+    photographerCommissionValue,
+    defaultBookPriceCents:
+      raw?.defaultBookPriceCents !== undefined || raw?.defaultBookPriceBrl !== undefined
+        ? parseOptionalPositiveInt(
+            rawDefaultPriceCents,
+            100,
+            100_000_000,
+            'defaultBookPriceCents',
+            strict
+          )
+        : DEFAULT_COMPANY_OPERATIONAL_CONFIG.defaultBookPriceCents,
+    maxSellerDiscountPercent: parsePercent(
+      raw?.maxSellerDiscountPercent,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.maxSellerDiscountPercent,
+      'maxSellerDiscountPercent',
+      strict
+    ),
+    discountPolicyMode,
+    creditMinDownPaymentPercent: parsePercent(
+      raw?.creditMinDownPaymentPercent,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditMinDownPaymentPercent,
+      'creditMinDownPaymentPercent',
+      strict
+    ),
+    creditMaxInstallments: parseBoundedInt(
+      raw?.creditMaxInstallments,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditMaxInstallments,
+      1,
+      48,
+      'creditMaxInstallments',
+      strict
+    ),
+    creditLateInterestMonthlyPercent: parsePercent(
+      raw?.creditLateInterestMonthlyPercent,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditLateInterestMonthlyPercent,
+      'creditLateInterestMonthlyPercent',
+      strict
+    ),
+    creditLateFinePercent: parsePercent(
+      raw?.creditLateFinePercent,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditLateFinePercent,
+      'creditLateFinePercent',
+      strict
+    ),
+    creditDaysToCollectionQueue: parseBoundedInt(
+      raw?.creditDaysToCollectionQueue,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditDaysToCollectionQueue,
+      1,
+      365,
+      'creditDaysToCollectionQueue',
+      strict
+    ),
+    creditDaysToSerasaEligible: parseBoundedInt(
+      raw?.creditDaysToSerasaEligible,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditDaysToSerasaEligible,
+      1,
+      365,
+      'creditDaysToSerasaEligible',
+      strict
+    ),
+    maxBatchReturnDays: parseBoundedInt(
+      raw?.maxBatchReturnDays,
+      DEFAULT_COMPANY_OPERATIONAL_CONFIG.maxBatchReturnDays,
+      1,
+      365,
+      'maxBatchReturnDays',
+      strict
+    ),
+    maxSimultaneousBooksPerSeller:
+      raw?.maxSimultaneousBooksPerSeller !== undefined
+        ? parseOptionalPositiveInt(
+            raw.maxSimultaneousBooksPerSeller,
+            1,
+            1000,
+            'maxSimultaneousBooksPerSeller',
+            strict
+          )
+        : DEFAULT_COMPANY_OPERATIONAL_CONFIG.maxSimultaneousBooksPerSeller,
+    whatsappCreditCollectionTemplate:
+      raw?.whatsappCreditCollectionTemplate !== undefined
+        ? sanitizeOptionalString(raw.whatsappCreditCollectionTemplate, 2000)
+        : DEFAULT_COMPANY_OPERATIONAL_CONFIG.whatsappCreditCollectionTemplate,
+    whatsappAdvanceNoticeTemplate:
+      raw?.whatsappAdvanceNoticeTemplate !== undefined
+        ? sanitizeOptionalString(raw.whatsappAdvanceNoticeTemplate, 2000)
+        : DEFAULT_COMPANY_OPERATIONAL_CONFIG.whatsappAdvanceNoticeTemplate,
+    whatsappPostSaleTemplate:
+      raw?.whatsappPostSaleTemplate !== undefined
+        ? sanitizeOptionalString(raw.whatsappPostSaleTemplate, 2000)
+        : DEFAULT_COMPANY_OPERATIONAL_CONFIG.whatsappPostSaleTemplate,
     companyLogoUrl:
       raw?.companyLogoUrl !== undefined
         ? sanitizeOptionalString(raw.companyLogoUrl, 1000)
@@ -140,6 +456,78 @@ export function normalizeCompanyOperationalConfigValues(
   };
 }
 
+/**
+ * Avalia política de preço padrão e desconto máximo para uma venda.
+ */
+export function evaluateSalePricePolicy(params: {
+  saleValueReais: number;
+  operationalConfig?: CompanyOperationalConfigValues | null;
+}): {
+  exceeded: boolean;
+  shouldBlock: boolean;
+  priceDivergenceAlert: boolean;
+  priceDivergenceDetail: string | null;
+  discountPercent: number;
+} {
+  const cfg = params.operationalConfig;
+  if (!cfg || !cfg.defaultBookPriceCents || cfg.defaultBookPriceCents <= 0) {
+    return {
+      exceeded: false,
+      shouldBlock: false,
+      priceDivergenceAlert: false,
+      priceDivergenceDetail: null,
+      discountPercent: 0,
+    };
+  }
+
+  const saleCents = Math.round(params.saleValueReais * 100);
+  if (saleCents >= cfg.defaultBookPriceCents) {
+    return {
+      exceeded: false,
+      shouldBlock: false,
+      priceDivergenceAlert: false,
+      priceDivergenceDetail: null,
+      discountPercent: 0,
+    };
+  }
+
+  const discountCents = cfg.defaultBookPriceCents - saleCents;
+  const discountPercent = Number(((discountCents / cfg.defaultBookPriceCents) * 100).toFixed(2));
+  const maxPct = cfg.maxSellerDiscountPercent ?? 15.0;
+
+  if (discountPercent <= maxPct) {
+    return {
+      exceeded: false,
+      shouldBlock: false,
+      priceDivergenceAlert: false,
+      priceDivergenceDetail: null,
+      discountPercent,
+    };
+  }
+
+  const baseBrl = (cfg.defaultBookPriceCents / 100).toFixed(2);
+  const saleBrl = (saleCents / 100).toFixed(2);
+  const detail = `Venda em R$ ${saleBrl} com desconto de ${discountPercent.toFixed(1)}% acima do teto de ${maxPct.toFixed(1)}% sobre o preço padrão de R$ ${baseBrl}.`;
+
+  if (cfg.discountPolicyMode === 'HARD_BLOCK') {
+    return {
+      exceeded: true,
+      shouldBlock: true,
+      priceDivergenceAlert: false,
+      priceDivergenceDetail: detail,
+      discountPercent,
+    };
+  }
+
+  return {
+    exceeded: true,
+    shouldBlock: false,
+    priceDivergenceAlert: true,
+    priceDivergenceDetail: detail,
+    discountPercent,
+  };
+}
+
 export async function getCompanyOperationalConfig(
   companyId: string,
   dbClient: Pick<PrismaClient, 'companyOperationalConfig'> = defaultPrisma
@@ -153,6 +541,7 @@ export async function getCompanyOperationalConfig(
       companyId,
       isDefault: true,
       ...DEFAULT_COMPANY_OPERATIONAL_CONFIG,
+      defaultTemplates: DEFAULT_WHATSAPP_TEMPLATES,
       updatedById: null,
       updatedAt: null,
     };
@@ -163,6 +552,7 @@ export async function getCompanyOperationalConfig(
     companyId,
     isDefault: false,
     ...values,
+    defaultTemplates: DEFAULT_WHATSAPP_TEMPLATES,
     updatedById: row.updatedById || null,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
   };
@@ -214,22 +604,46 @@ export async function upsertCompanyOperationalConfig(
         virginBookCommissionPercent: previous.virginBookCommissionPercent,
         reboloBookCommissionPercent: previous.reboloBookCommissionPercent,
         creditInstallmentCommissionPercent: previous.creditInstallmentCommissionPercent,
+        photographerCommissionType: previous.photographerCommissionType,
+        photographerCommissionValue: previous.photographerCommissionValue,
+        defaultBookPriceCents: previous.defaultBookPriceCents,
+        maxSellerDiscountPercent: previous.maxSellerDiscountPercent,
+        discountPolicyMode: previous.discountPolicyMode,
+        creditMinDownPaymentPercent: previous.creditMinDownPaymentPercent,
+        creditMaxInstallments: previous.creditMaxInstallments,
+        creditLateInterestMonthlyPercent: previous.creditLateInterestMonthlyPercent,
+        creditLateFinePercent: previous.creditLateFinePercent,
+        creditDaysToCollectionQueue: previous.creditDaysToCollectionQueue,
+        creditDaysToSerasaEligible: previous.creditDaysToSerasaEligible,
+        maxBatchReturnDays: previous.maxBatchReturnDays,
+        maxSimultaneousBooksPerSeller: previous.maxSimultaneousBooksPerSeller,
         companyLogoUrl: previous.companyLogoUrl,
         sacPhone: previous.sacPhone,
         sacWhatsapp: previous.sacWhatsapp,
-        qrReceiptFooterText: previous.qrReceiptFooterText,
       },
       newValues: {
         isDefault: false,
         virginBookCommissionPercent: nextValues.virginBookCommissionPercent,
         reboloBookCommissionPercent: nextValues.reboloBookCommissionPercent,
         creditInstallmentCommissionPercent: nextValues.creditInstallmentCommissionPercent,
+        photographerCommissionType: nextValues.photographerCommissionType,
+        photographerCommissionValue: nextValues.photographerCommissionValue,
+        defaultBookPriceCents: nextValues.defaultBookPriceCents,
+        maxSellerDiscountPercent: nextValues.maxSellerDiscountPercent,
+        discountPolicyMode: nextValues.discountPolicyMode,
+        creditMinDownPaymentPercent: nextValues.creditMinDownPaymentPercent,
+        creditMaxInstallments: nextValues.creditMaxInstallments,
+        creditLateInterestMonthlyPercent: nextValues.creditLateInterestMonthlyPercent,
+        creditLateFinePercent: nextValues.creditLateFinePercent,
+        creditDaysToCollectionQueue: nextValues.creditDaysToCollectionQueue,
+        creditDaysToSerasaEligible: nextValues.creditDaysToSerasaEligible,
+        maxBatchReturnDays: nextValues.maxBatchReturnDays,
+        maxSimultaneousBooksPerSeller: nextValues.maxSimultaneousBooksPerSeller,
         companyLogoUrl: nextValues.companyLogoUrl,
         sacPhone: nextValues.sacPhone,
         sacWhatsapp: nextValues.sacWhatsapp,
-        qrReceiptFooterText: nextValues.qrReceiptFooterText,
       },
-      reason: 'Atualização de comissões da equipe e personalização pública do QR Code',
+      reason: 'Atualização das configurações operacionais gerais da empresa',
       authorUserId: actorUserId,
       authorName: actorName,
       authorRole: actorRole,
@@ -242,7 +656,200 @@ export async function upsertCompanyOperationalConfig(
     companyId,
     isDefault: false,
     ...nextValues,
+    defaultTemplates: DEFAULT_WHATSAPP_TEMPLATES,
     updatedById: saved.updatedById || actorUserId,
     updatedAt: saved.updatedAt ? saved.updatedAt.toISOString() : null,
+  };
+}
+
+function parseOptionalPercentField(raw: unknown, field: string): number | null {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return null;
+  }
+  const num = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(num) || num < 0 || num > 100) {
+    throw Object.assign(
+      new Error(`${field} deve estar entre 0% e 100% (ou vazio/null para herdar da empresa).`),
+      { status: 400 }
+    );
+  }
+  return Number(num.toFixed(2));
+}
+
+export async function listSellerCommissionOverrides(
+  companyId: string,
+  dbClient: PrismaClient = defaultPrisma
+) {
+  const [opCfg, sellers] = await Promise.all([
+    getCompanyOperationalConfig(companyId, dbClient),
+    dbClient.user.findMany({
+      where: {
+        companyId,
+        role: { in: ['SELLER', 'SELLER_MANAGER', 'VENDEDOR'] },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        active: true,
+        customVirginCommissionPercent: true,
+        customReboloCommissionPercent: true,
+        customCreditInstallmentCommissionPercent: true,
+      },
+      orderBy: [{ active: 'desc' }, { name: 'asc' }],
+    }),
+  ]);
+
+  return {
+    companyId,
+    companyDefaults: {
+      virginBookCommissionPercent: opCfg.virginBookCommissionPercent,
+      reboloBookCommissionPercent: opCfg.reboloBookCommissionPercent,
+      creditInstallmentCommissionPercent: opCfg.creditInstallmentCommissionPercent,
+    },
+    sellers: sellers.map((s) => ({
+      ...s,
+      effectiveVirginCommissionPercent:
+        s.customVirginCommissionPercent ?? opCfg.virginBookCommissionPercent,
+      effectiveReboloCommissionPercent:
+        s.customReboloCommissionPercent ?? opCfg.reboloBookCommissionPercent,
+      effectiveCreditInstallmentCommissionPercent:
+        s.customCreditInstallmentCommissionPercent ?? opCfg.creditInstallmentCommissionPercent,
+      hasCustomOverride:
+        s.customVirginCommissionPercent !== null ||
+        s.customReboloCommissionPercent !== null ||
+        s.customCreditInstallmentCommissionPercent !== null,
+    })),
+  };
+}
+
+export async function upsertSellerCommissionOverride(
+  params: {
+    companyId: string;
+    sellerId: string;
+    payload: {
+      customVirginCommissionPercent?: unknown;
+      customReboloCommissionPercent?: unknown;
+      customCreditInstallmentCommissionPercent?: unknown;
+      clear?: boolean;
+    };
+    actorUserId: string;
+    actorName: string;
+    actorRole: string;
+    ipAddress?: string | null;
+  },
+  dbClient: PrismaClient = defaultPrisma
+) {
+  const { companyId, sellerId, payload, actorUserId, actorName, actorRole, ipAddress } = params;
+
+  const existingSeller = await dbClient.user.findUnique({
+    where: { id: sellerId },
+    select: {
+      id: true,
+      name: true,
+      role: true,
+      companyId: true,
+      active: true,
+      customVirginCommissionPercent: true,
+      customReboloCommissionPercent: true,
+      customCreditInstallmentCommissionPercent: true,
+    },
+  });
+
+  if (!existingSeller) {
+    throw Object.assign(new Error('Vendedor não encontrado.'), { status: 404 });
+  }
+  if (existingSeller.companyId !== companyId) {
+    throw Object.assign(
+      new Error('Isolamento multi-tenant: vendedor pertence a outra empresa.'),
+      { status: 403 }
+    );
+  }
+  if (!['SELLER', 'SELLER_MANAGER', 'VENDEDOR'].includes(String(existingSeller.role).toUpperCase())) {
+    throw Object.assign(
+      new Error('Exceção individual de comissão só pode ser aplicada a vendedores.'),
+      { status: 400 }
+    );
+  }
+
+  const nextVirgin = payload?.clear
+    ? null
+    : payload?.customVirginCommissionPercent !== undefined
+      ? parseOptionalPercentField(payload.customVirginCommissionPercent, 'customVirginCommissionPercent')
+      : existingSeller.customVirginCommissionPercent;
+  const nextRebolo = payload?.clear
+    ? null
+    : payload?.customReboloCommissionPercent !== undefined
+      ? parseOptionalPercentField(payload.customReboloCommissionPercent, 'customReboloCommissionPercent')
+      : existingSeller.customReboloCommissionPercent;
+  const nextCredit = payload?.clear
+    ? null
+    : payload?.customCreditInstallmentCommissionPercent !== undefined
+      ? parseOptionalPercentField(
+          payload.customCreditInstallmentCommissionPercent,
+          'customCreditInstallmentCommissionPercent'
+        )
+      : existingSeller.customCreditInstallmentCommissionPercent;
+
+  const updated = await dbClient.user.update({
+    where: { id: sellerId },
+    data: {
+      customVirginCommissionPercent: nextVirgin,
+      customReboloCommissionPercent: nextRebolo,
+      customCreditInstallmentCommissionPercent: nextCredit,
+    },
+    select: {
+      id: true,
+      name: true,
+      role: true,
+      active: true,
+      companyId: true,
+      customVirginCommissionPercent: true,
+      customReboloCommissionPercent: true,
+      customCreditInstallmentCommissionPercent: true,
+    },
+  });
+
+  await recordOperationalAuditEvent(
+    {
+      companyId,
+      category: 'GOVERNANCE',
+      action: 'SELLER_COMMISSION_OVERRIDE_UPDATED',
+      entityType: 'USER',
+      entityReference: updated.name,
+      entityId: updated.id,
+      previousValues: {
+        customVirginCommissionPercent: existingSeller.customVirginCommissionPercent,
+        customReboloCommissionPercent: existingSeller.customReboloCommissionPercent,
+        customCreditInstallmentCommissionPercent: existingSeller.customCreditInstallmentCommissionPercent,
+      },
+      newValues: {
+        customVirginCommissionPercent: updated.customVirginCommissionPercent,
+        customReboloCommissionPercent: updated.customReboloCommissionPercent,
+        customCreditInstallmentCommissionPercent: updated.customCreditInstallmentCommissionPercent,
+      },
+      reason: 'Configuração de exceção individual de comissão para vendedor',
+      authorUserId: actorUserId,
+      authorName: actorName,
+      authorRole: actorRole,
+      ipAddress: ipAddress || null,
+    },
+    dbClient as any
+  );
+
+  const opCfg = await getCompanyOperationalConfig(companyId, dbClient);
+  return {
+    ...updated,
+    effectiveVirginCommissionPercent:
+      updated.customVirginCommissionPercent ?? opCfg.virginBookCommissionPercent,
+    effectiveReboloCommissionPercent:
+      updated.customReboloCommissionPercent ?? opCfg.reboloBookCommissionPercent,
+    effectiveCreditInstallmentCommissionPercent:
+      updated.customCreditInstallmentCommissionPercent ?? opCfg.creditInstallmentCommissionPercent,
+    hasCustomOverride:
+      updated.customVirginCommissionPercent !== null ||
+      updated.customReboloCommissionPercent !== null ||
+      updated.customCreditInstallmentCommissionPercent !== null,
   };
 }

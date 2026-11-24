@@ -673,6 +673,8 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                 0.0;
                         final method =
                             (sale['paymentMethod'] ?? 'CASH').toString();
+                        final hasPriceDivergence =
+                            sale['priceDivergenceAlert'] == true;
 
                         return Container(
                           width: 204,
@@ -809,6 +811,30 @@ class _VisaoFechamentoAdminState extends State<VisaoFechamentoAdmin> {
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
+                                    if (hasPriceDivergence) ...[
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.amberAccent
+                                              .withOpacity(0.16),
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                          border: Border.all(
+                                              color: Colors.amberAccent
+                                                  .withOpacity(0.6)),
+                                        ),
+                                        child: const Text(
+                                          'Divergência Preço/Desc.',
+                                          style: TextStyle(
+                                            color: Colors.amberAccent,
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),

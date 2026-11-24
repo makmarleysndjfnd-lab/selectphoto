@@ -6,9 +6,13 @@ import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../m
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
 import {
   resolveNewSaleCommission,
+  resolveNewCreditInstallmentCommission,
   resolveHistoricalSaleCommissionRate,
 } from '../utils/commission';
-import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
+import {
+  evaluateSalePricePolicy,
+  getCompanyOperationalConfig,
+} from '../services/companyOperationalConfigService';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import { getSaleNetCents, isSaleCancelled } from '../utils/saleNetHelper';
 import { createDebitAdvance } from '../services/staffAdvanceService';
@@ -103,6 +107,33 @@ async function emitSaleCreationOperationalAudit(req: AuthRequest, sale: any, raw
                 details: { finalValue: sale.value, discountPercentage: effectivePct },
               }
             : null,
+      });
+    }
+
+    if (sale.priceDivergenceAlert) {
+      await recordOperationalAuditEvent({
+        companyId,
+        category: 'DISCOUNT',
+        action: 'SALE_PRICE_DIVERGENCE_ALERT',
+        entityType: 'SALE',
+        entityReference: ref,
+        entityId: sale.id,
+        previousValues: null,
+        newValues: {
+          value: sale.value,
+          detail: sale.priceDivergenceDetail || null,
+        },
+        reason: sale.priceDivergenceDetail || 'Desconto excedeu o teto configurado em modo auditoria silenciosa',
+        authorUserId: req.user?.id || sale.sellerId,
+        authorName,
+        authorRole,
+        ipAddress,
+        reviewAlert: {
+          alertType: 'PRICE_DIVERGENCE_REVIEW',
+          severity: 'ATTENTION',
+          summary: sale.priceDivergenceDetail || 'Venda registrada abaixo do preço mínimo autorizado.',
+          details: { finalValue: sale.value, detail: sale.priceDivergenceDetail || null },
+        },
       });
     }
 
@@ -441,7 +472,13 @@ async function finalizeSaleWithReceipt(params: {
   return runSerializableTransaction(async (tx) => {
     const sellerUser = await tx.user.findUnique({
       where: { id: params.sellerId },
-      select: { sellerBlocked: true, sellerBlockedReason: true },
+      select: {
+        sellerBlocked: true,
+        sellerBlockedReason: true,
+        customVirginCommissionPercent: true,
+        customReboloCommissionPercent: true,
+        customCreditInstallmentCommissionPercent: true,
+      },
     });
     if (sellerUser?.sellerBlocked) {
       throw {
@@ -535,10 +572,24 @@ async function finalizeSaleWithReceipt(params: {
       }
 
       // Pertence ao mesmo vendedor e dados são equivalentes: anexar o comprovante à venda existente de forma atômica
-      const scenario0OpCfg = await getCompanyOperationalConfig(params.companyId, tx);
+      const scenario0OpCfg = await getCompanyOperationalConfig(params.companyId, tx as any);
+      const scenario0PricePolicy = evaluateSalePricePolicy({
+        saleValueReais: input.value,
+        operationalConfig: scenario0OpCfg,
+      });
+      if (scenario0PricePolicy.shouldBlock) {
+        throw {
+          status: 400,
+          code: 'DISCOUNT_LIMIT_EXCEEDED',
+          message:
+            scenario0PricePolicy.priceDivergenceDetail ||
+            'Desconto acima do máximo permitido pela empresa.',
+        };
+      }
       const scenario0Comm = resolveNewSaleCommission({
         bookStatus: client.bookStatus,
         operationalConfig: scenario0OpCfg,
+        sellerOverrides: sellerUser,
       });
       let updatedSale = await tx.sale.update({
         where: { id: existingSingle.id },
@@ -547,6 +598,9 @@ async function finalizeSaleWithReceipt(params: {
           status: 'PRONTO',
           hasCover: input.hasCover,
           receiptUrl: params.receiptUrl,
+          priceDivergenceAlert: existingSingle.priceDivergenceAlert || scenario0PricePolicy.priceDivergenceAlert,
+          priceDivergenceDetail:
+            existingSingle.priceDivergenceDetail || scenario0PricePolicy.priceDivergenceDetail,
           ...(existingSingle.appliedCommissionPercent == null
             ? { appliedCommissionPercent: scenario0Comm.percent }
             : {}),
@@ -622,10 +676,45 @@ async function finalizeSaleWithReceipt(params: {
     }
 
       const { payments: paymentsList, credit: creditInput, ...saleData } = input;
-      const scenario1OpCfg = await getCompanyOperationalConfig(params.companyId, tx);
+      const scenario1OpCfg = await getCompanyOperationalConfig(params.companyId, tx as any);
+      const scenario1PricePolicy = evaluateSalePricePolicy({
+        saleValueReais: input.value,
+        operationalConfig: scenario1OpCfg,
+      });
+      if (scenario1PricePolicy.shouldBlock) {
+        throw {
+          status: 400,
+          code: 'DISCOUNT_LIMIT_EXCEEDED',
+          message:
+            scenario1PricePolicy.priceDivergenceDetail ||
+            'Desconto acima do máximo permitido pela empresa.',
+        };
+      }
+      if (creditInput && !scenario1OpCfg.isDefault) {
+        if (creditInput.installmentsCount > scenario1OpCfg.creditMaxInstallments) {
+          throw {
+            status: 400,
+            code: 'CREDIT_MAX_INSTALLMENTS_EXCEEDED',
+            message: `Número máximo de parcelas permitido pela empresa é ${scenario1OpCfg.creditMaxInstallments}x.`,
+          };
+        }
+        const totalSaleCents = Math.round(input.value * 100);
+        const minDownCents = Math.max(
+          15000,
+          Math.round(totalSaleCents * (scenario1OpCfg.creditMinDownPaymentPercent / 100))
+        );
+        if (creditInput.downPaymentCents < minDownCents) {
+          throw {
+            status: 400,
+            code: 'CREDIT_MIN_DOWN_PAYMENT_NOT_MET',
+            message: `Entrada mínima configurada pela empresa é ${scenario1OpCfg.creditMinDownPaymentPercent}% (R$ ${(minDownCents / 100).toFixed(2)}).`,
+          };
+        }
+      }
       const scenario1Comm = resolveNewSaleCommission({
         bookStatus: client.bookStatus,
         operationalConfig: scenario1OpCfg,
+        sellerOverrides: sellerUser,
       });
       let sale = await tx.sale.create({
         data: {
@@ -641,6 +730,8 @@ async function finalizeSaleWithReceipt(params: {
           photographerRating: input.photographerRating,
           contactRating: input.contactRating,
           appliedCommissionPercent: scenario1Comm.percent,
+          priceDivergenceAlert: scenario1PricePolicy.priceDivergenceAlert,
+          priceDivergenceDetail: scenario1PricePolicy.priceDivergenceDetail,
           isLegacy: false,
         },
       });
@@ -702,9 +793,10 @@ async function finalizeSaleWithReceipt(params: {
         });
 
         const initialCommissionRate = scenario1Comm.rate;
-        const installmentCommissionRate = Number(
-          (scenario1OpCfg.creditInstallmentCommissionPercent / 100).toFixed(4)
-        );
+        const installmentCommissionRate = resolveNewCreditInstallmentCommission({
+          operationalConfig: scenario1OpCfg,
+          sellerOverrides: sellerUser,
+        }).rate;
 
         const agreement = await tx.creditAgreement.create({
           data: {
@@ -827,7 +919,13 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
 
     const sellerUser = await prisma.user.findUnique({
       where: { id: sellerId },
-      select: { sellerBlocked: true, sellerBlockedReason: true },
+      select: {
+        sellerBlocked: true,
+        sellerBlockedReason: true,
+        customVirginCommissionPercent: true,
+        customReboloCommissionPercent: true,
+        customCreditInstallmentCommissionPercent: true,
+      },
     });
     if (sellerUser?.sellerBlocked) {
       return res.status(403).json({
@@ -924,10 +1022,45 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       const { payments: postPayments, credit: postCredit, ...postSaleData } = input;
       const hasReceipt = Boolean(postSaleData.receiptUrl);
       const isConfirmedSale = hasReceipt || Boolean(postCredit);
-      const postOpCfg = await getCompanyOperationalConfig(companyId, tx);
+      const postOpCfg = await getCompanyOperationalConfig(companyId, tx as any);
+      const postPricePolicy = evaluateSalePricePolicy({
+        saleValueReais: input.value,
+        operationalConfig: postOpCfg,
+      });
+      if (postPricePolicy.shouldBlock) {
+        throw {
+          status: 400,
+          code: 'DISCOUNT_LIMIT_EXCEEDED',
+          message:
+            postPricePolicy.priceDivergenceDetail ||
+            'Desconto acima do máximo permitido pela empresa.',
+        };
+      }
+      if (postCredit && !postOpCfg.isDefault) {
+        if (postCredit.installmentsCount > postOpCfg.creditMaxInstallments) {
+          throw {
+            status: 400,
+            code: 'CREDIT_MAX_INSTALLMENTS_EXCEEDED',
+            message: `Número máximo de parcelas permitido pela empresa é ${postOpCfg.creditMaxInstallments}x.`,
+          };
+        }
+        const totalSaleCents = Math.round(input.value * 100);
+        const minDownCents = Math.max(
+          15000,
+          Math.round(totalSaleCents * (postOpCfg.creditMinDownPaymentPercent / 100))
+        );
+        if (postCredit.downPaymentCents < minDownCents) {
+          throw {
+            status: 400,
+            code: 'CREDIT_MIN_DOWN_PAYMENT_NOT_MET',
+            message: `Entrada mínima configurada pela empresa é ${postOpCfg.creditMinDownPaymentPercent}% (R$ ${(minDownCents / 100).toFixed(2)}).`,
+          };
+        }
+      }
       const postSaleComm = resolveNewSaleCommission({
         bookStatus: client.bookStatus,
         operationalConfig: postOpCfg,
+        sellerOverrides: sellerUser,
       });
       let sale = await tx.sale.create({
         data: {
@@ -936,6 +1069,8 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
           status: isConfirmedSale ? 'PRONTO' : 'PENDING_RECEIPT',
           paymentStatus: postCredit ? 'PARTIALLY_PAID' : (hasReceipt ? 'PAID' : 'PENDING_RECEIPT'),
           appliedCommissionPercent: postSaleComm.percent,
+          priceDivergenceAlert: postPricePolicy.priceDivergenceAlert,
+          priceDivergenceDetail: postPricePolicy.priceDivergenceDetail,
           companyId,
         },
       });
@@ -1031,9 +1166,10 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
         });
 
         const initialCommissionRate = postSaleComm.rate;
-        const installmentCommissionRate = Number(
-          (postOpCfg.creditInstallmentCommissionPercent / 100).toFixed(4)
-        );
+        const installmentCommissionRate = resolveNewCreditInstallmentCommission({
+          operationalConfig: postOpCfg,
+          sellerOverrides: sellerUser,
+        }).rate;
 
         const agreement = await tx.creditAgreement.create({
           data: {
@@ -1540,10 +1676,21 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
           ? 'REBOLO_SOLD'
           : 'SOLD';
 
-      const receiptOpCfg = await getCompanyOperationalConfig(companyId, tx);
+      const [receiptOpCfg, receiptSeller] = await Promise.all([
+        getCompanyOperationalConfig(companyId, tx as any),
+        tx.user.findUnique({
+          where: { id: sale.sellerId },
+          select: {
+            customVirginCommissionPercent: true,
+            customReboloCommissionPercent: true,
+            customCreditInstallmentCommissionPercent: true,
+          },
+        }),
+      ]);
       const receiptComm = resolveNewSaleCommission({
         bookStatus: client?.bookStatus,
         operationalConfig: receiptOpCfg,
+        sellerOverrides: receiptSeller,
       });
       let updated = await tx.sale.update({
         where: { id },

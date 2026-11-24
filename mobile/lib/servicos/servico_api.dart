@@ -1471,6 +1471,88 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getSellerCommissionOverrides({
+    String? companyId,
+  }) async {
+    try {
+      final path = (companyId != null && companyId.trim().isNotEmpty)
+          ? '/superadmin/companies/$companyId/operational-config/seller-overrides'
+          : '/company/operational-config/seller-overrides';
+      final resp = await _dio.get(path);
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveSellerCommissionOverride({
+    required String sellerId,
+    double? customVirginCommissionPercent,
+    double? customReboloCommissionPercent,
+    double? customCreditInstallmentCommissionPercent,
+    bool clear = false,
+    String? companyId,
+  }) async {
+    try {
+      final path = (companyId != null && companyId.trim().isNotEmpty)
+          ? '/superadmin/companies/$companyId/operational-config/seller-overrides/$sellerId'
+          : '/company/operational-config/seller-overrides/$sellerId';
+      final resp = await _dio.put(path, data: {
+        'customVirginCommissionPercent': customVirginCommissionPercent,
+        'customReboloCommissionPercent': customReboloCommissionPercent,
+        'customCreditInstallmentCommissionPercent':
+            customCreditInstallmentCommissionPercent,
+        'clear': clear,
+      });
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getCompanyWhatsAppTemplates() async {
+    try {
+      final resp = await _dio.get('/company/whatsapp-templates');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  static String renderWhatsAppTemplate(
+    String? template, {
+    String? cliente,
+    String? valor,
+    String? vencimento,
+    String? pix,
+    String? empresa,
+    String fallback = '',
+  }) {
+    final source = (template != null && template.trim().isNotEmpty)
+        ? template.trim()
+        : fallback;
+    if (source.isEmpty) return '';
+
+    String clean(String? v, String def) {
+      final s = (v ?? '').trim();
+      return s.isNotEmpty ? s : def;
+    }
+
+    final map = <String, String>{
+      '{cliente}': clean(cliente, 'Cliente'),
+      '{valor}': clean(valor, 'R\$ 0,00'),
+      '{vencimento}': clean(vencimento, 'a combinar'),
+      '{pix}': clean(pix, 'solicite com a equipe'),
+      '{empresa}': clean(empresa, 'Lumora'),
+    };
+
+    return source.replaceAllMapped(
+      RegExp(r'\{(cliente|valor|vencimento|pix|empresa)\}',
+          caseSensitive: false),
+      (m) => map[m.group(0)!.toLowerCase()] ?? m.group(0)!,
+    );
+  }
+
   // Roteiro Inteligente — clusters de prospectos dentro de 300km
   Future<Map<String, dynamic>> getSmartRoute() async {
     try {

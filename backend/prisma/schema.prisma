@@ -145,6 +145,9 @@ model User {
   rg                      String?
   usesOwnCar              Boolean                        @default(false)
   photographerCode        String?
+  customVirginCommissionPercent            Float?
+  customReboloCommissionPercent            Float?
+  customCreditInstallmentCommissionPercent Float?
   personalAppointments    PersonalAppointment[]
   salesType               String?
   company                 Company?                       @relation(fields: [companyId], references: [id])
@@ -417,6 +420,8 @@ model Sale {
   cancelledAt        DateTime?
   cancelReason       String?
   appliedCommissionPercent Float?
+  priceDivergenceAlert     Boolean  @default(false)
+  priceDivergenceDetail    String?  @db.Text
   company            Company?         @relation(fields: [companyId], references: [id])
   client             Client           @relation(fields: [clientId], references: [id])
   seller             User             @relation(fields: [sellerId], references: [id])
@@ -2030,6 +2035,22 @@ model CompanyOperationalConfig {
   qrShowBatchAndBookCode           Boolean  @default(true)
   qrShowRatingForm                 Boolean  @default(true)
   qrShowFooterText                 Boolean  @default(true)
+  photographerCommissionType       String   @default("FIXED_PER_BOOK") // FIXED_PER_BOOK | PERCENT_OF_SALE
+  photographerCommissionValue      Float    @default(0)
+  defaultBookPriceCents            Int?
+  maxSellerDiscountPercent         Float    @default(15.0)
+  discountPolicyMode               String   @default("SILENT_AUDIT_ALERT") // SILENT_AUDIT_ALERT | HARD_BLOCK
+  creditMinDownPaymentPercent      Float    @default(20.0)
+  creditMaxInstallments            Int      @default(6)
+  creditLateInterestMonthlyPercent Float    @default(2.0)
+  creditLateFinePercent            Float    @default(2.0)
+  creditDaysToCollectionQueue      Int      @default(5)
+  creditDaysToSerasaEligible       Int      @default(30)
+  maxBatchReturnDays               Int      @default(15)
+  maxSimultaneousBooksPerSeller    Int?
+  whatsappCreditCollectionTemplate String?  @db.Text
+  whatsappAdvanceNoticeTemplate    String?  @db.Text
+  whatsappPostSaleTemplate         String?  @db.Text
   updatedById                      String?
   updatedAt                        DateTime @updatedAt
   createdAt                        DateTime @default(now())

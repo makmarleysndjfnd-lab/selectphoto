@@ -28,6 +28,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   Map<String, dynamic>? _selectedSellerPortfolio;
   Map<String, dynamic>? _asaasConfig;
   List<dynamic> _asaasDuplicateAlerts = [];
+  Map<String, dynamic> _whatsappTemplates = {};
 
   // Fechamentos Mensais (10%)
   Map<String, dynamic>? _closingConfig;
@@ -138,6 +139,9 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
       final closingConfigFuture = _api
           .getCreditClosingConfig()
           .catchError((_) => <String, dynamic>{});
+      final whatsappTplFuture = _api
+          .getCompanyWhatsAppTemplates()
+          .catchError((_) => <String, dynamic>{});
 
       final results = await Future.wait([
         overviewFuture,
@@ -147,6 +151,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         asaasAlertsFuture,
         sellerPortfolioFuture,
         closingConfigFuture,
+        whatsappTplFuture,
       ]);
 
       if (mounted) {
@@ -160,6 +165,10 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           final cfg = results[6] as Map<String, dynamic>;
           if (cfg.isNotEmpty) {
             _closingConfig = cfg;
+          }
+          final waTpl = results[7] as Map<String, dynamic>;
+          if (waTpl.isNotEmpty) {
+            _whatsappTemplates = waTpl;
           }
           _isLoading = false;
         });
@@ -3028,8 +3037,40 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         agreement['periodicity']?.toString() == 'BIWEEKLY' ? 'quinzenal' : 'mensal';
     final totalSaleStr = currencyFormat.format(totalSale);
 
+    final customCreditTpl =
+        _whatsappTemplates['whatsappCreditCollectionTemplate']?.toString().trim();
+    final companyPix = _whatsappTemplates['companyPixKey']?.toString().trim();
+
     String defaultMessage = '';
-    if (installment != null) {
+    if (customCreditTpl != null && customCreditTpl.isNotEmpty) {
+      if (installment != null) {
+        final amount = ((installment['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+        final due = DateTime.tryParse(installment['dueDate'] ?? '');
+        final dueStr = due != null ? dateFormat.format(due) : 'em aberto';
+        defaultMessage = ApiService.renderWhatsAppTemplate(
+          customCreditTpl,
+          cliente: buyerName,
+          valor: currencyFormat.format(amount),
+          vencimento: dueStr,
+          pix: companyPix,
+          empresa: companyLabel,
+        );
+      } else {
+        final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ?? 0.0) > 0
+            ? ((agreement['remainingPrincipalCents'] as num).toDouble() / 100.0)
+            : ((agreement['remainingPrincipal'] as num?)?.toDouble() ?? 0.0);
+        final nextDue = DateTime.tryParse(agreement['nextDueDate']?.toString() ?? '');
+        final dueStr = nextDue != null ? dateFormat.format(nextDue) : 'em aberto';
+        defaultMessage = ApiService.renderWhatsAppTemplate(
+          customCreditTpl,
+          cliente: buyerName,
+          valor: currencyFormat.format(remaining),
+          vencimento: dueStr,
+          pix: companyPix,
+          empresa: companyLabel,
+        );
+      }
+    } else if (installment != null) {
       final instNum = installment['installmentNumber']?.toString() ?? '1';
       final amount = ((installment['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
       final due = DateTime.tryParse(installment['dueDate'] ?? '');
