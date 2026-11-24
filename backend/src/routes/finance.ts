@@ -1,7 +1,11 @@
 import express, { Response } from 'express';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
-import { resolveSellerCommissionRate } from '../utils/commission';
+import {
+  resolveSellerCommissionRate,
+  resolveHistoricalSaleCommissionRate,
+} from '../utils/commission';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import { getSaleNetCents, getSaleNetValue, isSaleCancelled } from '../utils/saleNetHelper';
 
 const router = express.Router();
@@ -77,18 +81,22 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         date: true,
         sellerId: true,
         paymentMethod: true,
+        appliedCommissionPercent: true,
         seller: { select: { name: true, usesOwnCar: true } },
-        client: { select: { name: true } },
+        client: { select: { name: true, bookStatus: true } },
         creditAgreement: {
           select: {
             id: true,
             status: true,
             totalSaleCents: true,
             downPaymentCents: true,
+            initialCommissionRate: true,
           },
         },
       },
     });
+
+    const financeOpCfg = userCompanyId ? await getCompanyOperationalConfig(userCompanyId) : null;
 
     let contractedRevenueCents = 0;
     let cashSalesContractedCents = 0;
@@ -115,7 +123,10 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         contractedRevenueCents += netSaleCents;
         cashSalesContractedCents += netSaleCents;
         cashSalesReceivedCents += netSaleCents;
-        const rate = resolveSellerCommissionRate(s.seller);
+        const rate = resolveHistoricalSaleCommissionRate({
+          sale: s,
+          operationalConfig: financeOpCfg,
+        });
         cashSalesCommissionsCents += Math.round(netSaleCents * rate);
       }
     }

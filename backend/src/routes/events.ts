@@ -337,9 +337,10 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     // Configuração dinâmica da busca de Eventos IA por empresa
     const searchConfig = await getCompanyEventSearchConfig(companyId);
     const cacheKey = `${lowerCity}:${companyId || 'global'}:${searchConfig.configHash}`;
+    const cacheTtlMs = Math.max(0, searchConfig.cacheTtlDays) * 24 * 3600 * 1000;
 
     // ── 1. Verificação de Cache do Scout por Cidade ───────────────────────────
-    const cachedEntry = cityScoutCache.get(cacheKey);
+    const cachedEntry = cacheTtlMs > 0 ? cityScoutCache.get(cacheKey) : undefined;
     if (cachedEntry && cachedEntry.expiresAt > Date.now() && !forceRefresh) {
       if (companyId) {
         await recordApiUsage({
@@ -532,14 +533,17 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         ]
       };
 
-      cityScoutCache.set(cacheKey, {
-        data: mockResult,
-        expiresAt: Date.now() + 24 * 3600 * 1000,
-      });
+      if (cacheTtlMs > 0) {
+        cityScoutCache.set(cacheKey, {
+          data: mockResult,
+          expiresAt: Date.now() + cacheTtlMs,
+        });
+      }
 
       return res.json({
         ...mockResult,
         configHash: searchConfig.configHash,
+        cacheTtlDays: searchConfig.cacheTtlDays,
         source: 'EXTERNAL',
         cached: false,
       });
@@ -680,7 +684,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     try {
       result = JSON.parse(cleanJson);
       if (result && Array.isArray(result.events)) {
-        result.events = result.events.slice(0, 30);
+        result.events = result.events.slice(0, searchConfig.maxResultsPerSearch);
         for (let ev of result.events) {
           ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
         }
@@ -693,10 +697,12 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     try {
-      cityScoutCache.set(cacheKey, {
-        data: result,
-        expiresAt: Date.now() + 24 * 3600 * 1000,
-      });
+      if (cacheTtlMs > 0) {
+        cityScoutCache.set(cacheKey, {
+          data: result,
+          expiresAt: Date.now() + cacheTtlMs,
+        });
+      }
     } catch (cacheErr: any) {
       console.warn('[EVENTS] Erro ao gravar cache do Scout:', cacheErr?.message);
     }
@@ -704,6 +710,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     res.json({
       ...result,
       configHash: searchConfig.configHash,
+      cacheTtlDays: searchConfig.cacheTtlDays,
       source: 'EXTERNAL',
       cached: false,
     });
@@ -808,13 +815,13 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     const radarCacheKey = `${stateUF}:${companyId || 'global'}:${searchConfig.configHash.slice(0, 12)}`;
 
     // ── 1. Verificação de Cache do Radar Estadual ────────────────────────────
-    if (!forceRefresh) {
+    if (!forceRefresh && searchConfig.cacheTtlDays > 0) {
       const cached = await prisma.stateRadarCache.findUnique({
         where: { state: radarCacheKey }
       });
       if (cached) {
         const ageInDays = (new Date().getTime() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
-        if (ageInDays < 10) {
+        if (ageInDays < searchConfig.cacheTtlDays) {
           resultData = cached.data;
         }
       }
@@ -1017,6 +1024,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       return res.json({
         ...mockRadar,
         configHash: searchConfig.configHash,
+        cacheTtlDays: searchConfig.cacheTtlDays,
         source: 'EXTERNAL',
         cached: false,
       });
@@ -1162,6 +1170,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     res.json({
       ...((resultData as Record<string, any>) || { state: stateUF, cities: [] }),
       configHash: searchConfig.configHash,
+      cacheTtlDays: searchConfig.cacheTtlDays,
       source: 'EXTERNAL',
       cached: false,
     });

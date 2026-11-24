@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import { prisma as defaultPrisma, PrismaClient, Prisma } from './prisma';
 import { recordOperationalAuditEvent } from './operationalAuditService';
 import { resolveCompanyDisplayName } from '../constants/companyClassification';
+import {
+  CompanyOperationalConfigValues,
+  DEFAULT_COMPANY_OPERATIONAL_CONFIG,
+  normalizeCompanyOperationalConfigValues,
+} from './companyOperationalConfigService';
 
 export type BuyerConfirmationStatus =
   | 'PENDING'
@@ -198,18 +203,57 @@ function parseOptionalStarRating(
   return n;
 }
 
+export interface QrReceiptDisplayFlags {
+  showLogo: boolean;
+  showTradeName: boolean;
+  showSacContact: boolean;
+  showSellerName: boolean;
+  showPhotographerName: boolean;
+  showPaymentMethod: boolean;
+  showSaleValue: boolean;
+  showInstallmentSummary: boolean;
+  showBatchAndBookCode: boolean;
+  showRatingForm: boolean;
+  showFooterText: boolean;
+}
+
+export function extractQrDisplayFlags(
+  opConfig?: Partial<CompanyOperationalConfigValues> | null
+): QrReceiptDisplayFlags {
+  const cfg = normalizeCompanyOperationalConfigValues(opConfig || {}, false);
+  return {
+    showLogo: cfg.qrShowLogo,
+    showTradeName: cfg.qrShowTradeName,
+    showSacContact: cfg.qrShowSacContact,
+    showSellerName: cfg.qrShowSellerName,
+    showPhotographerName: cfg.qrShowPhotographerName,
+    showPaymentMethod: cfg.qrShowPaymentMethod,
+    showSaleValue: cfg.qrShowSaleValue,
+    showInstallmentSummary: cfg.qrShowInstallmentSummary,
+    showBatchAndBookCode: cfg.qrShowBatchAndBookCode,
+    showRatingForm: cfg.qrShowRatingForm,
+    showFooterText: cfg.qrShowFooterText,
+  };
+}
+
 export interface BuyerConfirmationReceipt {
   documentTitle: string;
-  referenceCode: string;
+  referenceCode?: string;
+  batchName?: string | null;
   issuedAt: string;
-  companyName: string;
+  companyName?: string;
+  companyLogoUrl?: string | null;
+  sacPhone?: string | null;
+  sacWhatsapp?: string | null;
+  sellerName?: string | null;
+  photographerName?: string | null;
   clientName: string;
   product: string;
   city: string;
-  reportedTotalBrl: string;
-  reportedPaidBrl: string;
-  reportedPaymentMethod: string;
-  reportedPaymentMethodLabel: string;
+  reportedTotalBrl?: string;
+  reportedPaidBrl?: string;
+  reportedPaymentMethod?: string;
+  reportedPaymentMethodLabel?: string;
   isCredit: boolean;
   creditDetails?: {
     reportedRemainingBrl: string;
@@ -221,16 +265,21 @@ export interface BuyerConfirmationReceipt {
   contactRating?: number | null;
   photographerRating?: number | null;
   notes?: string | null;
-  disclaimer: string;
+  footerText?: string | null;
+  disclaimer?: string;
+  qrConfig?: QrReceiptDisplayFlags;
 }
 
 export function buildConfirmationReceipt(params: {
   referenceCode: string;
+  batchName?: string | null;
   issuedAt: Date;
   companyName: string;
   clientName: string;
   product: string;
   city: string;
+  sellerName?: string | null;
+  photographerName?: string | null;
   reportedTotalCents: number;
   reportedPaidCents: number;
   reportedPaymentMethod: string;
@@ -242,6 +291,7 @@ export function buildConfirmationReceipt(params: {
   contactRating?: number | null;
   photographerRating?: number | null;
   notes?: string | null;
+  opConfig?: Partial<CompanyOperationalConfigValues> | null;
 }): BuyerConfirmationReceipt {
   const formatBrl = (cents: number) =>
     (cents / 100).toLocaleString('pt-BR', {
@@ -249,44 +299,82 @@ export function buildConfirmationReceipt(params: {
       currency: 'BRL',
     });
 
+  const cfg = normalizeCompanyOperationalConfigValues(
+    params.opConfig || DEFAULT_COMPANY_OPERATIONAL_CONFIG,
+    false
+  );
+  const qrConfig = extractQrDisplayFlags(cfg);
+
   const isCredit =
     Boolean(params.reportedInstallmentsCount && params.reportedInstallmentsCount > 1) ||
     normalizePaymentMethodForComparison(params.reportedPaymentMethod) === 'CREDIARIO';
 
-  return {
+  const receipt: BuyerConfirmationReceipt = {
     documentTitle: 'Registro de conferência do pedido — sem valor fiscal',
-    referenceCode: params.referenceCode,
     issuedAt: params.issuedAt.toISOString(),
-    companyName: params.companyName,
     clientName: params.clientName,
     product: params.product,
     city: params.city,
-    reportedTotalBrl: formatBrl(params.reportedTotalCents),
-    reportedPaidBrl: formatBrl(params.reportedPaidCents),
-    reportedPaymentMethod: params.reportedPaymentMethod,
-    reportedPaymentMethodLabel: translatePaymentMethodPt(params.reportedPaymentMethod),
     isCredit,
-    creditDetails: isCredit
-      ? {
-          reportedRemainingBrl: formatBrl(params.reportedRemainingCents || 0),
-          reportedInstallmentsCount: params.reportedInstallmentsCount || 1,
-          reportedInstallmentBrl: formatBrl(params.reportedInstallmentCents || 0),
-        }
-      : undefined,
-    reportedPayments: Array.isArray(params.reportedPayments)
-      ? params.reportedPayments.map((p) => ({
-          method: p.method,
-          methodLabel: translatePaymentMethodPt(p.method),
-          amountBrl: formatBrl(p.amountCents || Math.round(Number(p.amount || 0) * 100)),
-        }))
-      : undefined,
-    serviceRating: params.serviceRating ?? null,
-    contactRating: params.contactRating ?? null,
-    photographerRating: params.photographerRating ?? null,
     notes: params.notes || null,
-    disclaimer:
-      'Documento emitido exclusivamente para fins de conferência operacional entre cliente e empresa. Não possui valor fiscal nem quita obrigações tributárias.',
+    qrConfig,
   };
+
+  if (qrConfig.showBatchAndBookCode) {
+    receipt.referenceCode = params.referenceCode;
+    receipt.batchName = params.batchName || null;
+  }
+  if (qrConfig.showTradeName) {
+    receipt.companyName = params.companyName;
+  }
+  if (qrConfig.showLogo && cfg.companyLogoUrl) {
+    receipt.companyLogoUrl = cfg.companyLogoUrl;
+  }
+  if (qrConfig.showSacContact) {
+    receipt.sacPhone = cfg.sacPhone || null;
+    receipt.sacWhatsapp = cfg.sacWhatsapp || null;
+  }
+  if (qrConfig.showSellerName) {
+    receipt.sellerName = params.sellerName || null;
+  }
+  if (qrConfig.showPhotographerName) {
+    receipt.photographerName = params.photographerName || null;
+  }
+  if (qrConfig.showSaleValue) {
+    receipt.reportedTotalBrl = formatBrl(params.reportedTotalCents);
+    receipt.reportedPaidBrl = formatBrl(params.reportedPaidCents);
+  }
+  if (qrConfig.showPaymentMethod) {
+    receipt.reportedPaymentMethod = params.reportedPaymentMethod;
+    receipt.reportedPaymentMethodLabel = translatePaymentMethodPt(params.reportedPaymentMethod);
+    if (Array.isArray(params.reportedPayments)) {
+      receipt.reportedPayments = params.reportedPayments.map((p) => ({
+        method: p.method,
+        methodLabel: translatePaymentMethodPt(p.method),
+        amountBrl: formatBrl(p.amountCents || Math.round(Number(p.amount || 0) * 100)),
+      }));
+    }
+  }
+  if (qrConfig.showInstallmentSummary && isCredit) {
+    receipt.creditDetails = {
+      reportedRemainingBrl: formatBrl(params.reportedRemainingCents || 0),
+      reportedInstallmentsCount: params.reportedInstallmentsCount || 1,
+      reportedInstallmentBrl: formatBrl(params.reportedInstallmentCents || 0),
+    };
+  }
+  if (qrConfig.showRatingForm) {
+    receipt.serviceRating = params.serviceRating ?? null;
+    receipt.contactRating = params.contactRating ?? null;
+    receipt.photographerRating = params.photographerRating ?? null;
+  }
+  if (qrConfig.showFooterText) {
+    receipt.footerText = cfg.qrReceiptFooterText || null;
+    receipt.disclaimer =
+      cfg.qrReceiptFooterText ||
+      'Documento emitido exclusivamente para fins de conferência operacional entre cliente e empresa. Não possui valor fiscal nem quita obrigações tributárias.';
+  }
+
+  return receipt;
 }
 
 /**
@@ -814,7 +902,7 @@ export async function getPublicBuyerConfirmationPrompt(
     const record = await dbClient.buyerPurchaseConfirmation.findUnique({
       where: { tokenHash },
       include: {
-        company: { select: { name: true, tradeName: true } },
+        company: { select: { name: true, tradeName: true, operationalConfig: true } },
         sale: {
           select: {
             fichaNumber: true,
@@ -830,6 +918,7 @@ export async function getPublicBuyerConfirmationPrompt(
                 photographer: { select: { name: true } },
                 batch: {
                   select: {
+                    name: true,
                     photographer: { select: { name: true } },
                   },
                 },
@@ -895,21 +984,35 @@ export async function getPublicBuyerConfirmationPrompt(
       record.sale?.client?.photographer?.name?.trim() ||
       record.sale?.client?.batch?.photographer?.name?.trim() ||
       null;
+    const batchName = record.sale?.client?.batch?.name?.trim() || null;
+
+    const opCfg = normalizeCompanyOperationalConfigValues(
+      (record.company as any)?.operationalConfig || DEFAULT_COMPANY_OPERATIONAL_CONFIG,
+      false
+    );
+    const qrConfig = extractQrDisplayFlags(opCfg);
+    const resolvedCompanyName = resolveCompanyDisplayName(record.company, 'Empresa Vendedora');
 
     // ESTRITAMENTE SEM VALORES DO VENDEDOR!
     return {
       saleId: record.saleId,
-      companyName: resolveCompanyDisplayName(record.company, 'Empresa Vendedora'),
-      fichaCode,
+      companyName: qrConfig.showTradeName ? resolvedCompanyName : null,
+      companyLogoUrl: qrConfig.showLogo ? opCfg.companyLogoUrl : null,
+      sacPhone: qrConfig.showSacContact ? opCfg.sacPhone : null,
+      sacWhatsapp: qrConfig.showSacContact ? opCfg.sacWhatsapp : null,
+      footerText: qrConfig.showFooterText ? opCfg.qrReceiptFooterText : null,
+      fichaCode: qrConfig.showBatchAndBookCode ? fichaCode : null,
+      batchName: qrConfig.showBatchAndBookCode ? batchName : null,
       buyerFirstName: firstName,
-      sellerName,
+      sellerName: qrConfig.showSellerName ? sellerName : null,
       contactName,
-      photographerName,
+      photographerName: qrConfig.showPhotographerName ? photographerName : null,
       city: record.sale?.city || '',
       product: record.sale?.product || 'Mídias fotográficas',
       conditionsVersion: record.conditionsVersion,
       requiresIdentityCheck: Boolean(record.expectedPhoneLast4),
       isCreditAgreement,
+      qrConfig,
       identityPrompt:
         'Para confirmar sua identidade, informe os 4 últimos dígitos do seu telefone (ou CPF) cadastrado na ficha.',
       fieldsToFill: [
@@ -1030,7 +1133,7 @@ export async function submitPublicBuyerConfirmation(
     const record = await tx.buyerPurchaseConfirmation.findUniqueOrThrow({
       where: { id: locked[0].id },
       include: {
-        company: { select: { name: true, tradeName: true } },
+        company: { select: { name: true, tradeName: true, operationalConfig: true } },
         sale: {
           include: {
             seller: { select: { id: true, name: true } },
@@ -1094,6 +1197,13 @@ export async function submitPublicBuyerConfirmation(
       'Empresa Vendedora'
     );
     const clientDisplayName = record.sale?.client?.name || 'Cliente';
+    const submitOpConfig = (record.company as any)?.operationalConfig || null;
+    const submitSellerName = record.sale?.seller?.name?.trim() || null;
+    const submitPhotographerName =
+      record.sale?.client?.photographer?.name?.trim() ||
+      record.sale?.client?.batch?.photographer?.name?.trim() ||
+      null;
+    const submitBatchName = record.sale?.client?.batch?.name?.trim() || null;
 
     // Idempotência: se já foi respondido, verifica se é o mesmo envio
     if (record.usedAt || record.status === 'CONFIRMED' || record.status === 'UNDER_REVIEW') {
@@ -1103,11 +1213,14 @@ export async function submitPublicBuyerConfirmation(
         // Reenvio idêntico seguro (double submit ou refresh)
         const receipt = buildConfirmationReceipt({
           referenceCode: ref,
+          batchName: submitBatchName,
           issuedAt: record.usedAt || new Date(),
           companyName: companyDisplayName,
           clientName: clientDisplayName,
           product: record.sale?.product || 'Mídias fotográficas',
           city: record.sale?.city || '',
+          sellerName: submitSellerName,
+          photographerName: submitPhotographerName,
           reportedTotalCents: record.reportedTotalCents || 0,
           reportedPaidCents: record.reportedPaidCents || 0,
           reportedPaymentMethod: record.reportedPaymentMethod || 'CASH',
@@ -1119,6 +1232,7 @@ export async function submitPublicBuyerConfirmation(
           contactRating: record.contactRating,
           photographerRating: record.photographerRating,
           notes: record.reportedNotes,
+          opConfig: submitOpConfig,
         });
 
         return {
@@ -1648,11 +1762,14 @@ export async function submitPublicBuyerConfirmation(
     // Registro de conferência do pedido — sem valor fiscal
     const receipt = buildConfirmationReceipt({
       referenceCode: ref,
+      batchName: submitBatchName,
       issuedAt: now,
       companyName: companyDisplayName,
       clientName: clientDisplayName,
       product: record.sale?.product || 'Mídias fotográficas',
       city: record.sale?.city || '',
+      sellerName: submitSellerName,
+      photographerName: submitPhotographerName,
       reportedTotalCents,
       reportedPaidCents,
       reportedPaymentMethod: rawReportedMethod,
@@ -1664,6 +1781,7 @@ export async function submitPublicBuyerConfirmation(
       contactRating: updated.contactRating,
       photographerRating: updated.photographerRating,
       notes: params.notes,
+      opConfig: submitOpConfig,
     });
 
     // RESPOSTA IDÊNTICA PARA VALORES COINCIDENTES E DIVERGENTES:
@@ -2294,12 +2412,37 @@ export function renderPublicBuyerConfirmationHtml(
     ? `Fotógrafo (${promptData.photographerName})`
     : 'Fotógrafo (1 a 5 estrelas)';
 
+  const qrCfg = promptData.qrConfig || {
+    showLogo: true,
+    showTradeName: true,
+    showSacContact: true,
+    showSellerName: true,
+    showPhotographerName: true,
+    showPaymentMethod: true,
+    showSaleValue: true,
+    showInstallmentSummary: true,
+    showBatchAndBookCode: true,
+    showRatingForm: true,
+    showFooterText: true,
+  };
+  const headerCompanyTitle =
+    qrCfg.showTradeName && promptData.companyName
+      ? esc(promptData.companyName)
+      : 'Conferência de Compra';
+  const showSacBlock = Boolean(
+    qrCfg.showSacContact && (promptData.sacPhone || promptData.sacWhatsapp)
+  );
+  const logoHtml =
+    qrCfg.showLogo && promptData.companyLogoUrl
+      ? `<img src="${esc(promptData.companyLogoUrl)}" alt="Logo" style="max-height:52px; max-width:140px; border-radius:8px; object-fit:contain; margin-bottom:10px;" />`
+      : '';
+
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Confirmação de Compra — ${esc(promptData.companyName)}</title>
+  <title>${headerCompanyTitle}</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 12px; display: flex; justify-content: center; }
     .container { max-width: 460px; width: 100%; margin: 8px auto; }
@@ -2333,15 +2476,19 @@ export function renderPublicBuyerConfirmationHtml(
 <body>
   <div class="container">
     <div class="card" id="formCard">
+      ${logoHtml}
       <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <h1>${esc(promptData.companyName)}</h1>
+        <h1>${headerCompanyTitle}</h1>
         <span class="badge">Conferência</span>
       </div>
-      <p>Olá, <strong>${esc(promptData.buyerFirstName)}</strong>! Confirme os valores combinados com <strong>${esc(promptData.companyName)}</strong>:</p>
+      <p>Olá, <strong>${esc(promptData.buyerFirstName)}</strong>! Confirme os valores combinados${qrCfg.showTradeName && promptData.companyName ? ` com <strong>${esc(promptData.companyName)}</strong>` : ''}:</p>
       
       <div class="meta">
-        <div>Ficha: <strong>${esc(promptData.fichaCode)}</strong> • Produto: <strong>${esc(promptData.product)}</strong></div>
-        ${promptData.city ? `<div>Cidade: <strong>${esc(promptData.city)}</strong></div>` : ''}
+        ${qrCfg.showBatchAndBookCode ? `<div>Ficha: <strong>${esc(promptData.fichaCode || '---')}</strong>${promptData.batchName ? ` • Lote: <strong>${esc(promptData.batchName)}</strong>` : ''}</div>` : ''}
+        <div>Produto: <strong>${esc(promptData.product)}</strong>${promptData.city ? ` • Cidade: <strong>${esc(promptData.city)}</strong>` : ''}</div>
+        ${qrCfg.showSellerName && promptData.sellerName ? `<div>Vendedor: <strong>${esc(promptData.sellerName)}</strong></div>` : ''}
+        ${qrCfg.showPhotographerName && promptData.photographerName ? `<div>Fotógrafo: <strong>${esc(promptData.photographerName)}</strong></div>` : ''}
+        ${showSacBlock ? `<div>SAC: <strong>${esc([promptData.sacPhone, promptData.sacWhatsapp ? `WhatsApp: ${promptData.sacWhatsapp}` : ''].filter(Boolean).join(' • '))}</strong></div>` : ''}
       </div>
 
       <form id="confirmForm">
@@ -2385,21 +2532,25 @@ export function renderPublicBuyerConfirmationHtml(
           <input id="reportedInstallmentValue" name="reportedInstallmentValue" type="number" step="0.01" min="0" placeholder="Ex: 100.00" />
         </div>
 
-        ${renderStarRatingGroup(
-          'serviceRating',
-          sellerRatingTitle,
-          'Avalie o atendimento recebido durante a venda.'
-        )}
-        ${renderStarRatingGroup(
-          'contactRating',
-          contactRatingTitle,
-          'Avalie o contato e agendamento prévio da visita.'
-        )}
-        ${renderStarRatingGroup(
-          'photographerRating',
-          photographerRatingTitle,
-          'Avalie a sessão fotográfica realizada.'
-        )}
+        ${
+          qrCfg.showRatingForm
+            ? `${renderStarRatingGroup(
+                'serviceRating',
+                sellerRatingTitle,
+                'Avalie o atendimento recebido durante a venda.'
+              )}
+              ${renderStarRatingGroup(
+                'contactRating',
+                contactRatingTitle,
+                'Avalie o contato e agendamento prévio da visita.'
+              )}
+              ${renderStarRatingGroup(
+                'photographerRating',
+                photographerRatingTitle,
+                'Avalie a sessão fotográfica realizada.'
+              )}`
+            : ''
+        }
 
         <button type="submit" id="submitBtn">Confirmar Compra</button>
         <div id="msg"></div>
@@ -2408,15 +2559,22 @@ export function renderPublicBuyerConfirmationHtml(
 
     <!-- Recibo formal de conferência -->
     <div class="card receipt" id="receiptCard">
+      ${logoHtml}
       <h2>Registro de conferência do pedido — sem valor fiscal</h2>
       <div id="receiptContent"></div>
-      <div class="receipt-disclaimer">
-        Registro operacional entre cliente e ${esc(promptData.companyName)}. Sem valor fiscal.
-      </div>
+      ${
+        qrCfg.showFooterText
+          ? `<div class="receipt-disclaimer">${esc(
+              promptData.footerText ||
+                `Registro operacional entre cliente e ${qrCfg.showTradeName && promptData.companyName ? promptData.companyName : 'empresa emissora'}. Sem valor fiscal.`
+            )}</div>`
+          : ''
+      }
     </div>
   </div>
 
   <script>
+    const qrShowRatings = ${qrCfg.showRatingForm ? 'true' : 'false'};
     const form = document.getElementById('confirmForm');
     const methodSelect = document.getElementById('reportedPaymentMethod');
     const creditBox = document.getElementById('creditFields');
@@ -2470,10 +2628,13 @@ export function renderPublicBuyerConfirmationHtml(
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const serviceVal = document.getElementById('serviceRating').value;
-      const contactVal = document.getElementById('contactRating').value;
-      const photoVal = document.getElementById('photographerRating').value;
-      if (!serviceVal || !contactVal || !photoVal) {
+      const serviceEl = document.getElementById('serviceRating');
+      const contactEl = document.getElementById('contactRating');
+      const photoEl = document.getElementById('photographerRating');
+      const serviceVal = serviceEl ? serviceEl.value : '';
+      const contactVal = contactEl ? contactEl.value : '';
+      const photoVal = photoEl ? photoEl.value : '';
+      if (qrShowRatings && (!serviceVal || !contactVal || !photoVal)) {
         msg.style.color = '#f87171';
         msg.textContent = 'Selecione as avaliações (1 a 5 estrelas) para Vendedor, Contato e Fotógrafo.';
         return;
@@ -2503,9 +2664,9 @@ export function renderPublicBuyerConfirmationHtml(
         reportedRemainingValue: document.getElementById('reportedRemainingValue') ? document.getElementById('reportedRemainingValue').value : undefined,
         reportedInstallmentsCount: document.getElementById('reportedInstallmentsCount') ? document.getElementById('reportedInstallmentsCount').value : undefined,
         reportedInstallmentValue: document.getElementById('reportedInstallmentValue') ? document.getElementById('reportedInstallmentValue').value : undefined,
-        serviceRating: Number(serviceVal),
-        contactRating: Number(contactVal),
-        photographerRating: Number(photoVal),
+        ...(serviceVal ? { serviceRating: Number(serviceVal) } : {}),
+        ...(contactVal ? { contactRating: Number(contactVal) } : {}),
+        ...(photoVal ? { photographerRating: Number(photoVal) } : {}),
       };
 
       const renderStarsReceipt = (label, rating) => {
@@ -2527,21 +2688,40 @@ export function renderPublicBuyerConfirmationHtml(
           receiptCard.style.display = 'block';
 
           const r = data.receipt || {};
+          const rc = r.qrConfig || {};
           const rawMethod = String(r.reportedPaymentMethod || '').toUpperCase();
           const methodDisplay = r.reportedPaymentMethodLabel || paymentLabelsPt[rawMethod] || r.reportedPaymentMethod || '';
           let html = '';
-          html += '<div class="receipt-row"><span class="receipt-label">Código de Referência:</span><span class="receipt-value">' + (r.referenceCode || '${esc(promptData.fichaCode)}') + '</span></div>';
-          html += '<div class="receipt-row"><span class="receipt-label">Empresa:</span><span class="receipt-value">' + (r.companyName || '${esc(promptData.companyName)}') + '</span></div>';
+          if (rc.showBatchAndBookCode !== false && r.referenceCode) {
+            html += '<div class="receipt-row"><span class="receipt-label">Código de Referência:</span><span class="receipt-value">' + r.referenceCode + (r.batchName ? ' (' + r.batchName + ')' : '') + '</span></div>';
+          }
+          if (rc.showTradeName !== false && r.companyName) {
+            html += '<div class="receipt-row"><span class="receipt-label">Empresa:</span><span class="receipt-value">' + r.companyName + '</span></div>';
+          }
+          if (rc.showSellerName !== false && r.sellerName) {
+            html += '<div class="receipt-row"><span class="receipt-label">Vendedor:</span><span class="receipt-value">' + r.sellerName + '</span></div>';
+          }
+          if (rc.showPhotographerName !== false && r.photographerName) {
+            html += '<div class="receipt-row"><span class="receipt-label">Fotógrafo:</span><span class="receipt-value">' + r.photographerName + '</span></div>';
+          }
           html += '<div class="receipt-row"><span class="receipt-label">Titular:</span><span class="receipt-value">' + (r.clientName || '${esc(promptData.buyerFirstName)}') + '</span></div>';
           html += '<div class="receipt-row"><span class="receipt-label">Data do Registro:</span><span class="receipt-value">' + new Date().toLocaleString('pt-BR') + '</span></div>';
-          html += '<div class="receipt-row"><span class="receipt-label">Total Declarado:</span><span class="receipt-value">' + (r.reportedTotalBrl || '') + '</span></div>';
-          html += '<div class="receipt-row"><span class="receipt-label">Pago no Ato / Entrada:</span><span class="receipt-value">' + (r.reportedPaidBrl || '') + '</span></div>';
-          html += '<div class="receipt-row"><span class="receipt-label">Forma de Pagamento:</span><span class="receipt-value">' + methodDisplay + '</span></div>';
-          html += renderStarsReceipt('Vendedor', r.serviceRating);
-          html += renderStarsReceipt('Contato / Agendamento', r.contactRating);
-          html += renderStarsReceipt('Fotógrafo', r.photographerRating);
-
-          if (r.creditDetails) {
+          if (rc.showSaleValue !== false && r.reportedTotalBrl) {
+            html += '<div class="receipt-row"><span class="receipt-label">Total Declarado:</span><span class="receipt-value">' + r.reportedTotalBrl + '</span></div>';
+            html += '<div class="receipt-row"><span class="receipt-label">Pago no Ato / Entrada:</span><span class="receipt-value">' + (r.reportedPaidBrl || '') + '</span></div>';
+          }
+          if (rc.showPaymentMethod !== false && methodDisplay) {
+            html += '<div class="receipt-row"><span class="receipt-label">Forma de Pagamento:</span><span class="receipt-value">' + methodDisplay + '</span></div>';
+          }
+          if (rc.showSacContact !== false && (r.sacPhone || r.sacWhatsapp)) {
+            html += '<div class="receipt-row"><span class="receipt-label">SAC:</span><span class="receipt-value">' + [r.sacPhone, r.sacWhatsapp].filter(Boolean).join(' / ') + '</span></div>';
+          }
+          if (rc.showRatingForm !== false) {
+            html += renderStarsReceipt('Vendedor', r.serviceRating);
+            html += renderStarsReceipt('Contato / Agendamento', r.contactRating);
+            html += renderStarsReceipt('Fotógrafo', r.photographerRating);
+          }
+          if (rc.showInstallmentSummary !== false && r.creditDetails) {
             html += '<div class="receipt-row"><span class="receipt-label">Saldo a Parcelar:</span><span class="receipt-value">' + r.creditDetails.reportedRemainingBrl + '</span></div>';
             html += '<div class="receipt-row"><span class="receipt-label">Parcelas:</span><span class="receipt-value">' + r.creditDetails.reportedInstallmentsCount + 'x de ' + r.creditDetails.reportedInstallmentBrl + '</span></div>';
           }

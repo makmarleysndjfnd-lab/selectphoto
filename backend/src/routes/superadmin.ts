@@ -29,6 +29,12 @@ import {
   resetCompanyEventSearchConfig,
 } from '../services/eventSearchConfigService';
 import { clearCompanyCityScoutCache } from './events';
+import {
+  getCompanyOperationalConfig,
+  upsertCompanyOperationalConfig,
+} from '../services/companyOperationalConfigService';
+import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
+import path from 'path';
 
 const router = Router();
 
@@ -702,6 +708,99 @@ router.post('/companies/:id/event-search-config/reset', authenticateToken, requi
     return res.status(500).json({ error: error.message || 'Erro ao restaurar padrão de Eventos IA.' });
   }
 });
+
+// ============================================================================
+// CONFIGURAÇÃO OPERACIONAL POR EMPRESA (COMISSÕES + LOGO + SAC + QR CODE)
+// ============================================================================
+
+router.get('/companies/:id/operational-config', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const config = await getCompanyOperationalConfig(company.id);
+    return res.json(config);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error reading company operational config:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao consultar configuração operacional.' });
+  }
+});
+
+router.put('/companies/:id/operational-config', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const updated = await upsertCompanyOperationalConfig({
+      companyId: company.id,
+      payload: req.body || {},
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'SuperAdmin',
+      actorRole: 'SUPER_ADMIN',
+      ipAddress: req.ip || null,
+    });
+
+    return res.json(updated);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error updating company operational config:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao salvar configuração operacional.' });
+  }
+});
+
+router.post(
+  '/companies/:id/operational-config/logo',
+  authenticateToken,
+  requireSuperAdmin,
+  safeUpload(upload.single('logo')),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+      if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+      if (!req.file) {
+        return res.status(400).json({ error: 'Nenhum arquivo de logo enviado (campo "logo").' });
+      }
+
+      const fileKey =
+        (req.file as any).key ||
+        (req.file.filename ? `${req.user?.companyId || company.id}/${req.file.filename}` : null);
+      const rawUrl = getUploadedFileUrl(req.file);
+      let publicLogoUrl = rawUrl;
+
+      if (!publicLogoUrl || publicLogoUrl.startsWith('/api/upload/file/')) {
+        const cleanFileName = fileKey ? path.basename(String(fileKey)) : req.file.filename;
+        const folderCompany =
+          fileKey && String(fileKey).includes('/') ? String(fileKey).split('/')[0] : company.id;
+        publicLogoUrl = `/api/company/public/logo/${encodeURIComponent(folderCompany)}/${encodeURIComponent(cleanFileName)}`;
+      }
+
+      const updated = await upsertCompanyOperationalConfig({
+        companyId: company.id,
+        payload: { companyLogoUrl: publicLogoUrl },
+        actorUserId: req.user!.id,
+        actorName: req.user!.name || 'SuperAdmin',
+        actorRole: 'SUPER_ADMIN',
+        ipAddress: req.ip || null,
+      });
+
+      return res.json({
+        logoUrl: updated.companyLogoUrl,
+        config: updated,
+      });
+    } catch (error: any) {
+      if (error?.status) {
+        return res.status(error.status).json({ error: error.message });
+      }
+      console.error('Error uploading company logo (SuperAdmin):', error);
+      return res.status(500).json({ error: error.message || 'Erro ao salvar logo da empresa.' });
+    }
+  }
+);
 
 // ============================================================================
 // FATURAMENTO LUMORA EM REGIME DE CAIXA REAL PAGO (SUPERADMIN)

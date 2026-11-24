@@ -4,7 +4,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken, AuthRequest } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl, removeUploadedFile } from '../middleware/upload';
 import { validateCpf, calculateCreditSchedule, validateCreditSaleRequirements } from '../services/creditService';
-import { resolveSellerCommissionRate } from '../utils/commission';
+import {
+  resolveNewSaleCommission,
+  resolveHistoricalSaleCommissionRate,
+} from '../utils/commission';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import { getSaleNetCents, isSaleCancelled } from '../utils/saleNetHelper';
 import { createDebitAdvance } from '../services/staffAdvanceService';
@@ -531,6 +535,11 @@ async function finalizeSaleWithReceipt(params: {
       }
 
       // Pertence ao mesmo vendedor e dados são equivalentes: anexar o comprovante à venda existente de forma atômica
+      const scenario0OpCfg = await getCompanyOperationalConfig(params.companyId, tx);
+      const scenario0Comm = resolveNewSaleCommission({
+        bookStatus: client.bookStatus,
+        operationalConfig: scenario0OpCfg,
+      });
       let updatedSale = await tx.sale.update({
         where: { id: existingSingle.id },
         data: {
@@ -538,6 +547,9 @@ async function finalizeSaleWithReceipt(params: {
           status: 'PRONTO',
           hasCover: input.hasCover,
           receiptUrl: params.receiptUrl,
+          ...(existingSingle.appliedCommissionPercent == null
+            ? { appliedCommissionPercent: scenario0Comm.percent }
+            : {}),
           ...(params.sheetPhotoUrl ? { sheetPhotoUrl: params.sheetPhotoUrl } : {}),
           ...(input.reportNotes ? { reportNotes: input.reportNotes } : {}),
           ...(input.sellerRating !== null ? { sellerRating: input.sellerRating } : {}),
@@ -610,6 +622,11 @@ async function finalizeSaleWithReceipt(params: {
     }
 
       const { payments: paymentsList, credit: creditInput, ...saleData } = input;
+      const scenario1OpCfg = await getCompanyOperationalConfig(params.companyId, tx);
+      const scenario1Comm = resolveNewSaleCommission({
+        bookStatus: client.bookStatus,
+        operationalConfig: scenario1OpCfg,
+      });
       let sale = await tx.sale.create({
         data: {
           ...saleData,
@@ -623,6 +640,7 @@ async function finalizeSaleWithReceipt(params: {
           sellerRating: input.sellerRating,
           photographerRating: input.photographerRating,
           contactRating: input.contactRating,
+          appliedCommissionPercent: scenario1Comm.percent,
           isLegacy: false,
         },
       });
@@ -683,11 +701,10 @@ async function finalizeSaleWithReceipt(params: {
           customInstallments: creditInput.customInstallments,
         });
 
-        const sellerUser = await tx.user.findUnique({
-          where: { id: params.sellerId },
-          select: { usesOwnCar: true },
-        });
-        const initialCommissionRate = resolveSellerCommissionRate(sellerUser);
+        const initialCommissionRate = scenario1Comm.rate;
+        const installmentCommissionRate = Number(
+          (scenario1OpCfg.creditInstallmentCommissionPercent / 100).toFixed(4)
+        );
 
         const agreement = await tx.creditAgreement.create({
           data: {
@@ -716,7 +733,7 @@ async function finalizeSaleWithReceipt(params: {
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',
             initialCommissionRate,
-            installmentCommissionRate: 0.10,
+            installmentCommissionRate,
             signedAgreementUrl: creditInput.signedAgreementUrl || null,
             notes: creditInput.notes || null,
           },
@@ -907,12 +924,18 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       const { payments: postPayments, credit: postCredit, ...postSaleData } = input;
       const hasReceipt = Boolean(postSaleData.receiptUrl);
       const isConfirmedSale = hasReceipt || Boolean(postCredit);
+      const postOpCfg = await getCompanyOperationalConfig(companyId, tx);
+      const postSaleComm = resolveNewSaleCommission({
+        bookStatus: client.bookStatus,
+        operationalConfig: postOpCfg,
+      });
       let sale = await tx.sale.create({
         data: {
           ...postSaleData,
           sellerId,
           status: isConfirmedSale ? 'PRONTO' : 'PENDING_RECEIPT',
           paymentStatus: postCredit ? 'PARTIALLY_PAID' : (hasReceipt ? 'PAID' : 'PENDING_RECEIPT'),
+          appliedCommissionPercent: postSaleComm.percent,
           companyId,
         },
       });
@@ -1007,11 +1030,10 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
           customInstallments: postCredit.customInstallments,
         });
 
-        const sellerUser = await tx.user.findUnique({
-          where: { id: sellerId },
-          select: { usesOwnCar: true },
-        });
-        const initialCommissionRate = resolveSellerCommissionRate(sellerUser);
+        const initialCommissionRate = postSaleComm.rate;
+        const installmentCommissionRate = Number(
+          (postOpCfg.creditInstallmentCommissionPercent / 100).toFixed(4)
+        );
 
         const agreement = await tx.creditAgreement.create({
           data: {
@@ -1040,7 +1062,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
             firstDueDate: schedule[0].dueDate,
             status: 'ACTIVE',
             initialCommissionRate,
-            installmentCommissionRate: 0.10,
+            installmentCommissionRate,
             signedAgreementUrl: postCredit.signedAgreementUrl || null,
             notes: postCredit.notes || null,
           },
@@ -1518,9 +1540,21 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
           ? 'REBOLO_SOLD'
           : 'SOLD';
 
+      const receiptOpCfg = await getCompanyOperationalConfig(companyId, tx);
+      const receiptComm = resolveNewSaleCommission({
+        bookStatus: client?.bookStatus,
+        operationalConfig: receiptOpCfg,
+      });
       let updated = await tx.sale.update({
         where: { id },
-        data: { receiptUrl, status: 'PRONTO', paymentStatus: 'PAID' },
+        data: {
+          receiptUrl,
+          status: 'PRONTO',
+          paymentStatus: 'PAID',
+          ...(sale.appliedCommissionPercent == null
+            ? { appliedCommissionPercent: receiptComm.percent }
+            : {}),
+        },
       });
       if (!sale.coverDeducted && updated.hasCover) {
         const deducted = await deductCoverForSellerSale(tx, {
@@ -2815,10 +2849,15 @@ router.post('/:id/refund-or-cancel', authenticateToken, async (req: AuthRequest,
         const newSaleStatus = becomesFullyCancelled ? 'CANCELLED' : 'PARTIALLY_REFUNDED';
         const now = new Date();
 
-        // Cálculo proporcional da comissão do vendedor a estornar
-        const sellerRate =
-          sale.creditAgreement?.initialCommissionRate ?? resolveSellerCommissionRate(sale.seller);
-        const installmentRate = sale.creditAgreement?.installmentCommissionRate ?? 0.10;
+        // Cálculo proporcional da comissão do vendedor a estornar (preserva snapshot histórico)
+        const refundOpCfg = await getCompanyOperationalConfig(effectiveCompanyId, tx);
+        const sellerRate = resolveHistoricalSaleCommissionRate({
+          sale,
+          operationalConfig: refundOpCfg,
+        });
+        const installmentRate =
+          sale.creditAgreement?.installmentCommissionRate ??
+          Number((refundOpCfg.creditInstallmentCommissionPercent / 100).toFixed(4));
         const alreadyDebitedCommCents = (sale.adjustments || []).reduce(
           (acc, adj) => acc + Math.max(0, adj.commissionDebitCents || 0),
           0

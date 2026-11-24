@@ -1390,6 +1390,87 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getCompanyOperationalConfig() async {
+    try {
+      final resp = await _dio.get('/company/operational-config');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveCompanyOperationalConfig(
+      Map<String, dynamic> payload) async {
+    try {
+      final resp = await _dio.put('/company/operational-config', data: payload);
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadCompanyOperationalLogo(
+      String filePath) async {
+    try {
+      final formData = FormData.fromMap({
+        'logo': await MultipartFile.fromFile(filePath),
+      });
+      final resp = await _dio.post(
+        '/company/operational-config/logo',
+        data: formData,
+        options: Options(contentType: 'multipart/form-data'),
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getSuperAdminOperationalConfig(
+      String companyId) async {
+    try {
+      final resp =
+          await _dio.get('/superadmin/companies/$companyId/operational-config');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveSuperAdminOperationalConfig(
+    String companyId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final resp = await _dio.put(
+        '/superadmin/companies/$companyId/operational-config',
+        data: payload,
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadSuperAdminOperationalLogo(
+    String companyId,
+    String filePath,
+  ) async {
+    try {
+      final formData = FormData.fromMap({
+        'logo': await MultipartFile.fromFile(filePath),
+      });
+      final resp = await _dio.post(
+        '/superadmin/companies/$companyId/operational-config/logo',
+        data: formData,
+        options: Options(contentType: 'multipart/form-data'),
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   // Roteiro Inteligente — clusters de prospectos dentro de 300km
   Future<Map<String, dynamic>> getSmartRoute() async {
     try {

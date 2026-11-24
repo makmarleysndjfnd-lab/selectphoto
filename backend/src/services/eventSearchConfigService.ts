@@ -17,6 +17,21 @@ export interface EventSearchExclusionItem {
 export const VALID_WEEKDAYS = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'DOM'] as const;
 export type WeekdayCode = (typeof VALID_WEEKDAYS)[number];
 
+export const VALID_CITY_POPULATION_PROFILES = ['ALL', 'SMALL_MEDIUM', 'LARGE'] as const;
+export type CityPopulationProfile = (typeof VALID_CITY_POPULATION_PROFILES)[number];
+
+export const VALID_AUDIENCE_FOCUS = ['FAMILY_KIDS', 'GENERAL', 'NIGHTLIFE'] as const;
+export type AudienceFocus = (typeof VALID_AUDIENCE_FOCUS)[number];
+
+export const VALID_ENTRY_TYPE_PREFERENCES = ['ANY', 'FREE_ONLY', 'PAID_OK'] as const;
+export type EntryTypePreference = (typeof VALID_ENTRY_TYPE_PREFERENCES)[number];
+
+export const VALID_CONFIRMATION_LEVELS = [
+  'CONFIRMED_ONLY',
+  'CONFIRMED_AND_TRADITIONAL',
+] as const;
+export type ConfirmationLevel = (typeof VALID_CONFIRMATION_LEVELS)[number];
+
 export interface EventSearchConfigValues {
   searchDescription: string;
   eventTypes: EventSearchTypeItem[];
@@ -25,6 +40,21 @@ export interface EventSearchConfigValues {
   includeHolidays: boolean;
   geographicFocus: string;
   exclusions: EventSearchExclusionItem[];
+  // Etapa 31: Expansão Avançada
+  minDurationDays: number;
+  maxDurationDays: number | null;
+  allowSingleDayIfLarge: boolean;
+  minEstimatedAudience: number | null;
+  cityPopulationProfile: CityPopulationProfile;
+  audienceFocus: AudienceFocus;
+  entryTypePreference: EntryTypePreference;
+  confirmationLevel: ConfirmationLevel;
+  baseCity: string;
+  maxRadiusKm: number | null;
+  priorityStates: string[];
+  priorityStatesJson: string | null;
+  maxResultsPerSearch: number;
+  cacheTtlDays: number;
 }
 
 export interface CompanyEventSearchConfigDTO extends EventSearchConfigValues {
@@ -89,6 +119,20 @@ export const DEFAULT_EVENT_SEARCH_CONFIG: EventSearchConfigValues = {
       text: 'Eventos exclusivamente online, transmissões digitais ou webinars sem público presencial.',
     },
   ],
+  minDurationDays: 1,
+  maxDurationDays: null,
+  allowSingleDayIfLarge: true,
+  minEstimatedAudience: null,
+  cityPopulationProfile: 'ALL',
+  audienceFocus: 'FAMILY_KIDS',
+  entryTypePreference: 'ANY',
+  confirmationLevel: 'CONFIRMED_AND_TRADITIONAL',
+  baseCity: '',
+  maxRadiusKm: null,
+  priorityStates: [],
+  priorityStatesJson: null,
+  maxResultsPerSearch: 20,
+  cacheTtlDays: 7,
 };
 
 function sanitizeText(raw: unknown, maxLen: number): string {
@@ -225,6 +269,85 @@ export function normalizeExclusions(input: unknown, strict = false): EventSearch
   return out;
 }
 
+export function normalizePriorityStates(rawStates: unknown, rawJson?: unknown): string[] {
+  let source = rawStates;
+  if ((source === undefined || source === null) && typeof rawJson === 'string' && rawJson.trim()) {
+    try {
+      const parsed = JSON.parse(rawJson);
+      source = parsed;
+    } catch {
+      source = rawJson.split(/[,;\s]+/).filter(Boolean);
+    }
+  } else if (typeof source === 'string') {
+    const trimmed = source.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        source = JSON.parse(trimmed);
+      } catch {
+        source = trimmed.split(/[,;\s]+/).filter(Boolean);
+      }
+    } else {
+      source = trimmed.split(/[,;\s]+/).filter(Boolean);
+    }
+  }
+
+  if (!Array.isArray(source)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of source) {
+    const uf = String(item ?? '').trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    if (uf.length === 2 && !seen.has(uf)) {
+      seen.add(uf);
+      out.push(uf);
+    }
+  }
+  return out;
+}
+
+function parseOptionalInt(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number,
+  strict: boolean
+): number | null {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return null;
+  }
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < min || num > max) {
+    if (strict) {
+      throw Object.assign(
+        new Error(`${field} deve ser um número inteiro entre ${min} e ${max}.`),
+        { status: 400 }
+      );
+    }
+    return null;
+  }
+  return num;
+}
+
+function parseEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T,
+  field: string,
+  strict: boolean
+): T {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toUpperCase() as T;
+  if (allowed.includes(normalized)) return normalized;
+  if (strict) {
+    throw Object.assign(
+      new Error(`${field} inválido: '${value}'. Permitidos: ${allowed.join(', ')}.`),
+      { status: 400 }
+    );
+  }
+  return fallback;
+}
+
 export function normalizeEventSearchConfigValues(
   raw: Partial<EventSearchConfigValues> | any,
   strict = false
@@ -288,6 +411,127 @@ export function normalizeEventSearchConfigValues(
       ? normalizeExclusions(raw.exclusions, strict)
       : DEFAULT_EVENT_SEARCH_CONFIG.exclusions.map((e) => ({ ...e }));
 
+  const minDurationRaw =
+    raw?.minDurationDays !== undefined
+      ? Number(raw.minDurationDays)
+      : DEFAULT_EVENT_SEARCH_CONFIG.minDurationDays;
+  if (!Number.isInteger(minDurationRaw) || minDurationRaw < 1 || minDurationRaw > 365) {
+    if (strict) {
+      throw Object.assign(
+        new Error('minDurationDays deve ser um número inteiro entre 1 e 365.'),
+        { status: 400 }
+      );
+    }
+  }
+  const minDurationDays =
+    Number.isInteger(minDurationRaw) && minDurationRaw >= 1 && minDurationRaw <= 365
+      ? minDurationRaw
+      : DEFAULT_EVENT_SEARCH_CONFIG.minDurationDays;
+
+  const maxDurationDays = parseOptionalInt(
+    raw?.maxDurationDays,
+    'maxDurationDays',
+    1,
+    365,
+    strict
+  );
+  if (strict && maxDurationDays !== null && maxDurationDays < minDurationDays) {
+    throw Object.assign(
+      new Error('Duração máxima (maxDurationDays) deve ser maior ou igual à duração mínima.'),
+      { status: 400 }
+    );
+  }
+
+  const allowSingleDayIfLarge =
+    raw?.allowSingleDayIfLarge !== undefined
+      ? Boolean(raw.allowSingleDayIfLarge)
+      : DEFAULT_EVENT_SEARCH_CONFIG.allowSingleDayIfLarge;
+
+  const minEstimatedAudience = parseOptionalInt(
+    raw?.minEstimatedAudience,
+    'minEstimatedAudience',
+    0,
+    10000000,
+    strict
+  );
+
+  const cityPopulationProfile = parseEnum(
+    raw?.cityPopulationProfile,
+    VALID_CITY_POPULATION_PROFILES,
+    DEFAULT_EVENT_SEARCH_CONFIG.cityPopulationProfile,
+    'cityPopulationProfile',
+    strict
+  );
+
+  const audienceFocus = parseEnum(
+    raw?.audienceFocus,
+    VALID_AUDIENCE_FOCUS,
+    DEFAULT_EVENT_SEARCH_CONFIG.audienceFocus,
+    'audienceFocus',
+    strict
+  );
+
+  const entryTypePreference = parseEnum(
+    raw?.entryTypePreference,
+    VALID_ENTRY_TYPE_PREFERENCES,
+    DEFAULT_EVENT_SEARCH_CONFIG.entryTypePreference,
+    'entryTypePreference',
+    strict
+  );
+
+  const confirmationLevel = parseEnum(
+    raw?.confirmationLevel,
+    VALID_CONFIRMATION_LEVELS,
+    DEFAULT_EVENT_SEARCH_CONFIG.confirmationLevel,
+    'confirmationLevel',
+    strict
+  );
+
+  const baseCity =
+    raw?.baseCity !== undefined
+      ? sanitizeText(raw.baseCity, 120)
+      : DEFAULT_EVENT_SEARCH_CONFIG.baseCity;
+
+  const maxRadiusKm = parseOptionalInt(raw?.maxRadiusKm, 'maxRadiusKm', 1, 5000, strict);
+
+  const priorityStates = normalizePriorityStates(raw?.priorityStates, raw?.priorityStatesJson);
+  const priorityStatesJson =
+    priorityStates.length > 0 ? JSON.stringify(priorityStates) : null;
+
+  const maxResultsRaw =
+    raw?.maxResultsPerSearch !== undefined
+      ? Number(raw.maxResultsPerSearch)
+      : DEFAULT_EVENT_SEARCH_CONFIG.maxResultsPerSearch;
+  if (!Number.isInteger(maxResultsRaw) || maxResultsRaw < 1 || maxResultsRaw > 50) {
+    if (strict) {
+      throw Object.assign(
+        new Error('maxResultsPerSearch deve ser um número inteiro entre 1 e 50.'),
+        { status: 400 }
+      );
+    }
+  }
+  const maxResultsPerSearch =
+    Number.isInteger(maxResultsRaw) && maxResultsRaw >= 1 && maxResultsRaw <= 50
+      ? maxResultsRaw
+      : DEFAULT_EVENT_SEARCH_CONFIG.maxResultsPerSearch;
+
+  const cacheTtlRaw =
+    raw?.cacheTtlDays !== undefined
+      ? Number(raw.cacheTtlDays)
+      : DEFAULT_EVENT_SEARCH_CONFIG.cacheTtlDays;
+  if (!Number.isInteger(cacheTtlRaw) || cacheTtlRaw < 0 || cacheTtlRaw > 30) {
+    if (strict) {
+      throw Object.assign(
+        new Error('cacheTtlDays deve ser um número inteiro entre 0 e 30 dias.'),
+        { status: 400 }
+      );
+    }
+  }
+  const cacheTtlDays =
+    Number.isInteger(cacheTtlRaw) && cacheTtlRaw >= 0 && cacheTtlRaw <= 30
+      ? cacheTtlRaw
+      : DEFAULT_EVENT_SEARCH_CONFIG.cacheTtlDays;
+
   return {
     searchDescription: searchDescription || DEFAULT_EVENT_SEARCH_CONFIG.searchDescription,
     eventTypes,
@@ -296,6 +540,23 @@ export function normalizeEventSearchConfigValues(
     includeHolidays,
     geographicFocus,
     exclusions,
+    minDurationDays,
+    maxDurationDays:
+      maxDurationDays !== null && maxDurationDays < minDurationDays
+        ? minDurationDays
+        : maxDurationDays,
+    allowSingleDayIfLarge,
+    minEstimatedAudience,
+    cityPopulationProfile,
+    audienceFocus,
+    entryTypePreference,
+    confirmationLevel,
+    baseCity,
+    maxRadiusKm,
+    priorityStates,
+    priorityStatesJson,
+    maxResultsPerSearch,
+    cacheTtlDays,
   };
 }
 
@@ -313,9 +574,45 @@ export function computeEventSearchConfigHash(cfg: EventSearchConfigValues): stri
       enabled: e.enabled,
     })),
     exclusions: cfg.exclusions.map((x) => ({ id: x.id, text: x.text })),
+    minDurationDays: cfg.minDurationDays,
+    maxDurationDays: cfg.maxDurationDays,
+    allowSingleDayIfLarge: cfg.allowSingleDayIfLarge,
+    minEstimatedAudience: cfg.minEstimatedAudience,
+    cityPopulationProfile: cfg.cityPopulationProfile,
+    audienceFocus: cfg.audienceFocus,
+    entryTypePreference: cfg.entryTypePreference,
+    confirmationLevel: cfg.confirmationLevel,
+    baseCity: cfg.baseCity,
+    maxRadiusKm: cfg.maxRadiusKm,
+    priorityStates: cfg.priorityStates,
+    maxResultsPerSearch: cfg.maxResultsPerSearch,
+    cacheTtlDays: cfg.cacheTtlDays,
   };
   return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
+
+const CITY_POP_LABEL: Record<CityPopulationProfile, string> = {
+  ALL: 'Qualquer porte de cidade',
+  SMALL_MEDIUM: 'Cidades pequenas e médias',
+  LARGE: 'Cidades grandes e regiões metropolitanas',
+};
+
+const AUDIENCE_FOCUS_LABEL: Record<AudienceFocus, string> = {
+  FAMILY_KIDS: 'Famílias e crianças (foco fotográfico infantil/familiar)',
+  GENERAL: 'Público geral amplo',
+  NIGHTLIFE: 'Público adulto e vida noturna',
+};
+
+const ENTRY_PREF_LABEL: Record<EntryTypePreference, string> = {
+  ANY: 'Entrada gratuita ou paga',
+  FREE_ONLY: 'Priorizar entrada gratuita / acesso aberto',
+  PAID_OK: 'Eventos pagos com bilheteria ou controle de acesso',
+};
+
+const CONFIRMATION_LEVEL_LABEL: Record<ConfirmationLevel, string> = {
+  CONFIRMED_ONLY: 'Somente edições oficialmente confirmadas com data fechada',
+  CONFIRMED_AND_TRADITIONAL: 'Eventos confirmados e edições tradicionais recorrentes do calendário local',
+};
 
 export function buildRenderedEventPrompt(
   cfg: EventSearchConfigValues,
@@ -342,14 +639,38 @@ export function buildRenderedEventPrompt(
   const holidaysRule = cfg.includeHolidays
     ? 'Incluir feriados nacionais, estaduais e municipais no período.'
     : 'Não priorizar feriados isolados sem evento confirmado.';
-  const geoRule = cfg.geographicFocus
-    ? `FOCO GEOGRÁFICO / RAIO: ${cfg.geographicFocus}\n`
-    : '';
+
+  const durationRule = cfg.maxDurationDays
+    ? `Duração entre ${cfg.minDurationDays} e ${cfg.maxDurationDays} dia(s).`
+    : `Duração mínima de ${cfg.minDurationDays} dia(s).`;
+  const singleDayRule = cfg.allowSingleDayIfLarge
+    ? 'Aceitar eventos de 1 dia apenas quando forem de grande porte/público expressivo.'
+    : 'Descartar eventos de apenas 1 dia.';
+
+  const audienceMinRule =
+    cfg.minEstimatedAudience !== null && cfg.minEstimatedAudience > 0
+      ? `Público estimado mínimo: ${cfg.minEstimatedAudience.toLocaleString('pt-BR')} pessoas.`
+      : '';
+
+  const areaParts: string[] = [];
+  if (cfg.baseCity) areaParts.push(`Cidade-base: ${cfg.baseCity}`);
+  if (cfg.maxRadiusKm) areaParts.push(`Raio máximo: ${cfg.maxRadiusKm} km`);
+  if (cfg.priorityStates.length > 0) areaParts.push(`UFs prioritárias: ${cfg.priorityStates.join(', ')}`);
+  if (cfg.geographicFocus) areaParts.push(`Foco: ${cfg.geographicFocus}`);
+  const geoRule = areaParts.length > 0 ? `ÁREA DE ATUAÇÃO: ${areaParts.join(' | ')}.\n` : '';
 
   const exclusionsBlock =
     cfg.exclusions.length > 0
       ? `EXCLUSÕES (NÃO RETORNAR):\n${cfg.exclusions.map((e) => `- ${e.text}`).join('\n')}\n`
       : '';
+
+  const filtersSummary = `FILTROS E PORTE:
+- ${durationRule} ${singleDayRule}
+- Perfil de cidade: ${CITY_POP_LABEL[cfg.cityPopulationProfile]}.
+- Público-alvo: ${AUDIENCE_FOCUS_LABEL[cfg.audienceFocus]}.
+- Entrada: ${ENTRY_PREF_LABEL[cfg.entryTypePreference]}.${audienceMinRule ? `\n- ${audienceMinRule}` : ''}
+- Confirmação: ${CONFIRMATION_LEVEL_LABEL[cfg.confirmationLevel]}.
+- Limite máximo: até ${cfg.maxResultsPerSearch} eventos nesta busca.`;
 
   if (target.mode === 'STATE_RADAR') {
     const stateUF = target.stateUF || '<UF>';
@@ -357,7 +678,8 @@ export function buildRenderedEventPrompt(
 
 ALVO DO RADAR: Principais cidades no estado "${stateUF}" com eventos reais entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias).
 DIAS PRIORITÁRIOS: ${weekdaysLabel}. ${holidaysRule}
-${geoRule}TIPOS DE EVENTOS PROCURADOS:
+${geoRule}${filtersSummary}
+TIPOS DE EVENTOS PROCURADOS:
 ${typesBlock}
 
 ${exclusionsBlock}Retorne APENAS JSON válido no formato:
@@ -389,7 +711,8 @@ ALVO DA BUSCA: Cidade "${cityName}".
 Hoje é dia ${currentDateStr}.
 JANELA OBRIGATÓRIA: Retorne APENAS eventos reais que acontecerão entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias).
 DIAS PRIORITÁRIOS: ${weekdaysLabel}. ${holidaysRule}
-${geoRule}TIPOS DE EVENTOS PROCURADOS:
+${geoRule}${filtersSummary}
+TIPOS DE EVENTOS PROCURADOS:
 ${typesBlock}
 
 ${exclusionsBlock}Retorne a resposta EXCLUSIVAMENTE em formato JSON puro:
@@ -471,6 +794,19 @@ export async function getCompanyEventSearchConfig(
     includeHolidays: row.includeHolidays,
     geographicFocus: row.geographicFocus ?? '',
     exclusions: row.exclusionsJson,
+    minDurationDays: row.minDurationDays,
+    maxDurationDays: row.maxDurationDays,
+    allowSingleDayIfLarge: row.allowSingleDayIfLarge,
+    minEstimatedAudience: row.minEstimatedAudience,
+    cityPopulationProfile: row.cityPopulationProfile,
+    audienceFocus: row.audienceFocus,
+    entryTypePreference: row.entryTypePreference,
+    confirmationLevel: row.confirmationLevel,
+    baseCity: row.baseCity ?? '',
+    maxRadiusKm: row.maxRadiusKm,
+    priorityStatesJson: row.priorityStatesJson,
+    maxResultsPerSearch: row.maxResultsPerSearch,
+    cacheTtlDays: row.cacheTtlDays,
   });
 
   return toDto(companyId, values, false, row.updatedById || null, row.updatedAt || null);
@@ -489,29 +825,37 @@ export async function upsertCompanyEventSearchConfig(params: {
   const previous = await getCompanyEventSearchConfig(companyId);
   const nextValues = normalizeEventSearchConfigValues(payload, true);
 
+  const dataBlock = {
+    searchDescription: nextValues.searchDescription,
+    eventTypesJson: nextValues.eventTypes as any,
+    horizonDays: nextValues.horizonDays,
+    priorityWeekdaysJson: nextValues.priorityWeekdays as any,
+    includeHolidays: nextValues.includeHolidays,
+    geographicFocus: nextValues.geographicFocus || null,
+    exclusionsJson: nextValues.exclusions as any,
+    minDurationDays: nextValues.minDurationDays,
+    maxDurationDays: nextValues.maxDurationDays,
+    allowSingleDayIfLarge: nextValues.allowSingleDayIfLarge,
+    minEstimatedAudience: nextValues.minEstimatedAudience,
+    cityPopulationProfile: nextValues.cityPopulationProfile,
+    audienceFocus: nextValues.audienceFocus,
+    entryTypePreference: nextValues.entryTypePreference,
+    confirmationLevel: nextValues.confirmationLevel,
+    baseCity: nextValues.baseCity || null,
+    maxRadiusKm: nextValues.maxRadiusKm,
+    priorityStatesJson: nextValues.priorityStatesJson,
+    maxResultsPerSearch: nextValues.maxResultsPerSearch,
+    cacheTtlDays: nextValues.cacheTtlDays,
+    updatedById: actorUserId,
+  };
+
   const saved = await prisma.companyEventSearchConfig.upsert({
     where: { companyId },
     create: {
       companyId,
-      searchDescription: nextValues.searchDescription,
-      eventTypesJson: nextValues.eventTypes as any,
-      horizonDays: nextValues.horizonDays,
-      priorityWeekdaysJson: nextValues.priorityWeekdays as any,
-      includeHolidays: nextValues.includeHolidays,
-      geographicFocus: nextValues.geographicFocus || null,
-      exclusionsJson: nextValues.exclusions as any,
-      updatedById: actorUserId,
+      ...dataBlock,
     },
-    update: {
-      searchDescription: nextValues.searchDescription,
-      eventTypesJson: nextValues.eventTypes as any,
-      horizonDays: nextValues.horizonDays,
-      priorityWeekdaysJson: nextValues.priorityWeekdays as any,
-      includeHolidays: nextValues.includeHolidays,
-      geographicFocus: nextValues.geographicFocus || null,
-      exclusionsJson: nextValues.exclusions as any,
-      updatedById: actorUserId,
-    },
+    update: dataBlock,
   });
 
   const nextDto = toDto(companyId, nextValues, false, saved.updatedById || actorUserId, saved.updatedAt);
@@ -531,6 +875,10 @@ export async function upsertCompanyEventSearchConfig(params: {
       priorityWeekdays: previous.priorityWeekdays,
       activeTypesCount: previous.eventTypes.filter((t) => t.enabled).length,
       exclusionsCount: previous.exclusions.length,
+      minDurationDays: previous.minDurationDays,
+      maxDurationDays: previous.maxDurationDays,
+      cacheTtlDays: previous.cacheTtlDays,
+      maxResultsPerSearch: previous.maxResultsPerSearch,
     },
     newValues: {
       isDefault: false,
@@ -540,6 +888,10 @@ export async function upsertCompanyEventSearchConfig(params: {
       priorityWeekdays: nextDto.priorityWeekdays,
       activeTypesCount: nextDto.eventTypes.filter((t) => t.enabled).length,
       exclusionsCount: nextDto.exclusions.length,
+      minDurationDays: nextDto.minDurationDays,
+      maxDurationDays: nextDto.maxDurationDays,
+      cacheTtlDays: nextDto.cacheTtlDays,
+      maxResultsPerSearch: nextDto.maxResultsPerSearch,
     },
     reason: 'Atualização detalhada da configuração de busca de Eventos IA',
     authorUserId: actorUserId,

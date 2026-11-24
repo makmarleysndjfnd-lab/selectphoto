@@ -7,6 +7,7 @@ import 'painel_proprietario_faturamento.dart';
 import 'painel_proprietario_suporte.dart';
 import 'painel_admin.dart';
 import 'tela_config_busca_eventos_ia.dart';
+import 'tela_config_operacional_empresa.dart';
 import 'tela_login.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
@@ -1884,6 +1885,29 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                       context,
                       MaterialPageRoute(
                         builder: (_) => TelaConfigBuscaEventosIa(
+                          companyId: compId,
+                          companyName: (empresa['tradeName'] ?? empresa['name'] ?? '').toString(),
+                          apiService: _api,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFF59E0B)),
+                    foregroundColor: const Color(0xFFFCD34D),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(Icons.tune_rounded, size: 16),
+                  label: const Text('Comissões & QR', style: TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    final compId = empresa['id']?.toString();
+                    if (compId == null || compId.isEmpty) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TelaConfigOperacionalEmpresa(
                           companyId: compId,
                           companyName: (empresa['tradeName'] ?? empresa['name'] ?? '').toString(),
                           apiService: _api,

@@ -10,6 +10,7 @@ import 'tela_config_impressora.dart';
 import 'tela_demonstrativo_empresa_lumora.dart';
 import 'tela_suporte_empresa.dart';
 import 'tela_integracoes_empresa.dart';
+import 'tela_config_operacional_empresa.dart';
 import 'tela_sincronizacao.dart';
 import '../utils/lumora_theme.dart';
 import '../widgets/account_deletion_dialog.dart';
@@ -1086,6 +1087,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const TelaIntegracoesEmpresa(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            LedCard(
+              color: palette.accent,
+              child: ListTile(
+                leading: const Icon(Icons.tune_rounded, color: Color(0xFFA855F7)),
+                title: Text('Configurações da Empresa (Comissões & QR)',
+                    style: TextStyle(color: palette.textPrimary, fontWeight: FontWeight.bold)),
+                subtitle: Text(
+                    'Defina % de Virgem/Rebolo/Crediário, logo oficial, SAC e campos do QR Code',
+                    style: TextStyle(color: palette.textSecondary, fontSize: 12)),
+                trailing: Icon(Icons.arrow_forward_ios_rounded,
+                    color: palette.textSecondary, size: 16),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const TelaConfigOperacionalEmpresa(),
                   ),
                 ),
               ),

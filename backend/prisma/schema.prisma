@@ -106,6 +106,7 @@ model Company {
   saleAdjustments              SaleAdjustment[]
   apiUsageLogs                 ApiUsageLog[]
   eventSearchConfig            CompanyEventSearchConfig?
+  operationalConfig            CompanyOperationalConfig?
 }
 
 model Team {
@@ -415,6 +416,7 @@ model Sale {
   refundedAmountCents Int      @default(0)
   cancelledAt        DateTime?
   cancelReason       String?
+  appliedCommissionPercent Float?
   company            Company?         @relation(fields: [companyId], references: [id])
   client             Client           @relation(fields: [clientId], references: [id])
   seller             User             @relation(fields: [sellerId], references: [id])
@@ -1978,18 +1980,59 @@ model SaleAdjustment {
 }
 
 model CompanyEventSearchConfig {
-  id                   String   @id @default(uuid())
-  companyId            String   @unique
-  searchDescription    String   @db.Text
-  eventTypesJson       Json
-  horizonDays          Int      @default(380)
-  priorityWeekdaysJson Json
-  includeHolidays      Boolean  @default(true)
-  geographicFocus      String?
-  exclusionsJson       Json
-  updatedById          String?
-  updatedAt            DateTime @updatedAt
-  createdAt            DateTime @default(now())
+  id                       String   @id @default(uuid())
+  companyId                String   @unique
+  searchDescription        String   @db.Text
+  eventTypesJson           Json
+  horizonDays              Int      @default(380)
+  priorityWeekdaysJson     Json
+  includeHolidays          Boolean  @default(true)
+  geographicFocus          String?
+  exclusionsJson           Json
+  minDurationDays          Int      @default(1)
+  maxDurationDays          Int?
+  allowSingleDayIfLarge    Boolean  @default(true)
+  minEstimatedAudience     Int?
+  cityPopulationProfile    String   @default("ALL") // ALL | SMALL_MEDIUM | LARGE
+  audienceFocus            String   @default("FAMILY_KIDS") // FAMILY_KIDS | GENERAL | NIGHTLIFE
+  entryTypePreference      String   @default("ANY") // ANY | FREE_ONLY | PAID_OK
+  confirmationLevel        String   @default("CONFIRMED_AND_TRADITIONAL") // CONFIRMED_ONLY | CONFIRMED_AND_TRADITIONAL
+  baseCity                 String?
+  maxRadiusKm              Int?
+  priorityStatesJson       String?  @db.Text
+  maxResultsPerSearch      Int      @default(20)
+  cacheTtlDays             Int      @default(7)
+  updatedById              String?
+  updatedAt                DateTime @updatedAt
+  createdAt                DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model CompanyOperationalConfig {
+  id                               String   @id @default(uuid())
+  companyId                        String   @unique
+  virginBookCommissionPercent      Float    @default(25.0)
+  reboloBookCommissionPercent      Float    @default(20.0)
+  creditInstallmentCommissionPercent Float  @default(10.0)
+  companyLogoUrl                   String?  @db.Text
+  sacPhone                         String?
+  sacWhatsapp                      String?
+  qrReceiptFooterText              String?  @db.Text
+  qrShowLogo                       Boolean  @default(true)
+  qrShowTradeName                  Boolean  @default(true)
+  qrShowSacContact                 Boolean  @default(true)
+  qrShowSellerName                 Boolean  @default(true)
+  qrShowPhotographerName           Boolean  @default(true)
+  qrShowPaymentMethod              Boolean  @default(true)
+  qrShowSaleValue                  Boolean  @default(true)
+  qrShowInstallmentSummary         Boolean  @default(true)
+  qrShowBatchAndBookCode           Boolean  @default(true)
+  qrShowRatingForm                 Boolean  @default(true)
+  qrShowFooterText                 Boolean  @default(true)
+  updatedById                      String?
+  updatedAt                        DateTime @updatedAt
+  createdAt                        DateTime @default(now())
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }

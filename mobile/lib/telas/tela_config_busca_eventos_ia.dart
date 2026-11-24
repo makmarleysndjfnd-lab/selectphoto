@@ -48,6 +48,20 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
   final TextEditingController _descriptionCtrl = TextEditingController();
   final TextEditingController _horizonCtrl = TextEditingController();
   final TextEditingController _geoFocusCtrl = TextEditingController();
+  final TextEditingController _minDurationCtrl = TextEditingController(text: '1');
+  final TextEditingController _maxDurationCtrl = TextEditingController();
+  final TextEditingController _minAudienceCtrl = TextEditingController();
+  final TextEditingController _baseCityCtrl = TextEditingController();
+  final TextEditingController _maxRadiusCtrl = TextEditingController();
+  final TextEditingController _priorityStatesCtrl = TextEditingController();
+  final TextEditingController _maxResultsCtrl = TextEditingController(text: '20');
+  final TextEditingController _cacheTtlCtrl = TextEditingController(text: '7');
+
+  bool _allowSingleDayIfLarge = true;
+  String _cityPopulationProfile = 'ALL';
+  String _audienceFocus = 'FAMILY_KIDS';
+  String _entryTypePreference = 'ANY';
+  String _confirmationLevel = 'CONFIRMED_AND_TRADITIONAL';
 
   List<Map<String, dynamic>> _eventTypes = [];
   Set<String> _selectedWeekdays = {
@@ -76,6 +90,14 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
     _descriptionCtrl.dispose();
     _horizonCtrl.dispose();
     _geoFocusCtrl.dispose();
+    _minDurationCtrl.dispose();
+    _maxDurationCtrl.dispose();
+    _minAudienceCtrl.dispose();
+    _baseCityCtrl.dispose();
+    _maxRadiusCtrl.dispose();
+    _priorityStatesCtrl.dispose();
+    _maxResultsCtrl.dispose();
+    _cacheTtlCtrl.dispose();
     super.dispose();
   }
 
@@ -103,12 +125,30 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
     final rawTypes = (data['eventTypes'] as List?) ?? [];
     final rawExclusions = (data['exclusions'] as List?) ?? [];
     final rawWeekdays = (data['priorityWeekdays'] as List?) ?? [];
+    final rawStates = (data['priorityStates'] as List?) ?? [];
 
     final horizon = int.tryParse('${data['horizonDays'] ?? 380}') ?? 380;
+    final minDur = int.tryParse('${data['minDurationDays'] ?? 1}') ?? 1;
+    final maxResults =
+        int.tryParse('${data['maxResultsPerSearch'] ?? 20}') ?? 20;
+    final cacheTtl = int.tryParse('${data['cacheTtlDays'] ?? 7}') ?? 7;
 
     _descriptionCtrl.text = (data['searchDescription'] ?? '').toString();
     _horizonCtrl.text = '$horizon';
     _geoFocusCtrl.text = (data['geographicFocus'] ?? '').toString();
+    _minDurationCtrl.text = '$minDur';
+    _maxDurationCtrl.text =
+        data['maxDurationDays'] != null ? '${data['maxDurationDays']}' : '';
+    _minAudienceCtrl.text = data['minEstimatedAudience'] != null
+        ? '${data['minEstimatedAudience']}'
+        : '';
+    _baseCityCtrl.text = (data['baseCity'] ?? '').toString();
+    _maxRadiusCtrl.text =
+        data['maxRadiusKm'] != null ? '${data['maxRadiusKm']}' : '';
+    _priorityStatesCtrl.text =
+        rawStates.map((e) => e.toString().trim().toUpperCase()).join(', ');
+    _maxResultsCtrl.text = '$maxResults';
+    _cacheTtlCtrl.text = '$cacheTtl';
 
     if (!mounted) return;
     setState(() {
@@ -116,6 +156,14 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
       _configHash = data['configHash']?.toString();
       _serverPromptPreview = data['renderedPromptPreview']?.toString();
       _includeHolidays = data['includeHolidays'] != false;
+      _allowSingleDayIfLarge = data['allowSingleDayIfLarge'] != false;
+      _cityPopulationProfile =
+          (data['cityPopulationProfile'] ?? 'ALL').toString();
+      _audienceFocus = (data['audienceFocus'] ?? 'FAMILY_KIDS').toString();
+      _entryTypePreference =
+          (data['entryTypePreference'] ?? 'ANY').toString();
+      _confirmationLevel =
+          (data['confirmationLevel'] ?? 'CONFIRMED_AND_TRADITIONAL').toString();
       _eventTypes = rawTypes
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
@@ -135,8 +183,30 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
     });
   }
 
+  List<String> _parsePriorityStatesInput() {
+    return _priorityStatesCtrl.text
+        .split(RegExp(r'[,;\s]+'))
+        .map((s) => s.trim().toUpperCase())
+        .where((s) => s.length == 2)
+        .toSet()
+        .toList();
+  }
+
   Map<String, dynamic> _buildPayload() {
     final horizon = int.tryParse(_horizonCtrl.text.trim()) ?? 380;
+    final minDuration = int.tryParse(_minDurationCtrl.text.trim()) ?? 1;
+    final maxDuration = _maxDurationCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_maxDurationCtrl.text.trim());
+    final minAudience = _minAudienceCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_minAudienceCtrl.text.trim());
+    final maxRadius = _maxRadiusCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_maxRadiusCtrl.text.trim());
+    final maxResults = int.tryParse(_maxResultsCtrl.text.trim()) ?? 20;
+    final cacheTtl = int.tryParse(_cacheTtlCtrl.text.trim()) ?? 7;
+
     final orderedWeekdays = _weekdays
         .map((w) => w['code']!)
         .where((code) => _selectedWeekdays.contains(code))
@@ -150,11 +220,37 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
       'geographicFocus': _geoFocusCtrl.text.trim(),
       'eventTypes': _eventTypes,
       'exclusions': _exclusions,
+      'minDurationDays': minDuration,
+      'maxDurationDays': maxDuration,
+      'allowSingleDayIfLarge': _allowSingleDayIfLarge,
+      'minEstimatedAudience': minAudience,
+      'cityPopulationProfile': _cityPopulationProfile,
+      'audienceFocus': _audienceFocus,
+      'entryTypePreference': _entryTypePreference,
+      'confirmationLevel': _confirmationLevel,
+      'baseCity': _baseCityCtrl.text.trim(),
+      'maxRadiusKm': maxRadius,
+      'priorityStates': _parsePriorityStatesInput(),
+      'maxResultsPerSearch': maxResults,
+      'cacheTtlDays': cacheTtl,
     };
   }
 
   String _buildLivePromptPreview() {
     final horizon = int.tryParse(_horizonCtrl.text.trim()) ?? 380;
+    final minDuration = int.tryParse(_minDurationCtrl.text.trim()) ?? 1;
+    final maxDuration = _maxDurationCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_maxDurationCtrl.text.trim());
+    final minAudience = _minAudienceCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_minAudienceCtrl.text.trim());
+    final maxRadius = _maxRadiusCtrl.text.trim().isEmpty
+        ? null
+        : int.tryParse(_maxRadiusCtrl.text.trim());
+    final maxResults = int.tryParse(_maxResultsCtrl.text.trim()) ?? 20;
+    final states = _parsePriorityStatesInput();
+
     final activeTypes =
         _eventTypes.where((t) => t['enabled'] != false).toList();
     final typesText = activeTypes.isEmpty
@@ -173,8 +269,23 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
         ? 'Incluir feriados nacionais, estaduais e municipais no período.'
         : 'Não priorizar feriados isolados sem evento confirmado.';
 
-    final geoText = _geoFocusCtrl.text.trim().isNotEmpty
-        ? 'FOCO GEOGRÁFICO / RAIO: ${_geoFocusCtrl.text.trim()}\n'
+    final durationText = maxDuration != null
+        ? 'Duração entre $minDuration e $maxDuration dia(s).'
+        : 'Duração mínima de $minDuration dia(s).';
+    final singleDayText = _allowSingleDayIfLarge
+        ? 'Aceitar 1 dia só se for grande porte.'
+        : 'Descartar eventos de 1 dia.';
+
+    final areaParts = <String>[
+      if (_baseCityCtrl.text.trim().isNotEmpty)
+        'Cidade-base: ${_baseCityCtrl.text.trim()}',
+      if (maxRadius != null) 'Raio: $maxRadius km',
+      if (states.isNotEmpty) 'UFs: ${states.join(', ')}',
+      if (_geoFocusCtrl.text.trim().isNotEmpty)
+        'Foco: ${_geoFocusCtrl.text.trim()}',
+    ];
+    final areaText = areaParts.isNotEmpty
+        ? 'ÁREA DE ATUAÇÃO: ${areaParts.join(' | ')}.\n'
         : '';
 
     final exclText = _exclusions.isNotEmpty
@@ -185,7 +296,11 @@ class _TelaConfigBuscaEventosIaState extends State<TelaConfigBuscaEventosIa> {
 
 JANELA OBRIGATÓRIA: Próximos $horizon dias a partir da data da pesquisa.
 DIAS PRIORITÁRIOS: ${orderedWeekdays.isEmpty ? 'Nenhum' : orderedWeekdays}. $holidaysText
-${geoText}TIPOS DE EVENTOS PROCURADOS:
+${areaText}FILTROS E PORTE:
+- $durationText $singleDayText
+- Perfil cidade: $_cityPopulationProfile | Público-alvo: $_audienceFocus | Entrada: $_entryTypePreference${minAudience != null ? ' | Público mín.: $minAudience' : ''}
+- Confirmação: $_confirmationLevel | Máximo de resultados: até $maxResults eventos.
+TIPOS DE EVENTOS PROCURADOS:
 $typesText
 
 ${exclText}Retorno estruturado em JSON (cityInfo + events[]).''';
@@ -195,6 +310,44 @@ ${exclText}Retorno estruturado em JSON (cityInfo + events[]).''';
     final horizon = int.tryParse(_horizonCtrl.text.trim());
     if (horizon == null || horizon < 1 || horizon > 730) {
       _showMsg('Horizonte em dias deve estar entre 1 e 730.', isError: true);
+      return;
+    }
+    final minDuration = int.tryParse(_minDurationCtrl.text.trim());
+    if (minDuration == null || minDuration < 1 || minDuration > 365) {
+      _showMsg('Duração mínima deve estar entre 1 e 365 dias.', isError: true);
+      return;
+    }
+    if (_maxDurationCtrl.text.trim().isNotEmpty) {
+      final maxDuration = int.tryParse(_maxDurationCtrl.text.trim());
+      if (maxDuration == null || maxDuration < minDuration || maxDuration > 365) {
+        _showMsg('Duração máxima deve ser >= duração mínima e até 365 dias.',
+            isError: true);
+        return;
+      }
+    }
+    if (_minAudienceCtrl.text.trim().isNotEmpty) {
+      final minAud = int.tryParse(_minAudienceCtrl.text.trim());
+      if (minAud == null || minAud < 0) {
+        _showMsg('Público mínimo estimado inválido.', isError: true);
+        return;
+      }
+    }
+    if (_maxRadiusCtrl.text.trim().isNotEmpty) {
+      final rad = int.tryParse(_maxRadiusCtrl.text.trim());
+      if (rad == null || rad < 1 || rad > 5000) {
+        _showMsg('Raio máximo deve estar entre 1 e 5000 km.', isError: true);
+        return;
+      }
+    }
+    final maxResults = int.tryParse(_maxResultsCtrl.text.trim());
+    if (maxResults == null || maxResults < 1 || maxResults > 50) {
+      _showMsg('Máximo de resultados deve estar entre 1 e 50.', isError: true);
+      return;
+    }
+    final cacheTtl = int.tryParse(_cacheTtlCtrl.text.trim());
+    if (cacheTtl == null || cacheTtl < 0 || cacheTtl > 30) {
+      _showMsg('Validade do cache deve estar entre 0 e 30 dias.',
+          isError: true);
       return;
     }
     if (_descriptionCtrl.text.trim().isEmpty) {
@@ -872,6 +1025,308 @@ ${exclText}Retorno estruturado em JSON (cityInfo + events[]).''';
                               filled: true,
                               fillColor: _bg,
                               border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _sectionCard(
+                      icon: Icons.timelapse_rounded,
+                      title: 'Duração do Evento',
+                      subtitle:
+                          'Filtre quantos dias o evento deve durar para compensar deslocamento.',
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _minDurationCtrl,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (_) => setState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Mínimo (dias)',
+                                    labelStyle: TextStyle(
+                                        color: Colors.white70, fontSize: 12),
+                                    filled: true,
+                                    fillColor: _bg,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _maxDurationCtrl,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (_) => setState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Máximo (vazio = livre)',
+                                    labelStyle: TextStyle(
+                                        color: Colors.white70, fontSize: 12),
+                                    filled: true,
+                                    fillColor: _bg,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            activeColor: _accent,
+                            title: const Text(
+                              'Aceitar 1 dia só se for grande porte',
+                              style:
+                                  TextStyle(color: Colors.white, fontSize: 13),
+                            ),
+                            value: _allowSingleDayIfLarge,
+                            onChanged: (v) =>
+                                setState(() => _allowSingleDayIfLarge = v),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _sectionCard(
+                      icon: Icons.groups_rounded,
+                      title: 'Porte, Público e Entrada',
+                      subtitle:
+                          'Perfil demográfico e perfil comercial dos eventos desejados.',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TextField(
+                            controller: _minAudienceCtrl,
+                            keyboardType: TextInputType.number,
+                            style: const TextStyle(color: Colors.white),
+                            onChanged: (_) => setState(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Público mínimo estimado (opcional)',
+                              hintText: 'Ex.: 5000',
+                              hintStyle: TextStyle(
+                                  color: Colors.white30, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            value: _cityPopulationProfile,
+                            dropdownColor: _cardBg,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Perfil da Cidade',
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                  value: 'ALL',
+                                  child: Text('Todas as cidades')),
+                              DropdownMenuItem(
+                                  value: 'SMALL_MEDIUM',
+                                  child: Text('Cidades pequenas e médias')),
+                              DropdownMenuItem(
+                                  value: 'LARGE',
+                                  child: Text('Cidades grandes / capitais')),
+                            ],
+                            onChanged: (v) => setState(
+                                () => _cityPopulationProfile = v ?? 'ALL'),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            value: _audienceFocus,
+                            dropdownColor: _cardBg,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Público-Alvo',
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                  value: 'FAMILY_KIDS',
+                                  child: Text('Famílias e crianças')),
+                              DropdownMenuItem(
+                                  value: 'GENERAL',
+                                  child: Text('Público geral')),
+                              DropdownMenuItem(
+                                  value: 'NIGHTLIFE',
+                                  child: Text('Vida noturna / adulto')),
+                            ],
+                            onChanged: (v) => setState(
+                                () => _audienceFocus = v ?? 'FAMILY_KIDS'),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            value: _entryTypePreference,
+                            dropdownColor: _cardBg,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Tipo de Entrada',
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                  value: 'ANY',
+                                  child: Text('Gratuita ou paga')),
+                              DropdownMenuItem(
+                                  value: 'FREE_ONLY',
+                                  child: Text('Somente entrada gratuita')),
+                              DropdownMenuItem(
+                                  value: 'PAID_OK',
+                                  child: Text('Eventos pagos com bilheteria')),
+                            ],
+                            onChanged: (v) => setState(
+                                () => _entryTypePreference = v ?? 'ANY'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _sectionCard(
+                      icon: Icons.explore_rounded,
+                      title: 'Confirmação e Área de Atuação',
+                      subtitle:
+                          'Rigor de confirmação, cidade-base, raio e estados prioritários.',
+                      child: Column(
+                        children: [
+                          DropdownButtonFormField<String>(
+                            value: _confirmationLevel,
+                            dropdownColor: _cardBg,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: const InputDecoration(
+                              labelText: 'Nível de Confirmação',
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                  value: 'CONFIRMED_AND_TRADITIONAL',
+                                  child: Text('Confirmados e tradicionais')),
+                              DropdownMenuItem(
+                                  value: 'CONFIRMED_ONLY',
+                                  child:
+                                      Text('Somente confirmados oficialmente')),
+                            ],
+                            onChanged: (v) => setState(() =>
+                                _confirmationLevel =
+                                    v ?? 'CONFIRMED_AND_TRADITIONAL'),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 2,
+                                child: TextField(
+                                  controller: _baseCityCtrl,
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (_) => setState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Cidade-base (opcional)',
+                                    labelStyle: TextStyle(
+                                        color: Colors.white70, fontSize: 12),
+                                    filled: true,
+                                    fillColor: _bg,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _maxRadiusCtrl,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(color: Colors.white),
+                                  onChanged: (_) => setState(() {}),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Raio (km)',
+                                    labelStyle: TextStyle(
+                                        color: Colors.white70, fontSize: 12),
+                                    filled: true,
+                                    fillColor: _bg,
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _priorityStatesCtrl,
+                            style: const TextStyle(color: Colors.white),
+                            onChanged: (_) => setState(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Estados prioritários (UFs separadas por vírgula)',
+                              hintText: 'Ex.: GO, MT, MS, MG',
+                              hintStyle: TextStyle(
+                                  color: Colors.white30, fontSize: 12),
+                              labelStyle: TextStyle(
+                                  color: Colors.white70, fontSize: 12),
+                              filled: true,
+                              fillColor: _bg,
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _sectionCard(
+                      icon: Icons.savings_rounded,
+                      title: 'Limite e Cache (Economia de API)',
+                      subtitle:
+                          'Controle a quantidade de eventos retornados e quantos dias reutilizar o cache.',
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _maxResultsCtrl,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
+                              onChanged: (_) => setState(() {}),
+                              decoration: const InputDecoration(
+                                labelText: 'Máx. resultados (1–50)',
+                                labelStyle: TextStyle(
+                                    color: Colors.white70, fontSize: 12),
+                                filled: true,
+                                fillColor: _bg,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: _cacheTtlCtrl,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(color: Colors.white),
+                              onChanged: (_) => setState(() {}),
+                              decoration: const InputDecoration(
+                                labelText: 'Cache em dias (0–30)',
+                                labelStyle: TextStyle(
+                                    color: Colors.white70, fontSize: 12),
+                                filled: true,
+                                fillColor: _bg,
+                                border: OutlineInputBorder(),
+                              ),
                             ),
                           ),
                         ],

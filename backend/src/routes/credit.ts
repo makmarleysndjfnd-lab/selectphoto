@@ -2106,6 +2106,8 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
       const uniformInstallmentAmountBrl = uniformInstallmentAmountCents !== null ? Number((uniformInstallmentAmountCents / 100).toFixed(2)) : null;
       const distinctInstallmentAmountsBrl = Array.from(new Set(instAmounts)).map((amt) => Number((amt / 100).toFixed(2)));
 
+      const instPctLabel = `${Math.round((a.installmentCommissionRate ?? 0.10) * 100)}%`;
+
       return {
         ...a,
         totalSaleBrl: Number((a.totalSaleCents / 100).toFixed(2)),
@@ -2124,13 +2126,13 @@ async function handleSellerPortfolio(req: AuthRequest, res: Response) {
         distinctInstallmentAmountsBrl,
         downPaymentCommissionRate: a.initialCommissionRate,
         downPaymentCommissionRateFormatted: `${Math.round(a.initialCommissionRate * 100)}%`,
-        downPaymentCommissionRateDescription: a.initialCommissionRate >= 0.25 ? '25% (Carro próprio)' : '20% (Carro da empresa)',
+        downPaymentCommissionRateDescription: `${Math.round(a.initialCommissionRate * 100)}% aplicado na entrada`,
         downPaymentCommissionCents: downPaymentCommCents,
         downPaymentCommissionBrl: Number((downPaymentCommCents / 100).toFixed(2)),
-        downPaymentCommissionExplanation: 'Comissão sobre a entrada, apurada e separada dos 10% das parcelas.',
+        downPaymentCommissionExplanation: `Comissão sobre a entrada, apurada e separada dos ${instPctLabel} das parcelas.`,
         installmentCommissionRate: a.installmentCommissionRate,
-        installmentCommissionRateFormatted: '10%',
-        installmentCommissionExplanation: 'Comissão de 10% sobre o principal recebido das parcelas.',
+        installmentCommissionRateFormatted: instPctLabel,
+        installmentCommissionExplanation: `Comissão de ${instPctLabel} sobre o principal recebido das parcelas.`,
         futureEstimatedCommissionCents: agreementFutureCommCents,
         futureEstimatedCommissionBrl: Number((agreementFutureCommCents / 100).toFixed(2)),
         futureEstimatedCommissionLabel: 'Previsão futura (condicional ao pagamento do principal pelo cliente)',
@@ -3219,8 +3221,9 @@ router.post('/asaas/duplicate-alerts/:id/resolve', authenticateToken, requireAdm
           },
         });
 
-        // Gerar comissão de 10% sobre o principal efetivamente amortizado, uma única vez
-        const commissionCents = Math.round(totalAmortizedCents * 0.10);
+        // Gerar comissão sobre o principal efetivamente amortizado usando a taxa do contrato
+        const instRate = freshAgreement.installmentCommissionRate ?? 0.10;
+        const commissionCents = Math.round(totalAmortizedCents * instRate);
         if (commissionCents > 0) {
           await tx.creditCommission.create({
             data: {

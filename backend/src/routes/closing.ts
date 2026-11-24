@@ -2,7 +2,11 @@ import { Router, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
-import { resolveSellerCommissionRate } from '../utils/commission';
+import {
+    resolveSellerCommissionRate,
+    resolveHistoricalSaleCommissionRate,
+} from '../utils/commission';
+import { getCompanyOperationalConfig } from '../services/companyOperationalConfigService';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import {
   getSaleEffectivePayments,
@@ -812,11 +816,20 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const requester = req.user?.id
             ? await prisma.user.findUnique({ where: { id: req.user.id }, select: { pixKey: true } })
             : null;
-        const commissionRate = resolveSellerCommissionRate(seller);
+        const opCfg = effectiveCompanyId
+            ? await getCompanyOperationalConfig(effectiveCompanyId)
+            : null;
+        const commissionRate = opCfg
+            ? Number((opCfg.virginBookCommissionPercent / 100).toFixed(4))
+            : resolveSellerCommissionRate(seller);
 
         sales.forEach(sale => {
             const effectiveValue = getSaleNetValue(sale);
             totalSalesValue += effectiveValue;
+            const saleRate = resolveHistoricalSaleCommissionRate({
+                sale: { ...sale, seller },
+                operationalConfig: opCfg,
+            });
 
             if (sale.creditAgreement && sale.creditAgreement.status !== 'CANCELLED') {
                 crediarioSalesCount += 1;
@@ -828,13 +841,11 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
                 const financedVal = Number((netFinancedCents / 100).toFixed(2));
                 crediarioDownPaymentValue += downPaymentVal;
                 crediarioFinancedValue += financedVal;
-                // Utilizar a taxa histórica salva no contrato de crediário
-                const downPaymentRate = sale.creditAgreement.initialCommissionRate ?? commissionRate;
-                crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
+                crediarioDownPaymentCommission += Number((downPaymentVal * saleRate).toFixed(2));
             } else {
                 aVistaSalesCount += 1;
                 aVistaSalesValue += effectiveValue;
-                aVistaCommission += Number((effectiveValue * commissionRate).toFixed(2));
+                aVistaCommission += Number((effectiveValue * saleRate).toFixed(2));
             }
 
             for (const p of getSaleEffectivePayments(sale)) {
@@ -851,8 +862,10 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         creditPaymentsCollected.forEach(payment => {
             const amountVal = Number((payment.amountCents / 100).toFixed(2));
             if (payment.agreement?.sellerId === sellerId) {
-                // 10% fixo sobre principal recebido de parcelas
-                crediarioInstallmentsCommission += Number((amountVal * 0.10).toFixed(2));
+                const instRate =
+                    payment.agreement?.installmentCommissionRate ??
+                    (opCfg ? Number((opCfg.creditInstallmentCommissionPercent / 100).toFixed(4)) : 0.10);
+                crediarioInstallmentsCommission += Number((amountVal * instRate).toFixed(2));
             }
 
             // Cobrança em mãos do vendedor (aumenta o dinheiro em posse do vendedor)
@@ -1062,6 +1075,7 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
                 date: { gte: startDate, lte: endDate }
             },
             include: {
+                client: { select: { bookStatus: true } },
                 payments: true,
                 creditAgreement: true,
             }
@@ -1088,21 +1102,29 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
         let crediarioInstallmentsCommission = 0;
 
         const seller = await prisma.user.findUnique({ where: { id: sellerId } });
-        const commRate = resolveSellerCommissionRate(seller);
+        const effectiveCompanyIdPost = seller?.companyId || userCompanyId;
+        const postOpCfg = effectiveCompanyIdPost
+            ? await getCompanyOperationalConfig(effectiveCompanyIdPost)
+            : null;
+        const commRate = postOpCfg
+            ? Number((postOpCfg.virginBookCommissionPercent / 100).toFixed(4))
+            : resolveSellerCommissionRate(seller);
 
         sales.forEach(s => {
             const effectiveValue = getSaleNetValue(s);
             totalSalesVal += effectiveValue;
+            const saleRate = resolveHistoricalSaleCommissionRate({
+                sale: { ...s, seller },
+                operationalConfig: postOpCfg,
+            });
 
             if (s.creditAgreement && s.creditAgreement.status !== 'CANCELLED') {
                 const netSaleCents = Math.round(effectiveValue * 100);
                 const netDownCents = Math.min(netSaleCents, s.creditAgreement.downPaymentCents || 0);
                 const downPaymentVal = Number((netDownCents / 100).toFixed(2));
-                // Utilizar a taxa histórica salva no contrato de crediário
-                const downPaymentRate = s.creditAgreement.initialCommissionRate ?? commRate;
-                crediarioDownPaymentCommission += Number((downPaymentVal * downPaymentRate).toFixed(2));
+                crediarioDownPaymentCommission += Number((downPaymentVal * saleRate).toFixed(2));
             } else {
-                aVistaCommission += Number((effectiveValue * commRate).toFixed(2));
+                aVistaCommission += Number((effectiveValue * saleRate).toFixed(2));
             }
 
             for (const p of getSaleEffectivePayments(s)) {

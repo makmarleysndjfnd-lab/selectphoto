@@ -28,6 +28,7 @@ import 'visao_crediario_admin.dart';
 import 'visao_conferencia_admin.dart';
 import 'tela_vales_admin.dart';
 import '../widgets/admin_ficha_actions.dart';
+import 'tela_config_operacional_empresa.dart';
 import '../widgets/company_pix_dialog.dart';
 import '../utils/lumora_theme.dart';
 import 'painel_proprietario_empresas.dart';
@@ -1168,6 +1169,24 @@ class _AdminDashboardState extends State<AdminDashboard>
                       _sideMenuItem(
                           5, Icons.people_alt_rounded, 'Funcionários'),
                       _sideMenuItem(3, Icons.directions_car_rounded, 'Frota'),
+                      ListTile(
+                        leading: const Icon(Icons.tune_rounded,
+                            color: Color(0xFFA855F7)),
+                        title: const Text('Comissões & QR',
+                            style: TextStyle(color: Colors.white)),
+                        onTap: () {
+                          if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+                            Navigator.pop(context);
+                          }
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const TelaConfigOperacionalEmpresa(),
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
