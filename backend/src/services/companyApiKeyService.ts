@@ -1,9 +1,17 @@
 import { prisma } from './prisma';
-import { encryptSecret, decryptSecret } from './vaultService';
+import {
+  encryptSecret,
+  decryptSecret,
+  isVaultConfigurationError,
+  validateExternalUrl,
+  ASAAS_SANDBOX_BASE_URL,
+  ASAAS_PRODUCTION_BASE_URL,
+} from './vaultService';
+import { GoogleGenAI } from '@google/genai';
 import { recordOperationalAuditEvent } from './operationalAuditService';
 import { isExternalServicesDisabled } from '../utils/externalServices';
 import { getCompanyAsaasConfig } from './asaasService';
-import { validateExternalUrl, ASAAS_SANDBOX_BASE_URL, ASAAS_PRODUCTION_BASE_URL } from './vaultService';
+import { recordCompanyApiUsageLog } from './apiUsageService';
 
 export function formatTailMask(secret: string | null | undefined): string | null {
   if (!secret || typeof secret !== 'string') return null;
@@ -13,7 +21,10 @@ export function formatTailMask(secret: string | null | undefined): string | null
   return `••••${trimmed.slice(-4)}`;
 }
 
-export async function resolveExclusiveCompanyGeminiKey(companyId: string): Promise<{
+export async function resolveExclusiveCompanyGeminiKey(
+  companyId: string,
+  options?: { rethrowVaultError?: boolean }
+): Promise<{
   configured: boolean;
   key: string | null;
   maskedKey: string | null;
@@ -53,6 +64,9 @@ export async function resolveExclusiveCompanyGeminiKey(companyId: string): Promi
         };
       }
     } catch (err) {
+      if (options?.rethrowVaultError && isVaultConfigurationError(err)) {
+        throw err;
+      }
       console.error(`[CompanyApiKey] Erro ao descriptografar chave Gemini da empresa ${companyId}:`, err);
     }
   }
@@ -91,6 +105,9 @@ export async function resolveExclusiveCompanyGeminiKey(companyId: string): Promi
         };
       }
     } catch (err) {
+      if (options?.rethrowVaultError && isVaultConfigurationError(err)) {
+        throw err;
+      }
       console.error(`[CompanyApiKey] Erro ao descriptografar CompanyIntegration Gemini (${companyId}):`, err);
     }
   }
@@ -339,7 +356,10 @@ export async function setExclusiveCompanyAsaasKey(params: {
   return { configured: true, environment: envUpper, maskedKey: masked };
 }
 
-export async function resolveCompanyAsaasStatus(companyId: string) {
+export async function resolveCompanyAsaasStatus(
+  companyId: string,
+  options?: { rethrowVaultError?: boolean }
+) {
   const [integs, legacyCfg, company] = await Promise.all([
     prisma.companyIntegration.findMany({
       where: { companyId, category: 'PAYMENT_GATEWAY', provider: 'ASAAS' },
@@ -373,7 +393,10 @@ export async function resolveCompanyAsaasStatus(companyId: string) {
         );
         configured = Boolean(secret && secret.trim());
         maskedKey = activeInteg.secretMasked || formatTailMask(secret);
-      } catch {
+      } catch (err) {
+        if (options?.rethrowVaultError && isVaultConfigurationError(err)) {
+          throw err;
+        }
         configured = false;
       }
     }
@@ -401,6 +424,20 @@ export async function resolveCompanyAsaasStatus(companyId: string) {
   };
 }
 
+function sanitizeProviderError(raw: unknown, secretToHide: string): string {
+  const rawStr = String(raw || 'Erro desconhecido');
+  if (!secretToHide) return rawStr;
+  return rawStr.split(secretToHide).join('••••');
+}
+
+function extractHttpStatusFromError(err: any): number | null {
+  const direct = err?.status ?? err?.statusCode ?? err?.httpStatus ?? err?.response?.status;
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+  const msg = String(err?.message || '');
+  const match = msg.match(/\b(401|403|429|500|502|503|504)\b/);
+  return match ? Number(match[1]) : null;
+}
+
 export async function testCompanyGeminiConnection(params: {
   companyId: string;
   actorUserId: string;
@@ -408,7 +445,7 @@ export async function testCompanyGeminiConnection(params: {
   ipAddress?: string | null;
 }) {
   const { companyId, actorUserId, actorName, ipAddress } = params;
-  const resolved = await resolveExclusiveCompanyGeminiKey(companyId);
+  const resolved = await resolveExclusiveCompanyGeminiKey(companyId, { rethrowVaultError: true });
 
   if (!resolved.configured || !resolved.key) {
     return {
@@ -424,47 +461,109 @@ export async function testCompanyGeminiConnection(params: {
   let success = false;
   let message = '';
   let latencyMs = 0;
+  let httpStatus: number | null = null;
+  let rateLimited = false;
+  let promptTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
   const started = Date.now();
 
   if (isExternalServicesDisabled()) {
+    const trimmedKey = resolved.key.trim();
+    const looksRateLimited = trimmedKey.toLowerCase().includes('ratelimit') || trimmedKey.includes('429');
     const looksInvalid =
-      resolved.key.trim().length < 12 ||
-      resolved.key.toLowerCase().includes('invalid');
-    success = !looksInvalid;
-    message = success
-      ? 'Chave Gemini da empresa validada com sucesso (modo seguro de teste).'
-      : 'Formato de chave Gemini inválido para autenticação.';
+      trimmedKey.length < 12 || trimmedKey.toLowerCase().includes('invalid');
+    if (looksRateLimited) {
+      success = false;
+      rateLimited = true;
+      httpStatus = 429;
+      message = 'Limite ou cota da API Gemini atingido (HTTP 429).';
+    } else if (looksInvalid) {
+      success = false;
+      httpStatus = 401;
+      message = 'Formato de chave Gemini inválido para autenticação.';
+    } else {
+      success = true;
+      httpStatus = 200;
+      message = 'Chave Gemini da empresa validada com sucesso (modo seguro de teste).';
+    }
     latencyMs = Date.now() - started;
   } else {
+    let timer: NodeJS.Timeout | null = null;
     try {
-      const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models';
-      const check = await validateExternalUrl(endpoint);
+      const check = await validateExternalUrl('https://generativelanguage.googleapis.com');
       if (!check.valid) {
         throw new Error(check.error || 'Endpoint Gemini não autorizado.');
       }
-      const resp = await fetch(endpoint, {
-        method: 'GET',
-        headers: { 'x-goog-api-key': resolved.key },
-        signal: AbortSignal.timeout(8000),
+
+      const ai = new GoogleGenAI({ apiKey: resolved.key });
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const timeoutErr: any = new Error('GEMINI_TEST_TIMEOUT');
+          timeoutErr.name = 'AbortError';
+          reject(timeoutErr);
+        }, 8000);
       });
+
+      const response: any = await Promise.race([
+        ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: 'Ping',
+          config: { maxOutputTokens: 8 },
+        }),
+        timeoutPromise,
+      ]);
+
       latencyMs = Date.now() - started;
-      if (resp.ok) {
-        success = true;
-        message = 'Conexão com Google Gemini autenticada com sucesso.';
-      } else {
-        success = false;
-        message = `Google Gemini rejeitou a credencial (HTTP ${resp.status}).`;
+      httpStatus = 200;
+      success = true;
+      message = 'Conexão com Google Gemini autenticada com sucesso.';
+
+      const um = response?.usageMetadata;
+      if (um) {
+        promptTokens = typeof um.promptTokenCount === 'number' ? um.promptTokenCount : 0;
+        outputTokens = typeof um.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
+        totalTokens =
+          typeof um.totalTokenCount === 'number'
+            ? um.totalTokenCount
+            : promptTokens + outputTokens;
       }
     } catch (err: any) {
       latencyMs = Date.now() - started;
-      const safeErr = String(err?.message || 'Timeout ou erro de rede').replace(
-        resolved.key,
-        '••••'
-      );
+      const errStatus = extractHttpStatusFromError(err);
+      httpStatus = errStatus;
+      const safeErr = sanitizeProviderError(err?.message || 'Timeout ou erro de rede', resolved.key);
       success = false;
-      message = `Falha na conexão Gemini: ${safeErr}`;
+
+      if (err?.name === 'AbortError' || safeErr.includes('GEMINI_TEST_TIMEOUT') || err?.code === 'ETIMEDOUT') {
+        httpStatus = 504;
+        message = 'Timeout após 8s ao conectar ao Google Gemini.';
+      } else if (errStatus === 429 || /RESOURCE_EXHAUSTED/i.test(safeErr)) {
+        httpStatus = 429;
+        rateLimited = true;
+        message = 'Limite ou cota da API Gemini atingido (HTTP 429).';
+      } else if (errStatus === 401 || errStatus === 403 || /API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED/i.test(safeErr)) {
+        message = `Chave Gemini rejeitada pela API Google (HTTP ${errStatus || '401/403'}).`;
+      } else if (/fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|network/i.test(safeErr)) {
+        message = `Erro de rede ao conectar ao Google Gemini: ${safeErr}`;
+      } else {
+        message = `Falha na conexão Gemini: ${safeErr}`;
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
+
+  await recordCompanyApiUsageLog({
+    companyId,
+    provider: 'GEMINI',
+    operation: 'CONNECTION_TEST',
+    status: success ? 'SUCCESS' : rateLimited ? 'RATE_LIMITED' : 'ERROR',
+    promptTokens,
+    outputTokens,
+    totalTokens,
+    httpStatus,
+  });
 
   const statusStr = success ? 'CONNECTED' : 'ERROR';
   await prisma.company.update({
@@ -489,6 +588,7 @@ export async function testCompanyGeminiConnection(params: {
       status: statusStr,
       maskedKey: resolved.maskedKey,
       latencyMs,
+      httpStatus,
     },
     reason: message,
     authorUserId: actorUserId,
@@ -504,6 +604,7 @@ export async function testCompanyGeminiConnection(params: {
     status: statusStr,
     message,
     latencyMs,
+    httpStatus,
     lastTestedAt: now,
   };
 }
@@ -516,7 +617,7 @@ export async function testCompanyAsaasConnection(params: {
   ipAddress?: string | null;
 }) {
   const { companyId, actorUserId, actorName, requestedEnv, ipAddress } = params;
-  const info = await resolveCompanyAsaasStatus(companyId);
+  const info = await resolveCompanyAsaasStatus(companyId, { rethrowVaultError: true });
 
   if (!info.configured || !info.secret) {
     return {
@@ -540,16 +641,29 @@ export async function testCompanyAsaasConnection(params: {
   let success = false;
   let message = '';
   let latencyMs = 0;
+  let httpStatus: number | null = null;
+  let rateLimited = false;
   const started = Date.now();
 
   if (isExternalServicesDisabled()) {
+    const trimmedSecret = info.secret.trim();
+    const looksRateLimited = trimmedSecret.toLowerCase().includes('ratelimit') || trimmedSecret.includes('429');
     const looksInvalid =
-      info.secret.trim().length < 12 ||
-      info.secret.toLowerCase().includes('invalid');
-    success = !looksInvalid;
-    message = success
-      ? `Conexão Asaas (${envUpper}) validada com sucesso (modo seguro de teste).`
-      : `Credencial Asaas (${envUpper}) inválida.`;
+      trimmedSecret.length < 12 || trimmedSecret.toLowerCase().includes('invalid');
+    if (looksRateLimited) {
+      success = false;
+      rateLimited = true;
+      httpStatus = 429;
+      message = `Limite de requisições Asaas (${envUpper}) atingido (HTTP 429).`;
+    } else if (looksInvalid) {
+      success = false;
+      httpStatus = 401;
+      message = `Credencial Asaas (${envUpper}) inválida.`;
+    } else {
+      success = true;
+      httpStatus = 200;
+      message = `Conexão Asaas (${envUpper}) validada com sucesso (modo seguro de teste).`;
+    }
     latencyMs = Date.now() - started;
   } else {
     try {
@@ -569,23 +683,43 @@ export async function testCompanyAsaasConnection(params: {
         signal: AbortSignal.timeout(8000),
       });
       latencyMs = Date.now() - started;
+      httpStatus = resp.status;
       if (resp.ok) {
         success = true;
         message = `Conexão com Asaas (${envUpper}) autenticada com sucesso.`;
+      } else if (resp.status === 429) {
+        success = false;
+        rateLimited = true;
+        message = `Limite de requisições Asaas (${envUpper}) atingido (HTTP 429).`;
+      } else if (resp.status === 401 || resp.status === 403) {
+        success = false;
+        message = `Chave Asaas (${envUpper}) rejeitada (HTTP ${resp.status}).`;
       } else {
         success = false;
-        message = `Asaas (${envUpper}) rejeitou a credencial (HTTP ${resp.status}).`;
+        message = `Asaas (${envUpper}) retornou falha HTTP ${resp.status}.`;
       }
     } catch (err: any) {
       latencyMs = Date.now() - started;
-      const safeErr = String(err?.message || 'Timeout ou erro de rede').replace(
-        info.secret,
-        '••••'
-      );
+      const safeErr = sanitizeProviderError(err?.message || 'Timeout ou erro de rede', info.secret);
       success = false;
-      message = `Falha na conexão Asaas (${envUpper}): ${safeErr}`;
+      if (err?.name === 'AbortError' || err?.name === 'TimeoutError' || /timeout|ETIMEDOUT/i.test(safeErr)) {
+        httpStatus = 504;
+        message = `Timeout após 8s ao conectar ao Asaas (${envUpper}).`;
+      } else if (/fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|network/i.test(safeErr)) {
+        message = `Erro de rede ao conectar ao Asaas (${envUpper}): ${safeErr}`;
+      } else {
+        message = `Falha na conexão Asaas (${envUpper}): ${safeErr}`;
+      }
     }
   }
+
+  await recordCompanyApiUsageLog({
+    companyId,
+    provider: 'ASAAS',
+    operation: 'CONNECTION_TEST',
+    status: success ? 'SUCCESS' : rateLimited ? 'RATE_LIMITED' : 'ERROR',
+    httpStatus,
+  });
 
   const statusStr = success ? 'CONNECTED' : 'ERROR';
   await prisma.company.update({
@@ -611,6 +745,7 @@ export async function testCompanyAsaasConnection(params: {
       environment: envUpper,
       maskedKey: info.maskedKey,
       latencyMs,
+      httpStatus,
     },
     reason: message,
     authorUserId: actorUserId,
@@ -627,6 +762,7 @@ export async function testCompanyAsaasConnection(params: {
     status: statusStr,
     message,
     latencyMs,
+    httpStatus,
     lastTestedAt: now,
   };
 }

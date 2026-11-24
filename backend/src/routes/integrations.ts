@@ -11,7 +11,9 @@ import {
   maskSecret,
   decryptSecret,
   isAllowedEnvVarForIntegration,
+  sendVaultUnavailableIfApplicable,
 } from '../services/vaultService';
+import { getCompanyMonthlyApiUsageSummary } from '../services/apiUsageService';
 import {
   testGeminiConnection,
   testViaCepConnection,
@@ -391,6 +393,53 @@ router.post(
 );
 
 /**
+ * GET /api/integrations/usage
+ * Resumo mensal de consumo e metas das APIs (Gemini e Asaas/Serasa) exclusivo para Admin da empresa
+ */
+router.get('/usage', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const role = String(req.user?.role || '').toUpperCase();
+    if (!['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return res.status(403).json({
+        error: 'Acesso restrito a administradores da empresa.',
+      });
+    }
+
+    const ownCompanyId = req.user?.companyId ? String(req.user.companyId) : '';
+    const requestedCompanyId =
+      typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '';
+
+    if (role !== 'SUPER_ADMIN') {
+      if (!ownCompanyId) {
+        return res.status(403).json({ error: 'Empresa do usuário não identificada.' });
+      }
+      if (requestedCompanyId && requestedCompanyId !== ownCompanyId) {
+        return res.status(403).json({
+          error: 'Isolamento multi-tenant: proibido consultar consumo de outra empresa.',
+        });
+      }
+    }
+
+    const targetCompanyId =
+      role === 'SUPER_ADMIN' && requestedCompanyId ? requestedCompanyId : ownCompanyId;
+    if (!targetCompanyId) {
+      return res.status(400).json({ error: 'companyId é obrigatório.' });
+    }
+
+    const yearMonth =
+      typeof req.query.yearMonth === 'string' ? req.query.yearMonth : undefined;
+    const summary = await getCompanyMonthlyApiUsageSummary(targetCompanyId, yearMonth);
+    return res.json(summary);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Erro ao consultar consumo mensal de APIs:', error);
+    return res.status(500).json({ error: error?.message || 'Erro ao consultar consumo de APIs.' });
+  }
+});
+
+/**
  * GET /api/owner/integrations/:id
  * Busca detalhes de uma integração (com auditoria recente e métricas de consumo)
  */
@@ -723,6 +772,7 @@ router.post(
         },
       });
     } catch (err: any) {
+      if (sendVaultUnavailableIfApplicable(res, err)) return;
       res.status(500).json({ error: `Falha ao cadastrar integração: ${err.message}` });
     }
   }
@@ -919,6 +969,7 @@ router.put(
         },
       });
     } catch (err: any) {
+      if (sendVaultUnavailableIfApplicable(res, err)) return;
       res.status(500).json({ error: `Falha ao atualizar parâmetros da integração: ${err.message}` });
     }
   }
@@ -995,6 +1046,7 @@ router.post(
         },
       });
     } catch (err: any) {
+      if (sendVaultUnavailableIfApplicable(res, err)) return;
       res.status(500).json({ error: `Erro ao rotacionar credencial: ${err.message}` });
     }
   }
@@ -1264,6 +1316,7 @@ router.post(
 
       res.json({ testResult });
     } catch (err: any) {
+      if (sendVaultUnavailableIfApplicable(res, err)) return;
       res.status(500).json({ error: `Erro ao testar conexão: ${err.message}` });
     }
   }

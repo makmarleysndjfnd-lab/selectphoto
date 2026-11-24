@@ -51,6 +51,8 @@ model Company {
   platformFeeBps          Int       @default(250) // 250 bps = 2,50%
   commercialStatus        String    @default("ACTIVE") // ACTIVE | WARNING | SUSPENDED
   commercialStatusReason  String?
+  geminiMonthlyLimitCalls Int       @default(200)
+  asaasMonthlyLimitCalls  Int       @default(500)
 
   users                User[]
   teams                Team[]
@@ -102,6 +104,7 @@ model Company {
   negativationRecords          CreditNegativationRecord[]
   staffAdvances                StaffAdvanceEntry[]
   saleAdjustments              SaleAdjustment[]
+  apiUsageLogs                 ApiUsageLog[]
 }
 
 model Team {
@@ -1268,6 +1271,25 @@ model ApiUsageRecord {
   @@index([companyId, category, environment, timestamp])
   @@index([integrationId, timestamp])
   @@index([tariffId])
+}
+
+model ApiUsageLog {
+  id           String   @id @default(uuid())
+  companyId    String
+  provider     String   // GEMINI | ASAAS
+  operation    String   // EVENTS_SEARCH | STATE_RADAR | CHARGE_CREATE | SERASA_QUERY | CONNECTION_TEST
+  yearMonth    String   // YYYY-MM em -03:00
+  status       String   // SUCCESS | ERROR | RATE_LIMITED
+  promptTokens Int      @default(0)
+  outputTokens Int      @default(0)
+  totalTokens  Int      @default(0)
+  httpStatus   Int?
+  createdAt    DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, yearMonth, provider])
+  @@index([companyId, createdAt])
 }
 
 model CompanyApiTariff {

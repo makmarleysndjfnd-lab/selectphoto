@@ -9,10 +9,38 @@ const resolve4Async = promisify(dns.resolve4);
  * Falha de forma segura (fail-closed) sem derrubar módulos independentes na inicialização.
  */
 export class VaultConfigurationError extends Error {
+  readonly code = 'VAULT_NOT_CONFIGURED';
+  readonly status = 503;
+
   constructor(message: string) {
     super(message);
     this.name = 'VaultConfigurationError';
   }
+}
+
+export const VAULT_NOT_CONFIGURED_CODE = 'VAULT_NOT_CONFIGURED';
+export const VAULT_NOT_CONFIGURED_MESSAGE =
+  'Cofre de integrações indisponível: configure a variável INTEGRATION_MASTER_KEY (mínimo 32 caracteres) no servidor.';
+
+export function isVaultConfigurationError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  if (err instanceof VaultConfigurationError) return true;
+  const anyErr = err as any;
+  return (
+    anyErr.name === 'VaultConfigurationError' ||
+    anyErr.code === 'VAULT_NOT_CONFIGURED' ||
+    (typeof anyErr.message === 'string' &&
+      anyErr.message.includes('INTEGRATION_MASTER_KEY'))
+  );
+}
+
+export function sendVaultUnavailableIfApplicable(res: any, err: unknown): boolean {
+  if (!isVaultConfigurationError(err)) return false;
+  res.status(503).json({
+    error: VAULT_NOT_CONFIGURED_MESSAGE,
+    code: VAULT_NOT_CONFIGURED_CODE,
+  });
+  return true;
 }
 
 /**
@@ -229,6 +257,10 @@ export function decryptSecret(
           // Ignora erro legado e lança o erro da chave primária
         }
       }
+    }
+
+    if (primaryErr instanceof VaultConfigurationError) {
+      throw primaryErr;
     }
 
     throw new Error(`Falha ao descriptografar segredo: integridade ou chave inválida (${primaryErr.message}).`);

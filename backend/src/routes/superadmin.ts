@@ -18,6 +18,11 @@ import {
   previewOrGetCompanyStatement,
 } from '../services/platformBillingService';
 import { getCompetenceForDate } from '../services/monthlyCreditClosingService';
+import { sendVaultUnavailableIfApplicable } from '../services/vaultService';
+import {
+  getCompanyMonthlyApiUsageSummary,
+  updateCompanyApiUsageLimits,
+} from '../services/apiUsageService';
 
 const router = Router();
 
@@ -73,9 +78,9 @@ async function syncCompanyPlatformRateFromBps(
   });
 }
 
-async function sanitizeCompanyForSuperAdmin(c: any) {
+async function sanitizeCompanyForSuperAdmin(c: any, options?: { rethrowVaultError?: boolean }) {
   const [asaasInfo, activeAiInteg] = await Promise.all([
-    resolveCompanyAsaasStatus(c.id),
+    resolveCompanyAsaasStatus(c.id, options),
     prisma.companyIntegration.findFirst({
       where: {
         companyId: c.id,
@@ -153,6 +158,7 @@ router.get('/companies', authenticateToken, requireSuperAdmin, async (req: AuthR
     const sanitized = await Promise.all(companies.map((c) => sanitizeCompanyForSuperAdmin(c)));
     res.json(sanitized);
   } catch (error) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error fetching companies:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -173,6 +179,7 @@ router.get('/companies/:id', authenticateToken, requireSuperAdmin, async (req: A
     }
     return res.json(await sanitizeCompanyForSuperAdmin(company));
   } catch (error) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error fetching company:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -259,6 +266,7 @@ router.post('/companies', authenticateToken, requireSuperAdmin, async (req: Auth
     const refreshed = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
     res.status(201).json(await sanitizeCompanyForSuperAdmin(refreshed));
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     if (error?.status) {
       res.status(error.status).json({ error: error.message });
       return;
@@ -433,6 +441,7 @@ router.put('/companies/:id', authenticateToken, requireSuperAdmin, async (req: A
     const refreshed = await prisma.company.findUniqueOrThrow({ where: { id: updated.id } });
     res.json(await sanitizeCompanyForSuperAdmin(refreshed));
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     if (error?.status) {
       res.status(error.status).json({ error: error.message });
       return;
@@ -462,6 +471,7 @@ router.put('/companies/:id/toggle', authenticateToken, requireSuperAdmin, async 
     });
     res.json(await sanitizeCompanyForSuperAdmin(updated));
   } catch (error) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error toggling company:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -477,13 +487,14 @@ router.get('/companies/:id/integrations', authenticateToken, requireSuperAdmin, 
     if (!company) {
       return res.status(404).json({ error: 'Empresa não encontrada.' });
     }
-    const sanitized = await sanitizeCompanyForSuperAdmin(company);
+    const sanitized = await sanitizeCompanyForSuperAdmin(company, { rethrowVaultError: true });
     return res.json({
       companyId: company.id,
       companyName: company.tradeName || company.name,
       ...sanitized.integrationsSummary,
     });
   } catch (error) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error reading company integrations:', error);
     return res.status(500).json({ error: 'Erro ao consultar integrações da empresa.' });
   }
@@ -504,6 +515,7 @@ router.put('/companies/:id/integrations/gemini', authenticateToken, requireSuper
 
     return res.json({ success: true, ...result });
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error updating company Gemini key:', error);
     return res.status(500).json({ error: error.message || 'Erro ao salvar chave Gemini da empresa.' });
   }
@@ -527,6 +539,7 @@ router.put('/companies/:id/integrations/asaas', authenticateToken, requireSuperA
 
     return res.json({ success: true, ...result });
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error updating company Asaas key:', error);
     return res.status(500).json({ error: error.message || 'Erro ao salvar chave Asaas da empresa.' });
   }
@@ -546,6 +559,7 @@ router.post('/companies/:id/integrations/gemini/test', authenticateToken, requir
 
     return res.json(testRes);
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error testing Gemini connection:', error);
     return res.status(500).json({ error: error.message || 'Erro ao testar conexão Gemini.' });
   }
@@ -566,8 +580,43 @@ router.post('/companies/:id/integrations/asaas/test', authenticateToken, require
 
     return res.json(testRes);
   } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error testing Asaas connection:', error);
     return res.status(500).json({ error: error.message || 'Erro ao testar conexão Asaas.' });
+  }
+});
+
+router.get('/companies/:id/api-usage', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const summary = await getCompanyMonthlyApiUsageSummary(
+      String(req.params.id),
+      typeof req.query.yearMonth === 'string' ? req.query.yearMonth : undefined
+    );
+    return res.json(summary);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error reading company API usage:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao consultar consumo de APIs.' });
+  }
+});
+
+router.patch('/companies/:id/api-usage-limits', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const updated = await updateCompanyApiUsageLimits(String(req.params.id), req.body || {});
+    const summary = await getCompanyMonthlyApiUsageSummary(String(req.params.id));
+    return res.json({
+      success: true,
+      company: updated,
+      usage: summary,
+    });
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error updating company API usage limits:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao atualizar metas mensais de API.' });
   }
 });
 

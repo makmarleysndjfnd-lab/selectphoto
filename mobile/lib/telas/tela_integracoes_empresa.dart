@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/api_usage_bar_card.dart';
 
 class TelaIntegracoesEmpresa extends StatefulWidget {
   const TelaIntegracoesEmpresa({super.key});
@@ -19,6 +20,7 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
   List<dynamic> _sharedServices = [];
   Map<String, dynamic>? _overview;
   Map<String, dynamic>? _unlinkedUsage;
+  Map<String, dynamic>? _apiUsage;
   String? _period;
   bool _globalLiveGateLocked = true;
 
@@ -36,6 +38,10 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
 
     try {
       final res = await _api.getMyCompanyIntegrations();
+      Map<String, dynamic>? apiUsage;
+      try {
+        apiUsage = await _api.getMyCompanyApiUsage();
+      } catch (_) {}
       if (mounted) {
         setState(() {
           _integrations = (res['integrations'] as List<dynamic>?) ?? [];
@@ -43,6 +49,7 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
           _sharedServices = (res['sharedServices'] as List<dynamic>?) ?? [];
           _overview = res['overview'] as Map<String, dynamic>?;
           _unlinkedUsage = res['unlinkedUsage'] as Map<String, dynamic>?;
+          _apiUsage = apiUsage;
           _period = res['period']?.toString();
           _globalLiveGateLocked = res['globalLiveGateLocked'] == true;
           _isLoading = false;
@@ -302,7 +309,14 @@ class _TelaIntegracoesEmpresaState extends State<TelaIntegracoesEmpresa> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
+                      if (_apiUsage != null)
+                        ApiUsageBarCard(
+                          usageData: _apiUsage,
+                          readOnly: true,
+                          onRefresh: _loadIntegrations,
+                        ),
+                      const SizedBox(height: 4),
 
                       // Card com Visão Geral de Consumo da Empresa
                       _buildOverviewCard(),

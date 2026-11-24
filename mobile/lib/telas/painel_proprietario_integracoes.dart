@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/api_usage_bar_card.dart';
 
 class PainelProprietarioIntegracoes extends StatefulWidget {
   final Map<String, dynamic>? initialCompany;
@@ -40,6 +41,8 @@ class _PainelProprietarioIntegracoesState
   Map<String, dynamic>? _harnessReport;
   Map<String, dynamic>? _liveReadinessReport;
   Map<String, dynamic>? _exclusiveIntegrations;
+  Map<String, dynamic>? _companyApiUsage;
+  bool _loadingApiUsage = false;
   bool _testingAsaas = false;
   bool _testingGemini = false;
   Map<String, dynamic>? _asaasTestResult;
@@ -123,6 +126,10 @@ class _PainelProprietarioIntegracoesState
       try {
         exclusive = await _api.getSuperAdminCompanyIntegrations(companyId);
       } catch (_) {}
+      Map<String, dynamic>? apiUsage;
+      try {
+        apiUsage = await _api.getSuperAdminCompanyApiUsage(companyId);
+      } catch (_) {}
 
       if (mounted) {
         setState(() {
@@ -133,6 +140,8 @@ class _PainelProprietarioIntegracoesState
           _period = period;
           _liveReadinessReport = readiness;
           _exclusiveIntegrations = exclusive;
+          _companyApiUsage = apiUsage;
+          _loadingApiUsage = false;
           _asaasTestResult = null;
           _geminiTestResult = null;
         });
@@ -1286,17 +1295,166 @@ class _PainelProprietarioIntegracoesState
   }
 
   Widget _buildCatalogoTab() {
+    final compId = _empresaSelecionada?['id']?.toString();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         _buildPlatformOverviewCard(),
         _buildCompanyConsumptionSummary(),
+        if (compId != null && compId.isNotEmpty)
+          ApiUsageBarCard(
+            usageData: _companyApiUsage,
+            readOnly: false,
+            isLoading: _loadingApiUsage,
+            onRefresh: () => _refreshCompanyApiUsage(compId),
+            onEditLimits: () => _openEditApiLimitsModal(compId),
+          ),
         _buildLumoraExclusiveApisSection(),
         if (_companyUnlinkedUsage != null && _companyUnlinkedUsage!['hasUnlinkedRecords'] == true)
           _buildUnlinkedUsageCard(_companyUnlinkedUsage!),
         ..._catalogos.map((cat) => _buildCategoriaCard(cat)),
       ],
     );
+  }
+
+  Future<void> _refreshCompanyApiUsage(String companyId) async {
+    setState(() => _loadingApiUsage = true);
+    try {
+      final usage = await _api.getSuperAdminCompanyApiUsage(companyId);
+      if (mounted) {
+        setState(() {
+          _companyApiUsage = usage;
+          _loadingApiUsage = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loadingApiUsage = false);
+        _mostrarErro('Erro ao atualizar consumo de APIs: $e');
+      }
+    }
+  }
+
+  Future<void> _openEditApiLimitsModal(String companyId) async {
+    final geminiCtrl = TextEditingController(
+      text: '${_companyApiUsage?['geminiMonthlyLimitCalls'] ?? 200}',
+    );
+    final asaasCtrl = TextEditingController(
+      text: '${_companyApiUsage?['asaasMonthlyLimitCalls'] ?? 500}',
+    );
+    bool saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          backgroundColor: const Color(0xFF160D24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.5)),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.tune_rounded, color: Color(0xFFA855F7), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Metas Mensais das APIs',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Defina o limite mensal de chamadas por empresa para monitorar barras de consumo.',
+                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: geminiCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Meta Mensal Google Gemini (chamadas)',
+                  labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+                  filled: true,
+                  fillColor: Color(0xFF0D0714),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: asaasCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  labelText: 'Meta Mensal Asaas / Serasa (chamadas)',
+                  labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+                  filled: true,
+                  fillColor: Color(0xFF0D0714),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final geminiLimit = int.tryParse(geminiCtrl.text.trim());
+                      final asaasLimit = int.tryParse(asaasCtrl.text.trim());
+                      if (geminiLimit == null || geminiLimit < 1 || asaasLimit == null || asaasLimit < 1) {
+                        _mostrarErro('Informe metas inteiras maiores que zero.');
+                        return;
+                      }
+                      setModalState(() => saving = true);
+                      try {
+                        final res = await _api.updateSuperAdminCompanyApiUsageLimits(
+                          companyId,
+                          geminiMonthlyLimitCalls: geminiLimit,
+                          asaasMonthlyLimitCalls: asaasLimit,
+                        );
+                        if (mounted && res['usage'] is Map) {
+                          setState(() {
+                            _companyApiUsage = Map<String, dynamic>.from(res['usage'] as Map);
+                          });
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx, true);
+                      } catch (e) {
+                        setModalState(() => saving = false);
+                        _mostrarErro('Erro ao atualizar metas: $e');
+                      }
+                    },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7)),
+              child: saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Salvar Metas', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Metas mensais de APIs atualizadas com sucesso.'),
+          backgroundColor: Color(0xFF10B981),
+        ),
+      );
+    }
   }
 
   Widget _buildLumoraExclusiveApisSection() {

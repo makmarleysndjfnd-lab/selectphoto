@@ -9,6 +9,7 @@ import {
   encryptSecret,
   maskSecret,
   decryptSecret,
+  sendVaultUnavailableIfApplicable,
 } from '../services/vaultService';
 import {
   testGeminiConnection,
@@ -179,6 +180,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       globalLiveGateLocked: prodSafety.locked,
     });
   } catch (err: any) {
+    if (sendVaultUnavailableIfApplicable(res, err)) return;
     console.error('Error fetching company integrations:', err);
     res.status(500).json({ error: `Erro ao buscar integrações: ${err.message}` });
   }
@@ -451,6 +453,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
       liveProtected: (await isProductionSafetyLocked(companyId)).locked,
     });
   } catch (err: any) {
+    if (sendVaultUnavailableIfApplicable(res, err)) return;
     console.error('Error saving company integration:', err);
     res.status(500).json({ error: `Erro ao salvar integração: ${err.message}` });
   }
@@ -748,6 +751,7 @@ router.post('/:id/test', authenticateToken, async (req: AuthRequest, res: Respon
       lastValidatedAt: new Date(),
     });
   } catch (err: any) {
+    if (sendVaultUnavailableIfApplicable(res, err)) return;
     console.error('Error testing company integration:', err);
     res.status(500).json({ error: `Erro ao testar integração: ${err.message}` });
   }

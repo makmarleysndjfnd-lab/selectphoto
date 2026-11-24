@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../servicos/servico_api.dart';
+import '../widgets/api_usage_bar_card.dart';
 import '../widgets/led_button.dart';
 
 class VisaoEstatisticasAdmin extends StatefulWidget {
@@ -14,6 +15,7 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
   String? _error;
   Map<String, dynamic>? _stats;
   Map<String, dynamic>? _reboloStats;
+  Map<String, dynamic>? _apiUsage;
   List<dynamic> _aiInsights = [];
   String? _filterCity;
   String? _filterEvent;
@@ -38,10 +40,15 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
       }
       final data = await ApiService().getStatsBooks(from: from, city: _filterCity, event: _filterEvent);
       final reboloData = await ApiService().getStatsRebolos();
+      Map<String, dynamic>? apiUsage;
+      try {
+        apiUsage = await ApiService().getMyCompanyApiUsage();
+      } catch (_) {}
       if (mounted) {
         setState(() {
           _stats = Map<String, dynamic>.from(data);
           _reboloStats = Map<String, dynamic>.from(reboloData);
+          _apiUsage = apiUsage;
           _loading = false;
         });
       }
@@ -187,6 +194,12 @@ class _VisaoEstatisticasAdminState extends State<VisaoEstatisticasAdmin> {
       children: [
         _buildAiSection(),
         const SizedBox(height: 16),
+        if (_apiUsage != null)
+          ApiUsageBarCard(
+            usageData: _apiUsage,
+            readOnly: true,
+            onRefresh: _load,
+          ),
         _buildKpiRow(s),
         const SizedBox(height: 12),
         _buildOperationalSummaryRow(s),

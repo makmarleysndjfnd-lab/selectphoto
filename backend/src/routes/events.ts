@@ -10,6 +10,7 @@ import {
   checkCompanyApiBudget,
 } from '../services/integrationResolver';
 import { resolveExclusiveCompanyGeminiKey } from '../services/companyApiKeyService';
+import { recordCompanyApiUsageLog } from '../services/apiUsageService';
 import { authorizeCompanyAdmin } from './companyIntegrations';
 import {
   reserveApiQuota,
@@ -303,6 +304,15 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
             delayMs: timeoutDelayMs,
           });
         }
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'EVENTS_SEARCH',
+            status: 'ERROR',
+            httpStatus: 504,
+          });
+        }
         res.status(504).json({
           error:
             'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
@@ -319,6 +329,15 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         await confirmApiReservation(reservationId, {
           status: 'SUCCESS',
           latencyMs: Date.now() - callStart,
+        });
+      }
+      if (companyId) {
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'EVENTS_SEARCH',
+          status: 'SUCCESS',
+          httpStatus: 200,
         });
       }
 
@@ -458,6 +477,26 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       providerResponded = true;
       text = (response.text || '').slice(0, 50000);
 
+      if (companyId) {
+        const um = response?.usageMetadata;
+        const promptTokens = typeof um?.promptTokenCount === 'number' ? um.promptTokenCount : 0;
+        const outputTokens = typeof um?.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
+        const totalTokens =
+          typeof um?.totalTokenCount === 'number'
+            ? um.totalTokenCount
+            : promptTokens + outputTokens;
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'EVENTS_SEARCH',
+          status: 'SUCCESS',
+          promptTokens,
+          outputTokens,
+          totalTokens,
+          httpStatus: 200,
+        });
+      }
+
       if (reservationId) {
         await confirmApiReservation(reservationId, {
           status: 'SUCCESS',
@@ -483,6 +522,15 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
 
       if (isTimeout) {
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'EVENTS_SEARCH',
+            status: 'ERROR',
+            httpStatus: 504,
+          });
+        }
         res.status(504).json({
           error: 'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
           status: 'PENDING_CONFIRMATION',
@@ -491,8 +539,26 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         return;
       }
       if (err.status === 429 || (err.message && err.message.includes('429'))) {
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'EVENTS_SEARCH',
+            status: 'RATE_LIMITED',
+            httpStatus: 429,
+          });
+        }
         res.status(429).json({ error: 'Limite de requisições de IA atingido. Tente novamente mais tarde.' });
         return;
+      }
+      if (companyId && providerDispatched && !providerResponded) {
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'EVENTS_SEARCH',
+          status: 'ERROR',
+          httpStatus: typeof err?.status === 'number' ? err.status : null,
+        });
       }
       throw err;
     }
@@ -751,6 +817,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
             delayMs: timeoutDelayMs,
           });
         }
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'STATE_RADAR',
+            status: 'ERROR',
+            httpStatus: 504,
+          });
+        }
         if (!forceRefresh) {
           const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
           if (fallbackCache) {
@@ -771,6 +846,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         await confirmApiReservation(reservationId, {
           status: 'SUCCESS',
           latencyMs: Date.now() - callStart,
+        });
+      }
+      if (companyId) {
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'STATE_RADAR',
+          status: 'SUCCESS',
+          httpStatus: 200,
         });
       }
 
@@ -868,6 +952,26 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
       providerResponded = true;
 
+      if (companyId) {
+        const um = response?.usageMetadata;
+        const promptTokens = typeof um?.promptTokenCount === 'number' ? um.promptTokenCount : 0;
+        const outputTokens = typeof um?.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
+        const totalTokens =
+          typeof um?.totalTokenCount === 'number'
+            ? um.totalTokenCount
+            : promptTokens + outputTokens;
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'STATE_RADAR',
+          status: 'SUCCESS',
+          promptTokens,
+          outputTokens,
+          totalTokens,
+          httpStatus: 200,
+        });
+      }
+
       // Confirme a unidade assim que o provedor responder com sucesso, antes de ler o conteúdo ou salvar o cache
       if (reservationId) {
         await confirmApiReservation(reservationId, {
@@ -908,6 +1012,17 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         }
       }
 
+      const isRateLimited = err?.status === 429 || String(err?.message || '').includes('429');
+      if (companyId) {
+        await recordCompanyApiUsageLog({
+          companyId,
+          provider: 'GEMINI',
+          operation: 'STATE_RADAR',
+          status: isRateLimited ? 'RATE_LIMITED' : 'ERROR',
+          httpStatus: isTimeout ? 504 : isRateLimited ? 429 : typeof err?.status === 'number' ? err.status : null,
+        });
+      }
+
       if (isTimeout) {
         const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
         if (fallbackCache) {
@@ -924,6 +1039,10 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
       if (fallbackCache) {
         res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
+        return;
+      }
+      if (isRateLimited) {
+        res.status(429).json({ error: 'Limite de requisições de IA atingido no Radar.' });
         return;
       }
       res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });

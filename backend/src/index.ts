@@ -38,6 +38,13 @@ function assertRequiredEnv() {
       process.exit(1);
     }
   }
+
+  const vaultMasterKey = process.env.INTEGRATION_MASTER_KEY;
+  if (!vaultMasterKey || vaultMasterKey.trim().length < 32) {
+    console.warn(
+      '⚠️ [STARTUP WARNING] INTEGRATION_MASTER_KEY está ausente ou possui menos de 32 caracteres. O servidor iniciará normalmente, mas o cofre de integrações (Vault) retornará HTTP 503 (VAULT_NOT_CONFIGURED) até sua configuração no servidor.'
+    );
+  }
 }
 
 assertRequiredEnv();

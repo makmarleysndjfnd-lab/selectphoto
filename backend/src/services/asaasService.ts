@@ -7,6 +7,7 @@
 
 import { prisma } from './prisma';
 import { resolveCompanyIntegration } from './integrationResolver';
+import { recordCompanyApiUsageLog } from './apiUsageService';
 
 
 
@@ -37,6 +38,7 @@ export interface AsaasChargeInput {
 
 export interface AsaasConfigData {
   mode: AsaasMode;
+  companyId?: string;
   apiKey?: string | null;
   webhookToken?: string | null;
   walletId?: string | null;
@@ -214,6 +216,7 @@ export async function getCompanyAsaasConfig(
         }
         return {
           mode: 'PRODUCTION',
+          companyId,
           apiKey: resolved.secret,
           webhookToken: extractWebhookTokenFromMetadata(resolved.integration?.configMetadata),
           walletId: (resolved.integration?.configMetadata as any)?.walletId || null,
@@ -238,6 +241,7 @@ export async function getCompanyAsaasConfig(
         }
         return {
           mode: 'SANDBOX',
+          companyId,
           apiKey: resolved.secret,
           webhookToken: extractWebhookTokenFromMetadata(resolved.integration?.configMetadata),
           walletId: (resolved.integration?.configMetadata as any)?.walletId || null,
@@ -282,6 +286,7 @@ export async function getCompanyAsaasConfig(
     }
     return {
       mode: 'SANDBOX',
+      companyId,
       apiKey: config.apiKey || null,
       webhookToken: config.webhookToken || null,
       walletId: config.walletId,
@@ -366,6 +371,16 @@ export async function getCompanyAsaasConfigForExistingCharge(
   return config;
 }
 
+function inferAsaasOperation(endpoint: string, method: string): string {
+  if (endpoint.includes('/negativations')) return 'SERASA_QUERY';
+  if (endpoint.includes('/refund')) return 'PAYMENT_REFUND';
+  if (endpoint.includes('/receiveInCash')) return 'PAYMENT_RECEIVE_CASH';
+  if (endpoint.includes('/pixQrCode')) return 'PIX_QRCODE';
+  if (endpoint.startsWith('/customers')) return 'CUSTOMER_SYNC';
+  if (endpoint.startsWith('/payments') && method === 'POST') return 'CHARGE_CREATE';
+  return 'ASAAS_API_CALL';
+}
+
 /**
  * Realiza chamada HTTP autenticada à API do Asaas
  */
@@ -379,28 +394,45 @@ async function asaasRequest(
     throw new Error('Integração Asaas está desativada (DISABLED).');
   }
 
+  const operation = inferAsaasOperation(endpoint, method);
+  const logUsage = async (status: 'SUCCESS' | 'ERROR' | 'RATE_LIMITED', httpStatus?: number | null) => {
+    if (!config.companyId) return;
+    await recordCompanyApiUsageLog({
+      companyId: config.companyId,
+      provider: 'ASAAS',
+      operation,
+      status,
+      httpStatus: httpStatus ?? null,
+    });
+  };
+
   if (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') {
     if (endpoint.includes('/refund')) {
       if ((global as any).__lastSimulatedRefunds) {
         (global as any).__lastSimulatedRefunds.push({ endpoint, method, payload: body });
       }
+      await logUsage('SUCCESS', 200);
       return { status: 'REFUND_PROCESSING', simulated: true };
     }
     if (endpoint.includes('/receiveInCash')) {
+      await logUsage('SUCCESS', 200);
       return { success: true, simulated: true };
     }
     if (method === 'DELETE') {
+      await logUsage('SUCCESS', 200);
       return { deleted: true, simulated: true };
     }
     if (endpoint.startsWith('/negativations/remove') || endpoint.startsWith('/payments/negativation/remove')) {
       const simCtrl = (global as any).__simulatedSerasaControl || {};
       if (simCtrl.failRemoval) {
+        await logUsage('ERROR', 502);
         throw new Error(
           typeof simCtrl.failRemoval === 'string'
             ? simCtrl.failRemoval
             : 'Falha simulada na comunicação de exclusão Serasa/Asaas Sandbox.'
         );
       }
+      await logUsage('SUCCESS', 200);
       return {
         removed: true,
         status: 'CANCELLED',
@@ -412,6 +444,7 @@ async function asaasRequest(
     if (endpoint.startsWith('/negativations') || endpoint.startsWith('/payments/negativation')) {
       const simCtrl = (global as any).__simulatedSerasaControl || {};
       if (simCtrl.failRequest) {
+        await logUsage('ERROR', 502);
         throw new Error(
           typeof simCtrl.failRequest === 'string'
             ? simCtrl.failRequest
@@ -419,6 +452,7 @@ async function asaasRequest(
         );
       }
       if (simCtrl.forceRefuseReason) {
+        await logUsage('ERROR', 422);
         return {
           accepted: false,
           status: 'REFUSED',
@@ -428,6 +462,7 @@ async function asaasRequest(
           environment: 'SANDBOX',
         };
       }
+      await logUsage('SUCCESS', 200);
       return {
         accepted: true,
         id: simCtrl.externalNegativationId || `neg_sbx_${Date.now()}`,
@@ -439,10 +474,12 @@ async function asaasRequest(
     }
     if (endpoint.startsWith('/payments/') && method === 'GET' && !endpoint.includes('?')) {
       if ((global as any).__simulatedAsaasRemotePaymentsError) {
+        await logUsage('ERROR', 502);
         throw new Error((global as any).__simulatedAsaasRemotePaymentsError);
       }
       const payId = endpoint.replace('/payments/', '').split('?')[0];
       const byId = (global as any).__simulatedAsaasRemotePayments?.[payId];
+      await logUsage('SUCCESS', 200);
       if (byId) {
         return byId;
       }
@@ -450,11 +487,13 @@ async function asaasRequest(
     }
     if (endpoint.startsWith('/payments?externalReference=')) {
       if ((global as any).__simulatedAsaasRemotePaymentsError) {
+        await logUsage('ERROR', 502);
         throw new Error((global as any).__simulatedAsaasRemotePaymentsError);
       }
       const parts = endpoint.split('externalReference=');
       const ref = decodeURIComponent(parts[1] || '');
       const simulatedPayment = (global as any).__simulatedAsaasRemotePayments?.[ref];
+      await logUsage('SUCCESS', 200);
       if (simulatedPayment) {
         return {
           totalCount: 1,
@@ -464,6 +503,7 @@ async function asaasRequest(
       }
       return { totalCount: 0, data: [], simulated: true };
     }
+    await logUsage('SUCCESS', 200);
     return { id: `sim_${Date.now()}`, status: 'CONFIRMED', simulated: true };
   }
 
@@ -490,7 +530,14 @@ async function asaasRequest(
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, options);
+  let response: globalThis.Response;
+  try {
+    response = await fetch(url, options);
+  } catch (err: any) {
+    await logUsage('ERROR', err?.name === 'AbortError' || err?.name === 'TimeoutError' ? 504 : null);
+    throw err;
+  }
+
   const responseText = await response.text();
 
   let responseData: any;
@@ -501,6 +548,7 @@ async function asaasRequest(
   }
 
   if (!response.ok) {
+    await logUsage(response.status === 429 ? 'RATE_LIMITED' : 'ERROR', response.status);
     const errorMsg = responseData?.errors?.[0]?.description || responseData?.message || responseText || `HTTP ${response.status}`;
     const err: any = new Error(`Erro na API do Asaas (${response.status}): ${errorMsg}`);
     err.status = response.status;
@@ -508,6 +556,7 @@ async function asaasRequest(
     throw err;
   }
 
+  await logUsage('SUCCESS', response.status);
   return responseData;
 }
 

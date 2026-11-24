@@ -3125,6 +3125,56 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getSuperAdminCompanyApiUsage(
+    String companyId, {
+    String? yearMonth,
+  }) async {
+    try {
+      final resp = await _dio.get(
+        '/superadmin/companies/$companyId/api-usage',
+        queryParameters: {
+          if (yearMonth != null && yearMonth.isNotEmpty) 'yearMonth': yearMonth,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateSuperAdminCompanyApiUsageLimits(
+    String companyId, {
+    int? geminiMonthlyLimitCalls,
+    int? asaasMonthlyLimitCalls,
+  }) async {
+    try {
+      final resp = await _dio.patch(
+        '/superadmin/companies/$companyId/api-usage-limits',
+        data: {
+          if (geminiMonthlyLimitCalls != null) 'geminiMonthlyLimitCalls': geminiMonthlyLimitCalls,
+          if (asaasMonthlyLimitCalls != null) 'asaasMonthlyLimitCalls': asaasMonthlyLimitCalls,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getMyCompanyApiUsage({String? yearMonth}) async {
+    try {
+      final resp = await _dio.get(
+        '/integrations/usage',
+        queryParameters: {
+          if (yearMonth != null && yearMonth.isNotEmpty) 'yearMonth': yearMonth,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> updateSuperAdminCompanySettings(
     String companyId,
     Map<String, dynamic> data,
