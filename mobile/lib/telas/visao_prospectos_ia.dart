@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../servicos/servico_api.dart';
 import '../provedores/provedor_configuracoes.dart';
 import 'tela_busca_manual.dart';
+import 'tela_config_busca_eventos_ia.dart';
 import 'tela_meus_prospectos.dart';
 import '../widgets/led_button.dart';
 
@@ -24,6 +26,7 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
   final Map<String, String?> _errors = {};
 
   String _durationFilter = 'ALL'; // 'ALL', 'IDEAL', 'LONG', 'SHORT'
+  bool _canConfigureSearch = false;
 
   Widget _buildFilterChip(String value, String label) {
     final bool isSelected = _durationFilter == value;
@@ -60,6 +63,18 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
     });
     // Load first state
     _loadDataForState(_states[0]);
+    _checkRole();
+  }
+
+  Future<void> _checkRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    final role = (prefs.getString('user_role') ?? '').toUpperCase();
+    if (mounted) {
+      setState(() {
+        _canConfigureSearch =
+            role == 'ADMIN' || role == 'COMPANY_ADMIN' || role == 'SUPER_ADMIN';
+      });
+    }
   }
 
   Future<void> _loadDataForState(String state, {bool force = false}) async {
@@ -173,6 +188,13 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
     Navigator.push(context, MaterialPageRoute(builder: (_) => const MyProspectsScreen()));
   }
 
+  void _openSearchConfig() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TelaConfigBuscaEventosIa()),
+    );
+  }
+
   String _formatIncome(String? incomeRaw) {
     if (incomeRaw == null || incomeRaw.isEmpty) return '';
     String text = incomeRaw;
@@ -216,6 +238,12 @@ class _StateProspectsViewState extends State<StateProspectsView> with SingleTick
                 tooltip: 'Meus Prospectos',
                 onPressed: _openMyProspects,
               ),
+              if (_canConfigureSearch)
+                IconButton(
+                  icon: const Icon(Icons.settings_rounded, color: Color(0xFFD8B4FE)),
+                  tooltip: 'Configurar Busca IA',
+                  onPressed: _openSearchConfig,
+                ),
               const SizedBox(width: 8),
             ],
           ),

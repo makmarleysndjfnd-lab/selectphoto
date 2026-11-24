@@ -6,6 +6,7 @@ import 'painel_proprietario_integracoes.dart';
 import 'painel_proprietario_faturamento.dart';
 import 'painel_proprietario_suporte.dart';
 import 'painel_admin.dart';
+import 'tela_config_busca_eventos_ia.dart';
 import 'tela_login.dart';
 
 class PainelProprietarioEmpresas extends StatefulWidget {
@@ -1864,6 +1865,29 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                       context,
                       MaterialPageRoute(
                         builder: (_) => PainelProprietarioIntegracoes(initialCompany: empresa),
+                      ),
+                    );
+                  },
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFA855F7)),
+                    foregroundColor: const Color(0xFFD8B4FE),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                  icon: const Icon(Icons.manage_search_rounded, size: 16),
+                  label: const Text('Busca IA', style: TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    final compId = empresa['id']?.toString();
+                    if (compId == null || compId.isEmpty) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TelaConfigBuscaEventosIa(
+                          companyId: compId,
+                          companyName: (empresa['tradeName'] ?? empresa['name'] ?? '').toString(),
+                          apiService: _api,
+                        ),
                       ),
                     );
                   },

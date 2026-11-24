@@ -23,6 +23,12 @@ import {
   getCompanyMonthlyApiUsageSummary,
   updateCompanyApiUsageLimits,
 } from '../services/apiUsageService';
+import {
+  getCompanyEventSearchConfig,
+  upsertCompanyEventSearchConfig,
+  resetCompanyEventSearchConfig,
+} from '../services/eventSearchConfigService';
+import { clearCompanyCityScoutCache } from './events';
 
 const router = Router();
 
@@ -617,6 +623,83 @@ router.patch('/companies/:id/api-usage-limits', authenticateToken, requireSuperA
     }
     console.error('Error updating company API usage limits:', error);
     return res.status(500).json({ error: error.message || 'Erro ao atualizar metas mensais de API.' });
+  }
+});
+
+// ============================================================================
+// CONFIGURAÇÃO DETALHADA DA BUSCA DE EVENTOS IA POR EMPRESA (SUPERADMIN)
+// ============================================================================
+
+router.get('/companies/:id/event-search-config', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const config = await getCompanyEventSearchConfig(company.id);
+    return res.json(config);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error reading company event search config:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao consultar configuração de Eventos IA.' });
+  }
+});
+
+router.put('/companies/:id/event-search-config', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const updated = await upsertCompanyEventSearchConfig({
+      companyId: company.id,
+      payload: req.body || {},
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'SuperAdmin',
+      actorRole: 'SUPER_ADMIN',
+      ipAddress: req.ip || null,
+    });
+
+    clearCompanyCityScoutCache(company.id);
+    await prisma.stateRadarCache.deleteMany({
+      where: { state: { contains: `:${company.id}:` } },
+    });
+
+    return res.json(updated);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error saving company event search config:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao salvar configuração de Eventos IA.' });
+  }
+});
+
+router.post('/companies/:id/event-search-config/reset', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const reset = await resetCompanyEventSearchConfig({
+      companyId: company.id,
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'SuperAdmin',
+      actorRole: 'SUPER_ADMIN',
+      ipAddress: req.ip || null,
+    });
+
+    clearCompanyCityScoutCache(company.id);
+    await prisma.stateRadarCache.deleteMany({
+      where: { state: { contains: `:${company.id}:` } },
+    });
+
+    return res.json(reset);
+  } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error('Error resetting company event search config:', error);
+    return res.status(500).json({ error: error.message || 'Erro ao restaurar padrão de Eventos IA.' });
   }
 });
 

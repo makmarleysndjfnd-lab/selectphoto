@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/api_usage_bar_card.dart';
+import 'tela_config_busca_eventos_ia.dart';
 
 class PainelProprietarioIntegracoes extends StatefulWidget {
   final Map<String, dynamic>? initialCompany;
@@ -1524,6 +1525,21 @@ class _PainelProprietarioIntegracoesState
             testResult: _geminiTestResult,
             onConfigure: () => _openExclusiveGeminiModal(compId),
             onTest: () => _runExclusiveGeminiTest(compId),
+            onConfigureAiSearch: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => TelaConfigBuscaEventosIa(
+                    companyId: compId,
+                    companyName: (_empresaSelecionada?['tradeName'] ??
+                            _empresaSelecionada?['name'] ??
+                            '')
+                        .toString(),
+                    apiService: _api,
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -1540,6 +1556,7 @@ class _PainelProprietarioIntegracoesState
     Map<String, dynamic>? testResult,
     required VoidCallback onConfigure,
     required VoidCallback onTest,
+    VoidCallback? onConfigureAiSearch,
   }) {
     final upper = status.toUpperCase();
     final Color statusColor = !configured
@@ -1649,6 +1666,16 @@ class _PainelProprietarioIntegracoesState
                 label: Text(isTesting ? 'Testando...' : 'Testar Conexão', style: const TextStyle(fontSize: 12)),
                 onPressed: (!configured || isTesting) ? null : onTest,
               ),
+              if (onConfigureAiSearch != null)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.75)),
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.manage_search_rounded, size: 15, color: Color(0xFFD8B4FE)),
+                  label: const Text('Configurar Busca IA', style: TextStyle(fontSize: 12)),
+                  onPressed: onConfigureAiSearch,
+                ),
             ],
           ),
         ],

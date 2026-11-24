@@ -11,6 +11,12 @@ import {
 } from '../services/integrationResolver';
 import { resolveExclusiveCompanyGeminiKey } from '../services/companyApiKeyService';
 import { recordCompanyApiUsageLog } from '../services/apiUsageService';
+import {
+  getCompanyEventSearchConfig,
+  upsertCompanyEventSearchConfig,
+  resetCompanyEventSearchConfig,
+  buildRenderedEventPrompt,
+} from '../services/eventSearchConfigService';
 import { authorizeCompanyAdmin } from './companyIntegrations';
 import {
   reserveApiQuota,
@@ -28,9 +34,28 @@ export const cityScoutCache = new Map<string, { data: any; expiresAt: number }>(
 
 export function clearCityScoutCache(city?: string): void {
   if (city) {
+    const prefix = `${city.toLowerCase().trim()}:`;
     cityScoutCache.delete(city.toLowerCase().trim());
+    for (const key of cityScoutCache.keys()) {
+      if (key.startsWith(prefix)) {
+        cityScoutCache.delete(key);
+      }
+    }
   } else {
     cityScoutCache.clear();
+  }
+}
+
+export function clearCompanyCityScoutCache(companyId?: string | null): void {
+  if (!companyId) {
+    cityScoutCache.clear();
+    return;
+  }
+  const marker = `:${companyId}:`;
+  for (const key of cityScoutCache.keys()) {
+    if (key.includes(marker)) {
+      cityScoutCache.delete(key);
+    }
   }
 }
 
@@ -125,6 +150,124 @@ function checkAiRateLimit(key: string, maxPerHour: number = 60): boolean {
   return true;
 }
 
+function resolveAuthorizedEventConfigScope(req: AuthRequest, res: Response): string | null {
+  const role = String(req.user?.role || '').toUpperCase();
+  if (!['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    res.status(403).json({
+      error: 'Acesso restrito a administradores da empresa.',
+    });
+    return null;
+  }
+
+  const ownCompanyId = req.user?.companyId ? String(req.user.companyId) : '';
+  const requestedCompanyId =
+    typeof req.query.companyId === 'string'
+      ? req.query.companyId.trim()
+      : typeof req.body?.companyId === 'string'
+        ? req.body.companyId.trim()
+        : '';
+
+  if (role !== 'SUPER_ADMIN') {
+    if (!ownCompanyId) {
+      res.status(403).json({ error: 'Empresa do usuário não identificada.' });
+      return null;
+    }
+    if (requestedCompanyId && requestedCompanyId !== ownCompanyId) {
+      res.status(403).json({
+        error: 'Isolamento multi-tenant: proibido acessar configuração de outra empresa.',
+      });
+      return null;
+    }
+  }
+
+  const targetCompanyId =
+    role === 'SUPER_ADMIN' && requestedCompanyId ? requestedCompanyId : ownCompanyId;
+  if (!targetCompanyId) {
+    res.status(400).json({ error: 'companyId é obrigatório.' });
+    return null;
+  }
+  return targetCompanyId;
+}
+
+// GET /api/events/search-config
+router.get('/search-config', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedEventConfigScope(req, res);
+    if (!companyId) return;
+
+    const config = await getCompanyEventSearchConfig(companyId);
+    res.json(config);
+  } catch (error: any) {
+    if (error?.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    console.error('Erro ao buscar configuração de Eventos IA:', error?.message || error);
+    res.status(500).json({ error: 'Erro ao buscar configuração de busca de eventos.' });
+  }
+});
+
+// PUT /api/events/search-config
+router.put('/search-config', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedEventConfigScope(req, res);
+    if (!companyId) return;
+
+    const updated = await upsertCompanyEventSearchConfig({
+      companyId,
+      payload: req.body || {},
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'Admin',
+      actorRole: String(req.user!.role || 'ADMIN'),
+      ipAddress: req.ip || null,
+    });
+
+    clearCompanyCityScoutCache(companyId);
+    await prisma.stateRadarCache.deleteMany({
+      where: { state: { contains: `:${companyId}:` } },
+    });
+
+    res.json(updated);
+  } catch (error: any) {
+    if (error?.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    console.error('Erro ao salvar configuração de Eventos IA:', error?.message || error);
+    res.status(500).json({ error: 'Erro ao salvar configuração de busca de eventos.' });
+  }
+});
+
+// POST /api/events/search-config/reset
+router.post('/search-config/reset', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const companyId = resolveAuthorizedEventConfigScope(req, res);
+    if (!companyId) return;
+
+    const reset = await resetCompanyEventSearchConfig({
+      companyId,
+      actorUserId: req.user!.id,
+      actorName: req.user!.name || 'Admin',
+      actorRole: String(req.user!.role || 'ADMIN'),
+      ipAddress: req.ip || null,
+    });
+
+    clearCompanyCityScoutCache(companyId);
+    await prisma.stateRadarCache.deleteMany({
+      where: { state: { contains: `:${companyId}:` } },
+    });
+
+    res.json(reset);
+  } catch (error: any) {
+    if (error?.status) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    console.error('Erro ao restaurar padrão de Eventos IA:', error?.message || error);
+    res.status(500).json({ error: 'Erro ao restaurar configuração padrão de eventos.' });
+  }
+});
+
 // POST /api/events/search - Gemini AI Event Search
 router.post('/search', authenticateToken, async (req: AuthRequest, res: Response) => {
   const callStart = Date.now();
@@ -191,8 +334,12 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
     }
 
+    // Configuração dinâmica da busca de Eventos IA por empresa
+    const searchConfig = await getCompanyEventSearchConfig(companyId);
+    const cacheKey = `${lowerCity}:${companyId || 'global'}:${searchConfig.configHash}`;
+
     // ── 1. Verificação de Cache do Scout por Cidade ───────────────────────────
-    const cachedEntry = cityScoutCache.get(lowerCity);
+    const cachedEntry = cityScoutCache.get(cacheKey);
     if (cachedEntry && cachedEntry.expiresAt > Date.now() && !forceRefresh) {
       if (companyId) {
         await recordApiUsage({
@@ -209,6 +356,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
       return res.json({
         ...cachedEntry.data,
+        configHash: searchConfig.configHash,
         source: 'CACHE',
         cached: true,
       });
@@ -384,59 +532,23 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         ]
       };
 
-      cityScoutCache.set(lowerCity, {
+      cityScoutCache.set(cacheKey, {
         data: mockResult,
         expiresAt: Date.now() + 24 * 3600 * 1000,
       });
 
       return res.json({
         ...mockResult,
+        configHash: searchConfig.configHash,
         source: 'EXTERNAL',
         cached: false,
       });
     }
 
-    const currentDate = new Date();
-    const targetDate = new Date();
-    targetDate.setDate(currentDate.getDate());
-    const maxDate = new Date();
-    maxDate.setDate(currentDate.getDate() + 380);
-    
-    const currentDateStr = currentDate.toISOString().split('T')[0];
-    const targetDateStr = targetDate.toISOString().split('T')[0];
-    const maxDateStr = maxDate.toISOString().split('T')[0];
-
-    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure eventos na cidade "${sanitizedCity}".
-    Hoje é dia ${currentDateStr}.
-    Você DEVE retornar APENAS eventos reais que acontecerão entre ${targetDateStr} e ${maxDateStr}.
-    
-    Retorne a resposta EXCLUSIVAMENTE em formato JSON puro:
-    {
-      "cityInfo": {
-        "name": "${sanitizedCity}",
-        "summary": "Breve resumo sobre o cenário de eventos da cidade neste período.",
-        "searchDate": "${currentDateStr}"
-      },
-      "events": [
-        {
-          "name": "Nome do Evento",
-          "category": "Exposição Agropecuária / Show / Festa Tradicional / Circo / Parque",
-          "startDate": "YYYY-MM-DD",
-          "endDate": "YYYY-MM-DD",
-          "durationDays": 3,
-          "location": "Local",
-          "city": "${sanitizedCity}",
-          "estimatedAudience": "Público estimado",
-          "historicalData": "Histórico",
-          "organizer": "Organizador",
-          "organizerContact": "(DD) 9XXXX-XXXX",
-          "socialMedia": "@perfil",
-          "website": "https://...",
-          "notes": "Observações comerciais",
-          "sources": ["Fonte"]
-        }
-      ]
-    }`.slice(0, 4000);
+    const prompt = buildRenderedEventPrompt(searchConfig, {
+      mode: 'CITY',
+      city: sanitizedCity,
+    });
 
     let text = '';
     providerDispatched = true;
@@ -581,7 +693,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     try {
-      cityScoutCache.set(lowerCity, {
+      cityScoutCache.set(cacheKey, {
         data: result,
         expiresAt: Date.now() + 24 * 3600 * 1000,
       });
@@ -591,6 +703,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
     res.json({
       ...result,
+      configHash: searchConfig.configHash,
       source: 'EXTERNAL',
       cached: false,
     });
@@ -691,10 +804,13 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       }
     }
 
+    const searchConfig = await getCompanyEventSearchConfig(companyId);
+    const radarCacheKey = `${stateUF}:${companyId || 'global'}:${searchConfig.configHash.slice(0, 12)}`;
+
     // ── 1. Verificação de Cache do Radar Estadual ────────────────────────────
     if (!forceRefresh) {
       const cached = await prisma.stateRadarCache.findUnique({
-        where: { state: stateUF }
+        where: { state: radarCacheKey }
       });
       if (cached) {
         const ageInDays = (new Date().getTime() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
@@ -720,6 +836,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       }
       return res.json({
         ...resultData,
+        configHash: searchConfig.configHash,
         source: 'CACHE',
         cached: true,
       });
@@ -827,9 +944,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
           });
         }
         if (!forceRefresh) {
-          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
           if (fallbackCache) {
-            return res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
+            return res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
           }
         }
         return res.status(504).json({
@@ -892,30 +1009,23 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       };
 
       await prisma.stateRadarCache.upsert({
-        where: { state: stateUF },
+        where: { state: radarCacheKey },
         update: { data: mockRadar, updatedAt: new Date() },
-        create: { state: stateUF, data: mockRadar }
+        create: { state: radarCacheKey, data: mockRadar }
       });
 
       return res.json({
         ...mockRadar,
+        configHash: searchConfig.configHash,
         source: 'EXTERNAL',
         cached: false,
       });
     }
 
-    const currentDate = new Date();
-    const targetDate = new Date();
-    targetDate.setDate(currentDate.getDate());
-    const maxDate = new Date();
-    maxDate.setDate(currentDate.getDate() + 380);
-    
-    const currentDateStr = currentDate.toISOString().split('T')[0];
-    const targetDateStr = targetDate.toISOString().split('T')[0];
-    const maxDateStr = maxDate.toISOString().split('T')[0];
-
-    const prompt = `Você é um agente de Inteligência Comercial e Investigador de Eventos ("pente fino" rigoroso). Procure as principais cidades no estado "${stateUF}" que terão eventos entre ${targetDateStr} e ${maxDateStr}.
-    Retorne APENAS JSON válido com o radar de cidades e eventos.`.slice(0, 4000);
+    const prompt = buildRenderedEventPrompt(searchConfig, {
+      mode: 'STATE_RADAR',
+      stateUF,
+    });
 
     providerDispatched = true;
     let hasTimedOut = false;
@@ -987,9 +1097,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
         if (resultData && typeof resultData === 'object' && (Array.isArray(resultData.cities) || Array.isArray(resultData.events))) {
           await prisma.stateRadarCache.upsert({
-            where: { state: stateUF },
+            where: { state: radarCacheKey },
             update: { data: resultData, updatedAt: new Date() },
-            create: { state: stateUF, data: resultData }
+            create: { state: radarCacheKey, data: resultData }
           });
         }
       } catch (downstreamErr) {
@@ -1024,9 +1134,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       }
 
       if (isTimeout) {
-        const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+        const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
         if (fallbackCache) {
-          res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
+          res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
           return;
         }
         res.status(504).json({
@@ -1036,9 +1146,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         });
         return;
       }
-      const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: stateUF } });
+      const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
       if (fallbackCache) {
-        res.json({ ...(fallbackCache.data as Record<string, any>), source: 'CACHE', cached: true });
+        res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
         return;
       }
       if (isRateLimited) {
@@ -1051,6 +1161,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
     res.json({
       ...((resultData as Record<string, any>) || { state: stateUF, cities: [] }),
+      configHash: searchConfig.configHash,
       source: 'EXTERNAL',
       cached: false,
     });

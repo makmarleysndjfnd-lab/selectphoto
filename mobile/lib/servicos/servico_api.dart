@@ -1317,6 +1317,79 @@ class ApiService {
     }
   }
 
+  void clearEventSearchCache() {
+    _searchCache.clear();
+  }
+
+  Future<Map<String, dynamic>> getEventSearchConfig() async {
+    try {
+      final resp = await _dio.get('/events/search-config');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveEventSearchConfig(
+      Map<String, dynamic> payload) async {
+    try {
+      final resp = await _dio.put('/events/search-config', data: payload);
+      _searchCache.clear();
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> resetEventSearchConfig() async {
+    try {
+      final resp = await _dio.post('/events/search-config/reset');
+      _searchCache.clear();
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> getSuperAdminEventSearchConfig(
+      String companyId) async {
+    try {
+      final resp =
+          await _dio.get('/superadmin/companies/$companyId/event-search-config');
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> saveSuperAdminEventSearchConfig(
+    String companyId,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final resp = await _dio.put(
+        '/superadmin/companies/$companyId/event-search-config',
+        data: payload,
+      );
+      _searchCache.clear();
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> resetSuperAdminEventSearchConfig(
+      String companyId) async {
+    try {
+      final resp = await _dio
+          .post('/superadmin/companies/$companyId/event-search-config/reset');
+      _searchCache.clear();
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   // Roteiro Inteligente — clusters de prospectos dentro de 300km
   Future<Map<String, dynamic>> getSmartRoute() async {
     try {

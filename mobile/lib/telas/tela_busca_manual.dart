@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:convert';
 import '../servicos/servico_api.dart';
 import '../widgets/led_button.dart';
 import '../widgets/led_card.dart';
+import 'tela_config_busca_eventos_ia.dart';
 
 class ManualSearchScreen extends StatefulWidget {
   const ManualSearchScreen({super.key});
@@ -26,6 +28,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
   bool _isLoadingCities = true;
 
   String _selectedDurationFilter = 'ALL'; // 'ALL', '6_30', 'OVER_30', 'SHORT'
+  bool _canConfigureSearch = false;
 
   List<dynamic> get _filteredEvents {
     if (_selectedDurationFilter == 'ALL') return _searchResults;
@@ -58,6 +61,18 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
     super.initState();
     _loadIbgeCities();
     _checkCache();
+    _checkRole();
+  }
+
+  Future<void> _checkRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    final role = (prefs.getString('user_role') ?? '').toUpperCase();
+    if (mounted) {
+      setState(() {
+        _canConfigureSearch =
+            role == 'ADMIN' || role == 'COMPANY_ADMIN' || role == 'SUPER_ADMIN';
+      });
+    }
   }
 
   void _checkCache() {
@@ -223,6 +238,21 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
         backgroundColor: const Color(0xFF1A0030),
         title: const Text('Busca de Eventos e Cidades (IA)', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          if (_canConfigureSearch)
+            IconButton(
+              icon: const Icon(Icons.settings_rounded, color: Color(0xFFD8B4FE)),
+              tooltip: 'Configurar Busca IA',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const TelaConfigBuscaEventosIa(),
+                  ),
+                );
+              },
+            ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(

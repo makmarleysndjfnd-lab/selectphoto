@@ -105,6 +105,7 @@ model Company {
   staffAdvances                StaffAdvanceEntry[]
   saleAdjustments              SaleAdjustment[]
   apiUsageLogs                 ApiUsageLog[]
+  eventSearchConfig            CompanyEventSearchConfig?
 }
 
 model Team {
@@ -1974,6 +1975,23 @@ model SaleAdjustment {
 
   @@index([companyId, saleId])
   @@index([companyId, createdAt])
+}
+
+model CompanyEventSearchConfig {
+  id                   String   @id @default(uuid())
+  companyId            String   @unique
+  searchDescription    String   @db.Text
+  eventTypesJson       Json
+  horizonDays          Int      @default(380)
+  priorityWeekdaysJson Json
+  includeHolidays      Boolean  @default(true)
+  geographicFocus      String?
+  exclusionsJson       Json
+  updatedById          String?
+  updatedAt            DateTime @updatedAt
+  createdAt            DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
 
 
