@@ -1245,26 +1245,103 @@ class ApiService {
     }
   }
 
-  // Cache das últimas 4 buscas
+  // Cache das últimas 4 buscas (com validação estrita de TTL e descarte de eventos vencidos em BRT -03:00)
   final List<Map<String, dynamic>> _searchCache = [];
 
-  List<Map<String, dynamic>> get cachedSearches => _searchCache;
+  String _currentDateBrtIso() {
+    final brt = DateTime.now().toUtc().subtract(const Duration(hours: 3));
+    final y = brt.year.toString().padLeft(4, '0');
+    final m = brt.month.toString().padLeft(2, '0');
+    final d = brt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  String? _normalizeEventDateIso(dynamic raw) {
+    if (raw == null) return null;
+    final head = raw.toString().trim().split('T').first.trim();
+    if (head.isEmpty) return null;
+    final isoMatch = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(head);
+    if (isoMatch != null) return head;
+    final brMatch = RegExp(r'^(\d{2})/(\d{2})/(\d{4})$').firstMatch(head);
+    if (brMatch != null) {
+      return '${brMatch.group(3)}-${brMatch.group(2)}-${brMatch.group(1)}';
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _sanitizeSearchCacheEntry(Map<String, dynamic> entry) {
+    final savedAtStr = entry['savedAt']?.toString() ?? '';
+    final savedAt = DateTime.tryParse(savedAtStr);
+    if (savedAt == null) return null;
+
+    final rawData = entry['data'];
+    if (rawData is! Map) return null;
+    final data = Map<String, dynamic>.from(rawData);
+
+    final ttlDays = int.tryParse('${data['cacheTtlDays'] ?? 7}') ?? 7;
+    if (ttlDays <= 0) return null;
+    if (DateTime.now().difference(savedAt) >= Duration(days: ttlDays)) {
+      return null;
+    }
+
+    final todayBrt = _currentDateBrtIso();
+    final rawEvents = (data['events'] as List?) ?? const [];
+    final validEvents = rawEvents.where((evt) {
+      if (evt is! Map) return false;
+      final startIso = _normalizeEventDateIso(evt['startDate']);
+      final endIso = _normalizeEventDateIso(evt['endDate']) ?? startIso;
+      if (endIso == null) return false;
+      return endIso.compareTo(todayBrt) >= 0;
+    }).toList();
+
+    if (rawEvents.isNotEmpty && validEvents.isEmpty) {
+      return null;
+    }
+
+    final sanitizedData = <String, dynamic>{
+      ...data,
+      'events': validEvents,
+      'cached': true,
+      'source': data['source'] ?? 'LOCAL_CACHE',
+      'fetchedAt': data['fetchedAt'] ?? savedAtStr,
+    };
+
+    return {
+      ...entry,
+      'data': sanitizedData,
+    };
+  }
+
+  List<Map<String, dynamic>> get cachedSearches {
+    final cleaned = <Map<String, dynamic>>[];
+    for (final entry in _searchCache) {
+      final valid = _sanitizeSearchCacheEntry(entry);
+      if (valid != null) {
+        cleaned.add(valid);
+      }
+    }
+    _searchCache
+      ..clear()
+      ..addAll(cleaned);
+    return List<Map<String, dynamic>>.unmodifiable(_searchCache);
+  }
 
   // AI Events
   Future<Map<String, dynamic>> searchEvents(String city,
       {bool forceRefresh = false}) async {
-    final lowerCity = city.toLowerCase();
+    final lowerCity = city.trim().toLowerCase();
 
     if (!forceRefresh) {
       final cachedIndex =
           _searchCache.indexWhere((c) => c['cityQuery'] == lowerCity);
       if (cachedIndex != -1) {
-        final cached = _searchCache[cachedIndex];
-        final DateTime savedAt = DateTime.parse(cached['savedAt']);
-        if (DateTime.now().difference(savedAt).inDays < 10) {
+        final sanitized = _sanitizeSearchCacheEntry(_searchCache[cachedIndex]);
+        if (sanitized != null) {
           _searchCache.removeAt(cachedIndex);
-          _searchCache.insert(0, cached);
-          return cached['data'];
+          _searchCache.insert(0, sanitized);
+          return Map<String, dynamic>.from(sanitized['data'] as Map);
+        } else {
+          _searchCache.removeAt(cachedIndex);
         }
       }
     }
@@ -1272,22 +1349,30 @@ class ApiService {
     try {
       final response = await _dio.post(
         '/events/search',
-        data: {'city': city},
+        queryParameters: forceRefresh ? {'force': 'true'} : null,
+        data: {
+          'city': city,
+          if (forceRefresh) 'force': true,
+        },
         options: Options(receiveTimeout: const Duration(seconds: 120)),
       );
       final Map<String, dynamic> responseData =
-          response.data as Map<String, dynamic>;
+          Map<String, dynamic>.from(response.data as Map);
 
       _searchCache.removeWhere((c) => c['cityQuery'] == lowerCity);
-      _searchCache.insert(0, {
-        'cityQuery': lowerCity,
-        'originalCity': city,
-        'savedAt': DateTime.now().toIso8601String(),
-        'data': responseData,
-      });
+      final ttlDays = int.tryParse('${responseData['cacheTtlDays'] ?? 7}') ?? 7;
+      if (ttlDays > 0) {
+        _searchCache.insert(0, {
+          'cityQuery': lowerCity,
+          'originalCity': city,
+          'savedAt':
+              responseData['fetchedAt']?.toString() ?? DateTime.now().toIso8601String(),
+          'data': responseData,
+        });
 
-      if (_searchCache.length > 4) {
-        _searchCache.removeLast();
+        if (_searchCache.length > 4) {
+          _searchCache.removeLast();
+        }
       }
 
       return responseData;

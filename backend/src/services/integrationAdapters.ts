@@ -52,7 +52,12 @@ export async function testGeminiConnection(
     // Operação mínima: prompt de 1 token para validar autenticação e cota
     const response: any = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: 'Ping',
+      contents: 'Responda apenas OK',
+      config: {
+        maxOutputTokens: 32,
+        temperature: 0,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
     });
 
     const latencyMs = Date.now() - start;

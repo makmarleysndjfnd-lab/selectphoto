@@ -16,7 +16,23 @@ import {
   upsertCompanyEventSearchConfig,
   resetCompanyEventSearchConfig,
   buildRenderedEventPrompt,
+  formatDateBrt,
+  addDaysToDateIso,
+  EventSearchConfigValues,
 } from '../services/eventSearchConfigService';
+import {
+  GenerativeAiModelsLike,
+  EventSearchExtractionError,
+  extractCleanJsonPayload,
+  computeInclusiveDurationDays,
+  applyDeterministicEventFilter,
+  normalizeCanonicalCityInfo,
+  sanitizeCachedCityPayload,
+  sanitizeCachedStateRadarPayload,
+  runTwoStepCityEventSearch,
+  runTwoStepStateRadarSearch,
+  DEFAULT_GEMINI_SEARCH_MODEL,
+} from '../services/eventSearchPipelineService';
 import { authorizeCompanyAdmin } from './companyIntegrations';
 import {
   reserveApiQuota,
@@ -62,35 +78,50 @@ export function clearCompanyCityScoutCache(companyId?: string | null): void {
 
 // Instanciação direta por chamada com resolução dinâmica por empresa
 // Elimina fallback silencioso para a chave global quando a empresa não tem contratação ativa
+let testAiClientOverride: ((apiKey: string) => GenerativeAiModelsLike) | null = null;
+
+export function setEventSearchAiClientOverrideForTests(
+  factory: ((apiKey: string) => GenerativeAiModelsLike) | null
+): void {
+  testAiClientOverride = factory;
+}
 
 // Helper to robustly extract clean JSON from AI responses (even with conversational wrappers)
 export function extractCleanJson(text: string): string {
-  let cleaned = text.trim();
-  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-  }
-  return cleaned;
+  return extractCleanJsonPayload(text);
 }
 
 // Helper for exact duration calculation
-export function computeExactDurationDays(startDateStr?: string, endDateStr?: string, providedDays?: any): number {
-  if (startDateStr && endDateStr) {
-    const s = new Date(startDateStr.split('T')[0]);
-    const e = new Date(endDateStr.split('T')[0]);
-    if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
-      const diffMs = e.getTime() - s.getTime();
-      const diffDays = Math.round(diffMs / (1000 * 3600 * 24)) + 1;
-      if (diffDays >= 1) return diffDays;
-    }
-  }
-  if (providedDays !== undefined && providedDays !== null) {
-    const p = parseInt(providedDays.toString(), 10);
-    if (!isNaN(p) && p >= 1) return p;
-  }
-  return 1;
+export function computeExactDurationDays(
+  startDateStr?: string,
+  endDateStr?: string,
+  providedDays?: any
+): number {
+  return computeInclusiveDurationDays(startDateStr || '', endDateStr || '', providedDays);
+}
+
+function buildMockDatesForConfig(cfg: EventSearchConfigValues): {
+  todayBrt: string;
+  windowEndBrt: string;
+  startDate: string;
+  endDate: string;
+  durationDays: number;
+} {
+  const todayBrt = formatDateBrt();
+  const windowEndBrt = addDaysToDateIso(todayBrt, cfg.horizonDays);
+  const desiredDuration = Math.max(
+    cfg.minDurationDays || 1,
+    cfg.allowSingleDayIfLarge ? 4 : Math.max(2, cfg.minDurationDays || 2)
+  );
+  const cappedDuration =
+    cfg.maxDurationDays !== null && cfg.maxDurationDays !== undefined
+      ? Math.min(desiredDuration, cfg.maxDurationDays)
+      : desiredDuration;
+  const safeDuration = Math.max(1, Math.min(cappedDuration, Math.max(1, cfg.horizonDays)));
+  const offsetDays = Math.max(1, Math.min(10, Math.max(0, cfg.horizonDays - safeDuration)));
+  const startDate = addDaysToDateIso(todayBrt, offsetDays);
+  const endDate = addDaysToDateIso(startDate, safeDuration - 1);
+  return { todayBrt, windowEndBrt, startDate, endDate, durationDays: safeDuration };
 }
 
 /**
@@ -304,7 +335,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const forceRefresh = req.query.force === 'true' || req.body?.force === true;
 
     // Resolução dinâmica de integração por empresa em tempo de execução
-    let activeAiClient: GoogleGenAI | null = null;
+    let activeAiClient: GenerativeAiModelsLike | null = null;
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
 
@@ -312,7 +343,9 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
-        activeAiClient = new GoogleGenAI({ apiKey: exclusiveGemini.key });
+        activeAiClient = testAiClientOverride
+          ? testAiClientOverride(exclusiveGemini.key)
+          : new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
         const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
@@ -329,7 +362,9 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         return;
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
-      if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
+      if (testAiClientOverride) {
+        activeAiClient = testAiClientOverride(process.env.GEMINI_API_KEY || 'superadmin_test_key');
+      } else if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
         activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       }
     }
@@ -339,28 +374,36 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const cacheKey = `${lowerCity}:${companyId || 'global'}:${searchConfig.configHash}`;
     const cacheTtlMs = Math.max(0, searchConfig.cacheTtlDays) * 24 * 3600 * 1000;
 
-    // ── 1. Verificação de Cache do Scout por Cidade ───────────────────────────
+    // ── 1. Verificação de Cache do Scout por Cidade (com pós-filtro determinístico) ──
     const cachedEntry = cacheTtlMs > 0 ? cityScoutCache.get(cacheKey) : undefined;
-    if (cachedEntry && cachedEntry.expiresAt > Date.now() && !forceRefresh) {
-      if (companyId) {
-        await recordApiUsage({
-          companyId,
-          integrationId: resolvedIntegrationId,
-          category: 'AI_RESEARCH',
-          provider: providerName,
-          environment,
-          operation: 'SCOUT_CITY_CACHE',
-          unitsUsed: 1,
-          status: 'SUCCESS',
-          latencyMs: Date.now() - callStart,
+    if (cachedEntry && cachedEntry.expiresAt <= Date.now()) {
+      cityScoutCache.delete(cacheKey);
+    } else if (cachedEntry && cachedEntry.expiresAt > Date.now() && !forceRefresh) {
+      const sanitizedCache = sanitizeCachedCityPayload(cachedEntry.data, searchConfig);
+      if (sanitizedCache.hadAllEventsExpired) {
+        cityScoutCache.delete(cacheKey);
+      } else {
+        if (companyId) {
+          await recordApiUsage({
+            companyId,
+            integrationId: resolvedIntegrationId,
+            category: 'AI_RESEARCH',
+            provider: providerName,
+            environment,
+            operation: 'SCOUT_CITY_CACHE',
+            unitsUsed: 1,
+            status: 'SUCCESS',
+            latencyMs: Date.now() - callStart,
+          });
+        }
+        return res.json({
+          ...sanitizedCache.payload,
+          configHash: searchConfig.configHash,
+          cacheTtlDays: searchConfig.cacheTtlDays,
+          source: 'CACHE',
+          cached: true,
         });
       }
-      return res.json({
-        ...cachedEntry.data,
-        configHash: searchConfig.configHash,
-        source: 'CACHE',
-        cached: true,
-      });
     }
 
     // ── 2. Reserva atômica de cota antes de chamar o provedor externo ─────────
@@ -389,8 +432,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       reservationId = reservation.reservationId;
     }
 
-    // Retorno mockado quando serviços externos estão desabilitados ou sem chave
-    if (isExternalServicesDisabled() || !activeAiClient) {
+    // Retorno mockado quando serviços externos estão desabilitados (sem override de teste) ou sem chave
+    if ((isExternalServicesDisabled() && !testAiClientOverride) || !activeAiClient) {
       providerDispatched = true;
 
       const simulateTimeout =
@@ -446,7 +489,6 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
             }, lateMs);
           }
 
-          // Gravação condicional do timeout: passa de RESERVED para PENDING_CONFIRMATION apenas se a reserva ainda estiver aberta
           await markReservationPendingConfirmation(reservationId, {
             latencyMs: Date.now() - callStart,
             reason: 'TIMEOUT_AFTER_DISPATCH',
@@ -471,7 +513,6 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         return;
       }
 
-      // O provedor respondeu à chamada!
       providerResponded = true;
 
       if (reservationId) {
@@ -480,6 +521,35 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           latencyMs: Date.now() - callStart,
         });
       }
+
+      if (simulateInvalidContent) {
+        console.error(`[EVENTS] Conteúdo degradado simulado para cidade "${sanitizedCity}".`);
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'EVENTS_SEARCH',
+            status: 'ERROR',
+            httpStatus: 502,
+          });
+        }
+        return res.status(200).json({
+          cityInfo: normalizeCanonicalCityInfo(
+            { name: sanitizedCity },
+            sanitizedCity,
+            formatDateBrt(),
+            'Mock AI Service (Degraded Content)'
+          ),
+          events: [],
+          fetchedAt: new Date().toISOString(),
+          warning: 'Resposta do provedor recebida, porém com formatação degradada.',
+          source: 'EXTERNAL',
+          cached: false,
+          preservedUnit: true,
+          reservationId,
+        });
+      }
+
       if (companyId) {
         await recordCompanyApiUsageLog({
           companyId,
@@ -490,47 +560,79 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         });
       }
 
-      if (simulateInvalidContent) {
-        // Se o provedor respondeu e houve erro ao ler o conteúdo ou salvar o cache, preserve a unidade consumida
-        return res.status(200).json({
-          cityInfo: {
-            name: sanitizedCity,
-            warning: 'Resposta do provedor recebida, porém com formatação degradada.',
-          },
-          events: [],
-          source: 'EXTERNAL',
-          cached: false,
-          preservedUnit: true,
-          reservationId,
-        });
-      }
-
-      const mockResult = {
-        cityInfo: {
-          name: sanitizedCity,
-          summary: `Pesquisa comercial simulada para ${sanitizedCity}.`,
-          searchDate: new Date().toISOString().split('T')[0],
-          aiSource: 'Mock AI Service (External Services Disabled)'
-        },
-        events: [
+      const mockDates = buildMockDatesForConfig(searchConfig);
+      const mockFiltered = applyDeterministicEventFilter(
+        [
           {
             name: `Exposição Comercial de ${sanitizedCity}`,
             category: 'Exposição Agropecuária',
-            startDate: '2026-09-10',
-            endDate: '2026-09-13',
-            durationDays: 4,
+            startDate: mockDates.startDate,
+            endDate: mockDates.endDate,
+            durationDays: mockDates.durationDays,
             location: 'Parque de Exposições',
             city: sanitizedCity,
             estimatedAudience: '15.000 pessoas',
+            ticketPrice: 'Entrada Franca',
+            entryType: 'FREE',
             historicalData: 'Evento anual consolidado',
             organizer: 'Sindicato Rural',
             organizerContact: '(62) 99999-0000',
             socialMedia: '@expo_evento',
-            website: 'https://exemplo.com',
+            sourcePlatform: 'Portal Oficial',
+            score: 'HIGH',
             notes: 'Excelente oportunidade de vendas fotográficas',
-            sources: ['Mock Local Fixture']
-          }
-        ]
+            sources: ['Mock Local Fixture'],
+          },
+        ],
+        searchConfig,
+        { defaultCity: sanitizedCity }
+      );
+
+      const fetchedAt = new Date().toISOString();
+      const mockResult = {
+        cityInfo: normalizeCanonicalCityInfo(
+          {
+            name: sanitizedCity,
+            summary: `Pesquisa comercial simulada para ${sanitizedCity}.`,
+            searchDate: mockDates.todayBrt,
+            population: '85.000 hab.',
+            perCapitaIncome: 'R$ 38.500/ano',
+            rendaDomiciliarPerCapitaMedia: 'R$ 1.950/mês',
+            gdp: 'R$ 3,2 bilhões',
+            economicActivities: 'Agronegócio, comércio e serviços',
+            principaisFestasFixas: 'Exposição Agropecuária e Aniversário da Cidade',
+            cityAge: '72 anos',
+            aiSource: 'Mock AI Service (External Services Disabled)',
+          },
+          sanitizedCity,
+          mockDates.todayBrt,
+          'Mock AI Service (External Services Disabled)'
+        ),
+        events: mockFiltered.events,
+        fetchedAt,
+        searchMeta: {
+          model: DEFAULT_GEMINI_SEARCH_MODEL,
+          pipelineVersion: 'v2-two-step-grounded',
+          referenceDateBrt: mockDates.todayBrt,
+          windowEndDateBrt: mockDates.windowEndBrt,
+          horizonDays: searchConfig.horizonDays,
+          grounded: false,
+          webSearchQueries: [],
+          groundingSourcesCount: 0,
+          groundingSources: [],
+          diagnostics: mockFiltered.diagnostics,
+          tokens: {
+            step1Prompt: 0,
+            step1Output: 0,
+            step1Total: 0,
+            step2Prompt: 0,
+            step2Output: 0,
+            step2Total: 0,
+            promptTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+          },
+        },
       };
 
       if (cacheTtlMs > 0) {
@@ -549,30 +651,16 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       });
     }
 
-    const prompt = buildRenderedEventPrompt(searchConfig, {
-      mode: 'CITY',
-      city: sanitizedCity,
-    });
-
-    let text = '';
     providerDispatched = true;
-    let hasTimedOut = false;
     const currentResId = reservationId;
 
     try {
-      const response: any = await executeWithTimeout(async (signal) => {
-        const genPromise = activeAiClient!.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: prompt,
-          config: { 
-            temperature: 0.1,
-            tools: [{ googleSearch: {} }] 
-          }
-        });
-
-        // Liga o retorno tardio do provedor à confirmação automática da reserva usando a mesma rotina unificada:
-        genPromise.then(async () => {
-          if (hasTimedOut && currentResId) {
+      const pipelineOut = await runTwoStepCityEventSearch({
+        aiClient: activeAiClient,
+        city: sanitizedCity,
+        config: searchConfig,
+        onLateResponseAfterTimeout: async () => {
+          if (currentResId) {
             await handleLateProviderResponse({
               reservationId: currentResId,
               outcome: 'CONFIRMED',
@@ -581,34 +669,20 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
               resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
             });
           }
-        }).catch((lateErr) => {
-          // Quando o consumo continuar incerto, mantenha a reserva pendente para revisão!
-          console.warn('[API-QUOTA] Resposta tardia com erro; consumo incerto. Mantendo PENDING_CONFIRMATION:', lateErr?.message);
-        });
+        },
+      });
 
-        return await genPromise;
-      }, 25000);
-
-      // O provedor respondeu com sucesso
       providerResponded = true;
-      text = (response.text || '').slice(0, 50000);
 
       if (companyId) {
-        const um = response?.usageMetadata;
-        const promptTokens = typeof um?.promptTokenCount === 'number' ? um.promptTokenCount : 0;
-        const outputTokens = typeof um?.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
-        const totalTokens =
-          typeof um?.totalTokenCount === 'number'
-            ? um.totalTokenCount
-            : promptTokens + outputTokens;
         await recordCompanyApiUsageLog({
           companyId,
           provider: 'GEMINI',
           operation: 'EVENTS_SEARCH',
           status: 'SUCCESS',
-          promptTokens,
-          outputTokens,
-          totalTokens,
+          promptTokens: pipelineOut.searchMeta.tokens.promptTokens,
+          outputTokens: pipelineOut.searchMeta.tokens.outputTokens,
+          totalTokens: pipelineOut.searchMeta.tokens.totalTokens,
           httpStatus: 200,
         });
       }
@@ -619,20 +693,74 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           latencyMs: Date.now() - callStart,
         });
       }
+
+      try {
+        if (cacheTtlMs > 0) {
+          cityScoutCache.set(cacheKey, {
+            data: pipelineOut,
+            expiresAt: Date.now() + cacheTtlMs,
+          });
+        }
+      } catch (cacheErr: any) {
+        console.warn('[EVENTS] Erro ao gravar cache do Scout:', cacheErr?.message);
+      }
+
+      return res.json({
+        ...pipelineOut,
+        configHash: searchConfig.configHash,
+        cacheTtlDays: searchConfig.cacheTtlDays,
+        source: 'EXTERNAL',
+        cached: false,
+      });
     } catch (err: any) {
-      hasTimedOut = true;
-      const isTimeout = err.name === 'AbortError' || err.message === 'AI_TIMEOUT' || err.code === 'ETIMEDOUT';
+      if (err instanceof EventSearchExtractionError) {
+        providerResponded = true;
+        console.error(
+          `[EVENTS] Falha de extração estruturada em POST /search (${sanitizedCity}):`,
+          err.message,
+          err.rawSnippet ? `| Trecho: ${err.rawSnippet}` : ''
+        );
+
+        if (reservationId) {
+          await confirmApiReservation(reservationId, {
+            status: 'SUCCESS',
+            latencyMs: Date.now() - callStart,
+            errorMessage: `EXTRACTION_ERROR: ${err.message}`,
+          });
+        }
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'EVENTS_SEARCH',
+            status: 'ERROR',
+            promptTokens: err.tokens.promptTokens,
+            outputTokens: err.tokens.outputTokens,
+            totalTokens: err.tokens.totalTokens,
+            httpStatus: 502,
+          });
+        }
+        res.status(502).json({
+          error:
+            'Falha ao estruturar os eventos retornados pela IA. Nenhum dado inválido foi salvo em cache. Tente novamente.',
+          code: err.code,
+          preservedUnit: Boolean(reservationId),
+          reservationId,
+        });
+        return;
+      }
+
+      const isTimeout =
+        err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT' || err?.code === 'ETIMEDOUT';
       if (reservationId && !providerResponded) {
         if (isTimeout || providerDispatched) {
-          // Se a chamada já foi enviada e terminar em timeout ou perda de conexão, deixa o consumo pendente de confirmação
           await markReservationPendingConfirmation(reservationId, {
             latencyMs: Date.now() - callStart,
             reason: 'TIMEOUT_AFTER_DISPATCH',
           });
         } else {
-          // Libera a reserva quando comprovado que a operação não consumiu cota
           await releaseApiReservation(reservationId, {
-            reason: err.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
+            reason: err?.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
           });
         }
       }
@@ -648,13 +776,15 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
           });
         }
         res.status(504).json({
-          error: 'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          error:
+            'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
           status: 'PENDING_CONFIRMATION',
           reservationId,
         });
         return;
       }
-      if (err.status === 429 || (err.message && err.message.includes('429'))) {
+
+      if (err?.status === 429 || (err?.message && String(err.message).includes('429'))) {
         if (companyId) {
           await recordCompanyApiUsageLog({
             companyId,
@@ -664,56 +794,23 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
             httpStatus: 429,
           });
         }
-        res.status(429).json({ error: 'Limite de requisições de IA atingido. Tente novamente mais tarde.' });
+        res.status(429).json({
+          error: 'Limite de requisições de IA atingido. Tente novamente mais tarde.',
+        });
         return;
       }
+
       if (companyId && providerDispatched && !providerResponded) {
         await recordCompanyApiUsageLog({
           companyId,
           provider: 'GEMINI',
           operation: 'EVENTS_SEARCH',
           status: 'ERROR',
-          httpStatus: typeof err?.status === 'number' ? err.status : null,
+          httpStatus: typeof err?.status === 'number' ? err.status : 503,
         });
       }
       throw err;
     }
-
-    const cleanJson = extractCleanJson(text);
-    let result: any;
-    try {
-      result = JSON.parse(cleanJson);
-      if (result && Array.isArray(result.events)) {
-        result.events = result.events.slice(0, searchConfig.maxResultsPerSearch);
-        for (let ev of result.events) {
-          ev.durationDays = computeExactDurationDays(ev.startDate, ev.endDate, ev.durationDays);
-        }
-      } else {
-        result = { cityInfo: { name: sanitizedCity }, events: [] };
-      }
-    } catch (parseError) {
-      // Se o provedor respondeu mas o JSON é malformado, preserva a unidade consumida
-      result = { cityInfo: { name: sanitizedCity, warning: 'Resposta do provedor com formatação degradada' }, events: [] };
-    }
-
-    try {
-      if (cacheTtlMs > 0) {
-        cityScoutCache.set(cacheKey, {
-          data: result,
-          expiresAt: Date.now() + cacheTtlMs,
-        });
-      }
-    } catch (cacheErr: any) {
-      console.warn('[EVENTS] Erro ao gravar cache do Scout:', cacheErr?.message);
-    }
-
-    res.json({
-      ...result,
-      configHash: searchConfig.configHash,
-      cacheTtlDays: searchConfig.cacheTtlDays,
-      source: 'EXTERNAL',
-      cached: false,
-    });
   } catch (error: any) {
     if (reservationId) {
       if (!providerResponded) {
@@ -783,13 +880,15 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     // Resolução dinâmica de integração por empresa
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
-    let activeAiClient: GoogleGenAI | null = null;
+    let activeAiClient: GenerativeAiModelsLike | null = null;
 
     if (companyId) {
       const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
-        activeAiClient = new GoogleGenAI({ apiKey: exclusiveGemini.key });
+        activeAiClient = testAiClientOverride
+          ? testAiClientOverride(exclusiveGemini.key)
+          : new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
         const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
@@ -806,7 +905,9 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         return;
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
-      if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
+      if (testAiClientOverride) {
+        activeAiClient = testAiClientOverride(process.env.GEMINI_API_KEY || 'superadmin_test_key');
+      } else if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
         activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       }
     }
@@ -814,15 +915,18 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     const searchConfig = await getCompanyEventSearchConfig(companyId);
     const radarCacheKey = `${stateUF}:${companyId || 'global'}:${searchConfig.configHash.slice(0, 12)}`;
 
-    // ── 1. Verificação de Cache do Radar Estadual ────────────────────────────
+    // ── 1. Verificação de Cache do Radar Estadual (com pós-filtro determinístico) ──
     if (!forceRefresh && searchConfig.cacheTtlDays > 0) {
       const cached = await prisma.stateRadarCache.findUnique({
-        where: { state: radarCacheKey }
+        where: { state: radarCacheKey },
       });
       if (cached) {
-        const ageInDays = (new Date().getTime() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
+        const ageInDays = (Date.now() - cached.updatedAt.getTime()) / (1000 * 3600 * 24);
         if (ageInDays < searchConfig.cacheTtlDays) {
-          resultData = cached.data;
+          const sanitized = sanitizeCachedStateRadarPayload(cached.data, stateUF, searchConfig);
+          if (!sanitized.hadAllEventsExpired) {
+            resultData = sanitized.payload;
+          }
         }
       }
     }
@@ -844,6 +948,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       return res.json({
         ...resultData,
         configHash: searchConfig.configHash,
+        cacheTtlDays: searchConfig.cacheTtlDays,
         source: 'CACHE',
         cached: true,
       });
@@ -875,10 +980,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       reservationId = reservation.reservationId;
     }
 
-    let providerDispatched = false;
-    let providerResponded = false;
-
-    if (isExternalServicesDisabled() || !activeAiClient) {
+    if ((isExternalServicesDisabled() && !testAiClientOverride) || !activeAiClient) {
       providerDispatched = true;
 
       const simulateTimeout =
@@ -934,7 +1036,6 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
             }, lateMs);
           }
 
-          // Gravação condicional do timeout: passa de RESERVED para PENDING_CONFIRMATION apenas se a reserva ainda estiver aberta
           await markReservationPendingConfirmation(reservationId, {
             latencyMs: Date.now() - callStart,
             reason: 'TIMEOUT_AFTER_DISPATCH',
@@ -949,12 +1050,6 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
             status: 'ERROR',
             httpStatus: 504,
           });
-        }
-        if (!forceRefresh) {
-          const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
-          if (fallbackCache) {
-            return res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
-          }
         }
         return res.status(504).json({
           error:
@@ -972,6 +1067,31 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
           latencyMs: Date.now() - callStart,
         });
       }
+
+      if (simulateInvalidContent) {
+        console.error(`[EVENTS] Conteúdo degradado simulado no Radar Estadual (${stateUF}).`);
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'STATE_RADAR',
+            status: 'ERROR',
+            httpStatus: 502,
+          });
+        }
+        const nowIso = new Date().toISOString();
+        return res.status(200).json({
+          state: stateUF,
+          updatedAt: nowIso,
+          fetchedAt: nowIso,
+          events: [],
+          source: 'EXTERNAL',
+          cached: false,
+          preservedUnit: true,
+          reservationId,
+        });
+      }
+
       if (companyId) {
         await recordCompanyApiUsageLog({
           companyId,
@@ -982,44 +1102,73 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         });
       }
 
-      if (simulateInvalidContent) {
-        return res.status(200).json({
-          state: stateUF,
-          cities: [],
-          source: 'EXTERNAL',
-          cached: false,
-          preservedUnit: true,
-          reservationId,
-        });
-      }
+      const mockDates = buildMockDatesForConfig(searchConfig);
+      const mockCityName = stateUF === 'GO' ? 'Goiânia - GO' : `Capital - ${stateUF}`;
+      const mockFiltered = applyDeterministicEventFilter(
+        [
+          {
+            name: `Festa Regional de ${stateUF}`,
+            category: 'Festival Cultural',
+            startDate: mockDates.startDate,
+            endDate: mockDates.endDate,
+            durationDays: mockDates.durationDays,
+            city: mockCityName,
+            state: stateUF,
+            location: 'Parque Central de Eventos',
+            estimatedAudience: '20.000 pessoas',
+            ticketPrice: 'Entrada Franca',
+            entryType: 'FREE',
+            organizerContact: '(62) 99999-0000',
+            socialMedia: '@festaregional',
+            sourcePlatform: 'Portal Oficial',
+            population: '1.437.000',
+            perCapitaIncome: 'R$ 42.000',
+            gdp: 'R$ 59,8 bi',
+            score: 'HIGH',
+          },
+        ],
+        searchConfig,
+        { defaultState: stateUF }
+      );
 
+      const fetchedAt = new Date().toISOString();
       const mockRadar = {
         state: stateUF,
-        updatedAt: new Date().toISOString(),
-        cities: [
-          {
-            city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
-            eventsCount: 3,
-            events: [
-              {
-                name: `Festa Regional de ${stateUF}`,
-                category: 'Festival Cultural',
-                startDate: '2026-09-15',
-                endDate: '2026-09-18',
-                durationDays: 4,
-                city: stateUF === 'GO' ? 'Goiânia' : 'Capital',
-                score: 'HIGH'
-              }
-            ]
-          }
-        ]
+        updatedAt: fetchedAt,
+        fetchedAt,
+        events: mockFiltered.events,
+        searchMeta: {
+          model: DEFAULT_GEMINI_SEARCH_MODEL,
+          pipelineVersion: 'v2-two-step-grounded',
+          referenceDateBrt: mockDates.todayBrt,
+          windowEndDateBrt: mockDates.windowEndBrt,
+          horizonDays: searchConfig.horizonDays,
+          grounded: false,
+          webSearchQueries: [],
+          groundingSourcesCount: 0,
+          groundingSources: [],
+          diagnostics: mockFiltered.diagnostics,
+          tokens: {
+            step1Prompt: 0,
+            step1Output: 0,
+            step1Total: 0,
+            step2Prompt: 0,
+            step2Output: 0,
+            step2Total: 0,
+            promptTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+          },
+        },
       };
 
-      await prisma.stateRadarCache.upsert({
-        where: { state: radarCacheKey },
-        update: { data: mockRadar, updatedAt: new Date() },
-        create: { state: radarCacheKey, data: mockRadar }
-      });
+      if (searchConfig.cacheTtlDays > 0) {
+        await prisma.stateRadarCache.upsert({
+          where: { state: radarCacheKey },
+          update: { data: mockRadar as any, updatedAt: new Date() },
+          create: { state: radarCacheKey, data: mockRadar as any },
+        });
+      }
 
       return res.json({
         ...mockRadar,
@@ -1030,29 +1179,16 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       });
     }
 
-    const prompt = buildRenderedEventPrompt(searchConfig, {
-      mode: 'STATE_RADAR',
-      stateUF,
-    });
-
     providerDispatched = true;
-    let hasTimedOut = false;
     const currentResId = reservationId;
 
     try {
-      const response: any = await executeWithTimeout(async (signal) => {
-        const genPromise = activeAiClient!.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: prompt,
-          config: { 
-            temperature: 0.1,
-            tools: [{ googleSearch: {} }] 
-          }
-        });
-
-        // Liga o retorno tardio do provedor à confirmação automática da reserva usando a mesma rotina unificada:
-        genPromise.then(async () => {
-          if (hasTimedOut && currentResId) {
+      const radarOut = await runTwoStepStateRadarSearch({
+        aiClient: activeAiClient,
+        stateUF,
+        config: searchConfig,
+        onLateResponseAfterTimeout: async () => {
+          if (currentResId) {
             await handleLateProviderResponse({
               reservationId: currentResId,
               outcome: 'CONFIRMED',
@@ -1061,36 +1197,24 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
               resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
             });
           }
-        }).catch((lateErr) => {
-          console.warn('[API-QUOTA] Resposta tardia com erro no Radar; consumo incerto:', lateErr?.message);
-        });
-
-        return await genPromise;
-      }, 25000);
+        },
+      });
 
       providerResponded = true;
 
       if (companyId) {
-        const um = response?.usageMetadata;
-        const promptTokens = typeof um?.promptTokenCount === 'number' ? um.promptTokenCount : 0;
-        const outputTokens = typeof um?.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
-        const totalTokens =
-          typeof um?.totalTokenCount === 'number'
-            ? um.totalTokenCount
-            : promptTokens + outputTokens;
         await recordCompanyApiUsageLog({
           companyId,
           provider: 'GEMINI',
           operation: 'STATE_RADAR',
           status: 'SUCCESS',
-          promptTokens,
-          outputTokens,
-          totalTokens,
+          promptTokens: radarOut.searchMeta.tokens.promptTokens,
+          outputTokens: radarOut.searchMeta.tokens.outputTokens,
+          totalTokens: radarOut.searchMeta.tokens.totalTokens,
           httpStatus: 200,
         });
       }
 
-      // Confirme a unidade assim que o provedor responder com sucesso, antes de ler o conteúdo ou salvar o cache
       if (reservationId) {
         await confirmApiReservation(reservationId, {
           status: 'SUCCESS',
@@ -1098,25 +1222,61 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         });
       }
 
-      const text = (response.text || '').slice(0, 50000);
-      try {
-        const cleanJson = extractCleanJson(text);
-        resultData = JSON.parse(cleanJson);
+      if (searchConfig.cacheTtlDays > 0) {
+        await prisma.stateRadarCache.upsert({
+          where: { state: radarCacheKey },
+          update: { data: radarOut as any, updatedAt: new Date() },
+          create: { state: radarCacheKey, data: radarOut as any },
+        });
+      }
 
-        if (resultData && typeof resultData === 'object' && (Array.isArray(resultData.cities) || Array.isArray(resultData.events))) {
-          await prisma.stateRadarCache.upsert({
-            where: { state: radarCacheKey },
-            update: { data: resultData, updatedAt: new Date() },
-            create: { state: radarCacheKey, data: resultData }
+      return res.json({
+        ...radarOut,
+        configHash: searchConfig.configHash,
+        cacheTtlDays: searchConfig.cacheTtlDays,
+        source: 'EXTERNAL',
+        cached: false,
+      });
+    } catch (err: any) {
+      if (err instanceof EventSearchExtractionError) {
+        providerResponded = true;
+        console.error(
+          `[EVENTS] Falha de extração estruturada em GET /state-radar (${stateUF}):`,
+          err.message,
+          err.rawSnippet ? `| Trecho: ${err.rawSnippet}` : ''
+        );
+
+        if (reservationId) {
+          await confirmApiReservation(reservationId, {
+            status: 'SUCCESS',
+            latencyMs: Date.now() - callStart,
+            errorMessage: `EXTRACTION_ERROR: ${err.message}`,
           });
         }
-      } catch (downstreamErr) {
-        // Falha ao ler conteúdo ou salvar cache downstream não anula consumo confirmado
-        resultData = { state: stateUF, cities: [], warning: 'Falha downstream ao processar resposta do provedor' };
+        if (companyId) {
+          await recordCompanyApiUsageLog({
+            companyId,
+            provider: 'GEMINI',
+            operation: 'STATE_RADAR',
+            status: 'ERROR',
+            promptTokens: err.tokens.promptTokens,
+            outputTokens: err.tokens.outputTokens,
+            totalTokens: err.tokens.totalTokens,
+            httpStatus: 502,
+          });
+        }
+        res.status(502).json({
+          error:
+            'Falha ao estruturar os eventos do radar retornados pela IA. Nenhum dado inválido foi salvo em cache.',
+          code: err.code,
+          preservedUnit: Boolean(reservationId),
+          reservationId,
+        });
+        return;
       }
-    } catch (err: any) {
-      hasTimedOut = true;
-      const isTimeout = err.name === 'AbortError' || err.message === 'AI_TIMEOUT' || err.code === 'ETIMEDOUT';
+
+      const isTimeout =
+        err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT' || err?.code === 'ETIMEDOUT';
       if (reservationId && !providerResponded) {
         if (isTimeout || providerDispatched) {
           await markReservationPendingConfirmation(reservationId, {
@@ -1125,7 +1285,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
           });
         } else {
           await releaseApiReservation(reservationId, {
-            reason: err.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
+            reason: err?.message || 'OPERATION_FAILED_NO_QUOTA_CONSUMED',
           });
         }
       }
@@ -1137,26 +1297,50 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
           provider: 'GEMINI',
           operation: 'STATE_RADAR',
           status: isRateLimited ? 'RATE_LIMITED' : 'ERROR',
-          httpStatus: isTimeout ? 504 : isRateLimited ? 429 : typeof err?.status === 'number' ? err.status : null,
+          httpStatus: isTimeout
+            ? 504
+            : isRateLimited
+              ? 429
+              : typeof err?.status === 'number'
+                ? err.status
+                : 503,
         });
       }
 
-      if (isTimeout) {
-        const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
+      // NUNCA devolver cache quando force=true ou quando o TTL (cacheTtlDays) já expirou
+      if (!forceRefresh && searchConfig.cacheTtlDays > 0) {
+        const fallbackCache = await prisma.stateRadarCache.findUnique({
+          where: { state: radarCacheKey },
+        });
         if (fallbackCache) {
-          res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
-          return;
+          const ageInDays =
+            (Date.now() - fallbackCache.updatedAt.getTime()) / (1000 * 3600 * 24);
+          if (ageInDays < searchConfig.cacheTtlDays) {
+            const sanitizedFallback = sanitizeCachedStateRadarPayload(
+              fallbackCache.data,
+              stateUF,
+              searchConfig
+            );
+            if (!sanitizedFallback.hadAllEventsExpired) {
+              return res.json({
+                ...sanitizedFallback.payload,
+                configHash: searchConfig.configHash,
+                cacheTtlDays: searchConfig.cacheTtlDays,
+                source: 'CACHE',
+                cached: true,
+              });
+            }
+          }
         }
+      }
+
+      if (isTimeout) {
         res.status(504).json({
-          error: 'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
+          error:
+            'Tempo limite esgotado ao aguardar resposta do provedor de IA. O consumo foi retido e está pendente de confirmação.',
           status: 'PENDING_CONFIRMATION',
           reservationId,
         });
-        return;
-      }
-      const fallbackCache = await prisma.stateRadarCache.findUnique({ where: { state: radarCacheKey } });
-      if (fallbackCache) {
-        res.json({ ...(fallbackCache.data as Record<string, any>), configHash: searchConfig.configHash, source: 'CACHE', cached: true });
         return;
       }
       if (isRateLimited) {
@@ -1166,14 +1350,6 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });
       return;
     }
-
-    res.json({
-      ...((resultData as Record<string, any>) || { state: stateUF, cities: [] }),
-      configHash: searchConfig.configHash,
-      cacheTtlDays: searchConfig.cacheTtlDays,
-      source: 'EXTERNAL',
-      cached: false,
-    });
   } catch (error: any) {
     if (reservationId) {
       if (!providerResponded) {

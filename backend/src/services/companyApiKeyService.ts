@@ -508,8 +508,12 @@ export async function testCompanyGeminiConnection(params: {
       const response: any = await Promise.race([
         ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: 'Ping',
-          config: { maxOutputTokens: 8 },
+          contents: 'Responda apenas OK',
+          config: {
+            maxOutputTokens: 32,
+            temperature: 0,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
         timeoutPromise,
       ]);

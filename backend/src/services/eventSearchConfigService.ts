@@ -369,7 +369,7 @@ export function normalizeEventSearchConfigValues(
 
   const searchDescription =
     raw?.searchDescription !== undefined
-      ? sanitizeMultilineText(raw.searchDescription, 4000)
+      ? sanitizeMultilineText(raw.searchDescription, 12000)
       : DEFAULT_EVENT_SEARCH_CONFIG.searchDescription;
 
   if (strict && !searchDescription) {
@@ -614,6 +614,31 @@ const CONFIRMATION_LEVEL_LABEL: Record<ConfirmationLevel, string> = {
   CONFIRMED_AND_TRADITIONAL: 'Eventos confirmados e edições tradicionais recorrentes do calendário local',
 };
 
+export function formatDateBrt(date: Date = new Date()): string {
+  // Horário oficial de Brasília (UTC-03:00)
+  const brtMs = date.getTime() - 3 * 60 * 60 * 1000;
+  const brt = new Date(brtMs);
+  const year = brt.getUTCFullYear();
+  const month = String(brt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(brt.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function addDaysToDateIso(yyyyMmDd: string, days: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(yyyyMmDd || '').trim());
+  if (!match) {
+    return formatDateBrt(new Date(Date.now() + days * 24 * 3600 * 1000));
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  const sy = shifted.getUTCFullYear();
+  const sm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const sd = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${sy}-${sm}-${sd}`;
+}
+
 export function buildRenderedEventPrompt(
   cfg: EventSearchConfigValues,
   target: { mode: 'CITY' | 'STATE_RADAR'; city?: string; stateUF?: string; referenceDate?: Date } = {
@@ -622,11 +647,9 @@ export function buildRenderedEventPrompt(
   }
 ): string {
   const baseDate = target.referenceDate ? new Date(target.referenceDate) : new Date();
-  const maxDate = new Date(baseDate);
-  maxDate.setDate(baseDate.getDate() + cfg.horizonDays);
-
-  const currentDateStr = baseDate.toISOString().split('T')[0];
-  const maxDateStr = maxDate.toISOString().split('T')[0];
+  const currentDateStr = formatDateBrt(baseDate);
+  const maxDateStr = addDaysToDateIso(currentDateStr, cfg.horizonDays);
+  const safeSearchDescription = sanitizeMultilineText(cfg.searchDescription, 8000);
 
   const activeTypes = cfg.eventTypes.filter((t) => t.enabled);
   const categorySample =
@@ -674,74 +697,32 @@ export function buildRenderedEventPrompt(
 
   if (target.mode === 'STATE_RADAR') {
     const stateUF = target.stateUF || '<UF>';
-    return `${cfg.searchDescription}
+    return `${safeSearchDescription}
 
-ALVO DO RADAR: Principais cidades no estado "${stateUF}" com eventos reais entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias).
+ALVO DO RADAR: Principais cidades no estado "${stateUF}" com eventos reais entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias, fuso de Brasília -03:00).
+Hoje é dia ${currentDateStr}. Descarte imediatamente qualquer evento já encerrado antes de ${currentDateStr}.
 DIAS PRIORITÁRIOS: ${weekdaysLabel}. ${holidaysRule}
 ${geoRule}${filtersSummary}
 TIPOS DE EVENTOS PROCURADOS:
 ${typesBlock}
 
-${exclusionsBlock}Retorne APENAS JSON válido no formato:
-{
-  "state": "${stateUF}",
-  "updatedAt": "${currentDateStr}",
-  "events": [
-    {
-      "name": "Nome do Evento",
-      "category": "${categorySample}",
-      "city": "Cidade - ${stateUF}",
-      "startDate": "YYYY-MM-DD",
-      "endDate": "YYYY-MM-DD",
-      "durationDays": 3,
-      "score": "HIGH",
-      "audience": "Público estimado",
-      "organizerContact": "(DD) 9XXXX-XXXX",
-      "socialMedia": "@perfil",
-      "notes": "Observações comerciais"
-    }
-  ]
-}`.slice(0, 4000);
+${exclusionsBlock}Pesquise na web (portais de prefeituras, calendários oficiais de eventos/turismo, sindicatos rurais, Sympla, Bilheteria Digital, Guichê Web, imprensa regional e perfis oficiais) e levante para cada evento confirmado: nome oficial, categoria (${categorySample}), cidade - ${stateUF}, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD), durationDays, público estimado, valor de ingresso/entrada, organizador/contato, redes sociais (@perfil), população IBGE/renda per capita/PIB aproximados do município e URL real da fonte verificada.`;
   }
 
   const cityName = target.city || '<CIDADE>';
-  return `${cfg.searchDescription}
+  return `${safeSearchDescription}
 
 ALVO DA BUSCA: Cidade "${cityName}".
-Hoje é dia ${currentDateStr}.
-JANELA OBRIGATÓRIA: Retorne APENAS eventos reais que acontecerão entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias).
+Hoje é dia ${currentDateStr} (fuso de Brasília -03:00).
+JANELA OBRIGATÓRIA: Retorne APENAS eventos reais que acontecerão entre ${currentDateStr} e ${maxDateStr} (horizonte de ${cfg.horizonDays} dias). Descarte imediatamente qualquer edição já encerrada antes de ${currentDateStr}.
 DIAS PRIORITÁRIOS: ${weekdaysLabel}. ${holidaysRule}
 ${geoRule}${filtersSummary}
 TIPOS DE EVENTOS PROCURADOS:
 ${typesBlock}
 
-${exclusionsBlock}Retorne a resposta EXCLUSIVAMENTE em formato JSON puro:
-{
-  "cityInfo": {
-    "name": "${cityName}",
-    "summary": "Breve resumo sobre o cenário de eventos da cidade neste período.",
-    "searchDate": "${currentDateStr}"
-  },
-  "events": [
-    {
-      "name": "Nome do Evento",
-      "category": "${categorySample}",
-      "startDate": "YYYY-MM-DD",
-      "endDate": "YYYY-MM-DD",
-      "durationDays": 3,
-      "location": "Local",
-      "city": "${cityName}",
-      "estimatedAudience": "Público estimado",
-      "historicalData": "Histórico",
-      "organizer": "Organizador",
-      "organizerContact": "(DD) 9XXXX-XXXX",
-      "socialMedia": "@perfil",
-      "website": "https://...",
-      "notes": "Observações comerciais",
-      "sources": ["Fonte"]
-    }
-  ]
-}`.slice(0, 4000);
+${exclusionsBlock}Pesquise na web (portais oficiais do município, secretarias de cultura/turismo, sindicato rural, Sympla, Bilheteria Digital, imprensa local, Instagram oficial e dados demográficos IBGE de "${cityName}") e levante:
+1. Cenário demográfico e econômico real de "${cityName}": população IBGE, renda per capita, PIB, principais atividades econômicas, idade/fundação do município e principais festas fixas anuais.
+2. Lista de eventos reais na janela ${currentDateStr} a ${maxDateStr} com: nome oficial, categoria (${categorySample}), startDate (YYYY-MM-DD), endDate (YYYY-MM-DD), durationDays, local exato, público estimado, ingresso/entrada (gratuito ou faixa de preço), histórico de edições, organizador, telefone/WhatsApp, redes sociais (@perfil), site/link oficial e fontes verificáveis com URL.`;
 }
 
 function toDto(
