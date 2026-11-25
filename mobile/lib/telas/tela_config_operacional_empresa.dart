@@ -27,7 +27,6 @@ class _TelaConfigOperacionalEmpresaState
   static const _accentSoft = Color(0xFFD8B4FE);
   static const _green = Color(0xFF10B981);
   static const _red = Color(0xFFEF4444);
-  static const _amber = Color(0xFFF59E0B);
 
   static const _defaultCreditTpl =
       'Olá, {cliente}! Aqui é da equipe {empresa}. Passando para lembrar da parcela no valor de {valor}, com vencimento em {vencimento}. Para pagamento via Pix, utilize a chave: {pix}. Qualquer dúvida estamos à disposição!';

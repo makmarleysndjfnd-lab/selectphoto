@@ -3591,10 +3591,7 @@ class _SaleTabState extends State<_SaleTab> {
                                         postSaleTpl.isNotEmpty)
                                     ? ApiService.renderWhatsAppTemplate(
                                         postSaleTpl,
-                                        cliente: clientName ??
-                                            widget.clientData['name']
-                                                ?.toString() ??
-                                            'Cliente',
+                                        cliente: clientName ?? 'Cliente',
                                         valor: '',
                                         empresa: tplRes['companyDisplayName']
                                                 ?.toString() ??
