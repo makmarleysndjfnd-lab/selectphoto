@@ -469,7 +469,7 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
     return c;
   };
 
-  // Empresa B (sem edição): Virgem 25%, Rebolo 20%
+  // Empresa B (sem edição): Virgem + Carro Empresa = 20%, Rebolo + Carro Empresa = 40%
   const clientBVirgin = await createClient(companyB.id, sellerB.id, batchB.id, 'DISTRIBUTED', `BV-${suffix}`);
   const clientBRebolo = await createClient(companyB.id, sellerB.id, batchB.id, 'DISTRIBUTED_REBOLO', `BR-${suffix}`);
 
@@ -486,7 +486,7 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
   });
   assert.equal(saleBVirgin.status, 201);
   createdSaleIds.push(saleBVirgin.json.id);
-  assert.equal(saleBVirgin.json.appliedCommissionPercent, 25);
+  assert.equal(saleBVirgin.json.appliedCommissionPercent, 20);
 
   const saleBRebolo = await apiJson(baseUrl, '/api/sales', {
     method: 'POST',
@@ -501,9 +501,9 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
   });
   assert.equal(saleBRebolo.status, 201);
   createdSaleIds.push(saleBRebolo.json.id);
-  assert.equal(saleBRebolo.json.appliedCommissionPercent, 20);
+  assert.equal(saleBRebolo.json.appliedCommissionPercent, 40);
 
-  // Empresa A: Venda #1 ANTES de editar (grava snapshot 25%)
+  // Empresa A: Venda #1 ANTES de editar (grava snapshot 20%)
   const clientA1 = await createClient(companyA.id, sellerA.id, batchA.id, 'DISTRIBUTED', `A1-${suffix}`);
   const saleA1 = await apiJson(baseUrl, '/api/sales', {
     method: 'POST',
@@ -518,7 +518,7 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
   });
   assert.equal(saleA1.status, 201);
   createdSaleIds.push(saleA1.json.id);
-  assert.equal(saleA1.json.appliedCommissionPercent, 25);
+  assert.equal(saleA1.json.appliedCommissionPercent, 20);
 
   // Atualiza Comissões de Empresa A para Virgem 30%, Rebolo 15%, Crediário 12% (via SuperAdmin)
   const updateOpRes = await apiJson(
@@ -643,8 +643,8 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
   assert.equal(instComm.amountCents, 1200);
 
   // Fechamento diário soma corretamente:
-  // Sale #1 (snapshot 25% * 200 = 50) + Sale #2 (30% * 200 = 60) + Sale #3 (15% * 200 = 30) = 140 à vista
-  // Sale #4 entrada (30% * 200 = 60) -> total diário = 200; parcela crediário = 12
+  // Sale #1 (snapshot 20% * 200 = 40) + Sale #2 (30% * 200 = 60) + Sale #3 (15% * 200 = 30) = 130 à vista
+  // Sale #4 entrada (30% * 200 = 60) -> total diário = 190; parcela crediário = 12
   const todayBr = new Date(Date.now() - 3 * 3600 * 1000).toISOString().split('T')[0];
   const closingRes = await apiJson(
     baseUrl,
@@ -652,12 +652,12 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
     { token: adminAToken }
   );
   assert.equal(closingRes.status, 200);
-  assert.equal(closingRes.json.commissionBreakdown.aVistaCommission, 140);
+  assert.equal(closingRes.json.commissionBreakdown.aVistaCommission, 130);
   assert.equal(closingRes.json.commissionBreakdown.crediarioDownPaymentCommission, 60);
   assert.equal(closingRes.json.commissionBreakdown.crediarioInstallmentsCommission, 12);
-  assert.equal(closingRes.json.commissionAmount, 200);
+  assert.equal(closingRes.json.commissionAmount, 190);
 
-  // Cancelamento da Sale #1 (snapshot anterior 25%) deve debitar EXATAMENTE 25% (5000 cents), sem distorção para 30%!
+  // Cancelamento da Sale #1 (snapshot anterior 20%) deve debitar EXATAMENTE 20% (4000 cents), sem distorção para 30%!
   const refundA1 = await apiJson(
     baseUrl,
     `/api/sales/${saleA1.json.id}/refund-or-cancel`,
@@ -672,7 +672,7 @@ test('Etapa 31: Busca IA Avançada, Comissões 25/20/10 + Snapshot, e Personaliz
     }
   );
   assert.equal(refundA1.status, 201);
-  assert.equal(refundA1.json.commissionDebitCents, 5000);
+  assert.equal(refundA1.json.commissionDebitCents, 4000);
 
   // Cancelamento da Sale #3 (Rebolo 15% * 200) -> 3000 cents!
   const refundA3 = await apiJson(

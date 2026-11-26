@@ -42,9 +42,15 @@ class _TelaConfigOperacionalEmpresaState
   bool _uploadingLogo = false;
   String? _error;
 
-  // Bloco 1: Comissões da Equipe
-  final TextEditingController _virginCtrl = TextEditingController(text: '25');
-  final TextEditingController _reboloCtrl = TextEditingController(text: '20');
+  // Bloco 1: Comissões da Equipe (Matriz Virgem 20/25% · Rebolo 40/50% · Parcela 10%)
+  final TextEditingController _virginCompanyCtrl =
+      TextEditingController(text: '20');
+  final TextEditingController _virginOwnCtrl =
+      TextEditingController(text: '25');
+  final TextEditingController _reboloCompanyCtrl =
+      TextEditingController(text: '40');
+  final TextEditingController _reboloOwnCtrl =
+      TextEditingController(text: '50');
   final TextEditingController _creditCtrl = TextEditingController(text: '10');
   String _photographerCommType = 'FIXED_PER_BOOK';
   final TextEditingController _photographerCommValCtrl =
@@ -111,8 +117,10 @@ class _TelaConfigOperacionalEmpresaState
 
   @override
   void dispose() {
-    _virginCtrl.dispose();
-    _reboloCtrl.dispose();
+    _virginCompanyCtrl.dispose();
+    _virginOwnCtrl.dispose();
+    _reboloCompanyCtrl.dispose();
+    _reboloOwnCtrl.dispose();
     _creditCtrl.dispose();
     _photographerCommValCtrl.dispose();
     _defaultBookPriceCtrl.dispose();
@@ -172,10 +180,22 @@ class _TelaConfigOperacionalEmpresaState
     _defaultWaPostSaleTpl =
         defaults['postSale']?.toString() ?? _defaultPostSaleTpl;
 
-    _virginCtrl.text =
-        _formatNum(data['virginBookCommissionPercent'], '25');
-    _reboloCtrl.text =
-        _formatNum(data['reboloBookCommissionPercent'], '20');
+    _virginCompanyCtrl.text = _formatNum(
+        data['virginCompanyCarCommissionPercent'] ??
+            data['virginBookCommissionPercent'],
+        '20');
+    _virginOwnCtrl.text = _formatNum(
+        data['virginOwnCarCommissionPercent'] ??
+            data['virginBookCommissionPercent'],
+        '25');
+    _reboloCompanyCtrl.text = _formatNum(
+        data['reboloCompanyCarCommissionPercent'] ??
+            data['reboloBookCommissionPercent'],
+        '40');
+    _reboloOwnCtrl.text = _formatNum(
+        data['reboloOwnCarCommissionPercent'] ??
+            data['reboloBookCommissionPercent'],
+        '50');
     _creditCtrl.text =
         _formatNum(data['creditInstallmentCommissionPercent'], '10');
     _photographerCommValCtrl.text =
@@ -296,10 +316,14 @@ class _TelaConfigOperacionalEmpresaState
   }
 
   Future<void> _save() async {
-    final virgin =
-        double.tryParse(_virginCtrl.text.trim().replaceAll(',', '.'));
-    final rebolo =
-        double.tryParse(_reboloCtrl.text.trim().replaceAll(',', '.'));
+    final virginCompany =
+        double.tryParse(_virginCompanyCtrl.text.trim().replaceAll(',', '.'));
+    final virginOwn =
+        double.tryParse(_virginOwnCtrl.text.trim().replaceAll(',', '.'));
+    final reboloCompany =
+        double.tryParse(_reboloCompanyCtrl.text.trim().replaceAll(',', '.'));
+    final reboloOwn =
+        double.tryParse(_reboloOwnCtrl.text.trim().replaceAll(',', '.'));
     final credit =
         double.tryParse(_creditCtrl.text.trim().replaceAll(',', '.'));
     final photoVal = double.tryParse(
@@ -318,13 +342,23 @@ class _TelaConfigOperacionalEmpresaState
     final serasaDays = int.tryParse(_creditSerasaDaysCtrl.text.trim());
     final batchDays = int.tryParse(_maxBatchReturnDaysCtrl.text.trim());
 
-    if (virgin == null || virgin < 0 || virgin > 100) {
-      _showMsg('Comissão Book Virgem deve estar entre 0% e 100%.',
+    if (virginCompany == null ||
+        virginCompany < 0 ||
+        virginCompany > 100 ||
+        virginOwn == null ||
+        virginOwn < 0 ||
+        virginOwn > 100) {
+      _showMsg('Comissões Book Virgem devem estar entre 0% e 100%.',
           isError: true);
       return;
     }
-    if (rebolo == null || rebolo < 0 || rebolo > 100) {
-      _showMsg('Comissão Book Rebolo deve estar entre 0% e 100%.',
+    if (reboloCompany == null ||
+        reboloCompany < 0 ||
+        reboloCompany > 100 ||
+        reboloOwn == null ||
+        reboloOwn < 0 ||
+        reboloOwn > 100) {
+      _showMsg('Comissões Book Rebolo devem estar entre 0% e 100%.',
           isError: true);
       return;
     }
@@ -403,8 +437,12 @@ class _TelaConfigOperacionalEmpresaState
     setState(() => _saving = true);
     try {
       final payload = {
-        'virginBookCommissionPercent': virgin,
-        'reboloBookCommissionPercent': rebolo,
+        'virginCompanyCarCommissionPercent': virginCompany,
+        'virginOwnCarCommissionPercent': virginOwn,
+        'reboloCompanyCarCommissionPercent': reboloCompany,
+        'reboloOwnCarCommissionPercent': reboloOwn,
+        'virginBookCommissionPercent': virginCompany,
+        'reboloBookCommissionPercent': reboloCompany,
         'creditInstallmentCommissionPercent': credit,
         'photographerCommissionType': _photographerCommType,
         'photographerCommissionValue': photoVal,
@@ -920,21 +958,62 @@ class _TelaConfigOperacionalEmpresaState
                       icon: Icons.percent_rounded,
                       title: 'Comissões da Equipe',
                       subtitle:
-                          'Virgem/Rebolo/Crediário, comissão do fotógrafo e exceções por vendedor.',
+                          'Matriz Virgem/Rebolo por veículo, boleto pago, fotógrafo e exceções.',
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              color: _bg,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                  color: _accent.withOpacity(0.4)),
+                            ),
+                            child: const Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(Icons.info_outline_rounded,
+                                    color: _accentSoft, size: 16),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Comissão incide somente sobre valores efetivamente pagos (à vista, entrada ou boleto/parcela paga). Nunca incide sobre saldo financiado em aberto.',
+                                    style: TextStyle(
+                                        color: Colors.white70, fontSize: 11.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                           _darkField(
-                            controller: _virginCtrl,
-                            label: 'Book Virgem / Ciclo Normal (%)',
+                            controller: _virginCompanyCtrl,
+                            label: 'Book Virgem · Carro da Empresa (%)',
                             suffixText: '%',
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
                           ),
                           const SizedBox(height: 12),
                           _darkField(
-                            controller: _reboloCtrl,
-                            label: 'Book Rebolo (%)',
+                            controller: _virginOwnCtrl,
+                            label: 'Book Virgem · Carro Próprio (%)',
+                            suffixText: '%',
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                          ),
+                          const SizedBox(height: 12),
+                          _darkField(
+                            controller: _reboloCompanyCtrl,
+                            label: 'Book Rebolo · Carro da Empresa (%)',
+                            suffixText: '%',
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                          ),
+                          const SizedBox(height: 12),
+                          _darkField(
+                            controller: _reboloOwnCtrl,
+                            label: 'Book Rebolo · Carro Próprio (%)',
                             suffixText: '%',
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
@@ -942,7 +1021,7 @@ class _TelaConfigOperacionalEmpresaState
                           const SizedBox(height: 12),
                           _darkField(
                             controller: _creditCtrl,
-                            label: 'Parcela Crediário Paga (%)',
+                            label: 'Parcela / Boleto Pago no Crediário (%)',
                             suffixText: '%',
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
@@ -1476,10 +1555,12 @@ class _SellerOverridesSheetState extends State<_SellerOverridesSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Deixe em branco para herdar o padrão da empresa '
-                '(Virgem ${_defaults['virginBookCommissionPercent'] ?? 25}%, '
-                'Rebolo ${_defaults['reboloBookCommissionPercent'] ?? 20}%, '
-                'Crediário ${_defaults['creditInstallmentCommissionPercent'] ?? 10}%).',
+                'Deixe em branco para herdar a matriz da empresa '
+                '(Virgem Emp ${_defaults['virginCompanyCarCommissionPercent'] ?? 20}% / '
+                'Próp ${_defaults['virginOwnCarCommissionPercent'] ?? 25}% • '
+                'Rebolo Emp ${_defaults['reboloCompanyCarCommissionPercent'] ?? 40}% / '
+                'Próp ${_defaults['reboloOwnCarCommissionPercent'] ?? 50}% • '
+                'Boleto Pago ${_defaults['creditInstallmentCommissionPercent'] ?? 10}%).',
                 style: const TextStyle(color: Colors.white60, fontSize: 11.5),
               ),
               const SizedBox(height: 12),
@@ -1637,9 +1718,11 @@ class _SellerOverridesSheetState extends State<_SellerOverridesSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Padrão da empresa: Virgem ${_defaults['virginBookCommissionPercent'] ?? 25}% • '
-                'Rebolo ${_defaults['reboloBookCommissionPercent'] ?? 20}% • '
-                'Crediário ${_defaults['creditInstallmentCommissionPercent'] ?? 10}%',
+                'Padrão da empresa: Virgem Emp ${_defaults['virginCompanyCarCommissionPercent'] ?? 20}% / '
+                'Próp ${_defaults['virginOwnCarCommissionPercent'] ?? 25}% • '
+                'Rebolo Emp ${_defaults['reboloCompanyCarCommissionPercent'] ?? 40}% / '
+                'Próp ${_defaults['reboloOwnCarCommissionPercent'] ?? 50}% • '
+                'Boleto Pago ${_defaults['creditInstallmentCommissionPercent'] ?? 10}%',
                 style: const TextStyle(color: _accentSoft, fontSize: 11.5),
               ),
               const SizedBox(height: 12),

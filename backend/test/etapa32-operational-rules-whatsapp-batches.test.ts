@@ -760,7 +760,7 @@ test('Etapa 32: Regras Gerais (Fotógrafo, Exceções por Vendedor, Preço/Desco
   // =========================================================================
   // 7. COMISSÃO DO FOTÓGRAFO NO FECHAMENTO + LIMPAR EXCEÇÃO DO VENDEDOR
   // =========================================================================
-  const oldBatchDateStr = oldDate.toISOString().split('T')[0];
+  const oldBatchDateStr = new Date(oldDate.getTime() - 3 * 3600 * 1000).toISOString().split('T')[0];
   const photoClosing = await apiJson(
     baseUrl,
     `/api/closing/photographer/${photoA.id}?date=${oldBatchDateStr}`,

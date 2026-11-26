@@ -1,19 +1,56 @@
 import { CompanyOperationalConfigValues } from '../services/companyOperationalConfigService';
 
+export type SellerVehicleType = 'COMPANY_CAR' | 'OWN_CAR';
+export type SellerBookProfile = 'VIRGIN' | 'REBOLO' | 'BOTH';
+
 export interface SellerCommissionProfile {
   usesOwnCar?: boolean | null;
+  sellerVehicleType?: string | null;
+  sellerBookProfile?: string | null;
+  salesType?: string | null;
   customVirginCommissionPercent?: number | null;
   customReboloCommissionPercent?: number | null;
   customCreditInstallmentCommissionPercent?: number | null;
 }
 
+export function normalizeSellerVehicleType(
+  rawVehicleType?: string | null,
+  usesOwnCar?: boolean | null
+): SellerVehicleType {
+  const upper = String(rawVehicleType || '').trim().toUpperCase();
+  if (usesOwnCar === true || upper === 'OWN_CAR' || upper === 'CARRO_PROPRIO') {
+    return 'OWN_CAR';
+  }
+  return 'COMPANY_CAR';
+}
+
+export function normalizeSellerBookProfile(
+  rawBookProfile?: string | null,
+  rawSalesType?: string | null
+): SellerBookProfile {
+  const primary = String(rawBookProfile || '').trim().toUpperCase();
+  if (primary === 'REBOLO' || primary === 'BOTH' || primary === 'VIRGIN') {
+    return primary as SellerBookProfile;
+  }
+  if (primary === 'AMBOS') return 'BOTH';
+  const fallback = String(rawSalesType || '').trim().toUpperCase();
+  if (fallback === 'REBOLO') return 'REBOLO';
+  if (fallback === 'BOTH' || fallback === 'AMBOS') return 'BOTH';
+  return 'VIRGIN';
+}
+
+export function resolveSellerUsesOwnCar(seller?: SellerCommissionProfile | null): boolean {
+  if (!seller) return false;
+  return normalizeSellerVehicleType(seller.sellerVehicleType, seller.usesOwnCar) === 'OWN_CAR';
+}
+
 /**
- * Regra comercial legada (fallback por veículo quando não há configuração da empresa):
- * - carro da empresa: 20%
- * - carro próprio do vendedor: 25%
+ * Regra comercial oficial (fallback quando não há configuração editável da empresa):
+ * - Virgem + carro da empresa: 20%
+ * - Virgem + carro próprio: 25%
  */
 export function resolveSellerCommissionRate(seller?: SellerCommissionProfile | null): number {
-  return seller?.usesOwnCar === true ? 0.25 : 0.20;
+  return resolveSellerUsesOwnCar(seller) ? 0.25 : 0.20;
 }
 
 /**
@@ -30,24 +67,38 @@ export function isReboloBookStatus(bookStatus?: string | null): boolean {
 }
 
 /**
- * Resolve o percentual (ex.: 25.0) e a alíquota decimal (ex.: 0.25) para uma nova venda,
- * seguindo estritamente a precedência:
- * 1) Exceção individual configurada para o vendedor (Virgem vs. Rebolo)
- * 2) Configuração operacional da empresa (Virgem vs. Rebolo)
- * 3) Fallback canônico 25% (Virgem) / 20% (Rebolo)
+ * Resolve o percentual (ex.: 20.0 / 25.0 / 40.0 / 50.0) e a alíquota decimal
+ * para uma nova venda ou prévia de comissão, seguindo estritamente a precedência:
+ * 1) Exceção individual configurada no cadastro do vendedor (Virgem vs. Rebolo)
+ * 2) Matriz editável de CompanyOperationalConfig cruzando Book (Virgem vs. Rebolo) x Veículo (Empresa vs. Próprio)
+ * 3) Fallback canônico: Virgem (20% Empresa / 25% Próprio) | Rebolo (40% Empresa / 50% Próprio)
  */
 export function resolveNewSaleCommission(params: {
   bookStatus?: string | null;
   operationalConfig?: Pick<
     CompanyOperationalConfigValues,
-    'virginBookCommissionPercent' | 'reboloBookCommissionPercent'
+    | 'virginBookCommissionPercent'
+    | 'reboloBookCommissionPercent'
+    | 'virginCompanyCarCommissionPercent'
+    | 'virginOwnCarCommissionPercent'
+    | 'reboloCompanyCarCommissionPercent'
+    | 'reboloOwnCarCommissionPercent'
   > | null;
-  sellerOverrides?: Pick<
-    SellerCommissionProfile,
-    'customVirginCommissionPercent' | 'customReboloCommissionPercent'
-  > | null;
-}): { percent: number; rate: number; isRebolo: boolean; source: 'SELLER_OVERRIDE' | 'COMPANY_CONFIG' | 'CANONICAL_FALLBACK' } {
-  const isRebolo = isReboloBookStatus(params.bookStatus);
+  sellerOverrides?: SellerCommissionProfile | null;
+}): {
+  percent: number;
+  rate: number;
+  isRebolo: boolean;
+  isOwnCar: boolean;
+  source: 'SELLER_OVERRIDE' | 'COMPANY_CONFIG' | 'CANONICAL_FALLBACK';
+} {
+  const sellerProfile = normalizeSellerBookProfile(
+    params.sellerOverrides?.sellerBookProfile,
+    params.sellerOverrides?.salesType
+  );
+  const isRebolo = isReboloBookStatus(params.bookStatus) || sellerProfile === 'REBOLO';
+  const isOwnCar = resolveSellerUsesOwnCar(params.sellerOverrides);
+
   const overrideVal = isRebolo
     ? params.sellerOverrides?.customReboloCommissionPercent
     : params.sellerOverrides?.customVirginCommissionPercent;
@@ -57,27 +108,36 @@ export function resolveNewSaleCommission(params: {
       percent: Number(overrideVal.toFixed(2)),
       rate: Number((overrideVal / 100).toFixed(4)),
       isRebolo,
+      isOwnCar,
       source: 'SELLER_OVERRIDE',
     };
   }
 
   if (params.operationalConfig) {
+    const cfg = params.operationalConfig;
     const companyPercent = isRebolo
-      ? params.operationalConfig.reboloBookCommissionPercent
-      : params.operationalConfig.virginBookCommissionPercent;
+      ? isOwnCar
+        ? (cfg.reboloOwnCarCommissionPercent ?? cfg.reboloBookCommissionPercent ?? 50.0)
+        : (cfg.reboloCompanyCarCommissionPercent ?? cfg.reboloBookCommissionPercent ?? 40.0)
+      : isOwnCar
+        ? (cfg.virginOwnCarCommissionPercent ?? cfg.virginBookCommissionPercent ?? 25.0)
+        : (cfg.virginCompanyCarCommissionPercent ?? cfg.virginBookCommissionPercent ?? 20.0);
+
     return {
       percent: Number(companyPercent.toFixed(2)),
       rate: Number((companyPercent / 100).toFixed(4)),
       isRebolo,
+      isOwnCar,
       source: 'COMPANY_CONFIG',
     };
   }
 
-  const fallback = isRebolo ? 20.0 : 25.0;
+  const fallback = isRebolo ? (isOwnCar ? 50.0 : 40.0) : (isOwnCar ? 25.0 : 20.0);
   return {
     percent: fallback,
     rate: Number((fallback / 100).toFixed(4)),
     isRebolo,
+    isOwnCar,
     source: 'CANONICAL_FALLBACK',
   };
 }
@@ -156,7 +216,7 @@ export function resolvePhotographerCommission(params: {
  * Resolve a alíquota histórica de uma venda já gravada:
  * 1) snapshot aplicado no momento da venda (Sale.appliedCommissionPercent) -> imutável
  * 2) taxa salva no contrato de crediário (CreditAgreement.initialCommissionRate)
- * 3) exceção individual do vendedor -> configuração da empresa -> fallback 25/20
+ * 3) exceção individual do vendedor -> matriz da empresa -> fallback 20/25/40/50
  */
 export function resolveHistoricalSaleCommissionRate(params: {
   sale: {
@@ -167,7 +227,12 @@ export function resolveHistoricalSaleCommissionRate(params: {
   };
   operationalConfig?: Pick<
     CompanyOperationalConfigValues,
-    'virginBookCommissionPercent' | 'reboloBookCommissionPercent'
+    | 'virginBookCommissionPercent'
+    | 'reboloBookCommissionPercent'
+    | 'virginCompanyCarCommissionPercent'
+    | 'virginOwnCarCommissionPercent'
+    | 'reboloCompanyCarCommissionPercent'
+    | 'reboloOwnCarCommissionPercent'
   > | null;
 }): number {
   const { sale, operationalConfig } = params;

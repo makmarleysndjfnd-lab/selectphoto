@@ -746,11 +746,11 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     assert.equal(fakePaymentFound, null);
   });
 
-  async function createTestClient(name: string) {
+  async function createTestClient(name: string, assignedSellerId: string = seller1Id) {
     return await prisma.client.create({
       data: {
         companyId,
-        assignedSellerId: seller1Id,
+        assignedSellerId,
         sequenceNumber: `CLI_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         name,
         city: 'Curitiba',
@@ -1849,7 +1849,7 @@ describe('AUDITORIA DE CREDIÁRIO & INTEGRAÇÃO BANCÁRIA ASAAS — ENTREGAS 1 
     });
 
     // Vendedor 2 recebe R$ 300 via Pix direto na conta da empresa (COMPANY_ACCOUNT)
-    const client23B = await createTestClient('Aluno Teste 23B');
+    const client23B = await createTestClient('Aluno Teste 23B', seller2Id);
     const sale23BRes = await fetch(`${baseUrl}/api/sales`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${seller2Token}` },

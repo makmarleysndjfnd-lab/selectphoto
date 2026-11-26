@@ -82,7 +82,17 @@ router.get('/overview', authenticateToken, requireAdminOrSupervisor, async (req:
         sellerId: true,
         paymentMethod: true,
         appliedCommissionPercent: true,
-        seller: { select: { name: true, usesOwnCar: true } },
+        seller: {
+          select: {
+            name: true,
+            usesOwnCar: true,
+            sellerVehicleType: true,
+            sellerBookProfile: true,
+            salesType: true,
+            customVirginCommissionPercent: true,
+            customReboloCommissionPercent: true,
+          },
+        },
         client: { select: { name: true, bookStatus: true } },
         creditAgreement: {
           select: {

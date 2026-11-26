@@ -8,6 +8,10 @@ export type DiscountPolicyMode = 'SILENT_AUDIT_ALERT' | 'HARD_BLOCK';
 export interface CompanyOperationalConfigValues {
   virginBookCommissionPercent: number;
   reboloBookCommissionPercent: number;
+  virginCompanyCarCommissionPercent: number;
+  virginOwnCarCommissionPercent: number;
+  reboloCompanyCarCommissionPercent: number;
+  reboloOwnCarCommissionPercent: number;
   creditInstallmentCommissionPercent: number;
   photographerCommissionType: PhotographerCommissionType;
   photographerCommissionValue: number;
@@ -72,8 +76,12 @@ export const DEFAULT_WHATSAPP_TEMPLATES: WhatsAppDefaultTemplates = {
 };
 
 export const DEFAULT_COMPANY_OPERATIONAL_CONFIG: CompanyOperationalConfigValues = {
-  virginBookCommissionPercent: 25.0,
-  reboloBookCommissionPercent: 20.0,
+  virginBookCommissionPercent: 20.0,
+  reboloBookCommissionPercent: 40.0,
+  virginCompanyCarCommissionPercent: 20.0,
+  virginOwnCarCommissionPercent: 25.0,
+  reboloCompanyCarCommissionPercent: 40.0,
+  reboloOwnCarCommissionPercent: 50.0,
   creditInstallmentCommissionPercent: 10.0,
   photographerCommissionType: 'FIXED_PER_BOOK',
   photographerCommissionValue: 0,
@@ -316,19 +324,48 @@ export function normalizeCompanyOperationalConfigValues(
     }
   }
 
+  const virginCompanyCar = parsePercent(
+    raw?.virginCompanyCarCommissionPercent ?? raw?.virginBookCommissionPercent,
+    DEFAULT_COMPANY_OPERATIONAL_CONFIG.virginCompanyCarCommissionPercent,
+    'virginCompanyCarCommissionPercent',
+    strict
+  );
+  const virginOwnCar = parsePercent(
+    raw?.virginOwnCarCommissionPercent ?? raw?.virginBookCommissionPercent,
+    DEFAULT_COMPANY_OPERATIONAL_CONFIG.virginOwnCarCommissionPercent,
+    'virginOwnCarCommissionPercent',
+    strict
+  );
+  const reboloCompanyCar = parsePercent(
+    raw?.reboloCompanyCarCommissionPercent ?? raw?.reboloBookCommissionPercent,
+    DEFAULT_COMPANY_OPERATIONAL_CONFIG.reboloCompanyCarCommissionPercent,
+    'reboloCompanyCarCommissionPercent',
+    strict
+  );
+  const reboloOwnCar = parsePercent(
+    raw?.reboloOwnCarCommissionPercent ?? raw?.reboloBookCommissionPercent,
+    DEFAULT_COMPANY_OPERATIONAL_CONFIG.reboloOwnCarCommissionPercent,
+    'reboloOwnCarCommissionPercent',
+    strict
+  );
+
   return {
     virginBookCommissionPercent: parsePercent(
-      raw?.virginBookCommissionPercent,
-      DEFAULT_COMPANY_OPERATIONAL_CONFIG.virginBookCommissionPercent,
+      raw?.virginBookCommissionPercent ?? raw?.virginCompanyCarCommissionPercent,
+      virginCompanyCar,
       'virginBookCommissionPercent',
       strict
     ),
     reboloBookCommissionPercent: parsePercent(
-      raw?.reboloBookCommissionPercent,
-      DEFAULT_COMPANY_OPERATIONAL_CONFIG.reboloBookCommissionPercent,
+      raw?.reboloBookCommissionPercent ?? raw?.reboloCompanyCarCommissionPercent,
+      reboloCompanyCar,
       'reboloBookCommissionPercent',
       strict
     ),
+    virginCompanyCarCommissionPercent: virginCompanyCar,
+    virginOwnCarCommissionPercent: virginOwnCar,
+    reboloCompanyCarCommissionPercent: reboloCompanyCar,
+    reboloOwnCarCommissionPercent: reboloOwnCar,
     creditInstallmentCommissionPercent: parsePercent(
       raw?.creditInstallmentCommissionPercent,
       DEFAULT_COMPANY_OPERATIONAL_CONFIG.creditInstallmentCommissionPercent,
@@ -572,9 +609,35 @@ export async function upsertCompanyOperationalConfig(
   const { companyId, payload, actorUserId, actorName, actorRole, ipAddress } = params;
 
   const previous = await getCompanyOperationalConfig(companyId, dbClient);
+  const safePayload = payload && typeof payload === 'object' ? { ...payload } : {};
+  const hasOwn = (key: string) =>
+    Object.prototype.hasOwnProperty.call(safePayload, key) && safePayload[key] !== undefined;
+
+  if (hasOwn('virginBookCommissionPercent')) {
+    if (!hasOwn('virginCompanyCarCommissionPercent')) {
+      safePayload.virginCompanyCarCommissionPercent = safePayload.virginBookCommissionPercent;
+    }
+    if (!hasOwn('virginOwnCarCommissionPercent')) {
+      safePayload.virginOwnCarCommissionPercent = safePayload.virginBookCommissionPercent;
+    }
+  } else if (hasOwn('virginCompanyCarCommissionPercent')) {
+    safePayload.virginBookCommissionPercent = safePayload.virginCompanyCarCommissionPercent;
+  }
+
+  if (hasOwn('reboloBookCommissionPercent')) {
+    if (!hasOwn('reboloCompanyCarCommissionPercent')) {
+      safePayload.reboloCompanyCarCommissionPercent = safePayload.reboloBookCommissionPercent;
+    }
+    if (!hasOwn('reboloOwnCarCommissionPercent')) {
+      safePayload.reboloOwnCarCommissionPercent = safePayload.reboloBookCommissionPercent;
+    }
+  } else if (hasOwn('reboloCompanyCarCommissionPercent')) {
+    safePayload.reboloBookCommissionPercent = safePayload.reboloCompanyCarCommissionPercent;
+  }
+
   const mergedInput = {
     ...previous,
-    ...payload,
+    ...safePayload,
   };
   const nextValues = normalizeCompanyOperationalConfigValues(mergedInput, true);
 
@@ -603,6 +666,10 @@ export async function upsertCompanyOperationalConfig(
         isDefault: previous.isDefault,
         virginBookCommissionPercent: previous.virginBookCommissionPercent,
         reboloBookCommissionPercent: previous.reboloBookCommissionPercent,
+        virginCompanyCarCommissionPercent: previous.virginCompanyCarCommissionPercent,
+        virginOwnCarCommissionPercent: previous.virginOwnCarCommissionPercent,
+        reboloCompanyCarCommissionPercent: previous.reboloCompanyCarCommissionPercent,
+        reboloOwnCarCommissionPercent: previous.reboloOwnCarCommissionPercent,
         creditInstallmentCommissionPercent: previous.creditInstallmentCommissionPercent,
         photographerCommissionType: previous.photographerCommissionType,
         photographerCommissionValue: previous.photographerCommissionValue,
@@ -625,6 +692,10 @@ export async function upsertCompanyOperationalConfig(
         isDefault: false,
         virginBookCommissionPercent: nextValues.virginBookCommissionPercent,
         reboloBookCommissionPercent: nextValues.reboloBookCommissionPercent,
+        virginCompanyCarCommissionPercent: nextValues.virginCompanyCarCommissionPercent,
+        virginOwnCarCommissionPercent: nextValues.virginOwnCarCommissionPercent,
+        reboloCompanyCarCommissionPercent: nextValues.reboloCompanyCarCommissionPercent,
+        reboloOwnCarCommissionPercent: nextValues.reboloOwnCarCommissionPercent,
         creditInstallmentCommissionPercent: nextValues.creditInstallmentCommissionPercent,
         photographerCommissionType: nextValues.photographerCommissionType,
         photographerCommissionValue: nextValues.photographerCommissionValue,
@@ -693,6 +764,10 @@ export async function listSellerCommissionOverrides(
         email: true,
         role: true,
         active: true,
+        usesOwnCar: true,
+        sellerVehicleType: true,
+        sellerBookProfile: true,
+        salesType: true,
         customVirginCommissionPercent: true,
         customReboloCommissionPercent: true,
         customCreditInstallmentCommissionPercent: true,
@@ -706,21 +781,37 @@ export async function listSellerCommissionOverrides(
     companyDefaults: {
       virginBookCommissionPercent: opCfg.virginBookCommissionPercent,
       reboloBookCommissionPercent: opCfg.reboloBookCommissionPercent,
+      virginCompanyCarCommissionPercent: opCfg.virginCompanyCarCommissionPercent,
+      virginOwnCarCommissionPercent: opCfg.virginOwnCarCommissionPercent,
+      reboloCompanyCarCommissionPercent: opCfg.reboloCompanyCarCommissionPercent,
+      reboloOwnCarCommissionPercent: opCfg.reboloOwnCarCommissionPercent,
       creditInstallmentCommissionPercent: opCfg.creditInstallmentCommissionPercent,
     },
-    sellers: sellers.map((s) => ({
-      ...s,
-      effectiveVirginCommissionPercent:
-        s.customVirginCommissionPercent ?? opCfg.virginBookCommissionPercent,
-      effectiveReboloCommissionPercent:
-        s.customReboloCommissionPercent ?? opCfg.reboloBookCommissionPercent,
-      effectiveCreditInstallmentCommissionPercent:
-        s.customCreditInstallmentCommissionPercent ?? opCfg.creditInstallmentCommissionPercent,
-      hasCustomOverride:
-        s.customVirginCommissionPercent !== null ||
-        s.customReboloCommissionPercent !== null ||
-        s.customCreditInstallmentCommissionPercent !== null,
-    })),
+    sellers: sellers.map((s) => {
+      const isOwn =
+        s.usesOwnCar === true ||
+        String(s.sellerVehicleType || '').toUpperCase() === 'OWN_CAR';
+      const defaultVirgin = isOwn
+        ? opCfg.virginOwnCarCommissionPercent
+        : opCfg.virginCompanyCarCommissionPercent;
+      const defaultRebolo = isOwn
+        ? opCfg.reboloOwnCarCommissionPercent
+        : opCfg.reboloCompanyCarCommissionPercent;
+      return {
+        ...s,
+        sellerVehicleType: isOwn ? 'OWN_CAR' : 'COMPANY_CAR',
+        effectiveVirginCommissionPercent:
+          s.customVirginCommissionPercent ?? defaultVirgin,
+        effectiveReboloCommissionPercent:
+          s.customReboloCommissionPercent ?? defaultRebolo,
+        effectiveCreditInstallmentCommissionPercent:
+          s.customCreditInstallmentCommissionPercent ?? opCfg.creditInstallmentCommissionPercent,
+        hasCustomOverride:
+          s.customVirginCommissionPercent !== null ||
+          s.customReboloCommissionPercent !== null ||
+          s.customCreditInstallmentCommissionPercent !== null,
+      };
+    }),
   };
 }
 
@@ -805,6 +896,9 @@ export async function upsertSellerCommissionOverride(
       role: true,
       active: true,
       companyId: true,
+      usesOwnCar: true,
+      sellerVehicleType: true,
+      sellerBookProfile: true,
       customVirginCommissionPercent: true,
       customReboloCommissionPercent: true,
       customCreditInstallmentCommissionPercent: true,
@@ -839,12 +933,21 @@ export async function upsertSellerCommissionOverride(
   );
 
   const opCfg = await getCompanyOperationalConfig(companyId, dbClient);
+  const isOwn =
+    updated.usesOwnCar === true ||
+    String(updated.sellerVehicleType || '').toUpperCase() === 'OWN_CAR';
+  const defaultVirgin = isOwn
+    ? opCfg.virginOwnCarCommissionPercent
+    : opCfg.virginCompanyCarCommissionPercent;
+  const defaultRebolo = isOwn
+    ? opCfg.reboloOwnCarCommissionPercent
+    : opCfg.reboloCompanyCarCommissionPercent;
   return {
     ...updated,
     effectiveVirginCommissionPercent:
-      updated.customVirginCommissionPercent ?? opCfg.virginBookCommissionPercent,
+      updated.customVirginCommissionPercent ?? defaultVirgin,
     effectiveReboloCommissionPercent:
-      updated.customReboloCommissionPercent ?? opCfg.reboloBookCommissionPercent,
+      updated.customReboloCommissionPercent ?? defaultRebolo,
     effectiveCreditInstallmentCommissionPercent:
       updated.customCreditInstallmentCommissionPercent ?? opCfg.creditInstallmentCommissionPercent,
     hasCustomOverride:

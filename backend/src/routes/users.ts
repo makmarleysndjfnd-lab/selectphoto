@@ -5,8 +5,73 @@ import crypto from 'crypto';
 import { authenticateToken, requireAdmin, AuthRequest, VALID_ROLES, ROLE_RANK } from '../middleware/authMiddleware';
 import { upload, safeUpload, getUploadedFileUrl } from '../middleware/upload';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
+import {
+  normalizeSellerBookProfile,
+  normalizeSellerVehicleType,
+} from '../utils/commission';
 
 const router = Router();
+
+function parseUserSellerCommissionProfile(
+  body: any,
+  fallback?: {
+    usesOwnCar?: boolean;
+    sellerVehicleType?: string | null;
+    sellerBookProfile?: string | null;
+    salesType?: string | null;
+  }
+) {
+  const rawVehicle = body?.sellerVehicleType;
+  const rawUsesOwn = body?.usesOwnCar;
+  let isOwnCar = fallback?.usesOwnCar === true;
+
+  if (rawVehicle !== undefined && rawVehicle !== null && String(rawVehicle).trim() !== '') {
+    const upper = String(rawVehicle).trim().toUpperCase();
+    if (!['COMPANY_CAR', 'OWN_CAR'].includes(upper)) {
+      throw Object.assign(
+        new Error('sellerVehicleType inválido. Use COMPANY_CAR ou OWN_CAR.'),
+        { status: 400 }
+      );
+    }
+    isOwnCar = upper === 'OWN_CAR';
+  } else if (rawUsesOwn !== undefined && rawUsesOwn !== null && String(rawUsesOwn).trim() !== '') {
+    isOwnCar = rawUsesOwn === 'true' || rawUsesOwn === true;
+  } else if (fallback) {
+    isOwnCar = normalizeSellerVehicleType(fallback.sellerVehicleType, fallback.usesOwnCar) === 'OWN_CAR';
+  }
+
+  const sellerVehicleType = isOwnCar ? 'OWN_CAR' : 'COMPANY_CAR';
+
+  const rawProfile = body?.sellerBookProfile;
+  const rawSalesType = body?.salesType;
+  let sellerBookProfile = fallback
+    ? normalizeSellerBookProfile(fallback.sellerBookProfile, fallback.salesType)
+    : 'VIRGIN';
+
+  if (rawProfile !== undefined && rawProfile !== null && String(rawProfile).trim() !== '') {
+    const upperP = String(rawProfile).trim().toUpperCase();
+    if (!['VIRGIN', 'REBOLO', 'BOTH'].includes(upperP)) {
+      throw Object.assign(
+        new Error('sellerBookProfile inválido. Use VIRGIN, REBOLO ou BOTH.'),
+        { status: 400 }
+      );
+    }
+    sellerBookProfile = upperP as 'VIRGIN' | 'REBOLO' | 'BOTH';
+  } else if (rawSalesType !== undefined && rawSalesType !== null && String(rawSalesType).trim() !== '') {
+    sellerBookProfile = normalizeSellerBookProfile(null, String(rawSalesType));
+  }
+
+  const salesType =
+    rawSalesType !== undefined && rawSalesType !== null && String(rawSalesType).trim() !== ''
+      ? String(rawSalesType).trim()
+      : sellerBookProfile === 'REBOLO'
+        ? 'REBOLO'
+        : sellerBookProfile === 'BOTH'
+          ? 'BOTH'
+          : 'BOOK';
+
+  return { usesOwnCar: isOwnCar, sellerVehicleType, sellerBookProfile, salesType };
+}
 
 
 // ── ROTAS ESTÁTICAS E DE PERFIL (DEVEM FICAR ANTES DE /:id) ───────────────────
@@ -85,6 +150,10 @@ router.get('/company', authenticateToken, async (req: AuthRequest, res: Response
         role: true,
         email: true,
         active: true,
+        usesOwnCar: true,
+        sellerVehicleType: true,
+        sellerBookProfile: true,
+        salesType: true,
         sellerBlocked: true,
         sellerBlockedReason: true,
       },
@@ -503,12 +572,19 @@ router.post('/deletion-requests/:id/process', authenticateToken, requireAdmin, a
 // Get all users (Admin only)
 router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    if (!req.user?.companyId && req.user?.role !== 'SUPER_ADMIN') {
+    const requestedCompanyId =
+      req.user?.role === 'SUPER_ADMIN' && typeof req.query.companyId === 'string' && req.query.companyId.trim()
+        ? req.query.companyId.trim()
+        : req.user?.companyId;
+    if (!requestedCompanyId && req.user?.role !== 'SUPER_ADMIN') {
       return res.status(403).json({ error: 'Empresa não identificada' });
     }
 
     const users = await prisma.user.findMany({
-      where: { companyId: req.user?.companyId, role: { not: 'SUPER_ADMIN' } },
+      where: {
+        ...(requestedCompanyId ? { companyId: requestedCompanyId } : {}),
+        role: { not: 'SUPER_ADMIN' },
+      },
       include: {
         team: true,
         currentCars: true, // Fetch assigned cars
@@ -532,9 +608,16 @@ router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: R
 router.post('/', authenticateToken, requireAdmin, safeUpload(upload.fields([{ name: 'profilePhoto', maxCount: 1 }, { name: 'criminalRecord', maxCount: 1 }])), async (req: AuthRequest, res: Response) => {
   try {
     const { name, password, role, teamId, cpf, rg, phone, emergencyPhone, address, usesOwnCar, carId, photographerCode: providedPhotographerCode, salesType } = req.body;
-    
+    const targetCompanyId =
+      req.user?.role === 'SUPER_ADMIN' && typeof req.body?.companyId === 'string' && req.body.companyId.trim()
+        ? req.body.companyId.trim()
+        : req.user?.companyId;
+
+    if (!targetCompanyId) return res.status(400).json({ error: 'Empresa não identificada' });
     if (!cpf) return res.status(400).json({ error: 'CPF is required' });
     if (!password) return res.status(400).json({ error: 'Password is required' });
+
+    const sellerProfile = parseUserSellerCommissionProfile(req.body);
     
     const callerRole = req.user?.role || '';
     const callerRank = ROLE_RANK[callerRole] || 0;
@@ -619,12 +702,14 @@ router.post('/', authenticateToken, requireAdmin, safeUpload(upload.fields([{ na
         phone: phone || null,
         emergencyPhone: emergencyPhone || null,
         address: address || null,
-        usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
-        salesType: salesType ? salesType.trim() : null,
+        usesOwnCar: sellerProfile.usesOwnCar,
+        sellerVehicleType: sellerProfile.sellerVehicleType,
+        sellerBookProfile: sellerProfile.sellerBookProfile,
+        salesType: salesType ? String(salesType).trim() : sellerProfile.salesType,
         profilePhotoUrl,
         criminalRecordUrl,
         photographerCode,
-        companyId: req.user?.companyId
+        companyId: targetCompanyId
       }
     });
 
@@ -635,8 +720,18 @@ router.post('/', authenticateToken, requireAdmin, safeUpload(upload.fields([{ na
       });
     }
     
-    res.status(201).json({ id: newUser.id, cpf: newUser.cpf });
+    res.status(201).json({
+      id: newUser.id,
+      cpf: newUser.cpf,
+      usesOwnCar: newUser.usesOwnCar,
+      sellerVehicleType: newUser.sellerVehicleType,
+      sellerBookProfile: newUser.sellerBookProfile,
+      salesType: newUser.salesType,
+    });
   } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('Error creating user:', error);
     res.status(500).json({ error: 'Failed to create user. CPF might be in use.' });
   }
@@ -722,6 +817,13 @@ router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ 
       }
     }
 
+    const sellerProfile = parseUserSellerCommissionProfile(req.body, {
+      usesOwnCar: existingUser.usesOwnCar,
+      sellerVehicleType: existingUser.sellerVehicleType,
+      sellerBookProfile: existingUser.sellerBookProfile,
+      salesType: existingUser.salesType,
+    });
+
     const updateData: any = {
       name,
       teamId: teamId || null,
@@ -730,8 +832,10 @@ router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ 
       phone: phone || null,
       emergencyPhone: emergencyPhone || null,
       address: address || null,
-      usesOwnCar: usesOwnCar === 'true' || usesOwnCar === true,
-      salesType: salesType !== undefined ? (salesType && salesType.trim() !== '' ? salesType.trim() : null) : existingUser.salesType,
+      usesOwnCar: sellerProfile.usesOwnCar,
+      sellerVehicleType: sellerProfile.sellerVehicleType,
+      sellerBookProfile: sellerProfile.sellerBookProfile,
+      salesType: sellerProfile.salesType,
       ...(pixKey !== undefined ? { pixKey: typeof pixKey === 'string' && pixKey.trim() !== '' ? pixKey.trim().slice(0, 140) : null } : {}),
       profilePhotoUrl,
       criminalRecordUrl
@@ -769,8 +873,18 @@ router.put('/:id', authenticateToken, requireAdmin, safeUpload(upload.fields([{ 
       }
     }
 
-    res.json({ id: updatedUser.id, email: updatedUser.email });
+    res.json({
+      id: updatedUser.id,
+      email: updatedUser.email,
+      usesOwnCar: updatedUser.usesOwnCar,
+      sellerVehicleType: updatedUser.sellerVehicleType,
+      sellerBookProfile: updatedUser.sellerBookProfile,
+      salesType: updatedUser.salesType,
+    });
   } catch (error: any) {
+    if (error?.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user' });
   }

@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import {
-    resolveSellerCommissionRate,
+    resolveNewSaleCommission,
     resolveHistoricalSaleCommissionRate,
     resolvePhotographerCommission,
 } from '../utils/commission';
@@ -820,10 +820,11 @@ router.get('/daily/:sellerId', authenticateToken, async (req: AuthRequest, res: 
         const opCfg = effectiveCompanyId
             ? await getCompanyOperationalConfig(effectiveCompanyId)
             : null;
-        const defaultSellerPct = seller?.customVirginCommissionPercent ?? opCfg?.virginBookCommissionPercent;
-        const commissionRate = defaultSellerPct !== undefined && defaultSellerPct !== null
-            ? Number((defaultSellerPct / 100).toFixed(4))
-            : resolveSellerCommissionRate(seller);
+        const commissionRate = resolveNewSaleCommission({
+            bookStatus: seller?.sellerBookProfile === 'REBOLO' ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED',
+            operationalConfig: opCfg,
+            sellerOverrides: seller,
+        }).rate;
 
         sales.forEach(sale => {
             const effectiveValue = getSaleNetValue(sale);
@@ -1108,9 +1109,11 @@ router.post('/daily', authenticateToken, async (req: AuthRequest, res: Response)
         const postOpCfg = effectiveCompanyIdPost
             ? await getCompanyOperationalConfig(effectiveCompanyIdPost)
             : null;
-        const commRate = postOpCfg
-            ? Number((postOpCfg.virginBookCommissionPercent / 100).toFixed(4))
-            : resolveSellerCommissionRate(seller);
+        const commRate = resolveNewSaleCommission({
+            bookStatus: seller?.sellerBookProfile === 'REBOLO' ? 'DISTRIBUTED_REBOLO' : 'DISTRIBUTED',
+            operationalConfig: postOpCfg,
+            sellerOverrides: seller,
+        }).rate;
 
         sales.forEach(s => {
             const effectiveValue = getSaleNetValue(s);

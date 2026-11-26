@@ -340,26 +340,41 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     let providerName = 'GEMINI';
 
     if (companyId) {
-      const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
+      const [exclusiveGemini, resolved] = await Promise.all([
+        resolveExclusiveCompanyGeminiKey(companyId),
+        resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment),
+      ]);
+      if (resolved?.integration?.id) {
+        resolvedIntegrationId = resolved.integration.id;
+      }
+
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
         activeAiClient = testAiClientOverride
           ? testAiClientOverride(exclusiveGemini.key)
           : new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
-        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
             error: 'Provedor Grok (xAI) configurado, mas o radar e pesquisa de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
           });
           return;
         }
-        res.status(403).json({
-          error:
-            'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
-          code: 'COMPANY_GEMINI_KEY_REQUIRED',
-        });
-        return;
+        const allowMockQuotaHarness =
+          isExternalServicesDisabled() &&
+          resolved?.integration?.status === 'ACTIVE' &&
+          resolved?.provider === 'GEMINI' &&
+          resolved?.integration?.credentialSource === 'NONE';
+
+        if (!allowMockQuotaHarness) {
+          res.status(403).json({
+            error:
+              'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
+            code: 'COMPANY_GEMINI_KEY_REQUIRED',
+          });
+          return;
+        }
+        providerName = 'GEMINI';
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
       if (testAiClientOverride) {
@@ -883,26 +898,41 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     let activeAiClient: GenerativeAiModelsLike | null = null;
 
     if (companyId) {
-      const exclusiveGemini = await resolveExclusiveCompanyGeminiKey(companyId);
+      const [exclusiveGemini, resolved] = await Promise.all([
+        resolveExclusiveCompanyGeminiKey(companyId),
+        resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment),
+      ]);
+      if (resolved?.integration?.id) {
+        resolvedIntegrationId = resolved.integration.id;
+      }
+
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
         activeAiClient = testAiClientOverride
           ? testAiClientOverride(exclusiveGemini.key)
           : new GoogleGenAI({ apiKey: exclusiveGemini.key });
       } else {
-        const resolved = await resolveCompanyIntegration(companyId, 'AI_RESEARCH', environment);
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
             error: 'Provedor Grok (xAI) configurado, mas o radar de eventos está disponível operacionalmente apenas via Gemini. Altere o provedor na Central para GEMINI.',
           });
           return;
         }
-        res.status(403).json({
-          error:
-            'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
-          code: 'COMPANY_GEMINI_KEY_REQUIRED',
-        });
-        return;
+        const allowMockQuotaHarness =
+          isExternalServicesDisabled() &&
+          resolved?.integration?.status === 'ACTIVE' &&
+          resolved?.provider === 'GEMINI' &&
+          resolved?.integration?.credentialSource === 'NONE';
+
+        if (!allowMockQuotaHarness) {
+          res.status(403).json({
+            error:
+              'Chave Gemini exclusiva da empresa não configurada no SuperAdmin. Configure a chave própria da empresa em Integrações para utilizar Eventos IA.',
+            code: 'COMPANY_GEMINI_KEY_REQUIRED',
+          });
+          return;
+        }
+        providerName = 'GEMINI';
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
       if (testAiClientOverride) {

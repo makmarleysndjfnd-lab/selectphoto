@@ -475,6 +475,10 @@ async function finalizeSaleWithReceipt(params: {
       select: {
         sellerBlocked: true,
         sellerBlockedReason: true,
+        usesOwnCar: true,
+        sellerVehicleType: true,
+        sellerBookProfile: true,
+        salesType: true,
         customVirginCommissionPercent: true,
         customReboloCommissionPercent: true,
         customCreditInstallmentCommissionPercent: true,
@@ -922,6 +926,10 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: any) => {
       select: {
         sellerBlocked: true,
         sellerBlockedReason: true,
+        usesOwnCar: true,
+        sellerVehicleType: true,
+        sellerBookProfile: true,
+        salesType: true,
         customVirginCommissionPercent: true,
         customReboloCommissionPercent: true,
         customCreditInstallmentCommissionPercent: true,
@@ -1681,6 +1689,10 @@ router.post('/:id/receipt', authenticateToken, validateSaleReceiptAccess, safeUp
         tx.user.findUnique({
           where: { id: sale.sellerId },
           select: {
+            usesOwnCar: true,
+            sellerVehicleType: true,
+            sellerBookProfile: true,
+            salesType: true,
             customVirginCommissionPercent: true,
             customReboloCommissionPercent: true,
             customCreditInstallmentCommissionPercent: true,

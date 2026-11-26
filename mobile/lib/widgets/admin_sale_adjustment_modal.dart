@@ -268,11 +268,15 @@ class _AdminSaleAdjustmentSheetState extends State<_AdminSaleAdjustmentSheet> {
         ? Map<String, dynamic>.from(widget.sale['seller'] as Map)
         : null;
     final usesOwnCar = seller?['usesOwnCar'] == true;
+    final appliedPct =
+        double.tryParse(widget.sale['appliedCommissionPercent']?.toString() ?? '');
     final agr = widget.sale['creditAgreement'] is Map
         ? Map<String, dynamic>.from(widget.sale['creditAgreement'] as Map)
         : null;
-    _sellerRate = double.tryParse(agr?['initialCommissionRate']?.toString() ?? '') ??
-        (usesOwnCar ? 0.25 : 0.20);
+    _sellerRate = (appliedPct != null && appliedPct > 0)
+        ? (appliedPct / 100.0)
+        : (double.tryParse(agr?['initialCommissionRate']?.toString() ?? '') ??
+            (usesOwnCar ? 0.25 : 0.20));
   }
 
   @override

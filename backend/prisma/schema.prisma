@@ -144,6 +144,8 @@ model User {
   profilePhotoUrl         String?
   rg                      String?
   usesOwnCar              Boolean                        @default(false)
+  sellerVehicleType       String                         @default("COMPANY_CAR") // COMPANY_CAR | OWN_CAR
+  sellerBookProfile       String                         @default("VIRGIN") // VIRGIN | REBOLO | BOTH
   photographerCode        String?
   customVirginCommissionPercent            Float?
   customReboloCommissionPercent            Float?
@@ -2015,11 +2017,15 @@ model CompanyEventSearchConfig {
 }
 
 model CompanyOperationalConfig {
-  id                               String   @id @default(uuid())
-  companyId                        String   @unique
-  virginBookCommissionPercent      Float    @default(25.0)
-  reboloBookCommissionPercent      Float    @default(20.0)
-  creditInstallmentCommissionPercent Float  @default(10.0)
+  id                                 String   @id @default(uuid())
+  companyId                          String   @unique
+  virginBookCommissionPercent        Float    @default(20.0)
+  reboloBookCommissionPercent        Float    @default(40.0)
+  virginCompanyCarCommissionPercent  Float    @default(20.0)
+  virginOwnCarCommissionPercent      Float    @default(25.0)
+  reboloCompanyCarCommissionPercent  Float    @default(40.0)
+  reboloOwnCarCommissionPercent      Float    @default(50.0)
+  creditInstallmentCommissionPercent Float    @default(10.0)
   companyLogoUrl                   String?  @db.Text
   sacPhone                         String?
   sacWhatsapp                      String?

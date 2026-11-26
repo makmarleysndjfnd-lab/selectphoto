@@ -138,17 +138,40 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                     itemCount: _employees.length,
                     itemBuilder: (context, index) {
                       final emp = _employees[index];
-                      final String role = emp['role'] == 'SELLER' ? 'Vendedor' : (emp['role'] == 'PHOTOGRAPHER' ? 'Fotógrafo' : (emp['role'] == 'SELLER_MANAGER' ? 'Vendedor Gerente' : 'Contato'));
-                      
-                      String carInfo = 'Nenhum';
-                      if (emp['usesOwnCar'] == true) {
-                        carInfo = 'Próprio';
-                      } else if (emp['currentCars'] != null && (emp['currentCars'] as List).isNotEmpty) {
+                      final String role = emp['role'] == 'SELLER'
+                          ? 'Vendedor'
+                          : (emp['role'] == 'PHOTOGRAPHER'
+                              ? 'Fotógrafo'
+                              : (emp['role'] == 'SELLER_MANAGER'
+                                  ? 'Vendedor Gerente'
+                                  : 'Contato'));
+                      final isSeller = emp['role'] == 'SELLER' ||
+                          emp['role'] == 'SELLER_MANAGER';
+                      final isOwnCar = emp['usesOwnCar'] == true ||
+                          emp['sellerVehicleType']?.toString().toUpperCase() ==
+                              'OWN_CAR';
+
+                      String carInfo = isOwnCar ? 'Carro Próprio' : 'Carro da Empresa';
+                      if (!isOwnCar &&
+                          emp['currentCars'] != null &&
+                          (emp['currentCars'] as List).isNotEmpty) {
                         carInfo = 'Empresa (${emp['currentCars'][0]['model']})';
+                      } else if (!isSeller && !isOwnCar) {
+                        carInfo = 'Nenhum';
                       }
 
+                      final rawProfile =
+                          (emp['sellerBookProfile'] ?? emp['salesType'] ?? 'VIRGIN')
+                              .toString()
+                              .toUpperCase();
+                      final profileLabel = rawProfile == 'REBOLO'
+                          ? 'Rebolo'
+                          : (rawProfile == 'BOTH' || rawProfile == 'AMBOS'
+                              ? 'Virgem + Rebolo'
+                              : 'Virgem');
+
                       return LedCard(
-                        color: const Color(0xFF1A1A2E),
+                        color: const Color(0xFF160D24),
                         margin: const EdgeInsets.only(bottom: 12),
                         child: ListTile(
                           leading: CircleAvatar(
@@ -157,7 +180,12 @@ class _EmployeeManagementScreenState extends State<EmployeeManagementScreen> {
                             child: emp['profilePhotoUrl'] == null ? const Icon(Icons.person, color: Colors.white54) : null,
                           ),
                           title: Text(emp['name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          subtitle: Text('$role | Carro: $carInfo${emp['photographerCode'] != null ? ' | Cód: ${emp['photographerCode']}' : ''}', style: const TextStyle(color: Colors.white70)),
+                          subtitle: Text(
+                            isSeller
+                                ? '$role · $profileLabel · $carInfo'
+                                : '$role | Carro: $carInfo${emp['photographerCode'] != null ? ' | Cód: ${emp['photographerCode']}' : ''}',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -213,15 +241,105 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
   late TextEditingController _photographerCodeCtrl;
 
   String _role = 'SELLER';
-  String _salesType = 'BOOK';
+  String _sellerVehicleType = 'COMPANY_CAR';
+  String _sellerBookProfile = 'VIRGIN';
   String? _teamId;
   String? _carId;
   bool _usesOwnCar = false;
-  
+  Map<String, dynamic>? _operationalConfig;
+
   File? _profilePhoto;
   File? _criminalRecord;
-  
+
   bool _isSaving = false;
+
+  Future<void> _loadOperationalConfig() async {
+    try {
+      final cfg = await _apiService.getCompanyOperationalConfig();
+      if (mounted) {
+        setState(() => _operationalConfig = cfg);
+      }
+    } catch (_) {}
+  }
+
+  double _cfgPercent(String key, double fallback) {
+    final val = double.tryParse((_operationalConfig?[key] ?? '').toString());
+    return val ?? fallback;
+  }
+
+  String _fmtPct(double v) {
+    return v == v.roundToDouble() ? '${v.toStringAsFixed(0)}%' : '${v.toStringAsFixed(1)}%';
+  }
+
+  bool get _isSellerRole => _role == 'SELLER' || _role == 'SELLER_MANAGER';
+
+  Widget _buildSellerCommissionPreviewCard() {
+    final virginComp = _cfgPercent('virginCompanyCarCommissionPercent', 20);
+    final virginOwn = _cfgPercent('virginOwnCarCommissionPercent', 25);
+    final reboloComp = _cfgPercent('reboloCompanyCarCommissionPercent', 40);
+    final reboloOwn = _cfgPercent('reboloOwnCarCommissionPercent', 50);
+    final instPct = _cfgPercent('creditInstallmentCommissionPercent', 10);
+
+    final isOwn = _sellerVehicleType == 'OWN_CAR';
+    final vehicleLabel = isOwn ? 'Carro Próprio' : 'Carro da Empresa';
+    final activeVirgin = isOwn ? virginOwn : virginComp;
+    final activeRebolo = isOwn ? reboloOwn : reboloComp;
+
+    late final String summaryText;
+    if (_sellerBookProfile == 'REBOLO') {
+      summaryText =
+          'Rebolo · $vehicleLabel: ${_fmtPct(activeRebolo)} + ${_fmtPct(instPct)} por boleto pago';
+    } else if (_sellerBookProfile == 'BOTH') {
+      summaryText =
+          'Ambos ($vehicleLabel) · Virgem: ${_fmtPct(activeVirgin)} · Rebolo: ${_fmtPct(activeRebolo)} + ${_fmtPct(instPct)} por boleto pago';
+    } else {
+      summaryText =
+          'Virgem · $vehicleLabel: ${_fmtPct(activeVirgin)} + ${_fmtPct(instPct)} por boleto pago';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF160D24),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.55)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.percent_rounded, color: Color(0xFFA855F7), size: 17),
+              SizedBox(width: 6),
+              Text(
+                'Comissão vigente da empresa',
+                style: TextStyle(
+                  color: Color(0xFFD8B4FE),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            summaryText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Incide somente sobre valores efetivamente pagos (à vista, entrada ou boleto/parcela paga).',
+            style: TextStyle(color: Colors.white60, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _createTeamInline() async {
     final nameCtrl = TextEditingController();
@@ -280,15 +398,31 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
     _addressCtrl = TextEditingController(text: emp?['address'] ?? '');
     _photographerCodeCtrl = TextEditingController(text: emp?['photographerCode'] ?? '');
     
+    _teamId = null;
     if (emp != null) {
       _role = emp['role'] ?? 'SELLER';
-      _salesType = emp['salesType'] ?? 'BOOK';
       _teamId = emp['teamId'];
-      _usesOwnCar = emp['usesOwnCar'] ?? false;
+      _usesOwnCar = emp['usesOwnCar'] == true ||
+          emp['sellerVehicleType']?.toString().toUpperCase() == 'OWN_CAR';
+      _sellerVehicleType = _usesOwnCar ? 'OWN_CAR' : 'COMPANY_CAR';
+
+      final rawProfile =
+          (emp['sellerBookProfile'] ?? emp['salesType'] ?? 'VIRGIN')
+              .toString()
+              .toUpperCase();
+      if (rawProfile == 'REBOLO') {
+        _sellerBookProfile = 'REBOLO';
+      } else if (rawProfile == 'BOTH' || rawProfile == 'AMBOS') {
+        _sellerBookProfile = 'BOTH';
+      } else {
+        _sellerBookProfile = 'VIRGIN';
+      }
+
       if (emp['currentCars'] != null && (emp['currentCars'] as List).isNotEmpty) {
         _carId = emp['currentCars'][0]['id'];
       }
     }
+    _loadOperationalConfig();
   }
 
   Future<void> _pickImage(bool isProfile) async {
@@ -310,9 +444,13 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
     setState(() => _isSaving = true);
 
     try {
-      String finalSalesType = _salesType;
+      String finalSalesType = _sellerBookProfile == 'REBOLO'
+          ? 'REBOLO'
+          : (_sellerBookProfile == 'BOTH' ? 'BOTH' : 'BOOK');
       String finalTeamId = _teamId ?? '';
-        
+      final isOwnCar = _sellerVehicleType == 'OWN_CAR';
+      _usesOwnCar = isOwnCar;
+
       if (_role == 'PHOTOGRAPHER' || _role == 'CONTACT') {
         finalSalesType = '';
       }
@@ -322,14 +460,16 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
         'password': _passwordCtrl.text.trim(),
         'role': _role,
         'salesType': finalSalesType,
+        'sellerVehicleType': _isSellerRole ? _sellerVehicleType : 'COMPANY_CAR',
+        'sellerBookProfile': _isSellerRole ? _sellerBookProfile : 'VIRGIN',
         'cpf': _cpfCtrl.text.trim(),
         'rg': _rgCtrl.text.trim(),
         'phone': _phoneCtrl.text.trim(),
         'emergencyPhone': _emergencyCtrl.text.trim(),
         'address': _addressCtrl.text.trim(),
         'teamId': finalTeamId,
-        'carId': _carId ?? '',
-        'usesOwnCar': _usesOwnCar.toString(),
+        'carId': isOwnCar ? '' : (_carId ?? ''),
+        'usesOwnCar': isOwnCar.toString(),
         'photographerCode': _photographerCodeCtrl.text.trim(),
       });
 
@@ -414,9 +554,9 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF121224),
+        backgroundColor: const Color(0xFF0D0714),
         appBar: AppBar(
-          backgroundColor: const Color(0xFF1A1A2E),
+          backgroundColor: const Color(0xFF160D24),
           elevation: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -656,23 +796,163 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
                   onChanged: (v) => setState(() => _role = v!),
                 ),
 
-                if (_role != 'PHOTOGRAPHER' && _role != 'CONTACT') ...[
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    value: _salesType,
-                    isExpanded: true,
-                    dropdownColor: const Color(0xFF111122),
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: 'Tipo de Venda',
-                      labelStyle: TextStyle(color: Colors.white54),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                if (_isSellerRole) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF160D24),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFFA855F7).withOpacity(0.45),
+                      ),
                     ),
-                    items: const [
-                      DropdownMenuItem(value: 'BOOK', child: Text('Book')),
-                      DropdownMenuItem(value: 'REBOLO', child: Text('Rebolo')),
-                    ],
-                    onChanged: (v) => setState(() => _salesType = v!),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Perfil Comercial e Comissão *',
+                          style: TextStyle(
+                            color: Color(0xFFD8B4FE),
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Veículo Utilizado *',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const SizedBox(
+                                  width: double.infinity,
+                                  child: Text(
+                                    'Carro da Empresa',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                selected: _sellerVehicleType == 'COMPANY_CAR',
+                                selectedColor: const Color(0xFFA855F7),
+                                backgroundColor: const Color(0xFF0D0714),
+                                labelStyle: TextStyle(
+                                  color: _sellerVehicleType == 'COMPANY_CAR'
+                                      ? Colors.white
+                                      : Colors.white70,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                                onSelected: (_) {
+                                  setState(() {
+                                    _sellerVehicleType = 'COMPANY_CAR';
+                                    _usesOwnCar = false;
+                                  });
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const SizedBox(
+                                  width: double.infinity,
+                                  child: Text(
+                                    'Carro Próprio',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                selected: _sellerVehicleType == 'OWN_CAR',
+                                selectedColor: const Color(0xFFA855F7),
+                                backgroundColor: const Color(0xFF0D0714),
+                                labelStyle: TextStyle(
+                                  color: _sellerVehicleType == 'OWN_CAR'
+                                      ? Colors.white
+                                      : Colors.white70,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                                onSelected: (_) {
+                                  setState(() {
+                                    _sellerVehicleType = 'OWN_CAR';
+                                    _usesOwnCar = true;
+                                    _carId = null;
+                                  });
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Modalidade de Atuação *',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('Book Virgem'),
+                              selected: _sellerBookProfile == 'VIRGIN',
+                              selectedColor: const Color(0xFFA855F7),
+                              backgroundColor: const Color(0xFF0D0714),
+                              labelStyle: TextStyle(
+                                color: _sellerBookProfile == 'VIRGIN'
+                                    ? Colors.white
+                                    : Colors.white70,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) {
+                                setState(() {
+                                  _sellerBookProfile = 'VIRGIN';
+                                });
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Book Rebolo'),
+                              selected: _sellerBookProfile == 'REBOLO',
+                              selectedColor: const Color(0xFFA855F7),
+                              backgroundColor: const Color(0xFF0D0714),
+                              labelStyle: TextStyle(
+                                color: _sellerBookProfile == 'REBOLO'
+                                    ? Colors.white
+                                    : Colors.white70,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) {
+                                setState(() {
+                                  _sellerBookProfile = 'REBOLO';
+                                });
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Ambos'),
+                              selected: _sellerBookProfile == 'BOTH',
+                              selectedColor: const Color(0xFFA855F7),
+                              backgroundColor: const Color(0xFF0D0714),
+                              labelStyle: TextStyle(
+                                color: _sellerBookProfile == 'BOTH'
+                                    ? Colors.white
+                                    : Colors.white70,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              onSelected: (_) {
+                                setState(() {
+                                  _sellerBookProfile = 'BOTH';
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                        _buildSellerCommissionPreviewCard(),
+                      ],
+                    ),
                   ),
                 ],
 
@@ -690,12 +970,12 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
                   ),
                 ],
 
-                if (!_usesOwnCar) ...[
+                if (_sellerVehicleType != 'OWN_CAR') ...[
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     value: _carId,
                     isExpanded: true,
-                    dropdownColor: const Color(0xFF1A1A2E),
+                    dropdownColor: const Color(0xFF160D24),
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
                       labelText: 'Veículo Vinculado (Opcional)',
@@ -711,45 +991,53 @@ class _EmployeeFormScreenState extends State<_EmployeeFormScreen> {
                     onChanged: (v) => setState(() => _carId = v),
                   ),
                 ],
-                
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Text('Usa carro próprio?', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: RadioListTile<bool>(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Sim', style: TextStyle(color: Colors.white, fontSize: 13)),
-                              value: true,
-                              groupValue: _usesOwnCar,
-                              activeColor: const Color(0xFFCE93D8),
-                              onChanged: (v) {
-                                setState(() {
-                                  _usesOwnCar = v!;
-                                  _carId = null;
-                                });
-                              },
+
+                if (!_isSellerRole) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text('Usa carro próprio?', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: RadioListTile<bool>(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Sim', style: TextStyle(color: Colors.white, fontSize: 13)),
+                                value: true,
+                                groupValue: _usesOwnCar,
+                                activeColor: const Color(0xFFA855F7),
+                                onChanged: (v) {
+                                  setState(() {
+                                    _usesOwnCar = v!;
+                                    _sellerVehicleType = _usesOwnCar ? 'OWN_CAR' : 'COMPANY_CAR';
+                                    _carId = null;
+                                  });
+                                },
+                              ),
                             ),
-                          ),
-                          Expanded(
-                            child: RadioListTile<bool>(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Não', style: TextStyle(color: Colors.white, fontSize: 13)),
-                              value: false,
-                              groupValue: _usesOwnCar,
-                              activeColor: const Color(0xFFCE93D8),
-                              onChanged: (v) => setState(() => _usesOwnCar = v!),
+                            Expanded(
+                              child: RadioListTile<bool>(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Não', style: TextStyle(color: Colors.white, fontSize: 13)),
+                                value: false,
+                                groupValue: _usesOwnCar,
+                                activeColor: const Color(0xFFA855F7),
+                                onChanged: (v) {
+                                  setState(() {
+                                    _usesOwnCar = v!;
+                                    _sellerVehicleType = _usesOwnCar ? 'OWN_CAR' : 'COMPANY_CAR';
+                                  });
+                                },
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
                 
                 const SizedBox(height: 24),
                 Row(
