@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../servicos/servico_api.dart';
 import '../widgets/api_usage_bar_card.dart';
@@ -78,34 +79,70 @@ class _PainelProprietarioIntegracoesState
   Future<void> _inicializarDados() async {
     setState(() => _carregando = true);
     try {
-      final empresas = await _api.getOwnerCompanies(classification: 'OPERATIONAL');
-      final cats = await _api.getIntegrationCatalogs();
+      List<Map<String, dynamic>> empresas = [];
+      try {
+        empresas = await _api.getOwnerCompanies(classification: 'ALL');
+      } catch (_) {
+        try {
+          empresas = await _api.getSuperAdminCompaniesList();
+        } catch (_) {}
+      }
+
+      if (widget.initialCompany != null) {
+        final initId = widget.initialCompany!['id']?.toString();
+        if (initId != null &&
+            initId.isNotEmpty &&
+            !empresas.any((e) => e['id']?.toString() == initId)) {
+          empresas = [Map<String, dynamic>.from(widget.initialCompany!), ...empresas];
+        }
+      }
+
+      List<Map<String, dynamic>> cats = [];
+      try {
+        cats = await _api.getIntegrationCatalogs();
+      } catch (_) {}
+
       Map<String, dynamic>? platformOverview;
       try {
         platformOverview = await _api.getPlatformIntegrationsOverview();
       } catch (_) {}
 
       Map<String, dynamic>? selected = _empresaSelecionada;
+      if (selected != null) {
+        final selId = selected['id']?.toString();
+        final match = empresas.where((e) => e['id']?.toString() == selId).toList();
+        if (match.isNotEmpty) {
+          selected = match.first;
+        }
+      }
       if (selected == null && empresas.isNotEmpty) {
         selected = empresas.firstWhere(
-          (e) => e['classification'] == 'OPERATIONAL',
+          (e) =>
+              e['classification'] != 'TEST_DEMO' &&
+              e['isTestExample'] != true,
           orElse: () => empresas.first,
         );
       }
-      final readiness = await _api.getAsaasLiveReadinessReport(
-        companyId: selected?['id']?.toString(),
-      );
 
-      setState(() {
-        _empresas = empresas;
-        _catalogos = cats;
-        _platformOverview = platformOverview;
-        _empresaSelecionada = selected;
-        _liveReadinessReport = readiness;
-      });
+      Map<String, dynamic>? readiness;
+      try {
+        readiness = await _api.getAsaasLiveReadinessReport(
+          companyId: selected?['id']?.toString(),
+        );
+      } catch (_) {}
 
-      if (selected != null) {
-        await _carregarIntegracoesEmpresa(selected['id']);
+      if (mounted) {
+        setState(() {
+          _empresas = empresas;
+          _catalogos = cats;
+          _platformOverview = platformOverview;
+          _empresaSelecionada = selected;
+          _liveReadinessReport = readiness;
+        });
+      }
+
+      if (selected != null && selected['id'] != null) {
+        await _carregarIntegracoesEmpresa(selected['id'].toString());
       }
     } catch (e) {
       _mostrarErro('Erro ao inicializar dados: $e');
@@ -115,40 +152,54 @@ class _PainelProprietarioIntegracoesState
   }
 
   Future<void> _carregarIntegracoesEmpresa(String companyId) async {
+    List<Map<String, dynamic>> list = [];
+    List<Map<String, dynamic>> shared = [];
+    Map<String, dynamic>? overview;
+    Map<String, dynamic>? unlinked;
+    String? period;
+    Map<String, dynamic>? readiness;
+    Map<String, dynamic>? exclusive;
+    Map<String, dynamic>? apiUsage;
+
     try {
       final payload = await _api.getCompanyIntegrationsPayload(companyId);
-      final list = (payload['integrations'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
-      final shared = (payload['sharedServices'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
-      final overview = payload['overview'] as Map<String, dynamic>?;
-      final unlinked = payload['unlinkedUsage'] as Map<String, dynamic>?;
-      final period = payload['period']?.toString();
-      final readiness = await _api.getAsaasLiveReadinessReport(companyId: companyId);
-      Map<String, dynamic>? exclusive;
-      try {
-        exclusive = await _api.getSuperAdminCompanyIntegrations(companyId);
-      } catch (_) {}
-      Map<String, dynamic>? apiUsage;
-      try {
-        apiUsage = await _api.getSuperAdminCompanyApiUsage(companyId);
-      } catch (_) {}
+      list = (payload['integrations'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      shared = (payload['sharedServices'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      overview = payload['overview'] as Map<String, dynamic>?;
+      unlinked = payload['unlinkedUsage'] as Map<String, dynamic>?;
+      period = payload['period']?.toString();
+    } catch (_) {}
 
-      if (mounted) {
-        setState(() {
-          _integracoes = list;
-          _companySharedServices = shared;
-          _companyOverview = overview;
-          _companyUnlinkedUsage = unlinked;
-          _period = period;
-          _liveReadinessReport = readiness;
-          _exclusiveIntegrations = exclusive;
-          _companyApiUsage = apiUsage;
-          _loadingApiUsage = false;
-          _asaasTestResult = null;
-          _geminiTestResult = null;
-        });
-      }
-    } catch (e) {
-      _mostrarErro('Erro ao carregar integrações da empresa: $e');
+    try {
+      readiness = await _api.getAsaasLiveReadinessReport(companyId: companyId);
+    } catch (_) {}
+
+    try {
+      exclusive = await _api.getSuperAdminCompanyIntegrations(companyId);
+    } catch (_) {}
+
+    try {
+      apiUsage = await _api.getSuperAdminCompanyApiUsage(companyId);
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _integracoes = list;
+        _companySharedServices = shared;
+        _companyOverview = overview;
+        _companyUnlinkedUsage = unlinked;
+        _period = period;
+        if (readiness != null) _liveReadinessReport = readiness;
+        _exclusiveIntegrations = exclusive;
+        _companyApiUsage = apiUsage;
+        _loadingApiUsage = false;
+        _asaasTestResult = null;
+        _geminiTestResult = null;
+      });
     }
   }
 
@@ -1237,42 +1288,89 @@ class _PainelProprietarioIntegracoesState
   }
 
   Widget _buildEmpresaHeader() {
+    final rawSelectedId = _empresaSelecionada?['id']?.toString();
+    final validSelectedId = _empresas.any((e) => e['id']?.toString() == rawSelectedId)
+        ? rawSelectedId
+        : (_empresas.isNotEmpty ? _empresas.first['id']?.toString() : null);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: const Color(0xFF1E293B).withOpacity(0.6),
+      decoration: const BoxDecoration(
+        color: Color(0xFF160D24),
+        border: Border(bottom: BorderSide(color: Color(0xFF2A1B3D))),
+      ),
       child: Row(
         children: [
-          const Icon(Icons.business_rounded, color: Color(0xFF94A3B8), size: 20),
+          const Icon(Icons.business_rounded, color: Color(0xFFA855F7), size: 20),
           const SizedBox(width: 8),
-          const Text('Empresa: ', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13)),
+          const Text('Empresa: ', style: TextStyle(color: Color(0xFFD8B4FE), fontSize: 13)),
           Expanded(
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _empresaSelecionada?['id'],
-                dropdownColor: const Color(0xFF1E293B),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                items: _empresas.map((e) {
-                  final isTest = e['isTestExample'] == true || e['classification'] == 'TEST_DEMO';
-                  return DropdownMenuItem<String>(
-                    value: e['id'],
-                    child: Text(
-                      isTest ? '${e['name']} [TESTE]' : (e['name'] ?? 'Sem Nome'),
-                      overflow: TextOverflow.ellipsis,
+            child: _empresas.isEmpty
+                ? Text(
+                    (_empresaSelecionada?['tradeName'] ?? _empresaSelecionada?['name'] ?? 'Nenhuma empresa carregada').toString(),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  )
+                : DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: validSelectedId,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF160D24),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      items: _empresas.map((e) {
+                        final idStr = e['id']?.toString() ?? '';
+                        final isTest = e['isTestExample'] == true || e['classification'] == 'TEST_DEMO';
+                        final displayName = (e['tradeName']?.toString().trim().isNotEmpty == true)
+                            ? e['tradeName'].toString()
+                            : (e['name'] ?? 'Sem Nome').toString();
+                        return DropdownMenuItem<String>(
+                          value: idStr,
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  displayName,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (isTest) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF59E0B).withOpacity(0.18),
+                                    borderRadius: BorderRadius.circular(5),
+                                    border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.6)),
+                                  ),
+                                  child: const Text(
+                                    'Teste/Demo',
+                                    style: TextStyle(
+                                      color: Color(0xFFFCD34D),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (id) {
+                        if (id != null) {
+                          final sel = _empresas.firstWhere(
+                            (e) => e['id']?.toString() == id,
+                            orElse: () => _empresas.first,
+                          );
+                          setState(() {
+                            _empresaSelecionada = sel;
+                            _harnessReport = null;
+                          });
+                          _carregarIntegracoesEmpresa(id);
+                        }
+                      },
                     ),
-                  );
-                }).toList(),
-                onChanged: (id) {
-                  if (id != null) {
-                    final sel = _empresas.firstWhere((e) => e['id'] == id);
-                    setState(() {
-                      _empresaSelecionada = sel;
-                      _harnessReport = null;
-                    });
-                    _carregarIntegracoesEmpresa(id);
-                  }
-                },
-              ),
-            ),
+                  ),
           ),
           if (_temStepUpAtivo)
             Container(
@@ -1505,12 +1603,13 @@ class _PainelProprietarioIntegracoesState
           _buildExclusiveProviderBox(
             title: 'Asaas / Serasa (Gateway + Consultas)',
             subtitle:
-                'Ambiente ativo: ${asaasMap['environment'] ?? 'SANDBOX'} • Chave: ${asaasMap['maskedKey'] ?? 'Não configurada'}',
+                'Ambiente: ${asaasMap['environment'] ?? 'SANDBOX'} • Chave: ${asaasMap['maskedKey'] ?? 'Não configurada'} • Webhook: ${asaasMap['hasWebhookToken'] == true ? (asaasMap['webhookMasked'] ?? 'Configurado') : 'Pendente'}',
             configured: asaasMap['configured'] == true,
             status: (asaasMap['connectionStatus'] ?? 'NOT_CONFIGURED').toString(),
             statusMessage: asaasMap['connectionMessage']?.toString(),
             isTesting: _testingAsaas,
             testResult: _asaasTestResult,
+            configureLabel: 'Configurar Asaas & Webhook',
             onConfigure: () => _openExclusiveAsaasModal(compId, asaasMap),
             onTest: () => _runExclusiveAsaasTest(compId, (asaasMap['environment'] ?? 'SANDBOX').toString()),
           ),
@@ -1554,6 +1653,7 @@ class _PainelProprietarioIntegracoesState
     String? statusMessage,
     required bool isTesting,
     Map<String, dynamic>? testResult,
+    String? configureLabel,
     required VoidCallback onConfigure,
     required VoidCallback onTest,
     VoidCallback? onConfigureAiSearch,
@@ -1648,7 +1748,10 @@ class _PainelProprietarioIntegracoesState
                   foregroundColor: const Color(0xFFD8B4FE),
                 ),
                 icon: const Icon(Icons.edit_rounded, size: 15),
-                label: Text(configured ? 'Trocar Chave' : 'Configurar Chave', style: const TextStyle(fontSize: 12)),
+                label: Text(
+                  configureLabel ?? (configured ? 'Trocar Chave' : 'Configurar Chave'),
+                  style: const TextStyle(fontSize: 12),
+                ),
                 onPressed: onConfigure,
               ),
               ElevatedButton.icon(
@@ -1684,89 +1787,304 @@ class _PainelProprietarioIntegracoesState
   }
 
   Future<void> _openExclusiveAsaasModal(String companyId, Map<String, dynamic> current) async {
+    const webhookPublicUrl = 'https://selectphoto-k1ac.onrender.com/api/credit/webhooks/asaas';
     final keyCtrl = TextEditingController();
+    final webhookCtrl = TextEditingController();
     final accountNameCtrl = TextEditingController(text: current['accountName']?.toString() ?? '');
+    final bool alreadyConfigured = current['configured'] == true;
+    final bool hasSavedWebhook = current['hasWebhookToken'] == true;
+    final String? savedKeyMask = current['maskedKey']?.toString();
+    final String? savedWebhookMask = current['webhookMasked']?.toString();
     String env = (current['environment'] ?? 'SANDBOX').toString();
     if (env != 'SANDBOX' && env != 'PRODUCTION') env = 'SANDBOX';
+    bool obscureKey = true;
+    bool obscureWh = true;
+    bool isSaving = false;
 
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => _ControllerDisposer(
-        controllers: [keyCtrl, accountNameCtrl],
+        controllers: [keyCtrl, webhookCtrl, accountNameCtrl],
         child: StatefulBuilder(
           builder: (dialogCtx, setDialogState) => AlertDialog(
             backgroundColor: const Color(0xFF160D24),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Chave Asaas / Serasa Exclusiva', style: TextStyle(color: Colors.white, fontSize: 16)),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<String>(
-                    value: env,
-                    dropdownColor: const Color(0xFF160D24),
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                    decoration: const InputDecoration(
-                      labelText: 'Ambiente Asaas',
-                      labelStyle: TextStyle(color: Color(0xFFD8B4FE)),
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 'SANDBOX', child: Text('SANDBOX (Homologação)')),
-                      DropdownMenuItem(value: 'PRODUCTION', child: Text('PRODUCTION (Produção)')),
-                    ],
-                    onChanged: (v) {
-                      if (v != null) setDialogState(() => env = v);
-                    },
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: const Color(0xFFA855F7).withOpacity(0.5)),
+            ),
+            title: const Row(
+              children: [
+                Icon(Icons.account_balance_rounded, color: Color(0xFFA855F7), size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Configurar Asaas & Webhook',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: keyCtrl,
-                    obscureText: true,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: 'API Key Asaas *',
-                      hintText: r'Ex: $aact_...',
-                      hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                      labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: env,
+                      dropdownColor: const Color(0xFF160D24),
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Ambiente Asaas',
+                        labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'SANDBOX', child: Text('SANDBOX (Homologação)')),
+                        DropdownMenuItem(value: 'PRODUCTION', child: Text('PRODUCTION (Produção)')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) setDialogState(() => env = v);
+                      },
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: accountNameCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: 'Nome da Conta (opcional)',
-                      labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: keyCtrl,
+                      obscureText: obscureKey,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: alreadyConfigured
+                            ? r'API Key Asaas ($aact_...)'
+                            : r'API Key Asaas ($aact_...) *',
+                        hintText: alreadyConfigured && savedKeyMask != null
+                            ? 'Em branco mantém $savedKeyMask'
+                            : r'Ex: $aact_hmlg_...',
+                        hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                        helperText: alreadyConfigured
+                            ? 'Deixe em branco se quiser atualizar apenas o Webhook.'
+                            : null,
+                        helperStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10.5),
+                        labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureKey ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.white54,
+                            size: 18,
+                          ),
+                          onPressed: () => setDialogState(() => obscureKey = !obscureKey),
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: webhookCtrl,
+                      obscureText: obscureWh,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Segredo do Webhook (asaas-access-token)',
+                        hintText: hasSavedWebhook && savedWebhookMask != null
+                            ? 'Salvo ($savedWebhookMask) — em branco mantém atual'
+                            : 'Ex: whsec_lumora_sbx_2026...',
+                        hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                        helperText: 'Opcional — deixar em branco mantém o segredo já salvo no cofre.',
+                        helperStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10.5),
+                        labelStyle: const TextStyle(color: Color(0xFFD8B4FE)),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureWh ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.white54,
+                            size: 18,
+                          ),
+                          onPressed: () => setDialogState(() => obscureWh = !obscureWh),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: accountNameCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: 'Nome da Conta (opcional)',
+                        labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0714),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.4)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.webhook_rounded, size: 15, color: Color(0xFFA855F7)),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Guia Rápido do Webhook Asaas',
+                                    style: TextStyle(
+                                      color: Color(0xFFD8B4FE),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              InkWell(
+                                borderRadius: BorderRadius.circular(6),
+                                onTap: () {
+                                  Clipboard.setData(const ClipboardData(text: webhookPublicUrl));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('URL pública do Webhook copiada!'),
+                                      backgroundColor: Color(0xFF10B981),
+                                    ),
+                                  );
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFA855F7).withOpacity(0.18),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: const Color(0xFFA855F7)),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.copy_rounded, size: 12, color: Colors.white),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'Copiar URL',
+                                        style: TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          const SelectableText(
+                            webhookPublicUrl,
+                            style: TextStyle(
+                              color: Color(0xFF38BDF8),
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Marque no Asaas apenas os 6 eventos de Cobrança:',
+                            style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            '• PAYMENT_CREATED   • PAYMENT_UPDATED\n'
+                            '• PAYMENT_CONFIRMED • PAYMENT_RECEIVED\n'
+                            '• PAYMENT_OVERDUE   • PAYMENT_REFUNDED',
+                            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10.5, fontFamily: 'monospace', height: 1.35),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
+                onPressed: isSaving ? null : () => Navigator.of(ctx).pop(false),
                 child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
               ),
               ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7), foregroundColor: Colors.white),
-                onPressed: () async {
-                  if (keyCtrl.text.trim().length < 6) {
-                    _mostrarErro('Informe uma chave Asaas válida.');
-                    return;
-                  }
-                  try {
-                    await _api.saveCompanyAsaasIntegration(
-                      companyId,
-                      apiKey: keyCtrl.text.trim(),
-                      environment: env,
-                      accountName: accountNameCtrl.text.trim().isNotEmpty ? accountNameCtrl.text.trim() : null,
-                    );
-                    if (ctx.mounted) Navigator.of(ctx).pop(true);
-                  } catch (e) {
-                    _mostrarErro('$e');
-                  }
-                },
-                child: const Text('Salvar no Vault'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA855F7),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        final rawKey = keyCtrl.text.trim();
+                        final rawWh = webhookCtrl.text.trim();
+                        if (!alreadyConfigured && rawKey.length < 6) {
+                          _mostrarErro('Informe uma API Key Asaas válida.');
+                          return;
+                        }
+                        if (rawKey.isNotEmpty && rawKey.length < 6) {
+                          _mostrarErro('A nova API Key Asaas deve ter ao menos 6 caracteres.');
+                          return;
+                        }
+                        setDialogState(() => isSaving = true);
+                        try {
+                          await _api.saveCompanyAsaasIntegration(
+                            companyId,
+                            apiKey: rawKey,
+                            environment: env,
+                            accountName: accountNameCtrl.text.trim().isNotEmpty
+                                ? accountNameCtrl.text.trim()
+                                : null,
+                            webhookToken: rawWh.isNotEmpty ? rawWh : null,
+                          );
+                          if (ctx.mounted) Navigator.of(ctx).pop(true);
+                        } catch (e) {
+                          setDialogState(() => isSaving = false);
+                          _mostrarErro('$e');
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Salvar no Vault'),
               ),
             ],
           ),
@@ -1775,7 +2093,7 @@ class _PainelProprietarioIntegracoesState
     );
 
     if (saved == true && mounted) {
-      _mostrarSucesso('Chave Asaas / Serasa criptografada e salva para a empresa.');
+      _mostrarSucesso('Configuração Asaas & Webhook salva com segurança no cofre.');
       await _carregarIntegracoesEmpresa(companyId);
     }
   }

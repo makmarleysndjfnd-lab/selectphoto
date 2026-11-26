@@ -101,6 +101,8 @@ export interface SerasaEligibilityReport {
   derivedStatus: 'ELEGIVEL' | 'INELEGIVEL';
   reasons: string[];
   blockCodes: string[];
+  minOverdueDays: number;
+  daysRemainingForEligibility: number;
   maxOverdueDays: number;
   overdue30PlusInstallmentsCount: number;
   overdue30PlusAmountCents: number;
@@ -333,13 +335,16 @@ export function evaluateAgreementSerasaEligibility(
   const hasActiveNegativation = Boolean(activeRecord);
 
   const eligible = blockCodes.length === 0;
+  const clampedMaxOverdue = Math.max(0, maxOverdueDays);
 
   return {
     eligible,
     derivedStatus: eligible ? 'ELEGIVEL' : 'INELEGIVEL',
     reasons,
     blockCodes,
-    maxOverdueDays: Math.max(0, maxOverdueDays),
+    minOverdueDays: effectiveMinOverdueDays,
+    daysRemainingForEligibility: Math.max(0, effectiveMinOverdueDays - clampedMaxOverdue),
+    maxOverdueDays: clampedMaxOverdue,
     overdue30PlusInstallmentsCount,
     overdue30PlusAmountCents,
     earliestOverdue30PlusInstallmentId,
@@ -720,13 +725,14 @@ export async function requestSerasaNegativation(params: {
             (i) => i.id === freshEligibility.earliestOverdue30PlusInstallmentId
           )?.asaasCharge?.externalId || null;
 
-        // Chamada ao adaptador Sandbox (nunca LIVE)
+        // Chamada ao adaptador Sandbox v3 (/v3/paymentDunnings, nunca LIVE)
         const bureauResp = await sendAsaasSerasaNegativationRequest(params.companyId, {
           agreementId: freshAgreement.id,
           buyerCpf: freshAgreement.buyerCpf,
           buyerName: freshAgreement.buyerName,
           overdueAmountCents: freshEligibility.overdue30PlusAmountCents,
           externalChargeId: firstOverdueCharge,
+          description: trimmedReason,
           idempotencyKey: normalizedKey,
           requestedEnvironment: 'SANDBOX',
         });
@@ -1083,7 +1089,7 @@ export async function triggerAutoSerasaRemovalOnDebtChange(params: {
   companyId: string;
   agreementId: string;
   triggerType: 'SETTLEMENT' | 'RENEGOTIATION';
-  actorUserId: string;
+  actorUserId?: string | null;
   actorName: string;
   reason: string;
   ipAddress?: string | null;
@@ -1155,7 +1161,7 @@ export async function triggerAutoSerasaRemovalOnDebtChange(params: {
           data: {
             status: newStatus,
             removalReason: params.reason,
-            removalRequestedByUserId: params.actorUserId,
+            removalRequestedByUserId: params.actorUserId || null,
             removalRequestedAt: fresh.removalRequestedAt || now,
             legalRemovalDeadlineAt: deadline,
             removalConfirmedAt,
@@ -1195,7 +1201,7 @@ export async function triggerAutoSerasaRemovalOnDebtChange(params: {
           lastCommunicationError: out.record.lastCommunicationError,
         },
         reason: params.reason,
-        authorUserId: params.actorUserId,
+        authorUserId: params.actorUserId || null,
         authorName: params.actorName,
         authorRole: 'SYSTEM',
         ipAddress: params.ipAddress || null,

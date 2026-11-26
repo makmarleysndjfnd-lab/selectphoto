@@ -4,6 +4,7 @@ import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../mid
 import { calculateCreditSchedule, validateCpf } from '../services/creditService';
 import {
   getCompanyAsaasConfig,
+  getCompanyAsaasConfigForExistingCharge,
   syncAsaasCustomer,
   createAsaasChargeForInstallment,
   notifyAsaasReceiveInCash,
@@ -726,10 +727,14 @@ router.get('/agreements', authenticateToken, requireCreditAccess, async (req: Au
           paidAt: inst.paidAt,
           isOverdue: (inst.status !== 'PAID' && inst.status !== 'RENEGOTIATED') && new Date(inst.dueDate) < now,
           asaasCharge: inst.asaasCharge ? {
+            id: inst.asaasCharge.id,
             externalId: inst.asaasCharge.externalId,
+            asaasPaymentId: inst.asaasCharge.externalId,
             status: inst.asaasCharge.status,
             identificationField: inst.asaasCharge.identificationField,
             bankSlipUrl: inst.asaasCharge.bankSlipUrl,
+            invoiceUrl: inst.asaasCharge.invoiceUrl,
+            pixQrCode: inst.asaasCharge.pixQrCodeUrl,
             pixQrCodeUrl: inst.asaasCharge.pixQrCodeUrl,
             pixPayload: inst.asaasCharge.pixPayload,
             settledAt: inst.asaasCharge.settledAt,
@@ -769,6 +774,7 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
         ...(companyId ? { companyId } : {}),
       },
       include: {
+        company: { select: { name: true, tradeName: true } },
         client: true,
         seller: { select: { id: true, name: true, phone: true } },
         installments: {
@@ -809,7 +815,35 @@ router.get('/agreements/:id', authenticateToken, requireCreditAccess, async (req
       return;
     }
 
-    res.json(existing);
+    const opCfg = await getCompanyOperationalConfig(existing.companyId);
+    const enrichedInstallments = existing.installments.map((inst) => ({
+      ...inst,
+      asaasPaymentId: inst.asaasCharge?.externalId || null,
+      bankSlipUrl: inst.asaasCharge?.bankSlipUrl || null,
+      invoiceUrl: inst.asaasCharge?.invoiceUrl || null,
+      pixQrCode: inst.asaasCharge?.pixQrCodeUrl || null,
+      pixPayload: inst.asaasCharge?.pixPayload || null,
+      asaasCharge: inst.asaasCharge
+        ? {
+            ...inst.asaasCharge,
+            asaasPaymentId: inst.asaasCharge.externalId,
+            bankSlipUrl: inst.asaasCharge.bankSlipUrl,
+            invoiceUrl: inst.asaasCharge.invoiceUrl,
+            pixQrCode: inst.asaasCharge.pixQrCodeUrl,
+            pixQrCodeUrl: inst.asaasCharge.pixQrCodeUrl,
+            pixPayload: inst.asaasCharge.pixPayload,
+            status: inst.asaasCharge.status,
+          }
+        : null,
+    }));
+
+    res.json({
+      ...existing,
+      companyName: resolveCompanyDisplayName((existing as any).company, 'Nossa Equipe'),
+      daysToSerasaEligible: opCfg.creditDaysToSerasaEligible ?? 30,
+      daysToCollectionQueue: opCfg.creditDaysToCollectionQueue ?? 5,
+      installments: enrichedInstallments,
+    });
   } catch (error: any) {
     console.error('Error getting credit agreement details:', error);
     res.status(500).json({ error: error.message || 'Erro ao buscar detalhes do contrato' });
@@ -845,6 +879,12 @@ function buildCreditPaymentReplayResponse(existing: any) {
     allocationsCount: Array.isArray(existing.allocations) ? existing.allocations.length : 0,
     commissionGenerated: commissionRecord ? Number((commissionRecord.amountCents / 100).toFixed(2)) : 0,
     commission: commissionRecord || null,
+    asaasSync: {
+      attempted: false,
+      synced: Boolean(existing.isAsaasSettled),
+      status: 'IDEMPOTENT_REPLAY',
+      message: 'Reenvio idempotente de baixa já registrada.',
+    },
   };
 }
 
@@ -960,7 +1000,14 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         return {
           idempotentReplay: true as const,
           replayPayload: buildCreditPaymentReplayResponse(existingInsideTx),
-          chargesToSyncInCash: [] as { chargeId: string; amountCents: number; residualCents: number }[],
+          chargesToSyncInCash: [] as {
+            installmentId: string;
+            installmentNumber: number;
+            chargeId: string;
+            amountCents: number;
+            residualCents: number;
+            paymentDateIso: string;
+          }[],
         };
       }
 
@@ -1003,6 +1050,51 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         };
       }
 
+      // Validação multi-tenant e de vínculo de installmentId opcional antes de criar o pagamento
+      const rawTargetInstallmentId =
+        typeof req.body?.installmentId === 'string' ? req.body.installmentId.trim() : '';
+      if (rawTargetInstallmentId) {
+        const targetInstRecord = await tx.creditInstallment.findUnique({
+          where: { id: rawTargetInstallmentId },
+          include: {
+            agreement: { select: { id: true, companyId: true } },
+          },
+        });
+        if (!targetInstRecord) {
+          throw {
+            status: 404,
+            code: 'INSTALLMENT_NOT_FOUND',
+            message: 'Parcela selecionada não encontrada.',
+          };
+        }
+        if (targetInstRecord.agreement.companyId !== companyId) {
+          throw {
+            status: 403,
+            code: 'CROSS_TENANT_INSTALLMENT',
+            message: 'Isolamento multi-tenant: parcela pertence a outra empresa.',
+          };
+        }
+        if (targetInstRecord.agreementId !== agreement.id) {
+          throw {
+            status: 400,
+            code: 'INSTALLMENT_AGREEMENT_MISMATCH',
+            message: 'A parcela informada não pertence a este contrato.',
+          };
+        }
+        const targetUnpaid = targetInstRecord.amountCents - targetInstRecord.paidCents;
+        if (
+          targetInstRecord.status === 'PAID' ||
+          targetInstRecord.status === 'RENEGOTIATED' ||
+          targetUnpaid <= 0
+        ) {
+          throw {
+            status: 400,
+            code: 'INSTALLMENT_NOT_OPEN',
+            message: 'A parcela selecionada já se encontra quitada ou renegociada.',
+          };
+        }
+      }
+
       // 3. Criar registro do pagamento
       const effectiveReceiverId = destination === 'SELLER_HANDS' ? agreement.sellerId : currentUserId;
       const paymentDate = req.body?.paidAt ? new Date(req.body.paidAt) : new Date();
@@ -1022,8 +1114,8 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         },
       });
 
-      // 4. Alocação: se o usuário especificou uma parcela alvo, prioriza ela, caso contrário FIFO
-      const targetInstallmentId = req.body.installmentId;
+      // 4. Alocação: se o usuário especificou uma parcela alvo, prioriza exatamente ela; caso contrário FIFO
+      const targetInstallmentId = rawTargetInstallmentId || undefined;
       const sortedInstallments = [...agreement.installments];
       if (targetInstallmentId) {
         sortedInstallments.sort((a, b) => {
@@ -1038,7 +1130,14 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       let totalChargesAllocatedCents = 0;
       const allocationsCreated: any[] = [];
       const updatedInstallmentIds: string[] = [];
-      const chargesToSyncInCash: { chargeId: string; amountCents: number; residualCents: number }[] = [];
+      const chargesToSyncInCash: {
+        installmentId: string;
+        installmentNumber: number;
+        chargeId: string;
+        amountCents: number;
+        residualCents: number;
+        paymentDateIso: string;
+      }[] = [];
 
       for (const inst of sortedInstallments) {
         if (remainingToAllocate <= 0) break;
@@ -1098,11 +1197,20 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
         });
         updatedInstallmentIds.push(inst.id);
 
-        if (inst.asaasCharge && inst.asaasCharge.status !== 'RECEIVED' && inst.asaasCharge.status !== 'RECEIVED_IN_CASH') {
+        if (
+          inst.asaasCharge &&
+          inst.asaasCharge.status !== 'RECEIVED' &&
+          inst.asaasCharge.status !== 'RECEIVED_IN_CASH' &&
+          inst.asaasCharge.status !== 'REFUNDED' &&
+          inst.asaasCharge.status !== 'DELETED'
+        ) {
           chargesToSyncInCash.push({
+            installmentId: inst.id,
+            installmentNumber: inst.installmentNumber,
             chargeId: inst.asaasCharge.externalId,
             amountCents: allocatedCents,
             residualCents: inst.amountCents - newPaidCents,
+            paymentDateIso: paymentDate.toISOString().split('T')[0],
           });
         }
 
@@ -1226,36 +1334,174 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       return;
     }
 
-    // 8. Sincronização assíncrona não-bloqueante com o Asaas se cobrança bancária existir
-    for (const c of result.chargesToSyncInCash) {
-      try {
-        if (c.residualCents === 0) {
-          // Parcela quitada integralmente -> registra recebimento em dinheiro no Asaas
-          await notifyAsaasReceiveInCash(
-            companyId,
-            c.chargeId,
-            new Date().toISOString().split('T')[0],
-            c.amountCents / 100.0
-          );
-          await prisma.asaasCharge.update({
-            where: { externalId: c.chargeId },
-            data: { isManualPaymentSync: true, status: 'RECEIVED_IN_CASH' },
-          });
-        } else {
-          // Parcela com saldo residual: NÃO liquidar a cobrança inteira com receiveInCash!
-          // Reduz o valor da cobrança no Asaas para o saldo devedor restante mantendo o boleto/Pix válido
-          const remainingValue = c.residualCents / 100.0;
-          await updateAsaasPayment(companyId, c.chargeId, { value: remainingValue });
-          await prisma.asaasCharge.update({
-            where: { externalId: c.chargeId },
-            data: {
-              nominalValueCents: c.residualCents,
-              isManualPaymentSync: true,
-            },
-          });
+    // 8. Sincronização automática não-bloqueante com o Asaas (receiveInCash / atualização residual)
+    let asaasSync: {
+      attempted: boolean;
+      synced: boolean;
+      status: string;
+      message: string;
+    } = {
+      attempted: false,
+      synced: false,
+      status: 'NO_ASAAS_CHARGE',
+      message: 'Parcela sem cobrança Asaas em aberto; baixa registrada localmente.',
+    };
+
+    if (result.chargesToSyncInCash.length > 0) {
+      const hasLocalTestOverride =
+        process.env.NODE_ENV === 'test' &&
+        Boolean(
+          process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+            /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+              process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+            )
+        );
+      const isSimMode =
+        (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+        !hasLocalTestOverride;
+
+      let syncedCount = 0;
+      let attemptedCount = 0;
+      let lastStatus = 'ASAAS_DISABLED';
+      let lastErrorMsg: string | null = null;
+
+      for (const c of result.chargesToSyncInCash) {
+        const chargeCfg = await getCompanyAsaasConfigForExistingCharge(companyId, c.chargeId);
+        const canCallAsaas =
+          chargeCfg.mode !== 'DISABLED' &&
+          (Boolean(chargeCfg.apiKey && chargeCfg.apiKey.trim()) || isSimMode);
+
+        if (!canCallAsaas) {
+          continue;
         }
-      } catch (err) {
-        console.warn(`[Asaas Sync] Aviso ao sincronizar parcela ${c.chargeId}:`, err);
+
+        attemptedCount++;
+        try {
+          if (c.residualCents === 0) {
+            const valueReais = Number((c.amountCents / 100.0).toFixed(2));
+            await notifyAsaasReceiveInCash(
+              companyId,
+              c.chargeId,
+              c.paymentDateIso,
+              valueReais
+            );
+            await prisma.asaasCharge.update({
+              where: { externalId: c.chargeId },
+              data: {
+                isManualPaymentSync: true,
+                status: 'RECEIVED_IN_CASH',
+                settledAt: new Date(),
+              },
+            });
+            syncedCount++;
+            lastStatus = 'RECEIVED_IN_CASH';
+            await recordOperationalAuditEvent({
+              companyId,
+              category: 'PAYMENT',
+              action: 'ASAAS_RECEIVE_IN_CASH_SYNCED',
+              entityType: 'CREDIT_PAYMENT',
+              entityReference: `CRD-${String(id).slice(0, 8).toUpperCase()}`,
+              entityId: result.payment.id,
+              previousValues: { chargeId: c.chargeId },
+              newValues: {
+                chargeId: c.chargeId,
+                installmentId: c.installmentId,
+                installmentNumber: c.installmentNumber,
+                status: 'RECEIVED_IN_CASH',
+                value: valueReais,
+                paymentDate: c.paymentDateIso,
+              },
+              reason: `Baixa manual sincronizada no Asaas via receiveInCash (Parcela #${c.installmentNumber})`,
+              authorUserId: currentUserId,
+              authorName: req.user?.name || 'Administrador',
+              authorRole: currentUserRole,
+              ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+            }).catch((auditErr) =>
+              console.warn('[Asaas Sync] Aviso ao gravar auditoria de sucesso:', auditErr)
+            );
+          } else {
+            const remainingValue = Number((c.residualCents / 100.0).toFixed(2));
+            await updateAsaasPayment(companyId, c.chargeId, { value: remainingValue });
+            await prisma.asaasCharge.update({
+              where: { externalId: c.chargeId },
+              data: {
+                nominalValueCents: c.residualCents,
+                isManualPaymentSync: true,
+              },
+            });
+            syncedCount++;
+            lastStatus = 'UPDATED_RESIDUAL';
+            await recordOperationalAuditEvent({
+              companyId,
+              category: 'PAYMENT',
+              action: 'ASAAS_PARTIAL_PAYMENT_SYNCED',
+              entityType: 'CREDIT_PAYMENT',
+              entityReference: `CRD-${String(id).slice(0, 8).toUpperCase()}`,
+              entityId: result.payment.id,
+              previousValues: { chargeId: c.chargeId },
+              newValues: {
+                chargeId: c.chargeId,
+                installmentId: c.installmentId,
+                residualValue: remainingValue,
+              },
+              reason: `Atualização de saldo residual no Asaas (Parcela #${c.installmentNumber})`,
+              authorUserId: currentUserId,
+              authorName: req.user?.name || 'Administrador',
+              authorRole: currentUserRole,
+              ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+            }).catch(() => {});
+          }
+        } catch (err: any) {
+          lastErrorMsg = err?.message || String(err);
+          lastStatus = 'SYNC_FAILED';
+          console.warn(`[Asaas Sync] Aviso ao sincronizar parcela ${c.chargeId}:`, err);
+          await recordOperationalAuditEvent({
+            companyId,
+            category: 'PAYMENT',
+            action: 'ASAAS_RECEIVE_IN_CASH_FAILED',
+            entityType: 'CREDIT_PAYMENT',
+            entityReference: `CRD-${String(id).slice(0, 8).toUpperCase()}`,
+            entityId: result.payment.id,
+            previousValues: { chargeId: c.chargeId },
+            newValues: {
+              chargeId: c.chargeId,
+              installmentId: c.installmentId,
+              installmentNumber: c.installmentNumber,
+              error: lastErrorMsg,
+            },
+            reason: `Baixa local mantida; falha temporária ao sincronizar receiveInCash no Asaas: ${lastErrorMsg}`,
+            authorUserId: currentUserId,
+            authorName: req.user?.name || 'Administrador',
+            authorRole: currentUserRole,
+            ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+          }).catch(() => {});
+        }
+      }
+
+      if (attemptedCount === 0) {
+        asaasSync = {
+          attempted: false,
+          synced: false,
+          status: 'ASAAS_DISABLED',
+          message: 'Baixa registrada localmente (chave Asaas inativa para sincronização automática).',
+        };
+      } else if (syncedCount === attemptedCount) {
+        asaasSync = {
+          attempted: true,
+          synced: true,
+          status: lastStatus,
+          message:
+            lastStatus === 'RECEIVED_IN_CASH'
+              ? 'Baixa concluída no Lumora e sincronizada automaticamente no Asaas (RECEIVED_IN_CASH).'
+              : 'Baixa parcial concluída e saldo residual atualizado no Asaas.',
+        };
+      } else {
+        asaasSync = {
+          attempted: true,
+          synced: false,
+          status: 'SYNC_FAILED',
+          message: `Baixa concluída localmente, mas o Asaas não confirmou a sincronização agora (${lastErrorMsg || 'indisponível'}).`,
+        };
       }
     }
 
@@ -1266,7 +1512,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
           companyId,
           agreementId: id,
           triggerType: 'SETTLEMENT',
-          actorUserId: req.user?.id || 'SYSTEM',
+          actorUserId: req.user?.id || null,
           actorName: req.user?.name || 'Admin/Sistema',
           reason: 'Quitação integral de saldo no crediário — exclusão Serasa (Súmula 548 STJ).',
           ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
@@ -1293,6 +1539,7 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
       allocationsCount: result.allocations.length,
       commissionGenerated: result.commission ? Number((result.commission.amountCents / 100).toFixed(2)) : 0,
       commission: result.commission || null,
+      asaasSync,
       ...(serasaAutoRemoval ? { serasaAutoRemoval } : {}),
     });
   } catch (error: any) {

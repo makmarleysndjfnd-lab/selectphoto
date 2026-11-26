@@ -2,6 +2,7 @@ import { prisma } from './prisma';
 import {
   encryptSecret,
   decryptSecret,
+  maskSecret,
   isVaultConfigurationError,
   validateExternalUrl,
   ASAAS_SANDBOX_BASE_URL,
@@ -235,6 +236,8 @@ export async function setExclusiveCompanyAsaasKey(params: {
   apiKey: string | null;
   environment?: 'SANDBOX' | 'PRODUCTION';
   accountName?: string | null;
+  webhookToken?: string | null;
+  removeWebhookToken?: boolean;
   actorUserId: string;
   actorName: string;
   ipAddress?: string | null;
@@ -244,6 +247,8 @@ export async function setExclusiveCompanyAsaasKey(params: {
     apiKey,
     environment = 'SANDBOX',
     accountName,
+    webhookToken,
+    removeWebhookToken,
     actorUserId,
     actorName,
     ipAddress,
@@ -251,8 +256,26 @@ export async function setExclusiveCompanyAsaasKey(params: {
 
   const envUpper = environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
   const trimmed = typeof apiKey === 'string' ? apiKey.trim() : '';
+  const trimmedWebhook = typeof webhookToken === 'string' ? webhookToken.trim() : '';
 
-  if (!trimmed) {
+  const existing = await prisma.companyIntegration.findUnique({
+    where: {
+      companyId_category_environment: {
+        companyId,
+        category: 'PAYMENT_GATEWAY',
+        environment: envUpper,
+      },
+    },
+  });
+
+  // Se apiKey não veio (vazia) mas já existe chave criptografada no cofre e veio atualização de webhook/conta
+  const keepExistingSecret =
+    apiKey !== null &&
+    !trimmed &&
+    Boolean(existing?.encryptedSecret && existing?.secretIv && existing?.secretTag) &&
+    (Boolean(trimmedWebhook) || removeWebhookToken === true || accountName !== undefined);
+
+  if (!trimmed && !keepExistingSecret) {
     await prisma.company.update({
       where: { id: companyId },
       data: {
@@ -265,11 +288,58 @@ export async function setExclusiveCompanyAsaasKey(params: {
       where: { companyId, category: 'PAYMENT_GATEWAY', environment: envUpper },
       data: { status: 'DISABLED', updatedByUserId: actorUserId },
     });
-    return { configured: false, environment: envUpper, maskedKey: null };
+    return {
+      configured: false,
+      environment: envUpper,
+      maskedKey: null,
+      hasWebhookToken: false,
+      webhookMasked: null,
+    };
   }
 
-  const cipher = encryptSecret(trimmed);
-  const masked = formatTailMask(trimmed)!;
+  const cipher = trimmed
+    ? encryptSecret(trimmed)
+    : {
+        encryptedSecret: existing!.encryptedSecret!,
+        secretIv: existing!.secretIv!,
+        secretTag: existing!.secretTag!,
+      };
+  const masked = trimmed ? formatTailMask(trimmed)! : existing!.secretMasked || '••••';
+
+  // MERGE seguro de configMetadata: preserva encryptedWebhookToken, operationalFinancialMode e demais parâmetros
+  const prevMeta =
+    existing?.configMetadata && typeof existing.configMetadata === 'object'
+      ? { ...(existing.configMetadata as Record<string, any>) }
+      : {};
+
+  const mergedMetadata: Record<string, any> = {
+    ...prevMeta,
+  };
+
+  if (envUpper === 'SANDBOX') {
+    mergedMetadata.operationalFinancialMode =
+      prevMeta.operationalFinancialMode || 'SANDBOX';
+  }
+
+  if (removeWebhookToken === true) {
+    delete mergedMetadata.encryptedWebhookToken;
+    delete mergedMetadata.webhookIv;
+    delete mergedMetadata.webhookTag;
+    delete mergedMetadata.webhookMasked;
+    delete mergedMetadata.webhookToken;
+  } else if (trimmedWebhook) {
+    const encWh = encryptSecret(trimmedWebhook);
+    mergedMetadata.encryptedWebhookToken = encWh.encryptedSecret;
+    mergedMetadata.webhookIv = encWh.secretIv;
+    mergedMetadata.webhookTag = encWh.secretTag;
+    mergedMetadata.webhookMasked = maskSecret(trimmedWebhook);
+    delete mergedMetadata.webhookToken;
+  }
+
+  const resolvedAccountName =
+    accountName !== undefined
+      ? (accountName?.trim() || `Conta Asaas ${envUpper}`)
+      : existing?.accountName || `Conta Asaas ${envUpper}`;
 
   await prisma.companyIntegration.upsert({
     where: {
@@ -283,7 +353,7 @@ export async function setExclusiveCompanyAsaasKey(params: {
       provider: 'ASAAS',
       scope: 'COMPANY_EXCLUSIVE',
       status: 'ACTIVE',
-      accountName: accountName?.trim() || `Conta Asaas ${envUpper}`,
+      accountName: resolvedAccountName,
       costPayer: 'COMPANY',
       credentialSource: 'VAULT_ENCRYPTED',
       encryptedSecret: cipher.encryptedSecret,
@@ -291,9 +361,7 @@ export async function setExclusiveCompanyAsaasKey(params: {
       secretTag: cipher.secretTag,
       secretMasked: masked,
       updatedByUserId: actorUserId,
-      ...(envUpper === 'SANDBOX'
-        ? { configMetadata: { operationalFinancialMode: 'SANDBOX' } }
-        : {}),
+      configMetadata: mergedMetadata,
     },
     create: {
       companyId,
@@ -302,7 +370,7 @@ export async function setExclusiveCompanyAsaasKey(params: {
       scope: 'COMPANY_EXCLUSIVE',
       status: 'ACTIVE',
       environment: envUpper,
-      accountName: accountName?.trim() || `Conta Asaas ${envUpper}`,
+      accountName: resolvedAccountName,
       costPayer: 'COMPANY',
       credentialSource: 'VAULT_ENCRYPTED',
       encryptedSecret: cipher.encryptedSecret,
@@ -310,9 +378,7 @@ export async function setExclusiveCompanyAsaasKey(params: {
       secretTag: cipher.secretTag,
       secretMasked: masked,
       createdByUserId: actorUserId,
-      ...(envUpper === 'SANDBOX'
-        ? { configMetadata: { operationalFinancialMode: 'SANDBOX' } }
-        : {}),
+      configMetadata: mergedMetadata,
     },
   });
 
@@ -329,13 +395,25 @@ export async function setExclusiveCompanyAsaasKey(params: {
     },
   });
 
-  await prisma.company.update({
-    where: { id: companyId },
-    data: {
-      asaasConnectionStatus: 'PENDING',
-      asaasConnectionMessage: `Chave Asaas (${envUpper}) configurada. Execute Testar Conexão para validar.`,
-    },
-  });
+  if (trimmed) {
+    await prisma.company.update({
+      where: { id: companyId },
+      data: {
+        asaasConnectionStatus: 'PENDING',
+        asaasConnectionMessage: `Chave Asaas (${envUpper}) configurada. Execute Testar Conexão para validar.`,
+      },
+    });
+  }
+
+  const hasWebhookToken = Boolean(
+    (mergedMetadata.encryptedWebhookToken && mergedMetadata.webhookIv && mergedMetadata.webhookTag) ||
+      mergedMetadata.webhookToken
+  );
+  const webhookMasked = mergedMetadata.webhookMasked
+    ? String(mergedMetadata.webhookMasked)
+    : mergedMetadata.webhookToken
+      ? maskSecret(String(mergedMetadata.webhookToken))
+      : null;
 
   await recordOperationalAuditEvent({
     companyId,
@@ -345,7 +423,13 @@ export async function setExclusiveCompanyAsaasKey(params: {
     entityReference: `ASAAS:${companyId}:${envUpper}`,
     entityId: companyId,
     previousValues: null,
-    newValues: { configured: true, environment: envUpper, maskedKey: masked, scope: 'COMPANY_EXCLUSIVE' },
+    newValues: {
+      configured: true,
+      environment: envUpper,
+      maskedKey: masked,
+      hasWebhookToken,
+      scope: 'COMPANY_EXCLUSIVE',
+    },
     reason: `Configuração de chave Asaas/Serasa (${envUpper}) exclusiva da empresa pelo SuperAdmin`,
     authorUserId: actorUserId,
     authorName: actorName,
@@ -353,7 +437,14 @@ export async function setExclusiveCompanyAsaasKey(params: {
     ipAddress: ipAddress || null,
   });
 
-  return { configured: true, environment: envUpper, maskedKey: masked };
+  return {
+    configured: true,
+    environment: envUpper,
+    maskedKey: masked,
+    accountName: resolvedAccountName,
+    hasWebhookToken,
+    webhookMasked,
+  };
 }
 
 export async function resolveCompanyAsaasStatus(
@@ -381,6 +472,22 @@ export async function resolveCompanyAsaasStatus(
   let environment: string = 'SANDBOX';
   let maskedKey: string | null = null;
   let secret: string | null = null;
+  let hasWebhookToken = false;
+  let webhookMasked: string | null = null;
+  let accountName: string | null = null;
+
+  if (activeInteg) {
+    const meta = (activeInteg.configMetadata as Record<string, any>) || {};
+    hasWebhookToken = Boolean(
+      (meta.encryptedWebhookToken && meta.webhookIv && meta.webhookTag) || meta.webhookToken
+    );
+    webhookMasked = meta.webhookMasked
+      ? String(meta.webhookMasked)
+      : meta.webhookToken
+        ? maskSecret(String(meta.webhookToken))
+        : null;
+    accountName = activeInteg.accountName || null;
+  }
 
   if (activeInteg && activeInteg.status === 'ACTIVE') {
     environment = activeInteg.environment || 'SANDBOX';
@@ -405,6 +512,10 @@ export async function resolveCompanyAsaasStatus(
     configured = true;
     // Se estiver cifrado ou texto antigo, apenas exibe últimos 4 caracteres mascarados
     maskedKey = formatTailMask(legacyCfg.apiKey);
+    if (!hasWebhookToken && legacyCfg.webhookToken) {
+      hasWebhookToken = true;
+      webhookMasked = maskSecret(legacyCfg.webhookToken);
+    }
     const resolved = await getCompanyAsaasConfig(
       companyId,
       environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX'
@@ -417,6 +528,9 @@ export async function resolveCompanyAsaasStatus(
     environment,
     maskedKey,
     secret,
+    accountName,
+    hasWebhookToken,
+    webhookMasked,
     connectionStatus:
       company?.asaasConnectionStatus || (configured ? 'PENDING' : 'UNCONFIGURED'),
     lastTestedAt: company?.asaasLastTestedAt || null,

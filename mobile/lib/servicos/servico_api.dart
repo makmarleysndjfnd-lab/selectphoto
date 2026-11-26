@@ -3375,6 +3375,21 @@ class ApiService {
   }
 
   /// Etapa 25: Integrações exclusivas por empresa (Asaas/Serasa e Gemini) mascaradas
+  Future<List<Map<String, dynamic>>> getSuperAdminCompaniesList() async {
+    try {
+      final resp = await _dio.get('/superadmin/companies');
+      if (resp.data is List) {
+        return (resp.data as List)
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      return [];
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> getSuperAdminCompanyIntegrations(String companyId) async {
     try {
       final resp = await _dio.get('/superadmin/companies/$companyId/integrations');
@@ -3404,6 +3419,8 @@ class ApiService {
     required String? apiKey,
     String environment = 'SANDBOX',
     String? accountName,
+    String? webhookToken,
+    bool? removeWebhookToken,
   }) async {
     try {
       final resp = await _dio.put(
@@ -3412,6 +3429,9 @@ class ApiService {
           'apiKey': apiKey,
           'environment': environment,
           if (accountName != null) 'accountName': accountName,
+          if (webhookToken != null && webhookToken.trim().isNotEmpty)
+            'webhookToken': webhookToken.trim(),
+          if (removeWebhookToken == true) 'removeWebhookToken': true,
         },
       );
       return Map<String, dynamic>.from(resp.data as Map);

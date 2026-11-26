@@ -303,41 +303,52 @@ router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
     const encrypted = hasNewSecret ? encryptSecret(secret.trim()) : null;
     const secretMasked = hasNewSecret ? maskSecret(secret.trim()) : existing?.secretMasked || null;
 
-    // Metadados seguros e tratamento de webhook:
+    // Metadados seguros e tratamento de webhook (MERGE preservando estado operacional existente):
+    const prevMeta =
+      existing?.configMetadata && typeof existing.configMetadata === 'object'
+        ? { ...(existing.configMetadata as Record<string, any>) }
+        : {};
+
     const configMetadata: Record<string, any> = {
-      accountName: accountName !== undefined ? (accountName ? String(accountName).trim() : undefined) : existing?.accountName || undefined,
+      ...prevMeta,
+      accountName:
+        accountName !== undefined
+          ? (accountName ? String(accountName).trim() : undefined)
+          : existing?.accountName || prevMeta.accountName || undefined,
       registeredByUserId: currentUserId,
-      registeredAt: existing ? (existing.configMetadata as any)?.registeredAt || new Date().toISOString() : new Date().toISOString(),
-      financialLiveAuthorized: false,
+      registeredAt: prevMeta.registeredAt || new Date().toISOString(),
+      financialLiveAuthorized: prevMeta.financialLiveAuthorized === true,
     };
 
-    if (removeWebhookToken === true || req.body.webhookToken === '') {
-      // Remoção explícita
+    if (category === 'PAYMENT_GATEWAY' && cleanEnv === 'SANDBOX') {
+      if (req.body.operationalFinancialMode === null) {
+        delete configMetadata.operationalFinancialMode;
+      } else {
+        configMetadata.operationalFinancialMode =
+          prevMeta.operationalFinancialMode || 'SANDBOX';
+      }
+    }
+
+    if (removeWebhookToken === true) {
+      // Remoção explícita solicitada
       delete configMetadata.encryptedWebhookToken;
       delete configMetadata.webhookIv;
       delete configMetadata.webhookTag;
       delete configMetadata.webhookMasked;
+      delete configMetadata.webhookToken;
     } else if (
       category === 'PAYMENT_GATEWAY' &&
       webhookToken &&
       typeof webhookToken === 'string' &&
       webhookToken.trim()
     ) {
-      // Novo webhook configurado
+      // Novo segredo de webhook configurado
       const encWh = encryptSecret(webhookToken.trim());
       configMetadata.encryptedWebhookToken = encWh.encryptedSecret;
       configMetadata.webhookIv = encWh.secretIv;
       configMetadata.webhookTag = encWh.secretTag;
       configMetadata.webhookMasked = maskSecret(webhookToken.trim());
-    } else if (existing?.configMetadata) {
-      // Preservar webhook e metadados anteriores
-      const prevMeta = existing.configMetadata as Record<string, any>;
-      if (prevMeta.encryptedWebhookToken && prevMeta.webhookIv && prevMeta.webhookTag) {
-        configMetadata.encryptedWebhookToken = prevMeta.encryptedWebhookToken;
-        configMetadata.webhookIv = prevMeta.webhookIv;
-        configMetadata.webhookTag = prevMeta.webhookTag;
-        configMetadata.webhookMasked = prevMeta.webhookMasked;
-      }
+      delete configMetadata.webhookToken;
     }
 
     // Gravação e auditoria transacionais

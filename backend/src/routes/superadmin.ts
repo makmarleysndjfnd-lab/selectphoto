@@ -135,6 +135,9 @@ async function sanitizeCompanyForSuperAdmin(c: any, options?: { rethrowVaultErro
         configured: asaasInfo.configured,
         environment: asaasInfo.environment,
         maskedKey: asaasInfo.maskedKey,
+        hasWebhookToken: asaasInfo.hasWebhookToken,
+        webhookMasked: asaasInfo.webhookMasked,
+        accountName: asaasInfo.accountName,
         connectionStatus: asaasInfo.connectionStatus,
         lastTestedAt: asaasInfo.lastTestedAt,
         connectionMessage: asaasInfo.connectionMessage,
@@ -312,6 +315,7 @@ router.put('/companies/:id', authenticateToken, requireSuperAdmin, async (req: A
       adminContactPhone,
       contractNotes,
       isActive,
+      classification,
       commercialStatus,
       commercialStatusReason,
       geminiApiKey,
@@ -393,6 +397,9 @@ router.put('/companies/:id', authenticateToken, requireSuperAdmin, async (req: A
         commercialStatusReason: nextCommReason,
         status: nextStatus,
         isActive: nextIsActive,
+        ...(classification === 'OPERATIONAL' || classification === 'TEST_DEMO'
+          ? { classification }
+          : {}),
         ...(nextCommStatus === 'SUSPENDED'
           ? {
               suspensionReason: nextCommReason || 'Suspensão comercial',
@@ -544,9 +551,11 @@ router.put('/companies/:id/integrations/asaas', authenticateToken, requireSuperA
     const env = String(req.body?.environment || 'SANDBOX').toUpperCase() === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX';
     const result = await setExclusiveCompanyAsaasKey({
       companyId: company.id,
-      apiKey: req.body?.apiKey ?? null,
+      apiKey: req.body?.apiKey !== undefined ? req.body.apiKey : '',
       environment: env,
-      accountName: req.body?.accountName || null,
+      accountName: req.body?.accountName !== undefined ? (req.body.accountName || null) : undefined,
+      webhookToken: req.body?.webhookToken ?? req.body?.plainWebhookToken ?? undefined,
+      removeWebhookToken: req.body?.removeWebhookToken === true,
       actorUserId: req.user!.id,
       actorName: req.user!.name || 'SuperAdmin',
       ipAddress: req.ip || null,

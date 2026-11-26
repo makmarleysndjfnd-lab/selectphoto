@@ -51,6 +51,16 @@ export interface AsaasConfigData {
  * Obtém a URL base oficial de acordo com o modo configurado
  */
 export function getAsaasBaseUrl(mode: AsaasMode): string {
+  if (
+    mode === 'SANDBOX' &&
+    process.env.NODE_ENV === 'test' &&
+    process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+    /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+      process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+    )
+  ) {
+    return process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim().replace(/\/+$/, '');
+  }
   if (mode === 'SANDBOX') {
     return 'https://api-sandbox.asaas.com/v3';
   }
@@ -372,7 +382,7 @@ export async function getCompanyAsaasConfigForExistingCharge(
 }
 
 function inferAsaasOperation(endpoint: string, method: string): string {
-  if (endpoint.includes('/negativations')) return 'SERASA_QUERY';
+  if (endpoint.includes('/paymentDunnings') || endpoint.includes('/negativations')) return 'SERASA_QUERY';
   if (endpoint.includes('/refund')) return 'PAYMENT_REFUND';
   if (endpoint.includes('/receiveInCash')) return 'PAYMENT_RECEIVE_CASH';
   if (endpoint.includes('/pixQrCode')) return 'PIX_QRCODE';
@@ -406,7 +416,20 @@ async function asaasRequest(
     });
   };
 
-  if (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') {
+  const hasLocalTestOverride =
+    config.mode === 'SANDBOX' &&
+    process.env.NODE_ENV === 'test' &&
+    Boolean(
+      process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+        /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+          process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+        )
+    );
+
+  if (
+    (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+    !hasLocalTestOverride
+  ) {
     if (endpoint.includes('/refund')) {
       if ((global as any).__lastSimulatedRefunds) {
         (global as any).__lastSimulatedRefunds.push({ endpoint, method, payload: body });
@@ -416,13 +439,17 @@ async function asaasRequest(
     }
     if (endpoint.includes('/receiveInCash')) {
       await logUsage('SUCCESS', 200);
-      return { success: true, simulated: true };
+      return { success: true, status: 'RECEIVED_IN_CASH', simulated: true };
     }
     if (method === 'DELETE') {
       await logUsage('SUCCESS', 200);
       return { deleted: true, simulated: true };
     }
-    if (endpoint.startsWith('/negativations/remove') || endpoint.startsWith('/payments/negativation/remove')) {
+    if (
+      (endpoint.startsWith('/paymentDunnings/') && endpoint.endsWith('/cancel')) ||
+      endpoint.startsWith('/negativations/remove') ||
+      endpoint.startsWith('/payments/negativation/remove')
+    ) {
       const simCtrl = (global as any).__simulatedSerasaControl || {};
       if (simCtrl.failRemoval) {
         await logUsage('ERROR', 502);
@@ -441,7 +468,11 @@ async function asaasRequest(
         environment: 'SANDBOX',
       };
     }
-    if (endpoint.startsWith('/negativations') || endpoint.startsWith('/payments/negativation')) {
+    if (
+      endpoint.startsWith('/paymentDunnings') ||
+      endpoint.startsWith('/negativations') ||
+      endpoint.startsWith('/payments/negativation')
+    ) {
       const simCtrl = (global as any).__simulatedSerasaControl || {};
       if (simCtrl.failRequest) {
         await logUsage('ERROR', 502);
@@ -455,7 +486,8 @@ async function asaasRequest(
         await logUsage('ERROR', 422);
         return {
           accepted: false,
-          status: 'REFUSED',
+          status: 'DENIED',
+          denialReason: simCtrl.forceRefuseReason,
           refusalReason: simCtrl.forceRefuseReason,
           protocolNumber: `SER-REF-SBX-${Date.now()}`,
           simulated: true,
@@ -465,9 +497,10 @@ async function asaasRequest(
       await logUsage('SUCCESS', 200);
       return {
         accepted: true,
-        id: simCtrl.externalNegativationId || `neg_sbx_${Date.now()}`,
+        id: simCtrl.externalNegativationId || `dun_sbx_${Date.now()}`,
+        dunningNumber: simCtrl.protocolNumber || `SER-SBX-${Date.now()}`,
         protocolNumber: simCtrl.protocolNumber || `SER-SBX-${Date.now()}`,
-        status: 'REQUESTED',
+        status: 'AWAITING_APPROVAL',
         simulated: true,
         environment: 'SANDBOX',
       };
@@ -1367,6 +1400,7 @@ export async function sendAsaasSerasaNegativationRequest(
     buyerName: string;
     overdueAmountCents: number;
     externalChargeId?: string | null;
+    description?: string | null;
     idempotencyKey: string;
     requestedEnvironment?: string | null;
   }
@@ -1383,11 +1417,20 @@ export async function sendAsaasSerasaNegativationRequest(
   assertSerasaSandboxEnvironment(payload.requestedEnvironment);
 
   const sandboxConfig = await getCompanyAsaasConfig(companyId, 'SANDBOX');
+  const hasLocalTestOverride =
+    process.env.NODE_ENV === 'test' &&
+    Boolean(
+      process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+        /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+          process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+        )
+    );
   const isTestSimulation =
-    process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test';
+    (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+    !hasLocalTestOverride;
 
   if (sandboxConfig.mode !== 'SANDBOX' && !isTestSimulation) {
-    // Em ambiente local/homologação sem chave real do birô, registra protocolo Sandbox auditado sem nunca chamar LIVE.
+    // Em ambiente sem chave Asaas ativa, registra protocolo Sandbox auditado sem nunca chamar LIVE.
     return {
       accepted: true,
       refused: false,
@@ -1400,30 +1443,48 @@ export async function sendAsaasSerasaNegativationRequest(
     };
   }
 
+  if (sandboxConfig.mode === 'SANDBOX' && !isTestSimulation && !payload.externalChargeId) {
+    const err: any = new Error(
+      'Para solicitar negativação via Asaas (/v3/paymentDunnings), emita primeiro o boleto/cobrança Asaas da parcela em atraso.'
+    );
+    err.status = 400;
+    err.code = 'ASAAS_CHARGE_REQUIRED_FOR_DUNNING';
+    throw err;
+  }
+
   const reqConfig: AsaasConfigData =
     sandboxConfig.mode === 'SANDBOX'
       ? sandboxConfig
       : { mode: 'SANDBOX', apiKey: null, webhookToken: null, environment: 'SANDBOX' };
 
-  const resp = await asaasRequest(reqConfig, '/negativations', 'POST', {
-    agreementId: payload.agreementId,
+  const cleanCpf = payload.buyerCpf.replace(/\D/g, '');
+  const resp = await asaasRequest(reqConfig, '/paymentDunnings', 'POST', {
     payment: payload.externalChargeId || undefined,
-    customerCpfCnpj: payload.buyerCpf.replace(/\D/g, ''),
+    type: 'CREDIT_BUREAU',
+    description:
+      (payload.description && payload.description.trim()) ||
+      `Inadimplência contratual - Contrato ${payload.agreementId}`,
     customerName: payload.buyerName,
+    customerCpfCnpj: cleanCpf,
+    cpfCnpj: cleanCpf,
     value: Number((payload.overdueAmountCents / 100).toFixed(2)),
     externalReference: `serasa_${payload.agreementId}_${payload.idempotencyKey.slice(0, 24)}`,
   });
 
-  if (resp?.status === 'REFUSED' || resp?.accepted === false) {
+  if (resp?.status === 'DENIED' || resp?.status === 'REFUSED' || resp?.accepted === false) {
     return {
       accepted: false,
       refused: true,
       status: 'REFUSED',
-      protocolNumber: String(resp?.protocolNumber || `SER-REF-SBX-${Date.now()}`),
+      protocolNumber: String(
+        resp?.protocolNumber || resp?.dunningNumber || `SER-REF-SBX-${Date.now()}`
+      ),
       externalNegativationId: resp?.id ? String(resp.id) : null,
-      refusalReason: String(resp?.refusalReason || 'Recusado na pré-validação do birô (Sandbox).'),
+      refusalReason: String(
+        resp?.denialReason || resp?.refusalReason || 'Recusado na pré-validação do birô (Sandbox).'
+      ),
       environment: 'SANDBOX',
-      simulated: Boolean(resp?.simulated ?? true),
+      simulated: Boolean(resp?.simulated ?? false),
     };
   }
 
@@ -1431,16 +1492,18 @@ export async function sendAsaasSerasaNegativationRequest(
     accepted: true,
     refused: false,
     status: String(resp?.status || 'REQUESTED'),
-    protocolNumber: String(resp?.protocolNumber || `SER-SBX-${Date.now()}`),
+    protocolNumber: String(
+      resp?.protocolNumber || resp?.dunningNumber || resp?.id || `SER-SBX-${Date.now()}`
+    ),
     externalNegativationId: resp?.id ? String(resp.id) : null,
     refusalReason: null,
     environment: 'SANDBOX',
-    simulated: Boolean(resp?.simulated ?? true),
+    simulated: Boolean(resp?.simulated ?? false),
   };
 }
 
 /**
- * Solicita baixa/exclusão de negativação Serasa (Súmula 548 STJ) em Sandbox.
+ * Solicita baixa/exclusão de negativação Serasa (Súmula 548 STJ) em Sandbox via rota v3 /paymentDunnings/{id}/cancel.
  */
 export async function sendAsaasSerasaNegativationRemoval(
   companyId: string,
@@ -1460,10 +1523,23 @@ export async function sendAsaasSerasaNegativationRemoval(
   assertSerasaSandboxEnvironment('SANDBOX');
 
   const sandboxConfig = await getCompanyAsaasConfig(companyId, 'SANDBOX');
+  const hasLocalTestOverride =
+    process.env.NODE_ENV === 'test' &&
+    Boolean(
+      process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+        /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+          process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+        )
+    );
   const isTestSimulation =
-    process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test';
+    (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+    !hasLocalTestOverride;
 
-  if (sandboxConfig.mode !== 'SANDBOX' && !isTestSimulation) {
+  if (
+    (sandboxConfig.mode !== 'SANDBOX' && !isTestSimulation) ||
+    (!isTestSimulation &&
+      (!payload.externalNegativationId || payload.externalNegativationId.startsWith('sbx_')))
+  ) {
     return {
       removed: true,
       removalProtocolNumber: `SER-REM-SBX-${payload.recordId.slice(0, 8).toUpperCase()}-${Date.now()}`,
@@ -1477,19 +1553,23 @@ export async function sendAsaasSerasaNegativationRemoval(
       ? sandboxConfig
       : { mode: 'SANDBOX', apiKey: null, webhookToken: null, environment: 'SANDBOX' };
 
-  const resp = await asaasRequest(reqConfig, '/negativations/remove', 'POST', {
-    recordId: payload.recordId,
-    agreementId: payload.agreementId,
-    externalNegativationId: payload.externalNegativationId || undefined,
-    reason: payload.reason,
-    idempotencyKey: payload.idempotencyKey,
-  });
+  const dunningId = (payload.externalNegativationId || payload.recordId).trim();
+  const resp = await asaasRequest(
+    reqConfig,
+    `/paymentDunnings/${encodeURIComponent(dunningId)}/cancel`,
+    'POST',
+    {
+      description: payload.reason,
+    }
+  );
 
   return {
-    removed: Boolean(resp?.removed ?? true),
-    removalProtocolNumber: String(resp?.removalProtocolNumber || `SER-REM-SBX-${Date.now()}`),
+    removed: resp?.removed !== undefined ? Boolean(resp.removed) : resp?.status !== 'ERROR',
+    removalProtocolNumber: String(
+      resp?.removalProtocolNumber || resp?.dunningNumber || resp?.id || `SER-REM-SBX-${Date.now()}`
+    ),
     environment: 'SANDBOX',
-    simulated: Boolean(resp?.simulated ?? true),
+    simulated: Boolean(resp?.simulated ?? false),
   };
 }
 

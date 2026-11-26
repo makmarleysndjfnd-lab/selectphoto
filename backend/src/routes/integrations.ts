@@ -690,8 +690,9 @@ router.post(
         configMetadata.walletId = String(req.body.walletId).trim();
       }
 
-      if (req.body.plainWebhookToken && String(req.body.plainWebhookToken).trim()) {
-        const trimmedWebhook = String(req.body.plainWebhookToken).trim();
+      const incomingCreateWebhook = req.body.plainWebhookToken ?? req.body.webhookToken;
+      if (incomingCreateWebhook && String(incomingCreateWebhook).trim()) {
+        const trimmedWebhook = String(incomingCreateWebhook).trim();
         const encryptedWebhook = encryptSecret(trimmedWebhook);
         configMetadata.encryptedWebhookToken = encryptedWebhook.encryptedSecret;
         configMetadata.webhookIv = encryptedWebhook.secretIv;
@@ -916,8 +917,17 @@ router.put(
         }
       }
 
-      if (req.body.plainWebhookToken && String(req.body.plainWebhookToken).trim()) {
-        const trimmed = String(req.body.plainWebhookToken).trim();
+      const incomingUpdateWebhook = req.body.plainWebhookToken ?? req.body.webhookToken;
+      if (req.body.removeWebhookToken === true) {
+        delete currentMetadata.encryptedWebhookToken;
+        delete currentMetadata.webhookIv;
+        delete currentMetadata.webhookTag;
+        delete currentMetadata.webhookMasked;
+        delete currentMetadata.webhookToken;
+        metadataChanged = true;
+        changes.webhookTokenRemoved = true;
+      } else if (incomingUpdateWebhook && String(incomingUpdateWebhook).trim()) {
+        const trimmed = String(incomingUpdateWebhook).trim();
         const encWebhook = encryptSecret(trimmed);
         currentMetadata.encryptedWebhookToken = encWebhook.encryptedSecret;
         currentMetadata.webhookIv = encWebhook.secretIv;
@@ -1082,6 +1092,8 @@ router.post(
         return;
       }
 
+      // Etapa 2 (guarda financeira): ativar status NUNCA habilita operationalFinancialMode implicitamente.
+      // O modo operacional só é definido por seleção explícita (PUT /owner/integrations/:id ou SuperAdmin Asaas).
       const updated = await prisma.companyIntegration.update({
         where: { id: integration.id },
         data: {

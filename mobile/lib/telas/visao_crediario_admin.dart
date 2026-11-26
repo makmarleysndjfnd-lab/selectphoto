@@ -1741,6 +1741,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     }
 
     final now = DateTime.now();
+    final shortDateFmt = DateFormat('dd/MM');
 
     return Container(
       decoration: BoxDecoration(
@@ -1753,25 +1754,44 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           final number = inst['installmentNumber'];
           final due = DateTime.tryParse(inst['dueDate'] ?? '');
           final dueStr = due != null ? dateFormat.format(due) : '---';
-          final amount = ((inst['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-          final paid = ((inst['paidCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+          final amountCents = (inst['amountCents'] as num?)?.toInt() ?? 0;
+          final paidCents = (inst['paidCents'] as num?)?.toInt() ?? 0;
+          final amount = amountCents / 100.0;
+          final paid = paidCents / 100.0;
           final status = inst['status']?.toString() ?? 'PENDING';
 
           final isPaid = status == 'PAID';
-          final isOverdue = !isPaid && due != null && due.isBefore(now);
+          final isRenegotiated = status == 'RENEGOTIATED';
+          final isOpenForPayment = !isPaid && !isRenegotiated && (amountCents - paidCents) > 0;
+          final isOverdue = isOpenForPayment && due != null && due.isBefore(now);
 
           Color badgeColor = const Color(0xFFA855F7);
           String badgeText = 'PENDENTE';
           if (isPaid) {
             badgeColor = const Color(0xFF10B981);
             badgeText = 'PAGO';
-          } else if (status == 'PARTIAL') {
+          } else if (isRenegotiated) {
+            badgeColor = Colors.white54;
+            badgeText = 'RENEGOCIADA';
+          } else if (status == 'PARTIAL' || status == 'PARTIALLY_PAID') {
             badgeColor = const Color(0xFFF59E0B);
             badgeText = 'PARCIAL (${currencyFormat.format(paid)})';
           } else if (isOverdue) {
             badgeColor = const Color(0xFFEF4444);
             badgeText = 'VENCIDA';
           }
+
+          final asaasCharge = inst['asaasCharge'] is Map
+              ? Map<String, dynamic>.from(inst['asaasCharge'] as Map)
+              : null;
+          final asaasStatus = asaasCharge?['status']?.toString() ?? 'PENDING';
+          final invoiceUrl = (asaasCharge?['invoiceUrl'] ?? inst['invoiceUrl'] ?? '').toString().trim();
+          final bankSlipUrl = (asaasCharge?['bankSlipUrl'] ?? inst['bankSlipUrl'] ?? '').toString().trim();
+          final chargeUrl = invoiceUrl.isNotEmpty ? invoiceUrl : bankSlipUrl;
+          final bool asaasSettled = asaasStatus == 'RECEIVED' ||
+              asaasStatus == 'RECEIVED_IN_CASH' ||
+              asaasStatus == 'CONFIRMED';
+          final Color asaasColor = asaasSettled ? const Color(0xFF10B981) : const Color(0xFF38BDF8);
 
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1789,7 +1809,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12),
                     ),
                     Text(
-                      'Venc: $dueStr',
+                      'Venc: ${due != null ? shortDateFmt.format(due) : dueStr}',
                       style: TextStyle(
                         color: isOverdue ? const Color(0xFFEF4444) : Colors.white70,
                         fontSize: 12,
@@ -1829,28 +1849,154 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
                     ),
                   ],
                 ),
-                if (inst['asaasCharge'] != null) ...[
-                  const SizedBox(height: 4),
-                  Row(
+                if (asaasCharge != null || isOpenForPayment) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF38BDF8).withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(4),
+                      if (asaasCharge != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: asaasColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: asaasColor.withOpacity(0.4)),
+                          ),
+                          child: Text(
+                            'Asaas: $asaasStatus',
+                            style: TextStyle(color: asaasColor, fontSize: 9.5, fontWeight: FontWeight.bold),
+                          ),
                         ),
-                        child: Text(
-                          'Asaas: ${inst['asaasCharge']['status'] ?? 'PENDING'}',
-                          style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 9, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      if ((inst['asaasCharge']['bankFeeCents'] as num?) != null &&
-                          (inst['asaasCharge']['bankFeeCents'] as num) > 0) ...[
-                        const SizedBox(width: 6),
+                      if (asaasCharge != null &&
+                          (asaasCharge['bankFeeCents'] as num?) != null &&
+                          (asaasCharge['bankFeeCents'] as num) > 0)
                         Text(
-                          'Tarifa: ${currencyFormat.format((inst['asaasCharge']['bankFeeCents'] as num).toDouble() / 100.0)}',
+                          'Tarifa: ${currencyFormat.format((asaasCharge['bankFeeCents'] as num).toDouble() / 100.0)}',
                           style: const TextStyle(color: Colors.white38, fontSize: 9),
                         ),
+                      if (isOpenForPayment && agreement != null)
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _showRegisterPaymentDialog(
+                              agreement,
+                              lockedInstallment: Map<String, dynamic>.from(inst as Map),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF10B981).withOpacity(0.65)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.check_circle_outline_rounded, size: 12, color: Color(0xFF10B981)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Baixar',
+                                  style: TextStyle(color: Color(0xFF10B981), fontSize: 10.5, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      if (chargeUrl.isNotEmpty) ...[
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () async {
+                            final uri = Uri.tryParse(chargeUrl);
+                            if (uri != null && await canLaunchUrl(uri)) {
+                              await launchUrl(uri, mode: LaunchMode.externalApplication);
+                            } else if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Não foi possível abrir o link do boleto/fatura.'),
+                                  backgroundColor: Colors.redAccent,
+                                ),
+                              );
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF38BDF8).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.55)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.open_in_new_rounded, size: 12, color: Color(0xFF38BDF8)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Abrir Boleto/Fatura',
+                                  style: TextStyle(color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(6),
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: chargeUrl));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Link do boleto/fatura copiado para a área de transferência!'),
+                                backgroundColor: Color(0xFF10B981),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.copy_rounded, size: 12, color: Colors.white70),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Copiar Link',
+                                  style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (agreement != null)
+                          InkWell(
+                            borderRadius: BorderRadius.circular(6),
+                            onTap: () => _showWhatsAppReviewDialog(agreement, inst),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF25D366).withOpacity(0.14),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFF25D366).withOpacity(0.5)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.share_rounded, size: 12, color: Color(0xFF25D366)),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'WhatsApp c/ Link',
+                                    style: TextStyle(color: Color(0xFF25D366), fontSize: 10.5, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                       ],
                     ],
                   ),
@@ -1979,9 +2125,46 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   // ══════════════════════════════════════════════════════════════════════════
   // DIÁLOGOS DE AÇÃO
   // ══════════════════════════════════════════════════════════════════════════
-  void _showRegisterPaymentDialog(Map<String, dynamic> agreement) {
-    final remaining = ((agreement['remainingPrincipalCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
-    final amountController = TextEditingController(text: remaining.toStringAsFixed(2));
+  void _showRegisterPaymentDialog(
+    Map<String, dynamic> agreement, {
+    Map<String, dynamic>? lockedInstallment,
+  }) {
+    final remainingPrincipalCents = (agreement['remainingPrincipalCents'] as num?)?.toInt() ?? 0;
+    final remainingChargesCents = (agreement['remainingChargesCents'] as num?)?.toInt() ?? 0;
+    final totalRemainingCents = remainingPrincipalCents + remainingChargesCents;
+    final remaining = totalRemainingCents > 0
+        ? totalRemainingCents / 100.0
+        : ((agreement['remainingPrincipal'] as num?)?.toDouble() ?? 0.0);
+
+    final rawInstallments = (agreement['installments'] as List?) ?? [];
+    final openInstallments = rawInstallments
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((inst) {
+          final st = inst['status']?.toString() ?? 'PENDING';
+          final amt = (inst['amountCents'] as num?)?.toInt() ?? 0;
+          final pd = (inst['paidCents'] as num?)?.toInt() ?? 0;
+          return st != 'PAID' && st != 'RENEGOTIATED' && (amt - pd) > 0;
+        })
+        .toList();
+
+    final shortDueFmt = DateFormat('dd/MM');
+    double initialAmount = remaining;
+    String selectedInstallmentKey = 'AUTO';
+
+    if (lockedInstallment != null) {
+      final lAmt = (lockedInstallment['amountCents'] as num?)?.toInt() ?? 0;
+      final lPaid = (lockedInstallment['paidCents'] as num?)?.toInt() ?? 0;
+      initialAmount = ((lAmt - lPaid).clamp(0, 999999999)) / 100.0;
+      selectedInstallmentKey = lockedInstallment['id']?.toString() ?? 'AUTO';
+    } else if (openInstallments.isNotEmpty) {
+      final firstOpen = openInstallments.first;
+      final fAmt = (firstOpen['amountCents'] as num?)?.toInt() ?? 0;
+      final fPaid = (firstOpen['paidCents'] as num?)?.toInt() ?? 0;
+      initialAmount = ((fAmt - fPaid).clamp(0, 999999999)) / 100.0;
+    }
+
+    final amountController = TextEditingController(text: initialAmount.toStringAsFixed(2));
     final notesController = TextEditingController();
     String selectedMethod = 'CASH';
     String selectedDestination = 'SELLER_HANDS';
@@ -1989,140 +2172,291 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     final attemptIdempotencyKey =
         'mob_${agreement['id']}_${DateTime.now().microsecondsSinceEpoch}';
 
+    Map<String, dynamic>? resolveActiveTargetInst(String key) {
+      if (lockedInstallment != null) return lockedInstallment;
+      if (key == 'AUTO') {
+        return openInstallments.isNotEmpty ? openInstallments.first : null;
+      }
+      for (final inst in openInstallments) {
+        if (inst['id']?.toString() == key) return inst;
+      }
+      return null;
+    }
+
+    bool hasOpenAsaasCharge(Map<String, dynamic>? inst) {
+      if (inst == null) return false;
+      final chg = inst['asaasCharge'];
+      if (chg is! Map) return false;
+      final st = chg['status']?.toString().toUpperCase() ?? '';
+      return st == 'PENDING' || st == 'OVERDUE';
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF160D24),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFF2A1B3D)),
-          ),
-          title: const Text('Registrar Baixa de Parcela', style: TextStyle(color: Colors.white, fontSize: 16)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Saldo em aberto: ${currencyFormat.format(remaining)}',
-                  style: const TextStyle(color: Color(0xFFA855F7), fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    labelText: 'Valor do Recebimento (R\$)',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    prefixText: 'R\$ ',
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String>(
-                  value: selectedMethod,
-                  dropdownColor: const Color(0xFF160D24),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    labelText: 'Forma de Pagamento',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'CASH', child: Text('Dinheiro')),
-                    DropdownMenuItem(value: 'PIX', child: Text('Pix')),
-                    DropdownMenuItem(value: 'CREDIT', child: Text('Cartão de Crédito')),
-                    DropdownMenuItem(value: 'DEBIT', child: Text('Cartão de Débito')),
-                  ],
-                  onChanged: (v) => setDialogState(() => selectedMethod = v!),
-                ),
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String>(
-                  value: selectedDestination,
-                  dropdownColor: const Color(0xFF160D24),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    labelText: 'Destino do Recurso',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
-                  ),
-                  items: const [
-                    DropdownMenuItem(value: 'SELLER_HANDS', child: Text('Em mãos do Vendedor')),
-                    DropdownMenuItem(value: 'COMPANY_ACCOUNT', child: Text('Conta da Empresa')),
-                  ],
-                  onChanged: (v) => setDialogState(() => selectedDestination = v!),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: notesController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    labelText: 'Observações (opcional)',
-                    labelStyle: TextStyle(color: Colors.white70),
-                    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
-                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white),
-              onPressed: isSubmitting
-                  ? null
-                  : () async {
-                      final val = double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0.0;
-                      if (val <= 0 || val > remaining) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Valor inválido ou superior ao saldo devedor.')),
-                        );
-                        return;
-                      }
+        builder: (ctx, setDialogState) {
+          final targetInst = resolveActiveTargetInst(selectedInstallmentKey);
+          final willSyncAsaas = hasOpenAsaasCharge(targetInst);
+          final lockedDue = lockedInstallment != null
+              ? DateTime.tryParse(lockedInstallment['dueDate']?.toString() ?? '')
+              : null;
 
-                      setDialogState(() => isSubmitting = true);
-                      try {
-                        await _api.registerCreditPayment(agreement['id'], {
-                          'amount': val,
-                          'paymentMethod': selectedMethod,
-                          'destination': selectedDestination,
-                          'notes': notesController.text.trim(),
-                          'idempotencyKey': attemptIdempotencyKey,
-                        });
-                        if (mounted) {
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Pagamento registrado com sucesso!'),
-                              backgroundColor: Color(0xFF10B981),
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF2A1B3D)),
+            ),
+            title: Text(
+              lockedInstallment != null
+                  ? 'Baixar Parcela #${lockedInstallment['installmentNumber']}'
+                  : 'Registrar Baixa de Parcela',
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Saldo total em aberto: ${currencyFormat.format(remaining)}',
+                    style: const TextStyle(color: Color(0xFFA855F7), fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  if (lockedInstallment != null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFA855F7).withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lock_outline_rounded, size: 15, color: Color(0xFFD8B4FE)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Parcela travada: #${lockedInstallment['installmentNumber']} • Venc. ${lockedDue != null ? dateFormat.format(lockedDue) : "---"}',
+                              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (openInstallments.isNotEmpty)
+                    DropdownButtonFormField<String>(
+                      value: selectedInstallmentKey,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xFF160D24),
+                      style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                      decoration: const InputDecoration(
+                        labelText: 'Selecionar Parcela',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: 'AUTO',
+                          child: Text('Automático (próxima em aberto)', overflow: TextOverflow.ellipsis),
+                        ),
+                        ...openInstallments.map((inst) {
+                          final idStr = inst['id']?.toString() ?? '';
+                          final instNumber = inst['installmentNumber'];
+                          final unpaid = (((inst['amountCents'] as num?)?.toInt() ?? 0) -
+                                  ((inst['paidCents'] as num?)?.toInt() ?? 0)) /
+                              100.0;
+                          final d = DateTime.tryParse(inst['dueDate']?.toString() ?? '');
+                          final dLabel = d != null ? shortDueFmt.format(d) : '--/--';
+                          return DropdownMenuItem(
+                            value: idStr,
+                            child: Text(
+                              'Parcela #$instNumber — ${currencyFormat.format(unpaid)} — Venc. $dLabel',
+                              overflow: TextOverflow.ellipsis,
                             ),
                           );
-                          _refresh();
-                        }
-                      } catch (e) {
-                        setDialogState(() => isSubmitting = false);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Erro ao registrar pagamento: $e'), backgroundColor: Colors.red),
-                          );
-                        }
-                      }
-                    },
-              child: isSubmitting
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Confirmar Baixa'),
+                        }),
+                      ],
+                      onChanged: (val) {
+                        if (val == null) return;
+                        setDialogState(() {
+                          selectedInstallmentKey = val;
+                          final chosen = resolveActiveTargetInst(val);
+                          if (chosen != null) {
+                            final unpaid = (((chosen['amountCents'] as num?)?.toInt() ?? 0) -
+                                    ((chosen['paidCents'] as num?)?.toInt() ?? 0)) /
+                                100.0;
+                            amountController.text = unpaid.toStringAsFixed(2);
+                          }
+                        });
+                      },
+                    ),
+                  if (willSyncAsaas) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF38BDF8).withOpacity(0.13),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.sync_rounded, size: 16, color: Color(0xFF38BDF8)),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Também dará baixa automática no Asaas (receiveInCash) na cobrança vinculada a esta parcela.',
+                              style: TextStyle(color: Color(0xFFBAE6FD), fontSize: 11.5, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: amountController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Valor do Recebimento (R\$)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      prefixText: 'R\$ ',
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: selectedMethod,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Forma de Pagamento',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'CASH', child: Text('Dinheiro')),
+                      DropdownMenuItem(value: 'PIX', child: Text('Pix')),
+                      DropdownMenuItem(value: 'CREDIT', child: Text('Cartão de Crédito')),
+                      DropdownMenuItem(value: 'DEBIT', child: Text('Cartão de Débito')),
+                    ],
+                    onChanged: (v) => setDialogState(() => selectedMethod = v!),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: selectedDestination,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Destino do Recurso',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'SELLER_HANDS', child: Text('Em mãos do Vendedor')),
+                      DropdownMenuItem(value: 'COMPANY_ACCOUNT', child: Text('Conta da Empresa')),
+                    ],
+                    onChanged: (v) => setDialogState(() => selectedDestination = v!),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: notesController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Observações (opcional)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final val = double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0.0;
+                        if (val <= 0 || val > remaining + 0.009) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Valor inválido ou superior ao saldo devedor.')),
+                          );
+                          return;
+                        }
+
+                        final String? explicitInstId = lockedInstallment != null
+                            ? lockedInstallment['id']?.toString()
+                            : (selectedInstallmentKey != 'AUTO' ? selectedInstallmentKey : null);
+
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          final res = await _api.registerCreditPayment(agreement['id'].toString(), {
+                            'amount': val,
+                            'paymentMethod': selectedMethod,
+                            'destination': selectedDestination,
+                            'notes': notesController.text.trim(),
+                            'idempotencyKey': attemptIdempotencyKey,
+                            if (explicitInstId != null && explicitInstId.isNotEmpty)
+                              'installmentId': explicitInstId,
+                          });
+                          if (mounted) {
+                            Navigator.pop(ctx);
+                            final asaasSync = res['asaasSync'] is Map
+                                ? Map<String, dynamic>.from(res['asaasSync'] as Map)
+                                : null;
+                            String snackMsg = 'Pagamento registrado com sucesso!';
+                            Color snackBg = const Color(0xFF10B981);
+                            if (asaasSync != null && asaasSync['attempted'] == true) {
+                              if (asaasSync['synced'] == true) {
+                                snackMsg = asaasSync['message']?.toString() ??
+                                    'Baixa concluída e sincronizada automaticamente no Asaas (RECEIVED_IN_CASH)!';
+                                snackBg = const Color(0xFF10B981);
+                              } else {
+                                snackMsg = asaasSync['message']?.toString() ??
+                                    'Baixa local concluída, porém a sincronização no Asaas falhou no momento.';
+                                snackBg = const Color(0xFFF59E0B);
+                              }
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(snackMsg),
+                                backgroundColor: snackBg,
+                                duration: const Duration(seconds: 4),
+                              ),
+                            );
+                            _refresh();
+                          }
+                        } catch (e) {
+                          setDialogState(() => isSubmitting = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Erro ao registrar pagamento: $e'), backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Confirmar Baixa'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -3094,6 +3428,18 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
           '(parcelamento em ${installmentsCount}x, periodicidade $periodicityLabel). '
           'O saldo atual em aberto é de ${currencyFormat.format(remaining)}.\n\n'
           'Caso queira consultar suas parcelas, obter 2ª via ou realizar a quitação antecipada, estamos à disposição para ajudar!';
+    }
+
+    if (installment != null) {
+      final instCharge = installment['asaasCharge'] is Map
+          ? Map<String, dynamic>.from(installment['asaasCharge'] as Map)
+          : null;
+      final invUrl = (instCharge?['invoiceUrl'] ?? installment['invoiceUrl'] ?? '').toString().trim();
+      final slipUrl = (instCharge?['bankSlipUrl'] ?? installment['bankSlipUrl'] ?? '').toString().trim();
+      final chargeLink = invUrl.isNotEmpty ? invUrl : slipUrl;
+      if (chargeLink.isNotEmpty && !defaultMessage.contains(chargeLink)) {
+        defaultMessage = '$defaultMessage\n\n📄 Link do Boleto / Pix: $chargeLink';
+      }
     }
 
     final messageController = TextEditingController(text: defaultMessage);
@@ -5074,6 +5420,15 @@ class _SerasaControlSheetState extends State<_SerasaControlSheet> {
     final effectiveStatus = detail?['effectiveSerasaStatus']?.toString() ?? 'INELEGIVEL';
     final statusColor = widget.statusColorBuilder(effectiveStatus);
     final reasons = List<dynamic>.from(eligibility['reasons'] ?? []);
+    final blockCodes = List<dynamic>.from(eligibility['blockCodes'] ?? []);
+    final int minOverdueDays = (eligibility['minOverdueDays'] as num?)?.toInt() ??
+        (detail?['daysToSerasaEligible'] as num?)?.toInt() ??
+        30;
+    final int maxOverdueDays = (eligibility['maxOverdueDays'] as num?)?.toInt() ?? 0;
+    final int missingOverdueDays = (eligibility['daysRemainingForEligibility'] as num?)?.toInt() ??
+        (minOverdueDays - maxOverdueDays).clamp(0, 9999);
+    final bool isIneligibleByDays = blockCodes.contains('MIN_30_DAYS_OVERDUE_NOT_MET') ||
+        (effectiveStatus == 'INELEGIVEL' && missingOverdueDays > 0);
     final bool canRequestNew = (eligibility['eligible'] == true) &&
         (eligibility['hasActiveNegativation'] != true) &&
         !_submitting;
@@ -5129,6 +5484,71 @@ class _SerasaControlSheetState extends State<_SerasaControlSheet> {
                           style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFA855F7).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFA855F7).withOpacity(0.35)),
+                        ),
+                        child: const Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.info_outline_rounded, size: 16, color: Color(0xFFD8B4FE)),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Envio assistido pelo Admin: a inclusão no Serasa nunca ocorre sozinha. Já a baixa/exclusão após quitação integral ou renegociação é disparada automaticamente (Súmula 548 STJ).',
+                                style: TextStyle(color: Color(0xFFE9D5FF), fontSize: 11),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (effectiveStatus == 'INELEGIVEL' || eligibility['eligible'] != true) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF59E0B).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.5)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.hourglass_bottom_rounded, size: 16, color: Color(0xFFFBBF24)),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Por que este contrato está Inelegível?',
+                                    style: TextStyle(
+                                      color: Color(0xFFFBBF24),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              if (isIneligibleByDays && missingOverdueDays > 0)
+                                Text(
+                                  'Faltam $missingOverdueDays ${missingOverdueDays == 1 ? "dia" : "dias"} para atingir o mínimo configurado de $minOverdueDays dias de atraso — ajustável em Configurações da Empresa.',
+                                  style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.w600),
+                                )
+                              else if (reasons.isNotEmpty)
+                                Text(
+                                  reasons.first.toString(),
+                                  style: const TextStyle(color: Colors.white, fontSize: 11.5),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       Container(
                         width: double.infinity,

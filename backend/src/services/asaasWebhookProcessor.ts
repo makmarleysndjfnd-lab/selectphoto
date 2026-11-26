@@ -284,12 +284,23 @@ export async function processAsaasWebhookEvent(params: {
 
         // A. Se a parcela já foi quitada anteriormente
         if (freshInstallment.status === 'PAID') {
-          if (paymentData.billingType === 'RECEIVED_IN_CASH') {
+          if (
+            paymentData.billingType === 'RECEIVED_IN_CASH' ||
+            paymentData.status === 'RECEIVED_IN_CASH'
+          ) {
             await tx.asaasCharge.update({
               where: { id: freshCharge.id },
               data: {
-                status: eventName === 'PAYMENT_RECEIVED' ? 'RECEIVED' : 'CONFIRMED',
-                settledAt: eventName === 'PAYMENT_RECEIVED' ? new Date() : freshCharge.settledAt,
+                status:
+                  paymentData.status === 'RECEIVED_IN_CASH'
+                    ? 'RECEIVED_IN_CASH'
+                    : eventName === 'PAYMENT_RECEIVED'
+                      ? 'RECEIVED'
+                      : 'CONFIRMED',
+                settledAt:
+                  eventName === 'PAYMENT_RECEIVED' || paymentData.status === 'RECEIVED_IN_CASH'
+                    ? new Date()
+                    : freshCharge.settledAt,
                 netValueCents,
                 feeCents,
               },
@@ -474,7 +485,7 @@ export async function processAsaasWebhookEvent(params: {
           companyId,
           agreementId: settledAgreementIdViaWebhook,
           triggerType: 'SETTLEMENT',
-          actorUserId: 'SYSTEM_ASAAS_WEBHOOK',
+          actorUserId: null,
           actorName: 'Asaas Webhook',
           reason: 'Quitação integral confirmada via webhook Asaas — baixa Serasa (Súmula 548 STJ).',
         }).catch((err) =>

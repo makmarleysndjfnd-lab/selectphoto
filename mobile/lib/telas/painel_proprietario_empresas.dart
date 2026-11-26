@@ -1811,7 +1811,7 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
             ),
             const SizedBox(height: 12),
 
-            // Ações do Card com Quebra Responsiva (Wrap)
+            // Barra enxuta de ações: no máximo 3 botões principais + "Mais" (Dark Purple)
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -1822,85 +1822,41 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFFA855F7),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                   icon: const Icon(Icons.support_agent_rounded, size: 15),
-                  label: const Text('Acessar como Admin (Suporte)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  label: const Text('Entrar Admin', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   onPressed: () => _acessarComoAdminSuporte(empresa),
-                ),
-                TextButton.icon(
-                  icon: const Icon(Icons.info_outline_rounded, size: 16),
-                  label: const Text('Detalhes & Vigências', style: TextStyle(fontSize: 12)),
-                  onPressed: () => _abrirDetalhesEmpresa(empresa['id']),
-                ),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFA855F7)),
-                    foregroundColor: const Color(0xFFD8B4FE),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  ),
-                  icon: const Icon(Icons.edit_rounded, size: 16),
-                  label: const Text('Editar & Taxa', style: TextStyle(fontSize: 12)),
-                  onPressed: () => _abrirModalEditarEmpresa(empresa),
-                ),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFF38BDF8)),
-                    foregroundColor: const Color(0xFF38BDF8),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  ),
-                  icon: const Icon(Icons.percent_rounded, size: 16),
-                  label: const Text('Ajustar Taxa', style: TextStyle(fontSize: 12)),
-                  onPressed: () => _abrirModalConfigurarTaxa(empresa),
                 ),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFF34D399)),
                     foregroundColor: const Color(0xFF34D399),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  icon: const Icon(Icons.hub_rounded, size: 16),
-                  label: const Text('APIs', style: TextStyle(fontSize: 12)),
-                  onPressed: () {
-                    Navigator.push(
+                  icon: const Icon(Icons.hub_rounded, size: 15),
+                  label: const Text('APIs & Webhook', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  onPressed: () async {
+                    await Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (_) => PainelProprietarioIntegracoes(initialCompany: empresa),
                       ),
                     );
+                    if (mounted) _carregarDados();
                   },
                 ),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Color(0xFFA855F7)),
                     foregroundColor: const Color(0xFFD8B4FE),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  icon: const Icon(Icons.manage_search_rounded, size: 16),
-                  label: const Text('Busca IA', style: TextStyle(fontSize: 12)),
-                  onPressed: () {
-                    final compId = empresa['id']?.toString();
-                    if (compId == null || compId.isEmpty) return;
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => TelaConfigBuscaEventosIa(
-                          companyId: compId,
-                          companyName: (empresa['tradeName'] ?? empresa['name'] ?? '').toString(),
-                          apiService: _api,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFF59E0B)),
-                    foregroundColor: const Color(0xFFFCD34D),
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  ),
-                  icon: const Icon(Icons.tune_rounded, size: 16),
-                  label: const Text('Comissões & QR', style: TextStyle(fontSize: 12)),
+                  icon: const Icon(Icons.tune_rounded, size: 15),
+                  label: const Text('Configurar', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   onPressed: () {
                     final compId = empresa['id']?.toString();
                     if (compId == null || compId.isEmpty) return;
@@ -1916,23 +1872,222 @@ class _PainelProprietarioEmpresasState extends State<PainelProprietarioEmpresas>
                     );
                   },
                 ),
-                IconButton(
-                  icon: Icon(
-                    isSuspensa ? Icons.play_arrow_rounded : Icons.gavel_rounded,
-                    color: isSuspensa
-                        ? Colors.greenAccent
-                        : isWarning
-                            ? const Color(0xFFFBBF24)
-                            : const Color(0xFFF87171),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF475569)),
+                    foregroundColor: Colors.white70,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  tooltip: 'Alterar Governança (Ativa / Aviso / Suspensa)',
-                  onPressed: () => _abrirModalStatus(empresa),
+                  icon: const Icon(Icons.more_horiz_rounded, size: 16),
+                  label: const Text('Mais', style: TextStyle(fontSize: 12)),
+                  onPressed: () => _abrirMenuMaisEmpresa(empresa),
                 ),
               ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _alternarClassificacaoEmpresa(Map<String, dynamic> empresa) async {
+    final compId = empresa['id']?.toString();
+    if (compId == null || compId.isEmpty) return;
+    final isCurrentlyTest =
+        empresa['isTestExample'] == true || empresa['classification'] == 'TEST_DEMO';
+    final nextClass = isCurrentlyTest ? 'OPERATIONAL' : 'TEST_DEMO';
+    try {
+      await _api.updateSuperAdminCompanySettings(compId, {
+        'classification': nextClass,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            nextClass == 'TEST_DEMO'
+                ? 'Empresa marcada como Teste/Demo.'
+                : 'Empresa marcada como Operacional.',
+          ),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      _carregarDados();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao alterar classificação: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  void _abrirMenuMaisEmpresa(Map<String, dynamic> empresa) {
+    final compId = empresa['id']?.toString() ?? '';
+    final compTitle = (empresa['tradeName']?.toString().trim().isNotEmpty == true)
+        ? empresa['tradeName'].toString()
+        : (empresa['name'] ?? 'Empresa').toString();
+    final isTestDemo =
+        empresa['isTestExample'] == true || empresa['classification'] == 'TEST_DEMO';
+    final commercialStatus =
+        (empresa['commercialStatus'] ?? (empresa['status'] == 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE')).toString();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF160D24),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        Widget buildOption({
+          required IconData icon,
+          required Color color,
+          required String title,
+          required String subtitle,
+          required VoidCallback onTap,
+        }) {
+          return ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            leading: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: color.withOpacity(0.4)),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            title: Text(
+              title,
+              style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              subtitle,
+              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11.5),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white38, size: 18),
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              onTap();
+            },
+          );
+        }
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(top: 12, bottom: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.corporate_fare_rounded, color: Color(0xFFA855F7), size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Mais Ações • $compTitle',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Color(0xFF2A1B3D), height: 1),
+                buildOption(
+                  icon: Icons.percent_rounded,
+                  color: const Color(0xFF38BDF8),
+                  title: 'Ajustar Taxa Lumora',
+                  subtitle: 'Definir nova vigência percentual sobre recebimentos reais',
+                  onTap: () => _abrirModalConfigurarTaxa(empresa),
+                ),
+                buildOption(
+                  icon: Icons.manage_search_rounded,
+                  color: const Color(0xFFA855F7),
+                  title: 'Busca IA (Eventos)',
+                  subtitle: 'Configurar prompt, raio, público, duração e cache por empresa',
+                  onTap: () {
+                    if (compId.isEmpty) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TelaConfigBuscaEventosIa(
+                          companyId: compId,
+                          companyName: compTitle,
+                          apiService: _api,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                buildOption(
+                  icon: Icons.receipt_long_rounded,
+                  color: const Color(0xFF34D399),
+                  title: 'Faturamento & Demonstrativos',
+                  subtitle: 'Abrir painel de apuração mensal, custos e auditoria B2B',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const PainelProprietarioFaturamentoAuditoriaCustos(),
+                      ),
+                    );
+                  },
+                ),
+                buildOption(
+                  icon: Icons.swap_horiz_rounded,
+                  color: const Color(0xFFF59E0B),
+                  title: isTestDemo
+                      ? 'Trocar Classificação para Operacional'
+                      : 'Trocar Classificação para Teste/Demo',
+                  subtitle: 'Atual: ${isTestDemo ? "Teste/Demo" : "Operacional"}',
+                  onTap: () => _alternarClassificacaoEmpresa(empresa),
+                ),
+                buildOption(
+                  icon: Icons.gavel_rounded,
+                  color: commercialStatus == 'SUSPENDED'
+                      ? const Color(0xFF10B981)
+                      : const Color(0xFFF87171),
+                  title: 'Governança & Status Comercial',
+                  subtitle: 'Alternar entre Ativa, Em Aviso ou Suspensa (atual: $commercialStatus)',
+                  onTap: () => _abrirModalStatus(empresa),
+                ),
+                buildOption(
+                  icon: Icons.edit_rounded,
+                  color: const Color(0xFFD8B4FE),
+                  title: 'Editar Cadastro & Contato',
+                  subtitle: 'Atualizar nome fantasia, razão social, CNPJ e responsável',
+                  onTap: () => _abrirModalEditarEmpresa(empresa),
+                ),
+                buildOption(
+                  icon: Icons.info_outline_rounded,
+                  color: const Color(0xFF94A3B8),
+                  title: 'Detalhes & Histórico de Vigências',
+                  subtitle: 'Consultar usuários por perfil e histórico completo da taxa',
+                  onTap: () => _abrirDetalhesEmpresa(compId),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
