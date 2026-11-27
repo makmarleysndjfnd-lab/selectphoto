@@ -7,6 +7,7 @@ import { claimSupportSessionToken } from '../services/supportCentralService';
 import { recordOperationalAuditEvent } from '../services/operationalAuditService';
 import {
   formatTailMask,
+  listCompanyGeminiModels,
   resolveCompanyAsaasStatus,
   setExclusiveCompanyAsaasKey,
   setExclusiveCompanyGeminiKey,
@@ -104,9 +105,23 @@ async function sanitizeCompanyForSuperAdmin(c: any, options?: { rethrowVaultErro
         status: 'ACTIVE',
         scope: { not: 'PLATFORM_SHARED' },
       },
-      select: { secretMasked: true, lastValidationStatus: true, lastValidatedAt: true },
+      select: {
+        secretMasked: true,
+        lastValidationStatus: true,
+        lastValidatedAt: true,
+        configMetadata: true,
+      },
     }),
   ]);
+
+  const geminiMeta =
+    activeAiInteg?.configMetadata && typeof activeAiInteg.configMetadata === 'object'
+      ? (activeAiInteg.configMetadata as Record<string, any>)
+      : {};
+  const geminiModel = geminiMeta.geminiModel ? String(geminiMeta.geminiModel) : null;
+  const availableGeminiModels = Array.isArray(geminiMeta.detectedGeminiModels)
+    ? geminiMeta.detectedGeminiModels.map((m: unknown) => String(m)).filter(Boolean)
+    : [];
 
   const geminiConfigured = Boolean(c.geminiApiKeyEncrypted && c.geminiApiKeyIv && c.geminiApiKeyTag) || Boolean(activeAiInteg);
   const geminiMasked = c.geminiApiKeyMasked || activeAiInteg?.secretMasked || null;
@@ -150,6 +165,8 @@ async function sanitizeCompanyForSuperAdmin(c: any, options?: { rethrowVaultErro
       gemini: {
         configured: geminiConfigured,
         maskedKey: geminiMasked,
+        geminiModel,
+        availableModels: availableGeminiModels,
         connectionStatus: geminiStatus,
         lastTestedAt: c.geminiLastTestedAt || null,
         connectionMessage: c.geminiConnectionMessage || null,
@@ -529,7 +546,9 @@ router.put('/companies/:id/integrations/gemini', authenticateToken, requireSuper
 
     const result = await setExclusiveCompanyGeminiKey({
       companyId: company.id,
-      apiKey: req.body?.apiKey ?? null,
+      apiKey: req.body?.apiKey,
+      geminiModel: req.body?.geminiModel,
+      removeKey: req.body?.removeKey === true,
       actorUserId: req.user!.id,
       actorName: req.user!.name || 'SuperAdmin',
       ipAddress: req.ip || null,
@@ -540,6 +559,28 @@ router.put('/companies/:id/integrations/gemini', authenticateToken, requireSuper
     if (sendVaultUnavailableIfApplicable(res, error)) return;
     console.error('Error updating company Gemini key:', error);
     return res.status(500).json({ error: error.message || 'Erro ao salvar chave Gemini da empresa.' });
+  }
+});
+
+router.get('/companies/:id/integrations/gemini/models', authenticateToken, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: String(req.params.id) } });
+    if (!company) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+    const result = await listCompanyGeminiModels(company.id);
+    if (!result.configured) {
+      return res.status(400).json({
+        error: 'Chave Gemini da empresa ainda não está configurada.',
+        ...result,
+      });
+    }
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    if (sendVaultUnavailableIfApplicable(res, error)) return;
+    console.error('Error listing Gemini models for company:', error);
+    return res.status(error?.status || 502).json({
+      error: error.message || 'Erro ao consultar modelos disponíveis do Gemini.',
+    });
   }
 });
 

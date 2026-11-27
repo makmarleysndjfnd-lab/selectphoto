@@ -1356,8 +1356,12 @@ class ApiService {
         },
         options: Options(receiveTimeout: const Duration(seconds: 120)),
       );
+      final dynamic rawBody = response.data;
+      if (rawBody is! Map) {
+        throw Exception('Resposta inválida do servidor ao buscar eventos.');
+      }
       final Map<String, dynamic> responseData =
-          Map<String, dynamic>.from(response.data as Map);
+          Map<String, dynamic>.from(rawBody);
 
       _searchCache.removeWhere((c) => c['cityQuery'] == lowerCity);
       final ttlDays = int.tryParse('${responseData['cacheTtlDays'] ?? 7}') ?? 7;
@@ -1392,7 +1396,10 @@ class ApiService {
         '/events/state-radar?state=$state&force=$force',
         options: Options(receiveTimeout: const Duration(seconds: 120)),
       );
-      return response.data as Map<String, dynamic>;
+      if (response.data is! Map) {
+        throw Exception('Resposta inválida do servidor ao carregar o Radar Estadual.');
+      }
+      return Map<String, dynamic>.from(response.data as Map);
     } on DioException catch (e) {
       final errorMsg = (e.response?.data is Map)
           ? (e.response?.data['error'] ?? e.response?.data['message'])?.toString()
@@ -2803,6 +2810,61 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> registerCreditPaymentBatch(
+    String agreementId, {
+    required List<String> installmentIds,
+    String paymentMethod = 'CASH',
+    String destination = 'COMPANY_ACCOUNT',
+    String? paidAt,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    try {
+      final key = (idempotencyKey != null && idempotencyKey.trim().isNotEmpty)
+          ? idempotencyKey.trim()
+          : 'mob_batch_${agreementId}_${DateTime.now().microsecondsSinceEpoch}';
+      final resp = await _dio.post(
+        '/credit/agreements/$agreementId/payments/batch',
+        data: {
+          'installmentIds': installmentIds,
+          'paymentMethod': paymentMethod,
+          'destination': destination,
+          if (paidAt != null && paidAt.trim().isNotEmpty) 'paidAt': paidAt.trim(),
+          if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+          'idempotencyKey': key,
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> updateCreditInstallment(
+    String agreementId,
+    String installmentId, {
+    String? dueDate,
+    double? amount,
+    int? amountCents,
+    String? notes,
+  }) async {
+    try {
+      final resp = await _dio.put(
+        '/credit/agreements/$agreementId/installments/$installmentId',
+        data: {
+          if (dueDate != null && dueDate.trim().isNotEmpty)
+            'dueDate': dueDate.trim(),
+          if (amount != null) 'amount': amount,
+          if (amountCents != null) 'amountCents': amountCents,
+          if (notes != null) 'notes': notes.trim(),
+        },
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
   Future<Map<String, dynamic>> reverseCreditPayment(String paymentId,
       {required String reason}) async {
     try {
@@ -3401,12 +3463,34 @@ class ApiService {
 
   Future<Map<String, dynamic>> saveCompanyGeminiIntegration(
     String companyId, {
-    required String? apiKey,
+    String? apiKey,
+    String? geminiModel,
+    bool removeKey = false,
   }) async {
     try {
+      final payload = <String, dynamic>{};
+      if (removeKey) {
+        payload['removeKey'] = true;
+      } else if (apiKey != null && apiKey.trim().isNotEmpty) {
+        payload['apiKey'] = apiKey.trim();
+      }
+      if (geminiModel != null) {
+        payload['geminiModel'] = geminiModel.trim();
+      }
       final resp = await _dio.put(
         '/superadmin/companies/$companyId/integrations/gemini',
-        data: {'apiKey': apiKey},
+        data: payload,
+      );
+      return Map<String, dynamic>.from(resp.data as Map);
+    } on DioException catch (e) {
+      throw Exception(_extractError(e));
+    }
+  }
+
+  Future<Map<String, dynamic>> listCompanyGeminiModels(String companyId) async {
+    try {
+      final resp = await _dio.get(
+        '/superadmin/companies/$companyId/integrations/gemini/models',
       );
       return Map<String, dynamic>.from(resp.data as Map);
     } on DioException catch (e) {

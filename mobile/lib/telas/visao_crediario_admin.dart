@@ -1448,6 +1448,10 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
   // MODAL DE DETALHES DO CONTRATO
   // ══════════════════════════════════════════════════════════════════════════
   Future<void> _openAgreementDetailsModal(String agreementId) async {
+    Future<Map<String, dynamic>> detailsFuture =
+        _api.getCreditAgreementDetails(agreementId);
+    final Set<String> selectedInstallmentIds = <String>{};
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1456,31 +1460,56 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.85,
-          minChildSize: 0.5,
-          maxChildSize: 0.95,
-          expand: false,
-          builder: (_, scrollController) {
-            return FutureBuilder<Map<String, dynamic>>(
-              future: _api.getCreditAgreementDetails(agreementId),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: Color(0xFFA855F7)),
-                  );
-                }
-                if (snapshot.hasError || !snapshot.hasData) {
-                  return Center(
-                    child: Text(
-                      'Erro ao carregar detalhes: ${snapshot.error}',
-                      style: const TextStyle(color: Color(0xFFEF4444)),
-                    ),
-                  );
-                }
+        return StatefulBuilder(
+          builder: (modalCtx, setModalState) {
+            void reloadAgreement() {
+              setModalState(() {
+                selectedInstallmentIds.clear();
+                detailsFuture = _api.getCreditAgreementDetails(agreementId);
+              });
+              _refresh();
+            }
 
-                final agreement = snapshot.data!;
-                return _buildModalContent(agreement, scrollController);
+            return DraggableScrollableSheet(
+              initialChildSize: 0.85,
+              minChildSize: 0.5,
+              maxChildSize: 0.95,
+              expand: false,
+              builder: (_, scrollController) {
+                return FutureBuilder<Map<String, dynamic>>(
+                  future: detailsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child:
+                            CircularProgressIndicator(color: Color(0xFFA855F7)),
+                      );
+                    }
+                    if (snapshot.hasError || !snapshot.hasData) {
+                      return Center(
+                        child: Text(
+                          'Erro ao carregar detalhes: ${snapshot.error}',
+                          style: const TextStyle(color: Color(0xFFEF4444)),
+                        ),
+                      );
+                    }
+
+                    final agreement = snapshot.data!;
+                    return _buildModalContent(
+                      agreement,
+                      scrollController,
+                      selectedInstallmentIds: selectedInstallmentIds,
+                      onSelectionChanged: (nextSet) {
+                        setModalState(() {
+                          selectedInstallmentIds
+                            ..clear()
+                            ..addAll(nextSet);
+                        });
+                      },
+                      onReloadAgreement: reloadAgreement,
+                    );
+                  },
+                );
               },
             );
           },
@@ -1489,7 +1518,13 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     );
   }
 
-  Widget _buildModalContent(Map<String, dynamic> a, ScrollController scrollController) {
+  Widget _buildModalContent(
+    Map<String, dynamic> a,
+    ScrollController scrollController, {
+    Set<String>? selectedInstallmentIds,
+    ValueChanged<Set<String>>? onSelectionChanged,
+    VoidCallback? onReloadAgreement,
+  }) {
     final buyerName = a['buyerName']?.toString() ?? 'Cliente';
     final buyerCpf = a['buyerCpf']?.toString() ?? '---';
     final city = a['city']?.toString() ?? '';
@@ -1688,7 +1723,13 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
             ),
           ),
           const SizedBox(height: 10),
-          _buildInstallmentsTable(installments, a),
+          _buildInstallmentsTable(
+            installments,
+            a,
+            selectedInstallmentIds: selectedInstallmentIds,
+            onSelectionChanged: onSelectionChanged,
+            onReloadAgreement: onReloadAgreement,
+          ),
 
           const SizedBox(height: 20),
 
@@ -1735,276 +1776,1191 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
     );
   }
 
-  Widget _buildInstallmentsTable(List installments, [Map<String, dynamic>? agreement]) {
+  Widget _buildInstallmentsTable(
+    List installments, [
+    Map<String, dynamic>? agreement,
+  ]) {
+    return _buildInstallmentsTableInteractive(installments, agreement);
+  }
+
+  Widget _buildInstallmentsTableInteractive(
+    List installments,
+    Map<String, dynamic>? agreement, {
+    Set<String>? selectedInstallmentIds,
+    ValueChanged<Set<String>>? onSelectionChanged,
+    VoidCallback? onReloadAgreement,
+  }) {
     if (installments.isEmpty) {
-      return const Text('Nenhuma parcela cadastrada.', style: TextStyle(color: Colors.white54, fontSize: 12));
+      return const Text('Nenhuma parcela cadastrada.',
+          style: TextStyle(color: Colors.white54, fontSize: 12));
     }
 
     final now = DateTime.now();
     final shortDateFmt = DateFormat('dd/MM');
+    final activeSelection = selectedInstallmentIds ?? const <String>{};
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0714),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF2A1B3D)),
-      ),
-      child: Column(
-        children: installments.map((inst) {
-          final number = inst['installmentNumber'];
-          final due = DateTime.tryParse(inst['dueDate'] ?? '');
-          final dueStr = due != null ? dateFormat.format(due) : '---';
-          final amountCents = (inst['amountCents'] as num?)?.toInt() ?? 0;
-          final paidCents = (inst['paidCents'] as num?)?.toInt() ?? 0;
-          final amount = amountCents / 100.0;
-          final paid = paidCents / 100.0;
-          final status = inst['status']?.toString() ?? 'PENDING';
+    final openInstallments = installments
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((inst) {
+          final st = inst['status']?.toString() ?? 'PENDING';
+          final amt = (inst['amountCents'] as num?)?.toInt() ?? 0;
+          final pd = (inst['paidCents'] as num?)?.toInt() ?? 0;
+          return st != 'PAID' && st != 'RENEGOTIATED' && (amt - pd) > 0;
+        })
+        .toList();
 
-          final isPaid = status == 'PAID';
-          final isRenegotiated = status == 'RENEGOTIATED';
-          final isOpenForPayment = !isPaid && !isRenegotiated && (amountCents - paidCents) > 0;
-          final isOverdue = isOpenForPayment && due != null && due.isBefore(now);
+    final selectedInstallments = openInstallments
+        .where((inst) => activeSelection.contains(inst['id']?.toString() ?? ''))
+        .toList();
+    final int selectedCount = selectedInstallments.length;
+    final int selectedTotalCents = selectedInstallments.fold<int>(
+      0,
+      (acc, inst) =>
+          acc +
+          (((inst['amountCents'] as num?)?.toInt() ?? 0) -
+                  ((inst['paidCents'] as num?)?.toInt() ?? 0))
+              .clamp(0, 999999999),
+    );
+    final double selectedTotalReais = selectedTotalCents / 100.0;
 
-          Color badgeColor = const Color(0xFFA855F7);
-          String badgeText = 'PENDENTE';
-          if (isPaid) {
-            badgeColor = const Color(0xFF10B981);
-            badgeText = 'PAGO';
-          } else if (isRenegotiated) {
-            badgeColor = Colors.white54;
-            badgeText = 'RENEGOCIADA';
-          } else if (status == 'PARTIAL' || status == 'PARTIALLY_PAID') {
-            badgeColor = const Color(0xFFF59E0B);
-            badgeText = 'PARCIAL (${currencyFormat.format(paid)})';
-          } else if (isOverdue) {
-            badgeColor = const Color(0xFFEF4444);
-            badgeText = 'VENCIDA';
-          }
+    void selectFirstN(int count) {
+      if (onSelectionChanged == null) return;
+      final next = openInstallments
+          .take(count)
+          .map((i) => i['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      onSelectionChanged(next);
+    }
 
-          final asaasCharge = inst['asaasCharge'] is Map
-              ? Map<String, dynamic>.from(inst['asaasCharge'] as Map)
-              : null;
-          final asaasStatus = asaasCharge?['status']?.toString() ?? 'PENDING';
-          final invoiceUrl = (asaasCharge?['invoiceUrl'] ?? inst['invoiceUrl'] ?? '').toString().trim();
-          final bankSlipUrl = (asaasCharge?['bankSlipUrl'] ?? inst['bankSlipUrl'] ?? '').toString().trim();
-          final chargeUrl = invoiceUrl.isNotEmpty ? invoiceUrl : bankSlipUrl;
-          final bool asaasSettled = asaasStatus == 'RECEIVED' ||
-              asaasStatus == 'RECEIVED_IN_CASH' ||
-              asaasStatus == 'CONFIRMED';
-          final Color asaasColor = asaasSettled ? const Color(0xFF10B981) : const Color(0xFF38BDF8);
-
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Color(0xFF2A1B3D), width: 0.5)),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (agreement != null &&
+            openInstallments.isNotEmpty &&
+            onSelectionChanged != null) ...[
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D0714),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selectedCount > 0
+                    ? const Color(0xFFA855F7).withOpacity(0.75)
+                    : const Color(0xFF2A1B3D),
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text(
-                      'Parcela $number',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12),
-                    ),
-                    Text(
-                      'Venc: ${due != null ? shortDateFmt.format(due) : dueStr}',
+                    const Text(
+                      'Seleção múltipla:',
                       style: TextStyle(
-                        color: isOverdue ? const Color(0xFFEF4444) : Colors.white70,
-                        fontSize: 12,
-                        fontWeight: isOverdue ? FontWeight.bold : FontWeight.normal,
+                        color: Color(0xFFD8B4FE),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    Text(
-                      currencyFormat.format(amount),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    _buildQuickSelectChip(
+                      label: 'Todas abertas (${openInstallments.length})',
+                      onTap: () => selectFirstN(openInstallments.length),
+                      active: selectedCount == openInstallments.length,
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: badgeColor.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: badgeColor.withOpacity(0.5)),
-                          ),
-                          child: Text(
-                            badgeText,
-                            style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        if (!isPaid && agreement != null) ...[
-                          const SizedBox(width: 4),
-                          IconButton(
-                            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 14, color: Color(0xFF25D366)),
-                            tooltip: 'Cobrança via WhatsApp',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                            onPressed: () => _showWhatsAppReviewDialog(agreement, inst),
-                          ),
-                        ],
-                      ],
-                    ),
+                    if (openInstallments.length >= 2)
+                      _buildQuickSelectChip(
+                        label: '2',
+                        onTap: () => selectFirstN(2),
+                        active: selectedCount == 2,
+                      ),
+                    if (openInstallments.length >= 3)
+                      _buildQuickSelectChip(
+                        label: '3',
+                        onTap: () => selectFirstN(3),
+                        active: selectedCount == 3,
+                      ),
+                    if (openInstallments.length >= 5)
+                      _buildQuickSelectChip(
+                        label: '5',
+                        onTap: () => selectFirstN(5),
+                        active: selectedCount == 5,
+                      ),
+                    if (selectedCount > 0)
+                      _buildQuickSelectChip(
+                        label: 'Limpar',
+                        onTap: () => onSelectionChanged(<String>{}),
+                        active: false,
+                        isClear: true,
+                      ),
                   ],
                 ),
-                if (asaasCharge != null || isOpenForPayment) ...[
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (asaasCharge != null)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: asaasColor.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: asaasColor.withOpacity(0.4)),
-                          ),
-                          child: Text(
-                            'Asaas: $asaasStatus',
-                            style: TextStyle(color: asaasColor, fontSize: 9.5, fontWeight: FontWeight.bold),
-                          ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        selectedCount > 0
+                            ? '$selectedCount selecionadas • ${currencyFormat.format(selectedTotalReais)}'
+                            : 'Marque os boletos abaixo para dar baixa em lote',
+                        style: TextStyle(
+                          color: selectedCount > 0
+                              ? Colors.white
+                              : Colors.white54,
+                          fontSize: 11.5,
+                          fontWeight: selectedCount > 0
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                         ),
-                      if (asaasCharge != null &&
-                          (asaasCharge['bankFeeCents'] as num?) != null &&
-                          (asaasCharge['bankFeeCents'] as num) > 0)
-                        Text(
-                          'Tarifa: ${currencyFormat.format((asaasCharge['bankFeeCents'] as num).toDouble() / 100.0)}',
-                          style: const TextStyle(color: Colors.white38, fontSize: 9),
+                      ),
+                    ),
+                    if (selectedCount > 0)
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFA855F7),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
                         ),
-                      if (isOpenForPayment && agreement != null)
-                        InkWell(
-                          borderRadius: BorderRadius.circular(6),
-                          onTap: () {
-                            Navigator.pop(context);
-                            _showRegisterPaymentDialog(
-                              agreement,
-                              lockedInstallment: Map<String, dynamic>.from(inst as Map),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981).withOpacity(0.18),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFF10B981).withOpacity(0.65)),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.check_circle_outline_rounded, size: 12, color: Color(0xFF10B981)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Baixar',
-                                  style: TextStyle(color: Color(0xFF10B981), fontSize: 10.5, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
+                        icon: const Icon(Icons.done_all_rounded, size: 15),
+                        label: Text(
+                          'Baixar $selectedCount boleto${selectedCount == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                              fontSize: 11.5, fontWeight: FontWeight.bold),
                         ),
-                      if (chargeUrl.isNotEmpty) ...[
-                        InkWell(
-                          borderRadius: BorderRadius.circular(6),
-                          onTap: () async {
-                            final uri = Uri.tryParse(chargeUrl);
-                            if (uri != null && await canLaunchUrl(uri)) {
-                              await launchUrl(uri, mode: LaunchMode.externalApplication);
-                            } else if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Não foi possível abrir o link do boleto/fatura.'),
-                                  backgroundColor: Colors.redAccent,
-                                ),
-                              );
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF38BDF8).withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.55)),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.open_in_new_rounded, size: 12, color: Color(0xFF38BDF8)),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Abrir Boleto/Fatura',
-                                  style: TextStyle(color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
+                        onPressed: () => _showBatchPaymentDialog(
+                          agreement,
+                          selectedInstallments,
+                          onSettled: onReloadAgreement ?? _refresh,
                         ),
-                        InkWell(
-                          borderRadius: BorderRadius.circular(6),
-                          onTap: () {
-                            Clipboard.setData(ClipboardData(text: chargeUrl));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Link do boleto/fatura copiado para a área de transferência!'),
-                                backgroundColor: Color(0xFF10B981),
-                              ),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.06),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: Colors.white24),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.copy_rounded, size: 12, color: Colors.white70),
-                                SizedBox(width: 4),
-                                Text(
-                                  'Copiar Link',
-                                  style: TextStyle(color: Colors.white70, fontSize: 10.5, fontWeight: FontWeight.w600),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        if (agreement != null)
-                          InkWell(
-                            borderRadius: BorderRadius.circular(6),
-                            onTap: () => _showWhatsAppReviewDialog(agreement, inst),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF25D366).withOpacity(0.14),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: const Color(0xFF25D366).withOpacity(0.5)),
-                              ),
-                              child: const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.share_rounded, size: 12, color: Color(0xFF25D366)),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    'WhatsApp c/ Link',
-                                    style: TextStyle(color: Color(0xFF25D366), fontSize: 10.5, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ],
-                  ),
-                ],
+                      ),
+                  ],
+                ),
               ],
             ),
+          ),
+        ],
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0714),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF2A1B3D)),
+          ),
+          child: Column(
+            children: installments.map((inst) {
+              final instId = inst['id']?.toString() ?? '';
+              final number = inst['installmentNumber'];
+              final due = DateTime.tryParse(inst['dueDate'] ?? '');
+              final dueStr = due != null ? dateFormat.format(due) : '---';
+              final amountCents = (inst['amountCents'] as num?)?.toInt() ?? 0;
+              final paidCents = (inst['paidCents'] as num?)?.toInt() ?? 0;
+              final amount = amountCents / 100.0;
+              final paid = paidCents / 100.0;
+              final status = inst['status']?.toString() ?? 'PENDING';
+
+              final isPaid = status == 'PAID';
+              final isRenegotiated = status == 'RENEGOTIATED';
+              final isOpenForPayment =
+                  !isPaid && !isRenegotiated && (amountCents - paidCents) > 0;
+              final isOverdue =
+                  isOpenForPayment && due != null && due.isBefore(now);
+              final isChecked =
+                  instId.isNotEmpty && activeSelection.contains(instId);
+
+              Color badgeColor = const Color(0xFFA855F7);
+              String badgeText = 'PENDENTE';
+              if (isPaid) {
+                badgeColor = const Color(0xFF10B981);
+                badgeText = 'PAGO';
+              } else if (isRenegotiated) {
+                badgeColor = Colors.white54;
+                badgeText = 'RENEGOCIADA';
+              } else if (status == 'PARTIAL' || status == 'PARTIALLY_PAID') {
+                badgeColor = const Color(0xFFF59E0B);
+                badgeText = 'PARCIAL (${currencyFormat.format(paid)})';
+              } else if (isOverdue) {
+                badgeColor = const Color(0xFFEF4444);
+                badgeText = 'VENCIDA';
+              }
+
+              final asaasCharge = inst['asaasCharge'] is Map
+                  ? Map<String, dynamic>.from(inst['asaasCharge'] as Map)
+                  : null;
+              final asaasStatus =
+                  asaasCharge?['status']?.toString() ?? 'PENDING';
+              final invoiceUrl =
+                  (asaasCharge?['invoiceUrl'] ?? inst['invoiceUrl'] ?? '')
+                      .toString()
+                      .trim();
+              final bankSlipUrl =
+                  (asaasCharge?['bankSlipUrl'] ?? inst['bankSlipUrl'] ?? '')
+                      .toString()
+                      .trim();
+              final chargeUrl =
+                  invoiceUrl.isNotEmpty ? invoiceUrl : bankSlipUrl;
+              final bool asaasSettled = asaasStatus == 'RECEIVED' ||
+                  asaasStatus == 'RECEIVED_IN_CASH' ||
+                  asaasStatus == 'CONFIRMED';
+              final Color asaasColor = asaasSettled
+                  ? const Color(0xFF10B981)
+                  : const Color(0xFF38BDF8);
+
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isChecked
+                      ? const Color(0xFFA855F7).withOpacity(0.1)
+                      : Colors.transparent,
+                  border: const Border(
+                      bottom:
+                          BorderSide(color: Color(0xFF2A1B3D), width: 0.5)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (isOpenForPayment && onSelectionChanged != null)
+                              SizedBox(
+                                width: 26,
+                                height: 24,
+                                child: Checkbox(
+                                  value: isChecked,
+                                  activeColor: const Color(0xFFA855F7),
+                                  checkColor: Colors.white,
+                                  side: const BorderSide(
+                                      color: Color(0xFFA855F7), width: 1.5),
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  onChanged: (checked) {
+                                    if (instId.isEmpty) return;
+                                    final next = Set<String>.from(activeSelection);
+                                    if (checked == true) {
+                                      next.add(instId);
+                                    } else {
+                                      next.remove(instId);
+                                    }
+                                    onSelectionChanged(next);
+                                  },
+                                ),
+                              ),
+                            Text(
+                              'Parcela $number',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          'Venc: ${due != null ? shortDateFmt.format(due) : dueStr}',
+                          style: TextStyle(
+                            color: isOverdue
+                                ? const Color(0xFFEF4444)
+                                : Colors.white70,
+                            fontSize: 12,
+                            fontWeight:
+                                isOverdue ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        Text(
+                          currencyFormat.format(amount),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: badgeColor.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                    color: badgeColor.withOpacity(0.5)),
+                              ),
+                              child: Text(
+                                badgeText,
+                                style: TextStyle(
+                                    color: badgeColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            if (!isPaid && agreement != null) ...[
+                              const SizedBox(width: 4),
+                              IconButton(
+                                icon: const Icon(
+                                    Icons.chat_bubble_outline_rounded,
+                                    size: 14,
+                                    color: Color(0xFF25D366)),
+                                tooltip: 'Cobrança via WhatsApp',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () =>
+                                    _showWhatsAppReviewDialog(agreement, inst),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                    if (asaasCharge != null || isOpenForPayment) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (asaasCharge != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: asaasColor.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                    color: asaasColor.withOpacity(0.4)),
+                              ),
+                              child: Text(
+                                'Asaas: $asaasStatus',
+                                style: TextStyle(
+                                    color: asaasColor,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          if (asaasCharge != null &&
+                              (asaasCharge['bankFeeCents'] as num?) != null &&
+                              (asaasCharge['bankFeeCents'] as num) > 0)
+                            Text(
+                              'Tarifa: ${currencyFormat.format((asaasCharge['bankFeeCents'] as num).toDouble() / 100.0)}',
+                              style: const TextStyle(
+                                  color: Colors.white38, fontSize: 9),
+                            ),
+                          if (isOpenForPayment && agreement != null)
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () {
+                                Navigator.pop(context);
+                                _showRegisterPaymentDialog(
+                                  agreement,
+                                  lockedInstallment:
+                                      Map<String, dynamic>.from(inst as Map),
+                                );
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFF10B981).withOpacity(0.18),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                      color: const Color(0xFF10B981)
+                                          .withOpacity(0.65)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.check_circle_outline_rounded,
+                                        size: 12, color: Color(0xFF10B981)),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Baixar',
+                                      style: TextStyle(
+                                          color: Color(0xFF10B981),
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (isOpenForPayment && agreement != null)
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () => _showEditInstallmentDialog(
+                                agreement,
+                                Map<String, dynamic>.from(inst as Map),
+                                onSaved: onReloadAgreement ?? _refresh,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFFA855F7).withOpacity(0.16),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                      color: const Color(0xFFA855F7)
+                                          .withOpacity(0.6)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.edit_outlined,
+                                        size: 12, color: Color(0xFFD8B4FE)),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Editar',
+                                      style: TextStyle(
+                                          color: Color(0xFFD8B4FE),
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (chargeUrl.isNotEmpty) ...[
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () async {
+                                final uri = Uri.tryParse(chargeUrl);
+                                if (uri != null && await canLaunchUrl(uri)) {
+                                  await launchUrl(uri,
+                                      mode: LaunchMode.externalApplication);
+                                } else if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Não foi possível abrir o link do boleto/fatura.'),
+                                      backgroundColor: Colors.redAccent,
+                                    ),
+                                  );
+                                }
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFF38BDF8).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                      color: const Color(0xFF38BDF8)
+                                          .withOpacity(0.55)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.open_in_new_rounded,
+                                        size: 12, color: Color(0xFF38BDF8)),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Abrir Boleto/Fatura',
+                                      style: TextStyle(
+                                          color: Color(0xFF38BDF8),
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () {
+                                Clipboard.setData(
+                                    ClipboardData(text: chargeUrl));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                        'Link do boleto/fatura copiado para a área de transferência!'),
+                                    backgroundColor: Color(0xFF10B981),
+                                  ),
+                                );
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.06),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: Colors.white24),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.copy_rounded,
+                                        size: 12, color: Colors.white70),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'Copiar Link',
+                                      style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (agreement != null)
+                              InkWell(
+                                borderRadius: BorderRadius.circular(6),
+                                onTap: () =>
+                                    _showWhatsAppReviewDialog(agreement, inst),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF25D366)
+                                        .withOpacity(0.14),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                        color: const Color(0xFF25D366)
+                                            .withOpacity(0.5)),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.share_rounded,
+                                          size: 12, color: Color(0xFF25D366)),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'WhatsApp c/ Link',
+                                        style: TextStyle(
+                                            color: Color(0xFF25D366),
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuickSelectChip({
+    required String label,
+    required VoidCallback onTap,
+    required bool active,
+    bool isClear = false,
+  }) {
+    final Color borderColor = isClear
+        ? Colors.redAccent.withOpacity(0.5)
+        : active
+            ? const Color(0xFFA855F7)
+            : const Color(0xFF2A1B3D);
+    final Color bgColor = isClear
+        ? Colors.redAccent.withOpacity(0.12)
+        : active
+            ? const Color(0xFFA855F7).withOpacity(0.28)
+            : const Color(0xFF160D24);
+    final Color fgColor = isClear
+        ? Colors.redAccent
+        : active
+            ? Colors.white
+            : const Color(0xFFD8B4FE);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: borderColor),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: fgColor,
+            fontSize: 10.5,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showBatchPaymentDialog(
+    Map<String, dynamic> agreement,
+    List<Map<String, dynamic>> selectedInstallments, {
+    required VoidCallback onSettled,
+  }) {
+    if (selectedInstallments.isEmpty) return;
+
+    final int totalCents = selectedInstallments.fold<int>(
+      0,
+      (acc, i) =>
+          acc +
+          (((i['amountCents'] as num?)?.toInt() ?? 0) -
+                  ((i['paidCents'] as num?)?.toInt() ?? 0))
+              .clamp(0, 999999999),
+    );
+    final double totalReais = totalCents / 100.0;
+    final numbersLabel = selectedInstallments
+        .map((i) => '#${i['installmentNumber']}')
+        .join(', ');
+    final openAsaasCount = selectedInstallments.where((i) {
+      final chg = i['asaasCharge'];
+      if (chg is! Map) return false;
+      final st = chg['status']?.toString().toUpperCase() ?? '';
+      return st == 'PENDING' || st == 'OVERDUE';
+    }).length;
+
+    DateTime selectedPaidAt = DateTime.now();
+    String selectedMethod = 'CASH';
+    String selectedDestination = 'COMPANY_ACCOUNT';
+    final notesController = TextEditingController();
+    bool isSubmitting = false;
+    final batchIdempotencyKey =
+        'mob_batch_${agreement['id']}_${DateTime.now().microsecondsSinceEpoch}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFFA855F7), width: 1.2),
+            ),
+            title: Text(
+              'Baixar ${selectedInstallments.length} boleto(s) em lote',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0D0714),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF2A1B3D)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Parcelas: $numbersLabel',
+                          style: const TextStyle(
+                              color: Color(0xFFD8B4FE),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Total da baixa: ${currencyFormat.format(totalReais)}',
+                          style: const TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (openAsaasCount > 0) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF38BDF8).withOpacity(0.13),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: const Color(0xFF38BDF8).withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.sync_rounded,
+                              size: 16, color: Color(0xFF38BDF8)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '$openAsaasCount cobrança(s) vinculada(s) serão baixadas automaticamente no Asaas via receiveInCash.',
+                              style: const TextStyle(
+                                  color: Color(0xFFBAE6FD),
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: selectedPaidAt,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2035),
+                        builder: (c, child) => Theme(
+                          data: ThemeData.dark().copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: Color(0xFFA855F7),
+                              surface: Color(0xFF160D24),
+                            ),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => selectedPaidAt = picked);
+                      }
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0714),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF2A1B3D)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Data do pagamento: ${dateFormat.format(selectedPaidAt)}',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 13),
+                          ),
+                          const Icon(Icons.calendar_today_rounded,
+                              size: 16, color: Color(0xFFA855F7)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedMethod,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Forma de Pagamento',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'CASH', child: Text('Dinheiro')),
+                      DropdownMenuItem(value: 'PIX', child: Text('Pix')),
+                      DropdownMenuItem(
+                          value: 'CREDIT', child: Text('Cartão de Crédito')),
+                      DropdownMenuItem(
+                          value: 'DEBIT', child: Text('Cartão de Débito')),
+                      DropdownMenuItem(
+                          value: 'BOLETO', child: Text('Boleto / Banco')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedMethod = v);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedDestination,
+                    dropdownColor: const Color(0xFF160D24),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Destino do Recurso',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'COMPANY_ACCOUNT',
+                          child: Text('Conta da Empresa')),
+                      DropdownMenuItem(
+                          value: 'SELLER_HANDS',
+                          child: Text('Em mãos do Vendedor')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) {
+                        setDialogState(() => selectedDestination = v);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Observação (opcional)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          final ids = selectedInstallments
+                              .map((i) => i['id']?.toString() ?? '')
+                              .where((id) => id.isNotEmpty)
+                              .toList();
+                          final res = await _api.registerCreditPaymentBatch(
+                            agreement['id'].toString(),
+                            installmentIds: ids,
+                            paymentMethod: selectedMethod,
+                            destination: selectedDestination,
+                            paidAt: selectedPaidAt.toIso8601String(),
+                            notes: notesController.text.trim(),
+                            idempotencyKey: batchIdempotencyKey,
+                          );
+                          if (!mounted) return;
+                          Navigator.pop(ctx);
+                          final syncMap = res['asaasSync'] is Map
+                              ? Map<String, dynamic>.from(
+                                  res['asaasSync'] as Map)
+                              : null;
+                          final syncMsg = syncMap?['message']?.toString() ??
+                              'Baixa em lote registrada com sucesso!';
+                          final bool syncWarn =
+                              syncMap != null &&
+                              syncMap['attempted'] == true &&
+                              syncMap['synced'] != true;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(syncMsg),
+                              backgroundColor: syncWarn
+                                  ? const Color(0xFFF59E0B)
+                                  : const Color(0xFF10B981),
+                              duration: const Duration(seconds: 4),
+                            ),
+                          );
+                          onSettled();
+                        } catch (e) {
+                          setDialogState(() => isSubmitting = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text(
+                                      'Erro na baixa em lote: ${e.toString().replaceFirst('Exception: ', '')}'),
+                                  backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Confirmar Baixa em Lote'),
+              ),
+            ],
           );
-        }).toList(),
+        },
+      ),
+    );
+  }
+
+  void _showEditInstallmentDialog(
+    Map<String, dynamic> agreement,
+    Map<String, dynamic> inst, {
+    required VoidCallback onSaved,
+  }) {
+    final instId = inst['id']?.toString() ?? '';
+    final instNumber = inst['installmentNumber'];
+    final currentAmountReais =
+        ((inst['amountCents'] as num?)?.toDouble() ?? 0.0) / 100.0;
+    final initialDue =
+        DateTime.tryParse(inst['dueDate']?.toString() ?? '') ?? DateTime.now();
+
+    final asaasCharge = inst['asaasCharge'] is Map
+        ? Map<String, dynamic>.from(inst['asaasCharge'] as Map)
+        : null;
+    final asaasSt = asaasCharge?['status']?.toString().toUpperCase() ?? '';
+    final hasOpenAsaas =
+        asaasCharge != null && (asaasSt == 'PENDING' || asaasSt == 'OVERDUE');
+
+    DateTime selectedDueDate = initialDue;
+    final valueCtrl =
+        TextEditingController(text: currentAmountReais.toStringAsFixed(2));
+    final obsCtrl = TextEditingController();
+    bool isSaving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF160D24),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFFA855F7), width: 1.2),
+            ),
+            title: Text(
+              'Editar Parcela #$instNumber',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (hasOpenAsaas) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF38BDF8).withOpacity(0.13),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: const Color(0xFF38BDF8).withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.sync_rounded,
+                              size: 16, color: Color(0xFF38BDF8)),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Atualização automática no Asaas ativa: vencimento e valor serão sincronizados no boleto/fatura (mínimo R\$ 5,00).',
+                              style: TextStyle(
+                                  color: Color(0xFFBAE6FD),
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: selectedDueDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2035),
+                        builder: (c, child) => Theme(
+                          data: ThemeData.dark().copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: Color(0xFFA855F7),
+                              surface: Color(0xFF160D24),
+                            ),
+                          ),
+                          child: child!,
+                        ),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => selectedDueDate = picked);
+                      }
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0714),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF2A1B3D)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Vencimento: ${dateFormat.format(selectedDueDate)}',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 13),
+                          ),
+                          const Icon(Icons.edit_calendar_rounded,
+                              size: 16, color: Color(0xFFA855F7)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: valueCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Valor da Parcela (R\$)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      prefixText: 'R\$ ',
+                      filled: true,
+                      fillColor: Color(0xFF0D0714),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: obsCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: 'Motivo / Observação (opcional)',
+                      labelStyle: TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Color(0xFF0D0714),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF2A1B3D))),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFA855F7))),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSaving ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFA855F7),
+                    foregroundColor: Colors.white),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        final parsedVal = double.tryParse(
+                            valueCtrl.text.replaceAll(',', '.'));
+                        if (parsedVal == null || parsedVal <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content:
+                                    Text('Informe um valor válido maior que zero.')),
+                          );
+                          return;
+                        }
+                        if (hasOpenAsaas && parsedVal < 5.0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text(
+                                    'Valor mínimo para boleto Asaas é R\$ 5,00.'),
+                                backgroundColor: Colors.orange),
+                          );
+                          return;
+                        }
+
+                        final dueYmd =
+                            DateFormat('yyyy-MM-dd').format(selectedDueDate);
+                        setDialogState(() => isSaving = true);
+                        try {
+                          final res = await _api.updateCreditInstallment(
+                            agreement['id'].toString(),
+                            instId,
+                            dueDate: dueYmd,
+                            amountCents: (parsedVal * 100).round(),
+                            notes: obsCtrl.text.trim().isNotEmpty
+                                ? obsCtrl.text.trim()
+                                : null,
+                          );
+                          if (!mounted) return;
+                          Navigator.pop(ctx);
+                          final syncMap = res['asaasSync'] is Map
+                              ? Map<String, dynamic>.from(
+                                  res['asaasSync'] as Map)
+                              : null;
+                          final syncMsg = syncMap?['message']?.toString() ??
+                              'Parcela atualizada com sucesso!';
+                          final bool syncWarn =
+                              syncMap != null &&
+                              syncMap['attempted'] == true &&
+                              syncMap['synced'] != true;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(syncMsg),
+                              backgroundColor: syncWarn
+                                  ? const Color(0xFFF59E0B)
+                                  : const Color(0xFF10B981),
+                              duration: const Duration(seconds: 4),
+                            ),
+                          );
+                          onSaved();
+                        } catch (e) {
+                          setDialogState(() => isSaving = false);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text(
+                                      'Erro ao editar parcela: ${e.toString().replaceFirst('Exception: ', '')}'),
+                                  backgroundColor: Colors.red),
+                            );
+                          }
+                        }
+                      },
+                child: isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Salvar Alterações'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

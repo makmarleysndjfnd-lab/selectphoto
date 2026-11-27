@@ -10,6 +10,15 @@ import {
   checkCompanyApiBudget,
 } from '../services/integrationResolver';
 import { resolveExclusiveCompanyGeminiKey } from '../services/companyApiKeyService';
+import {
+  createGoogleGenAiClient,
+  getGeminiClientOverrideForTests,
+  isGeminiModelNotFoundError,
+  listAvailableGeminiModels,
+  persistCompanyGeminiModel,
+  resolveActiveGeminiModel,
+  GeminiModelDescriptor,
+} from '../services/geminiModelService';
 import { recordCompanyApiUsageLog } from '../services/apiUsageService';
 import {
   getCompanyEventSearchConfig,
@@ -84,6 +93,70 @@ export function setEventSearchAiClientOverrideForTests(
   factory: ((apiKey: string) => GenerativeAiModelsLike) | null
 ): void {
   testAiClientOverride = factory;
+}
+
+function resolveAiClientFactory(): ((apiKey: string) => GenerativeAiModelsLike) | null {
+  return testAiClientOverride || getGeminiClientOverrideForTests();
+}
+
+async function executeGeminiPipelineWithModelFallback<T>(params: {
+  companyId?: string | null;
+  apiKey: string;
+  aiClient: GenerativeAiModelsLike;
+  executor: (model: string) => Promise<T>;
+}): Promise<T> {
+  const { companyId, apiKey, aiClient, executor } = params;
+  const resolution = await resolveActiveGeminiModel({
+    companyId,
+    apiKey,
+    aiClient: aiClient as any,
+  });
+
+  let queue = [...resolution.candidates];
+  let availableModels: GeminiModelDescriptor[] = [...resolution.availableModels];
+  let discoveryExecuted = availableModels.length > 0;
+  const tried: string[] = [];
+  let lastErr: any = null;
+
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
+    if (!candidate || tried.includes(candidate)) continue;
+    tried.push(candidate);
+
+    try {
+      const output = await executor(candidate);
+      if (companyId && (!resolution.fromSavedConfig || tried.length > 1)) {
+        await persistCompanyGeminiModel(companyId, candidate, availableModels).catch(() => {});
+      }
+      return output;
+    } catch (err: any) {
+      lastErr = err;
+      if (!isGeminiModelNotFoundError(err)) {
+        throw err;
+      }
+
+      if (!discoveryExecuted) {
+        discoveryExecuted = true;
+        try {
+          availableModels = await listAvailableGeminiModels({
+            apiKey,
+            aiClient: aiClient as any,
+          });
+          const discoveredIds = availableModels
+            .map((d) => d.id)
+            .filter((id) => !tried.includes(id));
+          const remaining = queue.filter(
+            (id) => !discoveredIds.includes(id) && !tried.includes(id)
+          );
+          queue = [...discoveredIds, ...remaining];
+        } catch {
+          // Mantém candidatos residuais de fallback
+        }
+      }
+    }
+  }
+
+  throw lastErr || new Error('Nenhum modelo Gemini compatível disponível para executar a pesquisa.');
 }
 
 // Helper to robustly extract clean JSON from AI responses (even with conversational wrappers)
@@ -336,8 +409,10 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
     // Resolução dinâmica de integração por empresa em tempo de execução
     let activeAiClient: GenerativeAiModelsLike | null = null;
+    let resolvedApiKey = '';
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
+    const overrideFactory = resolveAiClientFactory();
 
     if (companyId) {
       const [exclusiveGemini, resolved] = await Promise.all([
@@ -350,9 +425,8 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
 
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
-        activeAiClient = testAiClientOverride
-          ? testAiClientOverride(exclusiveGemini.key)
-          : new GoogleGenAI({ apiKey: exclusiveGemini.key });
+        resolvedApiKey = exclusiveGemini.key;
+        activeAiClient = createGoogleGenAiClient(exclusiveGemini.key, overrideFactory);
       } else {
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
@@ -377,10 +451,12 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
         providerName = 'GEMINI';
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
-      if (testAiClientOverride) {
-        activeAiClient = testAiClientOverride(process.env.GEMINI_API_KEY || 'superadmin_test_key');
+      if (overrideFactory) {
+        resolvedApiKey = process.env.GEMINI_API_KEY || 'superadmin_test_key';
+        activeAiClient = overrideFactory(resolvedApiKey);
       } else if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
-        activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        resolvedApiKey = process.env.GEMINI_API_KEY;
+        activeAiClient = createGoogleGenAiClient(resolvedApiKey);
       }
     }
 
@@ -448,7 +524,7 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     }
 
     // Retorno mockado quando serviços externos estão desabilitados (sem override de teste) ou sem chave
-    if ((isExternalServicesDisabled() && !testAiClientOverride) || !activeAiClient) {
+    if ((isExternalServicesDisabled() && !overrideFactory) || !activeAiClient) {
       providerDispatched = true;
 
       const simulateTimeout =
@@ -670,21 +746,28 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
     const currentResId = reservationId;
 
     try {
-      const pipelineOut = await runTwoStepCityEventSearch({
+      const pipelineOut = await executeGeminiPipelineWithModelFallback({
+        companyId,
+        apiKey: resolvedApiKey,
         aiClient: activeAiClient,
-        city: sanitizedCity,
-        config: searchConfig,
-        onLateResponseAfterTimeout: async () => {
-          if (currentResId) {
-            await handleLateProviderResponse({
-              reservationId: currentResId,
-              outcome: 'CONFIRMED',
-              reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
-              resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
-              resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
-            });
-          }
-        },
+        executor: (model) =>
+          runTwoStepCityEventSearch({
+            aiClient: activeAiClient!,
+            city: sanitizedCity,
+            config: searchConfig,
+            model,
+            onLateResponseAfterTimeout: async () => {
+              if (currentResId) {
+                await handleLateProviderResponse({
+                  reservationId: currentResId,
+                  outcome: 'CONFIRMED',
+                  reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+                  resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+                  resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
+                });
+              }
+            },
+          }),
       });
 
       providerResponded = true;
@@ -857,8 +940,14 @@ router.post('/search', authenticateToken, async (req: AuthRequest, res: Response
       }
     }
     console.error('Erro na IA de Eventos:', error?.message || error);
-    res.status(503).json({ 
-      error: 'Servidor das IAs sobrecarregado ou indisponível. Aguarde um momento e tente novamente.' 
+    const errDetail = String(error?.message || '').trim();
+    const isModelErr = isGeminiModelNotFoundError(error);
+    res.status(isModelErr ? 502 : 503).json({ 
+      error: isModelErr
+        ? `Modelo Gemini indisponível para a chave configurada: ${errDetail}`
+        : errDetail
+          ? `Falha ao consultar Eventos IA: ${errDetail.slice(0, 220)}`
+          : 'Servidor das IAs sobrecarregado ou indisponível. Aguarde um momento e tente novamente.',
     });
   }
 });
@@ -896,6 +985,8 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     let resolvedIntegrationId: string | undefined = undefined;
     let providerName = 'GEMINI';
     let activeAiClient: GenerativeAiModelsLike | null = null;
+    let resolvedApiKey = '';
+    const overrideFactory = resolveAiClientFactory();
 
     if (companyId) {
       const [exclusiveGemini, resolved] = await Promise.all([
@@ -908,9 +999,8 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
 
       if (exclusiveGemini.configured && exclusiveGemini.key) {
         providerName = 'GEMINI';
-        activeAiClient = testAiClientOverride
-          ? testAiClientOverride(exclusiveGemini.key)
-          : new GoogleGenAI({ apiKey: exclusiveGemini.key });
+        resolvedApiKey = exclusiveGemini.key;
+        activeAiClient = createGoogleGenAiClient(exclusiveGemini.key, overrideFactory);
       } else {
         if (resolved?.provider === 'GROK' && resolved.status === 'ACTIVE') {
           res.status(501).json({
@@ -935,10 +1025,12 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         providerName = 'GEMINI';
       }
     } else if (req.user?.role === 'SUPER_ADMIN') {
-      if (testAiClientOverride) {
-        activeAiClient = testAiClientOverride(process.env.GEMINI_API_KEY || 'superadmin_test_key');
+      if (overrideFactory) {
+        resolvedApiKey = process.env.GEMINI_API_KEY || 'superadmin_test_key';
+        activeAiClient = overrideFactory(resolvedApiKey);
       } else if (process.env.GEMINI_API_KEY && !isExternalServicesDisabled()) {
-        activeAiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        resolvedApiKey = process.env.GEMINI_API_KEY;
+        activeAiClient = createGoogleGenAiClient(resolvedApiKey);
       }
     }
 
@@ -1010,7 +1102,7 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
       reservationId = reservation.reservationId;
     }
 
-    if ((isExternalServicesDisabled() && !testAiClientOverride) || !activeAiClient) {
+    if ((isExternalServicesDisabled() && !overrideFactory) || !activeAiClient) {
       providerDispatched = true;
 
       const simulateTimeout =
@@ -1213,21 +1305,28 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
     const currentResId = reservationId;
 
     try {
-      const radarOut = await runTwoStepStateRadarSearch({
+      const radarOut = await executeGeminiPipelineWithModelFallback({
+        companyId,
+        apiKey: resolvedApiKey,
         aiClient: activeAiClient,
-        stateUF,
-        config: searchConfig,
-        onLateResponseAfterTimeout: async () => {
-          if (currentResId) {
-            await handleLateProviderResponse({
-              reservationId: currentResId,
-              outcome: 'CONFIRMED',
-              reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
-              resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
-              resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
-            });
-          }
-        },
+        executor: (model) =>
+          runTwoStepStateRadarSearch({
+            aiClient: activeAiClient!,
+            stateUF,
+            config: searchConfig,
+            model,
+            onLateResponseAfterTimeout: async () => {
+              if (currentResId) {
+                await handleLateProviderResponse({
+                  reservationId: currentResId,
+                  outcome: 'CONFIRMED',
+                  reason: 'LATE_PROVIDER_RESPONSE_AUTO_CONFIRMED',
+                  resolvedByUserId: 'SYSTEM_LATE_RESPONSE',
+                  resolvedByName: 'Provedor Externo (Resposta Tardia Automática)',
+                });
+              }
+            },
+          }),
       });
 
       providerResponded = true;
@@ -1377,7 +1476,17 @@ router.get('/state-radar', authenticateToken, async (req: AuthRequest, res: Resp
         res.status(429).json({ error: 'Limite de requisições de IA atingido no Radar.' });
         return;
       }
-      res.status(503).json({ error: 'Falha ao consultar radar de eventos do estado.' });
+      if (isGeminiModelNotFoundError(err)) {
+        res.status(502).json({
+          error: `Modelo Gemini indisponível para a chave configurada: ${String(err?.message || 'NOT_FOUND')}`,
+        });
+        return;
+      }
+      res.status(503).json({
+        error: err?.message
+          ? `Falha ao consultar radar de eventos do estado: ${String(err.message).slice(0, 200)}`
+          : 'Falha ao consultar radar de eventos do estado.',
+      });
       return;
     }
   } catch (error: any) {

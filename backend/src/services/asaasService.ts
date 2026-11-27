@@ -387,6 +387,7 @@ function inferAsaasOperation(endpoint: string, method: string): string {
   if (endpoint.includes('/receiveInCash')) return 'PAYMENT_RECEIVE_CASH';
   if (endpoint.includes('/pixQrCode')) return 'PIX_QRCODE';
   if (endpoint.startsWith('/customers')) return 'CUSTOMER_SYNC';
+  if (endpoint.startsWith('/payments/') && (method === 'PUT' || method === 'POST')) return 'CHARGE_UPDATE';
   if (endpoint.startsWith('/payments') && method === 'POST') return 'CHARGE_CREATE';
   return 'ASAAS_API_CALL';
 }
@@ -535,6 +536,15 @@ async function asaasRequest(
         };
       }
       return { totalCount: 0, data: [], simulated: true };
+    }
+    if (endpoint.startsWith('/payments/') && method === 'PUT') {
+      await logUsage('SUCCESS', 200);
+      return {
+        id: endpoint.replace('/payments/', '').split('?')[0],
+        status: 'PENDING',
+        ...(body || {}),
+        simulated: true,
+      };
     }
     await logUsage('SUCCESS', 200);
     return { id: `sim_${Date.now()}`, status: 'CONFIRMED', simulated: true };
@@ -808,7 +818,7 @@ export async function updateAsaasPayment(
   const config = await getCompanyAsaasConfigForExistingCharge(companyId, asaasPaymentId);
   if (config.mode === 'DISABLED') return { success: true };
 
-  return asaasRequest(config, `/payments/${asaasPaymentId}`, 'POST', data);
+  return asaasRequest(config, `/payments/${asaasPaymentId}`, 'PUT', data);
 }
 
 /**

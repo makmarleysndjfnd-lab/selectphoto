@@ -1614,29 +1614,38 @@ class _PainelProprietarioIntegracoesState
             onTest: () => _runExclusiveAsaasTest(compId, (asaasMap['environment'] ?? 'SANDBOX').toString()),
           ),
           const SizedBox(height: 12),
-          _buildExclusiveProviderBox(
-            title: 'Google Gemini (Eventos IA Exclusivo)',
-            subtitle: 'Chave: ${geminiMap['maskedKey'] ?? 'Não configurada'}',
-            configured: geminiMap['configured'] == true,
-            status: (geminiMap['connectionStatus'] ?? 'NOT_CONFIGURED').toString(),
-            statusMessage: geminiMap['connectionMessage']?.toString(),
-            isTesting: _testingGemini,
-            testResult: _geminiTestResult,
-            onConfigure: () => _openExclusiveGeminiModal(compId),
-            onTest: () => _runExclusiveGeminiTest(compId),
-            onConfigureAiSearch: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => TelaConfigBuscaEventosIa(
-                    companyId: compId,
-                    companyName: (_empresaSelecionada?['tradeName'] ??
-                            _empresaSelecionada?['name'] ??
-                            '')
-                        .toString(),
-                    apiService: _api,
-                  ),
-                ),
+          Builder(
+            builder: (_) {
+              final activeModel = geminiMap['geminiModel']?.toString().trim() ?? '';
+              final modelLabel = activeModel.isNotEmpty
+                  ? activeModel
+                  : (geminiMap['configured'] == true ? 'Detecção automática' : 'Padrão dinâmico');
+              return _buildExclusiveProviderBox(
+                title: 'Google Gemini (Eventos IA Exclusivo)',
+                subtitle:
+                    'Chave: ${geminiMap['maskedKey'] ?? 'Não configurada'} • Modelo: $modelLabel',
+                configured: geminiMap['configured'] == true,
+                status: (geminiMap['connectionStatus'] ?? 'NOT_CONFIGURED').toString(),
+                statusMessage: geminiMap['connectionMessage']?.toString(),
+                isTesting: _testingGemini,
+                testResult: _geminiTestResult,
+                onConfigure: () => _openExclusiveGeminiModal(compId, geminiMap),
+                onTest: () => _runExclusiveGeminiTest(compId),
+                onConfigureAiSearch: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => TelaConfigBuscaEventosIa(
+                        companyId: compId,
+                        companyName: (_empresaSelecionada?['tradeName'] ??
+                                _empresaSelecionada?['name'] ??
+                                '')
+                            .toString(),
+                        apiService: _api,
+                      ),
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -1728,7 +1737,7 @@ class _PainelProprietarioIntegracoesState
                 ),
               ),
               child: Text(
-                '${testResult['success'] == true ? 'OK' : 'FALHA'}: ${testResult['message'] ?? ''} ${testResult['latencyMs'] != null ? '(${testResult['latencyMs']}ms)' : ''}',
+                '${testResult['success'] == true ? 'OK' : 'FALHA'}: ${testResult['message'] ?? ''}${testResult['activeModel'] != null ? ' • Modelo: ${testResult['activeModel']}' : ''} ${testResult['latencyMs'] != null ? '(${testResult['latencyMs']}ms)' : ''}',
                 style: TextStyle(
                   color: testResult['success'] == true ? const Color(0xFF34D399) : const Color(0xFFFCA5A5),
                   fontSize: 11,
@@ -2098,65 +2107,264 @@ class _PainelProprietarioIntegracoesState
     }
   }
 
-  Future<void> _openExclusiveGeminiModal(String companyId) async {
+  Future<void> _openExclusiveGeminiModal(
+    String companyId, [
+    Map<String, dynamic>? geminiMap,
+  ]) async {
+    final alreadyConfigured = geminiMap?['configured'] == true;
+    final initialModel = geminiMap?['geminiModel']?.toString().trim() ?? '';
     final keyCtrl = TextEditingController();
+    final modelCtrl = TextEditingController(text: initialModel);
+
+    final initialList = <String>[
+      if (initialModel.isNotEmpty) initialModel,
+      if (geminiMap?['availableModels'] is List)
+        ...(geminiMap!['availableModels'] as List)
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty),
+      'gemini-3-flash-preview',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+    ];
+    List<String> detectedModels = initialList.toSet().toList();
+    bool isLoadingModels = false;
+    bool isSaving = false;
+    String? modelsError;
+
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => _ControllerDisposer(
-        controllers: [keyCtrl],
-        child: AlertDialog(
-          backgroundColor: const Color(0xFF160D24),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Chave Google Gemini Exclusiva', style: TextStyle(color: Colors.white, fontSize: 16)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Sem chave Gemini exclusiva cadastrada, a busca de Eventos IA fica bloqueada para esta empresa.',
-                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+        controllers: [keyCtrl, modelCtrl],
+        child: StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            Future<void> fetchAccountModels() async {
+              setDialogState(() {
+                isLoadingModels = true;
+                modelsError = null;
+              });
+              try {
+                final resp = await _api.listCompanyGeminiModels(companyId);
+                final raw = resp['models'] is List ? resp['models'] as List : [];
+                final extracted = raw
+                    .map((item) => item is Map
+                        ? (item['id'] ?? '').toString().trim()
+                        : item.toString().trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+                setDialogState(() {
+                  detectedModels = extracted.isNotEmpty ? extracted : detectedModels;
+                  if (modelCtrl.text.trim().isEmpty &&
+                      resp['activeModel'] != null &&
+                      resp['activeModel'].toString().trim().isNotEmpty) {
+                    modelCtrl.text = resp['activeModel'].toString().trim();
+                  }
+                  isLoadingModels = false;
+                });
+              } catch (e) {
+                setDialogState(() {
+                  modelsError = e.toString().replaceFirst('Exception: ', '');
+                  isLoadingModels = false;
+                });
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF160D24),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF2A1B3D)),
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: keyCtrl,
-                obscureText: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Gemini API Key *',
-                  hintText: 'AIza...',
-                  hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                  labelStyle: TextStyle(color: Color(0xFF94A3B8)),
+              title: const Text(
+                'Google Gemini Exclusivo & Modelo',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Sem chave Gemini exclusiva cadastrada, a busca de Eventos IA fica bloqueada para esta empresa.',
+                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: keyCtrl,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: alreadyConfigured
+                            ? 'Nova Gemini API Key (opcional para manter atual)'
+                            : 'Gemini API Key *',
+                        hintText: alreadyConfigured
+                            ? 'Deixe em branco para alterar apenas o modelo'
+                            : 'AIza...',
+                        hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 11.5),
+                        labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Modelo Gemini (opcional — vazio = detecção automática)',
+                            style: TextStyle(
+                              color: Color(0xFFD8B4FE),
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (alreadyConfigured)
+                          TextButton.icon(
+                            onPressed: isLoadingModels ? null : fetchAccountModels,
+                            icon: isLoadingModels
+                                ? const SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.8,
+                                      color: Color(0xFFA855F7),
+                                    ),
+                                  )
+                                : const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFFA855F7)),
+                            label: const Text(
+                              'Detectar',
+                              style: TextStyle(color: Color(0xFFA855F7), fontSize: 11),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: modelCtrl,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Vazio = detecção automática (ex: gemini-3-flash-preview)',
+                        hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 11.5),
+                        filled: true,
+                        fillColor: const Color(0xFF0D0714),
+                        suffixIcon: modelCtrl.text.trim().isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear_rounded, size: 16, color: Colors.white54),
+                                tooltip: 'Usar detecção automática',
+                                onPressed: () => setDialogState(() => modelCtrl.clear()),
+                              )
+                            : null,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFF2A1B3D)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: const BorderSide(color: Color(0xFFA855F7)),
+                        ),
+                      ),
+                    ),
+                    if (detectedModels.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: detectedModels.take(8).map((mId) {
+                          final selected = modelCtrl.text.trim() == mId;
+                          return ChoiceChip(
+                            label: Text(
+                              mId,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: selected ? Colors.white : const Color(0xFFCBD5E1),
+                              ),
+                            ),
+                            selected: selected,
+                            selectedColor: const Color(0xFFA855F7),
+                            backgroundColor: const Color(0xFF0D0714),
+                            side: BorderSide(
+                              color: selected
+                                  ? const Color(0xFFA855F7)
+                                  : const Color(0xFF2A1B3D),
+                            ),
+                            onSelected: (_) => setDialogState(() {
+                              modelCtrl.text = selected ? '' : mId;
+                            }),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                    if (modelsError != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        modelsError!,
+                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 11),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7), foregroundColor: Colors.white),
-              onPressed: () async {
-                if (keyCtrl.text.trim().length < 6) {
-                  _mostrarErro('Informe uma chave Gemini válida.');
-                  return;
-                }
-                try {
-                  await _api.saveCompanyGeminiIntegration(companyId, apiKey: keyCtrl.text.trim());
-                  if (ctx.mounted) Navigator.of(ctx).pop(true);
-                } catch (e) {
-                  _mostrarErro('$e');
-                }
-              },
-              child: const Text('Salvar no Vault'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.of(ctx).pop(false),
+                  child: const Text('Cancelar', style: TextStyle(color: Color(0xFF94A3B8))),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFA855F7),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          final rawKey = keyCtrl.text.trim();
+                          if (!alreadyConfigured && rawKey.length < 6) {
+                            _mostrarErro('Informe uma chave Gemini válida.');
+                            return;
+                          }
+                          if (rawKey.isNotEmpty && rawKey.length < 6) {
+                            _mostrarErro('A nova chave Gemini deve ter ao menos 6 caracteres.');
+                            return;
+                          }
+                          setDialogState(() => isSaving = true);
+                          try {
+                            await _api.saveCompanyGeminiIntegration(
+                              companyId,
+                              apiKey: rawKey.isNotEmpty ? rawKey : null,
+                              geminiModel: modelCtrl.text.trim(),
+                            );
+                            if (ctx.mounted) Navigator.of(ctx).pop(true);
+                          } catch (e) {
+                            setDialogState(() => isSaving = false);
+                            _mostrarErro('$e');
+                          }
+                        },
+                  child: isSaving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Salvar no Vault'),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
 
     if (saved == true && mounted) {
-      _mostrarSucesso('Chave Gemini exclusiva salva para a empresa.');
+      _mostrarSucesso('Configuração Gemini salva com segurança no cofre.');
       await _carregarIntegracoesEmpresa(companyId);
     }
   }

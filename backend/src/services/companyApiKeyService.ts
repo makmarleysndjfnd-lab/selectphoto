@@ -8,7 +8,20 @@ import {
   ASAAS_SANDBOX_BASE_URL,
   ASAAS_PRODUCTION_BASE_URL,
 } from './vaultService';
-import { GoogleGenAI } from '@google/genai';
+import {
+  DEFAULT_GEMINI_SEARCH_MODEL,
+  GeminiModelDescriptor,
+  createGoogleGenAiClient,
+  extractGeminiHttpStatus,
+  getCompanyGeminiMetadata,
+  getGeminiClientOverrideForTests,
+  hasGeminiBaseUrlOverride,
+  isGeminiModelNotFoundError,
+  listAvailableGeminiModels,
+  normalizeGeminiModelId,
+  persistCompanyGeminiModel,
+  resolveActiveGeminiModel,
+} from './geminiModelService';
 import { recordOperationalAuditEvent } from './operationalAuditService';
 import { isExternalServicesDisabled } from '../utils/externalServices';
 import { getCompanyAsaasConfig } from './asaasService';
@@ -118,15 +131,63 @@ export async function resolveExclusiveCompanyGeminiKey(
 
 export async function setExclusiveCompanyGeminiKey(params: {
   companyId: string;
-  apiKey: string | null;
+  apiKey?: string | null;
+  geminiModel?: string | null;
+  removeKey?: boolean;
   actorUserId: string;
   actorName: string;
   ipAddress?: string | null;
 }) {
-  const { companyId, apiKey, actorUserId, actorName, ipAddress } = params;
+  const {
+    companyId,
+    apiKey,
+    geminiModel,
+    removeKey = false,
+    actorUserId,
+    actorName,
+    ipAddress,
+  } = params;
   const trimmed = typeof apiKey === 'string' ? apiKey.trim() : '';
+  const hasModelParam = geminiModel !== undefined;
+  const normalizedModel =
+    typeof geminiModel === 'string' ? normalizeGeminiModelId(geminiModel) : '';
 
-  if (!trimmed) {
+  const existingInteg = await prisma.companyIntegration.findUnique({
+    where: {
+      companyId_category_environment: {
+        companyId,
+        category: 'AI_RESEARCH',
+        environment: 'PRODUCTION',
+      },
+    },
+  });
+
+  const existingCompany = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: {
+      geminiApiKeyEncrypted: true,
+      geminiApiKeyIv: true,
+      geminiApiKeyTag: true,
+      geminiApiKeyMasked: true,
+      geminiConnectionStatus: true,
+    },
+  });
+
+  const hasExistingKey = Boolean(
+    (existingCompany?.geminiApiKeyEncrypted &&
+      existingCompany.geminiApiKeyIv &&
+      existingCompany.geminiApiKeyTag) ||
+      (existingInteg?.encryptedSecret &&
+        existingInteg.secretIv &&
+        existingInteg.secretTag)
+  );
+
+  // Remoção explícita da chave (ou chamada legada com apiKey null/vazia sem atualização de modelo)
+  const shouldRemove =
+    removeKey === true ||
+    (!trimmed && (!hasModelParam || !hasExistingKey));
+
+  if (shouldRemove) {
     await prisma.company.update({
       where: { id: companyId },
       data: {
@@ -138,6 +199,11 @@ export async function setExclusiveCompanyGeminiKey(params: {
         geminiConnectionStatus: 'UNCONFIGURED',
         geminiConnectionMessage: 'Chave Gemini removida pelo SuperAdmin.',
       },
+    });
+
+    await prisma.companyIntegration.updateMany({
+      where: { companyId, category: 'AI_RESEARCH', provider: 'GEMINI' },
+      data: { status: 'DISABLED', updatedByUserId: actorUserId },
     });
 
     await recordOperationalAuditEvent({
@@ -156,23 +222,55 @@ export async function setExclusiveCompanyGeminiKey(params: {
       ipAddress: ipAddress || null,
     });
 
-    return { configured: false, maskedKey: null, connectionStatus: 'UNCONFIGURED' };
+    return {
+      configured: false,
+      maskedKey: null,
+      geminiModel: null,
+      connectionStatus: 'UNCONFIGURED',
+    };
   }
 
-  const cipher = encryptSecret(trimmed);
-  const masked = formatTailMask(trimmed)!;
+  // MERGE seguro de configMetadata preservando dados anteriores
+  const prevMeta =
+    existingInteg?.configMetadata && typeof existingInteg.configMetadata === 'object'
+      ? { ...(existingInteg.configMetadata as Record<string, any>) }
+      : {};
+  const mergedMeta: Record<string, any> = { ...prevMeta };
+  if (hasModelParam) {
+    if (normalizedModel) {
+      mergedMeta.geminiModel = normalizedModel;
+    } else {
+      delete mergedMeta.geminiModel;
+    }
+  }
 
-  await prisma.company.update({
-    where: { id: companyId },
-    data: {
-      geminiApiKeyEncrypted: cipher.encryptedSecret,
-      geminiApiKeyIv: cipher.secretIv,
-      geminiApiKeyTag: cipher.secretTag,
-      geminiApiKeyMasked: masked,
-      geminiConnectionStatus: 'PENDING',
-      geminiConnectionMessage: 'Chave configurada. Execute Testar Conexão para validar.',
-    },
-  });
+  let cipher: { encryptedSecret: string; secretIv: string; secretTag: string };
+  let masked: string;
+
+  if (trimmed) {
+    cipher = encryptSecret(trimmed);
+    masked = formatTailMask(trimmed)!;
+    await prisma.company.update({
+      where: { id: companyId },
+      data: {
+        geminiApiKeyEncrypted: cipher.encryptedSecret,
+        geminiApiKeyIv: cipher.secretIv,
+        geminiApiKeyTag: cipher.secretTag,
+        geminiApiKeyMasked: masked,
+        geminiConnectionStatus: 'PENDING',
+        geminiConnectionMessage: 'Chave configurada. Execute Testar Conexão para validar.',
+      },
+    });
+  } else {
+    cipher = {
+      encryptedSecret:
+        existingInteg?.encryptedSecret || existingCompany!.geminiApiKeyEncrypted!,
+      secretIv: existingInteg?.secretIv || existingCompany!.geminiApiKeyIv!,
+      secretTag: existingInteg?.secretTag || existingCompany!.geminiApiKeyTag!,
+    };
+    masked =
+      existingInteg?.secretMasked || existingCompany?.geminiApiKeyMasked || '••••';
+  }
 
   // Sincroniza também em CompanyIntegration exclusiva da empresa (ENVIRONMENT PRODUCTION)
   await prisma.companyIntegration.upsert({
@@ -193,6 +291,7 @@ export async function setExclusiveCompanyGeminiKey(params: {
       secretIv: cipher.secretIv,
       secretTag: cipher.secretTag,
       secretMasked: masked,
+      configMetadata: mergedMeta,
       updatedByUserId: actorUserId,
     },
     create: {
@@ -208,6 +307,7 @@ export async function setExclusiveCompanyGeminiKey(params: {
       secretIv: cipher.secretIv,
       secretTag: cipher.secretTag,
       secretMasked: masked,
+      configMetadata: mergedMeta,
       createdByUserId: actorUserId,
     },
   });
@@ -215,20 +315,34 @@ export async function setExclusiveCompanyGeminiKey(params: {
   await recordOperationalAuditEvent({
     companyId,
     category: 'INTEGRATION',
-    action: 'COMPANY_GEMINI_KEY_CONFIGURED',
+    action: trimmed ? 'COMPANY_GEMINI_KEY_CONFIGURED' : 'COMPANY_GEMINI_MODEL_UPDATED',
     entityType: 'COMPANY_API_KEY',
     entityReference: `GEMINI:${companyId}`,
     entityId: companyId,
-    previousValues: null,
-    newValues: { configured: true, maskedKey: masked, scope: 'EXCLUSIVE_OWN_KEY' },
-    reason: 'Configuração de chave Gemini exclusiva da empresa pelo SuperAdmin',
+    previousValues: { geminiModel: prevMeta.geminiModel || null },
+    newValues: {
+      configured: true,
+      maskedKey: masked,
+      geminiModel: mergedMeta.geminiModel || null,
+      scope: 'EXCLUSIVE_OWN_KEY',
+    },
+    reason: trimmed
+      ? 'Configuração de chave Gemini exclusiva da empresa pelo SuperAdmin'
+      : 'Atualização do modelo Gemini da empresa pelo SuperAdmin',
     authorUserId: actorUserId,
     authorName: actorName,
     authorRole: 'SUPER_ADMIN',
     ipAddress: ipAddress || null,
   });
 
-  return { configured: true, maskedKey: masked, connectionStatus: 'PENDING' };
+  return {
+    configured: true,
+    maskedKey: masked,
+    geminiModel: mergedMeta.geminiModel ? String(mergedMeta.geminiModel) : null,
+    connectionStatus: trimmed
+      ? 'PENDING'
+      : existingCompany?.geminiConnectionStatus || 'PENDING',
+  };
 }
 
 export async function setExclusiveCompanyAsaasKey(params: {
@@ -545,11 +659,44 @@ function sanitizeProviderError(raw: unknown, secretToHide: string): string {
 }
 
 function extractHttpStatusFromError(err: any): number | null {
-  const direct = err?.status ?? err?.statusCode ?? err?.httpStatus ?? err?.response?.status;
-  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
-  const msg = String(err?.message || '');
-  const match = msg.match(/\b(401|403|429|500|502|503|504)\b/);
-  return match ? Number(match[1]) : null;
+  return extractGeminiHttpStatus(err);
+}
+
+export async function listCompanyGeminiModels(companyId: string): Promise<{
+  configured: boolean;
+  activeModel: string | null;
+  recommendedModel: string | null;
+  models: GeminiModelDescriptor[];
+}> {
+  const resolved = await resolveExclusiveCompanyGeminiKey(companyId, { rethrowVaultError: true });
+  const meta = await getCompanyGeminiMetadata(companyId);
+
+  if (!resolved.configured || !resolved.key) {
+    return {
+      configured: false,
+      activeModel: meta.geminiModel,
+      recommendedModel: null,
+      models: [],
+    };
+  }
+
+  const aiClient = createGoogleGenAiClient(resolved.key);
+  const models = await listAvailableGeminiModels({
+    apiKey: resolved.key,
+    aiClient,
+  });
+
+  if (models.length > 0 && meta.geminiModel) {
+    await persistCompanyGeminiModel(companyId, meta.geminiModel, models);
+  }
+
+  const recommendedModel = models.find((m) => m.recommended)?.id || models[0]?.id || null;
+  return {
+    configured: true,
+    activeModel: meta.geminiModel || recommendedModel,
+    recommendedModel,
+    models,
+  };
 }
 
 export async function testCompanyGeminiConnection(params: {
@@ -566,6 +713,9 @@ export async function testCompanyGeminiConnection(params: {
       success: false,
       configured: false,
       maskedKey: null,
+      activeModel: null,
+      model: null,
+      availableModels: [],
       status: 'UNCONFIGURED',
       message: 'Nenhuma chave Gemini exclusiva configurada para esta empresa.',
     };
@@ -580,10 +730,26 @@ export async function testCompanyGeminiConnection(params: {
   let promptTokens = 0;
   let outputTokens = 0;
   let totalTokens = 0;
+  let activeModel: string | null = null;
+  let autoSwitchedFrom: string | null = null;
+  let availableModels: GeminiModelDescriptor[] = [];
   const started = Date.now();
 
-  if (isExternalServicesDisabled()) {
+  const hasTestOverride = Boolean(getGeminiClientOverrideForTests()) || hasGeminiBaseUrlOverride();
+
+  if (isExternalServicesDisabled() && !hasTestOverride) {
     const trimmedKey = resolved.key.trim();
+    const savedMeta = await getCompanyGeminiMetadata(companyId);
+    activeModel = savedMeta.geminiModel || DEFAULT_GEMINI_SEARCH_MODEL;
+    availableModels = [
+      {
+        id: activeModel,
+        name: `models/${activeModel}`,
+        displayName: activeModel,
+        supportedMethods: ['generateContent'],
+        recommended: true,
+      },
+    ];
     const looksRateLimited = trimmedKey.toLowerCase().includes('ratelimit') || trimmedKey.includes('429');
     const looksInvalid =
       trimmedKey.length < 12 || trimmedKey.toLowerCase().includes('invalid');
@@ -599,45 +765,146 @@ export async function testCompanyGeminiConnection(params: {
     } else {
       success = true;
       httpStatus = 200;
-      message = 'Chave Gemini da empresa validada com sucesso (modo seguro de teste).';
+      message = `Chave Gemini da empresa validada com sucesso no modelo ${activeModel} (modo seguro de teste).`;
     }
     latencyMs = Date.now() - started;
   } else {
-    let timer: NodeJS.Timeout | null = null;
     try {
-      const check = await validateExternalUrl('https://generativelanguage.googleapis.com');
-      if (!check.valid) {
-        throw new Error(check.error || 'Endpoint Gemini não autorizado.');
+      if (!hasTestOverride) {
+        const check = await validateExternalUrl('https://generativelanguage.googleapis.com');
+        if (!check.valid) {
+          throw new Error(check.error || 'Endpoint Gemini não autorizado.');
+        }
       }
 
-      const ai = new GoogleGenAI({ apiKey: resolved.key });
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          const timeoutErr: any = new Error('GEMINI_TEST_TIMEOUT');
-          timeoutErr.name = 'AbortError';
-          reject(timeoutErr);
-        }, 8000);
+      const ai = createGoogleGenAiClient(resolved.key);
+      const resolution = await resolveActiveGeminiModel({
+        companyId,
+        apiKey: resolved.key,
+        aiClient: ai,
       });
+      availableModels = resolution.availableModels;
 
-      const response: any = await Promise.race([
-        ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: 'Responda apenas OK',
-          config: {
-            maxOutputTokens: 32,
-            temperature: 0,
-            thinkingConfig: { thinkingBudget: 0 },
-          },
-        }),
-        timeoutPromise,
-      ]);
+      const triedModels: string[] = [];
+      let queue = [...resolution.candidates];
+      let lastErr: any = null;
+      let discoveryExecuted = availableModels.length > 0;
+
+      const pingModel = async (candidateModel: string) => {
+        let timer: NodeJS.Timeout | null = null;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              const timeoutErr: any = new Error('GEMINI_TEST_TIMEOUT');
+              timeoutErr.name = 'AbortError';
+              reject(timeoutErr);
+            }, 8000);
+          });
+
+          const callWithoutThinkingIfRejected = async () => {
+            try {
+              return await ai.models.generateContent({
+                model: candidateModel,
+                contents: 'Responda apenas OK',
+                config: {
+                  maxOutputTokens: 32,
+                  temperature: 0,
+                  thinkingConfig: { thinkingBudget: 0 },
+                },
+              });
+            } catch (cfgErr: any) {
+              const cfgMsg = String(cfgErr?.message || '');
+              if (
+                !isGeminiModelNotFoundError(cfgErr) &&
+                extractHttpStatusFromError(cfgErr) === 400 &&
+                /thinking/i.test(cfgMsg)
+              ) {
+                return await ai.models.generateContent({
+                  model: candidateModel,
+                  contents: 'Responda apenas OK',
+                  config: { maxOutputTokens: 32, temperature: 0 },
+                });
+              }
+              throw cfgErr;
+            }
+          };
+
+          return await Promise.race([callWithoutThinkingIfRejected(), timeoutPromise]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+
+      let finalResp: any = null;
+      while (queue.length > 0) {
+        const candidate = queue.shift()!;
+        if (!candidate || triedModels.includes(candidate)) continue;
+        triedModels.push(candidate);
+
+        try {
+          finalResp = await pingModel(candidate);
+          activeModel = candidate;
+          if (triedModels.length > 1) {
+            autoSwitchedFrom = triedModels[0];
+          }
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          if (!isGeminiModelNotFoundError(err)) {
+            throw err;
+          }
+
+          // Recebeu HTTP 404 / NOT_FOUND -> descobre modelos reais da chave se ainda não consultou
+          if (!discoveryExecuted) {
+            discoveryExecuted = true;
+            try {
+              availableModels = await listAvailableGeminiModels({
+                apiKey: resolved.key,
+                aiClient: ai,
+              });
+              for (const discovered of availableModels) {
+                if (!triedModels.includes(discovered.id) && !queue.includes(discovered.id)) {
+                  queue.unshift(discovered.id);
+                }
+              }
+              // Reordena mantendo os recém-descobertos por prioridade no topo
+              const discoveredIds = availableModels
+                .map((d) => d.id)
+                .filter((id) => !triedModels.includes(id));
+              const remainingFallbacks = queue.filter((id) => !discoveredIds.includes(id) && !triedModels.includes(id));
+              queue = [...discoveredIds, ...remainingFallbacks];
+            } catch {
+              // segue com a fila residual de fallback
+            }
+          }
+        }
+      }
+
+      if (!finalResp || !activeModel) {
+        throw lastErr || new Error('Nenhum modelo Gemini compatível disponível para esta chave.');
+      }
+
+      if (!discoveryExecuted) {
+        try {
+          availableModels = await listAvailableGeminiModels({
+            apiKey: resolved.key,
+            aiClient: ai,
+          });
+        } catch {
+          availableModels = [];
+        }
+      }
+
+      await persistCompanyGeminiModel(companyId, activeModel, availableModels);
 
       latencyMs = Date.now() - started;
       httpStatus = 200;
       success = true;
-      message = 'Conexão com Google Gemini autenticada com sucesso.';
+      message = autoSwitchedFrom
+        ? `Modelo "${autoSwitchedFrom}" indisponível (404). Conexão migrada e autenticada com sucesso em "${activeModel}".`
+        : `Conexão com Google Gemini (${activeModel}) autenticada com sucesso.`;
 
-      const um = response?.usageMetadata;
+      const um = finalResp?.usageMetadata;
       if (um) {
         promptTokens = typeof um.promptTokenCount === 'number' ? um.promptTokenCount : 0;
         outputTokens = typeof um.candidatesTokenCount === 'number' ? um.candidatesTokenCount : 0;
@@ -662,13 +929,14 @@ export async function testCompanyGeminiConnection(params: {
         message = 'Limite ou cota da API Gemini atingido (HTTP 429).';
       } else if (errStatus === 401 || errStatus === 403 || /API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED/i.test(safeErr)) {
         message = `Chave Gemini rejeitada pela API Google (HTTP ${errStatus || '401/403'}).`;
+      } else if (isGeminiModelNotFoundError(err)) {
+        httpStatus = 404;
+        message = `Nenhum modelo Gemini compatível respondeu ao teste (HTTP 404): ${safeErr}`;
       } else if (/fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|network/i.test(safeErr)) {
         message = `Erro de rede ao conectar ao Google Gemini: ${safeErr}`;
       } else {
         message = `Falha na conexão Gemini: ${safeErr}`;
       }
-    } finally {
-      if (timer) clearTimeout(timer);
     }
   }
 
@@ -705,6 +973,8 @@ export async function testCompanyGeminiConnection(params: {
       success,
       status: statusStr,
       maskedKey: resolved.maskedKey,
+      activeModel,
+      autoSwitchedFrom,
       latencyMs,
       httpStatus,
     },
@@ -719,6 +989,11 @@ export async function testCompanyGeminiConnection(params: {
     success,
     configured: true,
     maskedKey: resolved.maskedKey,
+    activeModel,
+    model: activeModel,
+    autoSwitchedFrom,
+    availableModels: availableModels.map((m) => m.id),
+    models: availableModels,
     status: statusStr,
     message,
     latencyMs,

@@ -42,13 +42,15 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
 
   int _computeEventDuration(Map<dynamic, dynamic> evt) {
     try {
-      final sRaw = evt['startDate']?.toString() ?? '';
-      final eRaw = evt['endDate']?.toString() ?? '';
+      final sRaw = evt['startDate']?.toString().trim() ?? '';
+      final eRaw = evt['endDate']?.toString().trim() ?? '';
       if (sRaw.isNotEmpty && eRaw.isNotEmpty) {
-        final s = DateTime.parse(sRaw.split('T')[0]);
-        final e = DateTime.parse(eRaw.split('T')[0]);
-        final diff = e.difference(s).inDays + 1;
-        return diff >= 1 ? diff : 1;
+        final s = DateTime.tryParse(sRaw.split('T').first);
+        final e = DateTime.tryParse(eRaw.split('T').first);
+        if (s != null && e != null) {
+          final diff = e.difference(s).inDays + 1;
+          return diff >= 1 ? diff : 1;
+        }
       }
     } catch (_) {}
     final rawDays = evt['durationDays'];
@@ -57,6 +59,14 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
       if (parsed != null && parsed >= 1) return parsed;
     }
     return 1;
+  }
+
+  List<Map<String, dynamic>> _safeEventsList(dynamic rawEvents) {
+    if (rawEvents is! List) return <Map<String, dynamic>>[];
+    return rawEvents
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
   }
 
   List<dynamic> get _filteredEvents {
@@ -109,7 +119,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
         _cityInfo = data['cityInfo'] is Map
             ? Map<String, dynamic>.from(data['cityInfo'] as Map)
             : null;
-        _searchResults = (data['events'] as List?) ?? [];
+        _searchResults = _safeEventsList(data['events']);
         _isCachedResult = true;
         _fetchedAt =
             data['fetchedAt']?.toString() ?? latest['savedAt']?.toString();
@@ -171,7 +181,7 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
         _cityInfo = data['cityInfo'] is Map
             ? Map<String, dynamic>.from(data['cityInfo'] as Map)
             : null;
-        _searchResults = (data['events'] as List?) ?? [];
+        _searchResults = _safeEventsList(data['events']);
         _isCachedResult = data['cached'] == true;
         _fetchedAt = data['fetchedAt']?.toString();
         _searchMeta = data['searchMeta'] is Map
@@ -181,8 +191,9 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
       });
     } catch (e) {
       if (!mounted) return;
+      final clean = e.toString().replaceFirst('Exception: ', '').trim();
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = clean.isNotEmpty ? clean : 'Falha ao consultar Eventos IA.';
         _isSearching = false;
       });
     }
@@ -643,14 +654,66 @@ class _ManualSearchScreenState extends State<ManualSearchScreen> {
                       margin: const EdgeInsets.only(bottom: 16),
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(10),
+                        color: _cardBg,
+                        borderRadius: BorderRadius.circular(12),
                         border:
-                            Border.all(color: Colors.redAccent.withOpacity(0.4)),
+                            Border.all(color: Colors.redAccent.withOpacity(0.55)),
                       ),
-                      child: Text(
-                        _error!,
-                        style: const TextStyle(color: Colors.redAccent),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.error_outline_rounded,
+                                  color: Colors.redAccent, size: 20),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Não foi possível concluir a busca',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _error!,
+                            style: const TextStyle(
+                              color: Color(0xFFFCA5A5),
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: LedButton.icon(
+                              onPressed: _isSearching
+                                  ? null
+                                  : () => _performSearch(
+                                        _searchController.text,
+                                        forceRefresh: true,
+                                      ),
+                              icon: const Icon(Icons.refresh_rounded,
+                                  size: 16, color: Colors.white),
+                              label: const Text(
+                                'Tentar novamente',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: LedButton.styleFrom(
+                                backgroundColor: _accent,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 10),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   if (_isSearching)

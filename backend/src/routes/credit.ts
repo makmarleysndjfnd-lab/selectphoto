@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { randomUUID } from 'crypto';
 import { prisma, Prisma } from '../services/prisma';
 import { authenticateToken, AuthRequest, requireAdminOrSupervisor } from '../middleware/authMiddleware';
 import { calculateCreditSchedule, validateCpf } from '../services/creditService';
@@ -57,6 +58,15 @@ function requireCreditAccess(req: AuthRequest, res: Response, next: any) {
 function isUserAdmin(req: AuthRequest): boolean {
   const role = req.user?.role || '';
   return ['COMPANY_ADMIN', 'ADMIN', 'SUPER_ADMIN', 'SUPERVISOR', 'SELLER_MANAGER'].includes(role);
+}
+
+/**
+ * Permissão estrita para baixa em lote e edição de parcelas/boletos.
+ * Restrito a ADMIN, COMPANY_ADMIN e SUPER_ADMIN (bloqueia SELLER, PHOTOGRAPHER e demais com 403).
+ */
+function isStrictCreditAdmin(req: AuthRequest): boolean {
+  const role = String(req.user?.role || '').toUpperCase();
+  return ['ADMIN', 'COMPANY_ADMIN', 'SUPER_ADMIN'].includes(role);
 }
 
 /**
@@ -1589,6 +1599,1010 @@ router.post(['/agreements/:id/payments', '/agreements/:id/pay'], authenticateTok
 
     console.error('Error registering credit payment:', error);
     res.status(500).json({ error: error.message || 'Erro ao registrar pagamento de crediário' });
+  }
+});
+
+/**
+ * POST /api/credit/agreements/:id/payments/batch
+ * Baixa em lote de múltiplas parcelas selecionadas (1, N ou todas abertas),
+ * com transação atômica, comissão sobre valor pago (Caixa Real) e sincronização Asaas (receiveInCash).
+ */
+router.post('/agreements/:id/payments/batch', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  const agreementId = req.params.id as string;
+  const requesterCompanyId = req.user?.companyId;
+  const currentUserId = req.user?.id;
+  const currentUserRole = String(req.user?.role || '').toUpperCase();
+
+  if (!currentUserId) {
+    res.status(401).json({ error: 'Usuário não identificado.' });
+    return;
+  }
+
+  if (!isStrictCreditAdmin(req)) {
+    res.status(403).json({
+      error: 'Acesso negado: baixa em lote é restrita a ADMIN, COMPANY_ADMIN e SUPER_ADMIN.',
+    });
+    return;
+  }
+
+  if (!requesterCompanyId && currentUserRole !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada.' });
+    return;
+  }
+
+  const rawIdempotencyKey =
+    req.body?.idempotencyKey ??
+    req.headers['idempotency-key'] ??
+    req.headers['x-idempotency-key'];
+  const explicitIdempotencyKey =
+    typeof rawIdempotencyKey === 'string' && rawIdempotencyKey.trim()
+      ? rawIdempotencyKey.trim()
+      : '';
+  const effectiveIdempotencyKey =
+    explicitIdempotencyKey || `batch_${agreementId}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+
+  try {
+    const rawIds = req.body?.installmentIds;
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      res.status(400).json({
+        error: 'Informe installmentIds com ao menos uma parcela aberta para baixa em lote.',
+      });
+      return;
+    }
+
+    const installmentIds = Array.from(
+      new Set(rawIds.map((v: unknown) => String(v || '').trim()).filter(Boolean))
+    );
+    if (installmentIds.length === 0) {
+      res.status(400).json({ error: 'Lista de parcelas selecionadas está vazia.' });
+      return;
+    }
+
+    const paymentMethod = String(req.body?.paymentMethod || 'CASH').trim().toUpperCase();
+    const destination =
+      req.body?.destination === 'SELLER_HANDS' ? 'SELLER_HANDS' : 'COMPANY_ACCOUNT';
+    const rawNotes = req.body?.notes ?? req.body?.observation ?? '';
+    const notes = typeof rawNotes === 'string' && rawNotes.trim() ? rawNotes.trim() : null;
+    const receiptUrl =
+      typeof req.body?.receiptUrl === 'string' && req.body.receiptUrl.trim()
+        ? req.body.receiptUrl.trim()
+        : null;
+
+    let paymentDate = new Date();
+    if (req.body?.paidAt) {
+      const parsedDate = new Date(String(req.body.paidAt));
+      if (Number.isNaN(parsedDate.getTime())) {
+        res.status(400).json({ error: 'Data de pagamento inválida.' });
+        return;
+      }
+      paymentDate = parsedDate;
+    }
+
+    const preAgreement = await prisma.creditAgreement.findUnique({
+      where: { id: agreementId },
+      select: { id: true, companyId: true },
+    });
+    if (!preAgreement) {
+      res.status(404).json({ error: 'Contrato de crediário não encontrado.' });
+      return;
+    }
+    if (currentUserRole !== 'SUPER_ADMIN' && preAgreement.companyId !== requesterCompanyId) {
+      res.status(403).json({
+        error: 'Isolamento multi-tenant: proibido realizar baixa em contrato de outra empresa.',
+      });
+      return;
+    }
+
+    const agreementCompanyId = preAgreement.companyId;
+
+    if (explicitIdempotencyKey) {
+      const replayCheck = await prisma.creditPayment.findUnique({
+        where: { idempotencyKey: explicitIdempotencyKey },
+        include: {
+          allocations: true,
+          agreement: { select: { id: true, remainingPrincipalCents: true, remainingChargesCents: true, status: true } },
+          commissions: { where: { type: 'INSTALLMENT', isReversed: false } },
+        },
+      });
+      if (replayCheck) {
+        if (replayCheck.companyId !== agreementCompanyId || replayCheck.agreementId !== agreementId) {
+          res.status(409).json({
+            error: 'Chave de idempotência já utilizada em outro contrato ou empresa.',
+            code: 'IDEMPOTENCY_KEY_CONFLICT',
+          });
+          return;
+        }
+        res.status(200).json(buildCreditPaymentReplayResponse(replayCheck));
+        return;
+      }
+    }
+
+    const opCfg = await getCompanyOperationalConfig(agreementCompanyId);
+
+    const txOut = await prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${agreementId} FOR UPDATE`;
+
+        const agreement = await tx.creditAgreement.findUnique({
+          where: { id: agreementId },
+          include: {
+            installments: {
+              orderBy: { installmentNumber: 'asc' },
+              include: { asaasCharge: true },
+            },
+          },
+        });
+        if (!agreement) {
+          throw { status: 404, message: 'Contrato de crediário não encontrado.' };
+        }
+
+        const instById = new Map(agreement.installments.map((i) => [i.id, i]));
+        const selectedInstallments: typeof agreement.installments = [];
+
+        for (const reqInstId of installmentIds) {
+          const found = instById.get(reqInstId);
+          if (!found) {
+            const elsewhere = await tx.creditInstallment.findUnique({
+              where: { id: reqInstId },
+              include: { agreement: { select: { companyId: true } } },
+            });
+            if (!elsewhere) {
+              throw {
+                status: 404,
+                code: 'INSTALLMENT_NOT_FOUND',
+                message: `Parcela ${reqInstId} não encontrada.`,
+              };
+            }
+            if (currentUserRole !== 'SUPER_ADMIN' && elsewhere.agreement.companyId !== requesterCompanyId) {
+              throw {
+                status: 403,
+                code: 'CROSS_TENANT_INSTALLMENT',
+                message: 'Isolamento multi-tenant: parcela pertence a outra empresa.',
+              };
+            }
+            throw {
+              status: 400,
+              code: 'INSTALLMENT_AGREEMENT_MISMATCH',
+              message: `Parcela ${reqInstId} não pertence a este contrato.`,
+            };
+          }
+
+          const unpaidCents = found.amountCents - found.paidCents;
+          if (
+            found.status === 'PAID' ||
+            found.status === 'RENEGOTIATED' ||
+            unpaidCents <= 0
+          ) {
+            throw {
+              status: 400,
+              code: 'INSTALLMENT_NOT_OPEN',
+              message: `A Parcela #${found.installmentNumber} já está quitada ou renegociada e não pode entrar na baixa em lote.`,
+            };
+          }
+          selectedInstallments.push(found);
+        }
+
+        selectedInstallments.sort((a, b) => a.installmentNumber - b.installmentNumber);
+
+        let totalBatchCents = 0;
+        let totalPrincipalAllocatedCents = 0;
+        let totalChargesAllocatedCents = 0;
+        const perInstallmentBreakdown: {
+          inst: (typeof selectedInstallments)[number];
+          allocatedCents: number;
+          principalAllocatedCents: number;
+          chargesAllocatedCents: number;
+        }[] = [];
+
+        for (const inst of selectedInstallments) {
+          const unpaidCents = inst.amountCents - inst.paidCents;
+          const chargesRemaining = Math.max(0, (inst.chargesCents || 0) - (inst.paidChargesCents || 0));
+          const chargesAllocated = Math.min(unpaidCents, chargesRemaining);
+          const principalAllocated = unpaidCents - chargesAllocated;
+
+          totalBatchCents += unpaidCents;
+          totalPrincipalAllocatedCents += principalAllocated;
+          totalChargesAllocatedCents += chargesAllocated;
+
+          perInstallmentBreakdown.push({
+            inst,
+            allocatedCents: unpaidCents,
+            principalAllocatedCents: principalAllocated,
+            chargesAllocatedCents: chargesAllocated,
+          });
+        }
+
+        const effectiveReceiverId =
+          destination === 'SELLER_HANDS' ? agreement.sellerId : currentUserId;
+
+        const payment = await tx.creditPayment.create({
+          data: {
+            agreementId: agreement.id,
+            companyId: agreementCompanyId,
+            amountCents: totalBatchCents,
+            principalPaidCents: totalPrincipalAllocatedCents,
+            chargesPaidCents: totalChargesAllocatedCents,
+            paymentMethod,
+            receivedByRole: destination === 'SELLER_HANDS' ? 'SELLER' : currentUserRole,
+            receiverUserId: effectiveReceiverId,
+            destination,
+            paidAt: paymentDate,
+            receiptUrl,
+            notes:
+              notes ||
+              `Baixa em lote de ${selectedInstallments.length} parcela(s): #${selectedInstallments.map((s) => s.installmentNumber).join(', #')}`,
+            idempotencyKey: effectiveIdempotencyKey,
+          },
+        });
+
+        const effectiveRate =
+          agreement.installmentCommissionRate !== undefined &&
+          agreement.installmentCommissionRate !== null
+            ? agreement.installmentCommissionRate
+            : (opCfg.creditInstallmentCommissionPercent ?? 10) / 100;
+
+        const allocationsCreated: any[] = [];
+        const commissionsCreated: any[] = [];
+        const chargesToSyncInCash: {
+          installmentId: string;
+          installmentNumber: number;
+          chargeId: string;
+          amountCents: number;
+          paymentDateIso: string;
+        }[] = [];
+
+        for (const item of perInstallmentBreakdown) {
+          const { inst, allocatedCents, principalAllocatedCents, chargesAllocatedCents } = item;
+
+          const alloc = await tx.creditPaymentAllocation.create({
+            data: {
+              paymentId: payment.id,
+              installmentId: inst.id,
+              allocatedCents,
+              principalAllocatedCents,
+              chargesAllocatedCents,
+            },
+          });
+          allocationsCreated.push(alloc);
+
+          await tx.creditInstallment.update({
+            where: { id: inst.id },
+            data: {
+              paidCents: inst.amountCents,
+              paidChargesCents: inst.chargesCents || 0,
+              status: 'PAID',
+              paidAt: paymentDate,
+            },
+          });
+
+          const instCommissionCents = Math.round(principalAllocatedCents * effectiveRate);
+          if (instCommissionCents > 0) {
+            const comm = await tx.creditCommission.create({
+              data: {
+                agreementId: agreement.id,
+                paymentId: payment.id,
+                sellerId: agreement.sellerId,
+                companyId: agreementCompanyId,
+                amountCents: instCommissionCents,
+                status: 'RELEASED',
+                type: 'INSTALLMENT',
+                createdAt: paymentDate,
+              },
+            });
+            commissionsCreated.push(comm);
+          }
+
+          if (
+            inst.asaasCharge &&
+            inst.asaasCharge.status !== 'RECEIVED' &&
+            inst.asaasCharge.status !== 'RECEIVED_IN_CASH' &&
+            inst.asaasCharge.status !== 'REFUNDED' &&
+            inst.asaasCharge.status !== 'DELETED'
+          ) {
+            chargesToSyncInCash.push({
+              installmentId: inst.id,
+              installmentNumber: inst.installmentNumber,
+              chargeId: inst.asaasCharge.externalId,
+              amountCents: allocatedCents,
+              paymentDateIso: paymentDate.toISOString().split('T')[0],
+            });
+          }
+        }
+
+        const remainingOpenCount = await tx.creditInstallment.count({
+          where: {
+            agreementId: agreement.id,
+            status: { in: ['PENDING', 'PARTIALLY_PAID', 'OVERDUE'] },
+          },
+        });
+
+        let newRemainingPrincipalCents = Math.max(
+          0,
+          agreement.remainingPrincipalCents - totalPrincipalAllocatedCents
+        );
+        const newPaidPrincipalCents = agreement.paidPrincipalCents + totalPrincipalAllocatedCents;
+        let newRemainingChargesCents = Math.max(
+          0,
+          (agreement.remainingChargesCents || 0) - totalChargesAllocatedCents
+        );
+        const isSettled =
+          remainingOpenCount === 0 ||
+          (newRemainingPrincipalCents <= 0 && newRemainingChargesCents <= 0);
+        if (isSettled) {
+          newRemainingPrincipalCents = 0;
+          newRemainingChargesCents = 0;
+        }
+
+        await tx.creditAgreement.update({
+          where: { id: agreement.id },
+          data: {
+            remainingPrincipalCents: newRemainingPrincipalCents,
+            paidPrincipalCents: newPaidPrincipalCents,
+            remainingChargesCents: newRemainingChargesCents,
+            status: isSettled ? 'SETTLED' : agreement.status,
+          },
+        });
+
+        await recordOperationalAuditEvent(
+          {
+            companyId: agreementCompanyId,
+            category: 'PAYMENT',
+            action: 'CREDIT_BATCH_PAYMENT_RECEIVED',
+            entityType: 'CREDIT_AGREEMENT',
+            entityReference: `CRD-${String(agreement.id).slice(0, 8).toUpperCase()}`,
+            entityId: agreement.id,
+            previousValues: {
+              remainingPrincipalCents: agreement.remainingPrincipalCents,
+              remainingChargesCents: agreement.remainingChargesCents || 0,
+            },
+            newValues: {
+              paymentId: payment.id,
+              installmentIds,
+              installmentNumbers: selectedInstallments.map((s) => s.installmentNumber),
+              amountCents: totalBatchCents,
+              principalPaidCents: totalPrincipalAllocatedCents,
+              chargesPaidCents: totalChargesAllocatedCents,
+              paymentMethod,
+              commissionRate: effectiveRate,
+              totalCommissionCents: commissionsCreated.reduce((acc, c) => acc + c.amountCents, 0),
+              remainingPrincipalCents: newRemainingPrincipalCents,
+              isSettled,
+            },
+            reason:
+              notes ||
+              `Baixa em lote de ${selectedInstallments.length} parcela(s) via ${paymentMethod}`,
+            authorUserId: currentUserId,
+            authorName: req.user?.name || 'Administrador',
+            authorRole: currentUserRole,
+            ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+          },
+          tx
+        );
+
+        await tx.clientTimeline.create({
+          data: {
+            clientId: agreement.clientId,
+            previousStatus: 'EM_ABERTO',
+            newStatus: isSettled ? 'QUITADO' : 'PARCIALMENTE_PAGO',
+            authorId: currentUserId,
+            authorRole: currentUserRole,
+            action: 'CREDIT_BATCH_PAYMENT_RECEIVED',
+            reason: `Baixa em lote (${selectedInstallments.length} boletos) de R$ ${(totalBatchCents / 100).toFixed(2)} via ${paymentMethod}. Saldo restante: R$ ${(newRemainingPrincipalCents / 100).toFixed(2)}`,
+          },
+        });
+
+        return {
+          payment,
+          totalBatchCents,
+          principalPaidCents: totalPrincipalAllocatedCents,
+          chargesPaidCents: totalChargesAllocatedCents,
+          remainingPrincipalCents: newRemainingPrincipalCents,
+          remainingChargesCents: newRemainingChargesCents,
+          isSettled,
+          allocations: allocationsCreated,
+          commissions: commissionsCreated,
+          settledInstallmentIds: selectedInstallments.map((s) => s.id),
+          chargesToSyncInCash,
+        };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 20000,
+        maxWait: 10000,
+      }
+    );
+
+    const hasLocalTestOverride =
+      process.env.NODE_ENV === 'test' &&
+      Boolean(
+        process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+          /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+            process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+          )
+      );
+    const isSimMode =
+      (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+      !hasLocalTestOverride;
+
+    const asaasSyncItems: {
+      installmentId: string;
+      installmentNumber: number;
+      chargeId: string;
+      synced: boolean;
+      status: string;
+      message: string;
+    }[] = [];
+
+    let attemptedCount = 0;
+    let syncedCount = 0;
+
+    for (const c of txOut.chargesToSyncInCash) {
+      const chargeCfg = await getCompanyAsaasConfigForExistingCharge(agreementCompanyId, c.chargeId);
+      const canCallAsaas =
+        chargeCfg.mode !== 'DISABLED' &&
+        (Boolean(chargeCfg.apiKey && chargeCfg.apiKey.trim()) || isSimMode);
+
+      if (!canCallAsaas) {
+        asaasSyncItems.push({
+          installmentId: c.installmentId,
+          installmentNumber: c.installmentNumber,
+          chargeId: c.chargeId,
+          synced: false,
+          status: 'ASAAS_DISABLED',
+          message: 'Asaas inativo para sincronização automática.',
+        });
+        continue;
+      }
+
+      attemptedCount++;
+      const valueReais = Number((c.amountCents / 100.0).toFixed(2));
+      try {
+        await notifyAsaasReceiveInCash(
+          agreementCompanyId,
+          c.chargeId,
+          c.paymentDateIso,
+          valueReais
+        );
+        await prisma.asaasCharge.update({
+          where: { externalId: c.chargeId },
+          data: {
+            isManualPaymentSync: true,
+            status: 'RECEIVED_IN_CASH',
+            settledAt: new Date(),
+          },
+        });
+        syncedCount++;
+        asaasSyncItems.push({
+          installmentId: c.installmentId,
+          installmentNumber: c.installmentNumber,
+          chargeId: c.chargeId,
+          synced: true,
+          status: 'RECEIVED_IN_CASH',
+          message: 'Sincronizado no Asaas (RECEIVED_IN_CASH).',
+        });
+        await recordOperationalAuditEvent({
+          companyId: agreementCompanyId,
+          category: 'PAYMENT',
+          action: 'ASAAS_RECEIVE_IN_CASH_SYNCED',
+          entityType: 'CREDIT_PAYMENT',
+          entityReference: `CRD-${String(agreementId).slice(0, 8).toUpperCase()}`,
+          entityId: txOut.payment.id,
+          previousValues: { chargeId: c.chargeId },
+          newValues: {
+            chargeId: c.chargeId,
+            installmentId: c.installmentId,
+            installmentNumber: c.installmentNumber,
+            status: 'RECEIVED_IN_CASH',
+            value: valueReais,
+            paymentDate: c.paymentDateIso,
+          },
+          reason: `Baixa em lote sincronizada no Asaas via receiveInCash (Parcela #${c.installmentNumber})`,
+          authorUserId: currentUserId,
+          authorName: req.user?.name || 'Administrador',
+          authorRole: currentUserRole,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        }).catch(() => {});
+      } catch (err: any) {
+        const errMsg = err?.message || String(err);
+        asaasSyncItems.push({
+          installmentId: c.installmentId,
+          installmentNumber: c.installmentNumber,
+          chargeId: c.chargeId,
+          synced: false,
+          status: 'SYNC_FAILED',
+          message: errMsg,
+        });
+        await recordOperationalAuditEvent({
+          companyId: agreementCompanyId,
+          category: 'PAYMENT',
+          action: 'ASAAS_RECEIVE_IN_CASH_FAILED',
+          entityType: 'CREDIT_PAYMENT',
+          entityReference: `CRD-${String(agreementId).slice(0, 8).toUpperCase()}`,
+          entityId: txOut.payment.id,
+          previousValues: { chargeId: c.chargeId },
+          newValues: {
+            chargeId: c.chargeId,
+            installmentId: c.installmentId,
+            installmentNumber: c.installmentNumber,
+            error: errMsg,
+          },
+          reason: `Baixa em lote mantida localmente; falha no receiveInCash Asaas: ${errMsg}`,
+          authorUserId: currentUserId,
+          authorName: req.user?.name || 'Administrador',
+          authorRole: currentUserRole,
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        }).catch(() => {});
+      }
+    }
+
+    const asaasSync = {
+      attempted: attemptedCount > 0,
+      synced: attemptedCount > 0 && syncedCount === attemptedCount,
+      partialSuccess: syncedCount > 0 && syncedCount < attemptedCount,
+      attemptedCount,
+      syncedCount,
+      failedCount: Math.max(0, attemptedCount - syncedCount),
+      status:
+        txOut.chargesToSyncInCash.length === 0
+          ? 'NO_ASAAS_CHARGE'
+          : attemptedCount === 0
+            ? 'ASAAS_DISABLED'
+            : syncedCount === attemptedCount
+              ? 'RECEIVED_IN_CASH'
+              : syncedCount > 0
+                ? 'PARTIAL_SYNC'
+                : 'SYNC_FAILED',
+      message:
+        txOut.chargesToSyncInCash.length === 0
+          ? 'Baixa em lote registrada localmente (parcelas sem cobrança Asaas).'
+          : attemptedCount === 0
+            ? 'Baixa em lote registrada localmente (Asaas inativo para sincronização).'
+            : syncedCount === attemptedCount
+              ? `Baixa em lote concluída e ${syncedCount} cobrança(s) sincronizada(s) no Asaas (RECEIVED_IN_CASH).`
+              : `Baixa em lote concluída localmente (${syncedCount}/${attemptedCount} cobranças sincronizadas no Asaas).`,
+      items: asaasSyncItems,
+    };
+
+    let serasaAutoRemoval: any = null;
+    if (txOut.isSettled) {
+      try {
+        serasaAutoRemoval = await triggerAutoSerasaRemovalOnDebtChange({
+          companyId: agreementCompanyId,
+          agreementId,
+          triggerType: 'SETTLEMENT',
+          actorUserId: currentUserId,
+          actorName: req.user?.name || 'Admin/Sistema',
+          reason: 'Quitação integral via baixa em lote — exclusão Serasa (Súmula 548 STJ).',
+          ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+        });
+      } catch (serasaErr) {
+        console.warn('[Credit Batch Payment] Aviso ao disparar baixa automática Serasa:', serasaErr);
+      }
+    }
+
+    const totalCommCents = txOut.commissions.reduce((acc: number, c: any) => acc + (c.amountCents || 0), 0);
+
+    res.status(201).json({
+      success: true,
+      payment: txOut.payment,
+      paymentId: txOut.payment.id,
+      amount: Number((txOut.totalBatchCents / 100).toFixed(2)),
+      amountCents: txOut.totalBatchCents,
+      principalPaidCents: txOut.principalPaidCents,
+      chargesPaidCents: txOut.chargesPaidCents,
+      remainingPrincipalCents: txOut.remainingPrincipalCents,
+      remainingPrincipal: Number((txOut.remainingPrincipalCents / 100).toFixed(2)),
+      remainingChargesCents: txOut.remainingChargesCents,
+      remainingCharges: Number((txOut.remainingChargesCents / 100).toFixed(2)),
+      isSettled: txOut.isSettled,
+      paidCount: txOut.settledInstallmentIds.length,
+      settledInstallmentIds: txOut.settledInstallmentIds,
+      allocations: txOut.allocations,
+      allocationsCount: txOut.allocations.length,
+      commissions: txOut.commissions,
+      commissionGenerated: Number((totalCommCents / 100).toFixed(2)),
+      commissionGeneratedCents: totalCommCents,
+      asaasSync,
+      ...(serasaAutoRemoval ? { serasaAutoRemoval } : {}),
+    });
+  } catch (error: any) {
+    if (error?.status && error?.message) {
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
+      return;
+    }
+    console.error('Error registering batch credit payment:', error);
+    res.status(500).json({ error: error.message || 'Erro ao processar baixa em lote de boletos' });
+  }
+});
+
+/**
+ * PUT /api/credit/agreements/:agreementId/installments/:installmentId
+ * Edição de vencimento, valor e observação de parcela não paga, recalculando saldo do contrato
+ * e sincronizando cobrança aberta no Asaas via PUT /v3/payments/{asaasPaymentId}.
+ */
+router.put('/agreements/:agreementId/installments/:installmentId', authenticateToken, requireCreditAccess, async (req: AuthRequest, res: Response) => {
+  const agreementId = req.params.agreementId as string;
+  const installmentId = req.params.installmentId as string;
+  const requesterCompanyId = req.user?.companyId;
+  const currentUserId = req.user?.id;
+  const currentUserRole = String(req.user?.role || '').toUpperCase();
+
+  if (!currentUserId) {
+    res.status(401).json({ error: 'Usuário não identificado.' });
+    return;
+  }
+
+  if (!isStrictCreditAdmin(req)) {
+    res.status(403).json({
+      error: 'Acesso negado: edição de parcelas e boletos é restrita a ADMIN, COMPANY_ADMIN e SUPER_ADMIN.',
+    });
+    return;
+  }
+
+  if (!requesterCompanyId && currentUserRole !== 'SUPER_ADMIN') {
+    res.status(403).json({ error: 'Empresa não identificada.' });
+    return;
+  }
+
+  try {
+    const existingAgreement = await prisma.creditAgreement.findUnique({
+      where: { id: agreementId },
+      select: { id: true, companyId: true },
+    });
+    if (!existingAgreement) {
+      res.status(404).json({ error: 'Contrato de crediário não encontrado.' });
+      return;
+    }
+    if (currentUserRole !== 'SUPER_ADMIN' && existingAgreement.companyId !== requesterCompanyId) {
+      res.status(403).json({
+        error: 'Isolamento multi-tenant: proibido editar parcelas de contrato de outra empresa.',
+      });
+      return;
+    }
+
+    const rawInstallment = await prisma.creditInstallment.findUnique({
+      where: { id: installmentId },
+      include: {
+        asaasCharge: true,
+        agreement: { select: { companyId: true } },
+      },
+    });
+    if (!rawInstallment) {
+      res.status(404).json({ error: 'Parcela não encontrada.' });
+      return;
+    }
+    if (currentUserRole !== 'SUPER_ADMIN' && rawInstallment.agreement.companyId !== requesterCompanyId) {
+      res.status(403).json({
+        error: 'Isolamento multi-tenant: parcela pertence a outra empresa.',
+      });
+      return;
+    }
+    if (rawInstallment.agreementId !== agreementId) {
+      res.status(400).json({ error: 'A parcela informada não pertence a este contrato.' });
+      return;
+    }
+
+    if (
+      rawInstallment.status === 'PAID' ||
+      rawInstallment.status === 'RENEGOTIATED' ||
+      rawInstallment.paidCents >= rawInstallment.amountCents
+    ) {
+      res.status(400).json({
+        error: 'Parcelas já quitadas ou renegociadas não podem ser editadas.',
+        code: 'INSTALLMENT_ALREADY_PAID',
+      });
+      return;
+    }
+
+    const { dueDate: rawDueDate, amountCents: rawAmountCents, amount: rawAmount, notes, observation } = req.body || {};
+    const hasDueDate = rawDueDate !== undefined && rawDueDate !== null && String(rawDueDate).trim() !== '';
+    const hasAmount =
+      (rawAmountCents !== undefined && rawAmountCents !== null && String(rawAmountCents).trim() !== '') ||
+      (rawAmount !== undefined && rawAmount !== null && String(rawAmount).trim() !== '');
+    const rawNoteStr = notes ?? observation;
+    const hasNotes = typeof rawNoteStr === 'string';
+
+    if (!hasDueDate && !hasAmount && !hasNotes) {
+      res.status(400).json({
+        error: 'Informe ao menos um campo para atualizar (dueDate, amountCents/amount ou notes).',
+      });
+      return;
+    }
+
+    let nextDueDate = rawInstallment.dueDate;
+    let nextDueDateYmd = rawInstallment.dueDate.toISOString().split('T')[0];
+
+    if (hasDueDate) {
+      const dueStr = String(rawDueDate).trim();
+      const ymdMatch = dueStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (ymdMatch) {
+        const ymd = `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
+        const parsedNoon = new Date(`${ymd}T12:00:00.000Z`);
+        if (Number.isNaN(parsedNoon.getTime())) {
+          res.status(400).json({ error: 'Data de vencimento inválida.' });
+          return;
+        }
+        nextDueDate = parsedNoon;
+        nextDueDateYmd = ymd;
+      } else {
+        const parsedFull = new Date(dueStr);
+        if (Number.isNaN(parsedFull.getTime())) {
+          res.status(400).json({ error: 'Data de vencimento inválida.' });
+          return;
+        }
+        nextDueDate = parsedFull;
+        nextDueDateYmd = parsedFull.toISOString().split('T')[0];
+      }
+    }
+
+    let nextAmountCents = rawInstallment.amountCents;
+    if (hasAmount) {
+      const computed =
+        rawAmountCents !== undefined && rawAmountCents !== null && String(rawAmountCents).trim() !== ''
+          ? Math.round(Number(rawAmountCents))
+          : Math.round(Number(String(rawAmount).replace(',', '.')) * 100);
+      if (!Number.isFinite(computed) || computed <= 0) {
+        res.status(400).json({ error: 'Valor da parcela inválido.' });
+        return;
+      }
+      if (computed <= rawInstallment.paidCents) {
+        res.status(400).json({
+          error: `O novo valor (R$ ${(computed / 100).toFixed(2)}) não pode ser menor ou igual ao valor já pago nesta parcela (R$ ${(rawInstallment.paidCents / 100).toFixed(2)}).`,
+        });
+        return;
+      }
+      nextAmountCents = computed;
+    }
+
+    const openAsaasCharge =
+      rawInstallment.asaasCharge &&
+      (rawInstallment.asaasCharge.status === 'PENDING' ||
+        rawInstallment.asaasCharge.status === 'OVERDUE')
+        ? rawInstallment.asaasCharge
+        : null;
+
+    if (openAsaasCharge && nextAmountCents < 500) {
+      res.status(400).json({
+        error: 'O valor mínimo permitido para boleto/cobrança integrada no Asaas é R$ 5,00 (500 centavos).',
+        code: 'ASAAS_MIN_AMOUNT_500_CENTS',
+      });
+      return;
+    }
+
+    const cleanNote = hasNotes && String(rawNoteStr).trim() ? String(rawNoteStr).trim() : null;
+    const companyId = existingAgreement.companyId;
+    const todayBrtStart = toBrtStartOfDay(new Date());
+
+    const txResult = await prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "CreditAgreement" WHERE id = ${agreementId} FOR UPDATE`;
+
+        const agreement = await tx.creditAgreement.findUnique({
+          where: { id: agreementId },
+        });
+        if (!agreement) {
+          throw { status: 404, message: 'Contrato não encontrado.' };
+        }
+
+        const currentInst = await tx.creditInstallment.findUnique({
+          where: { id: installmentId },
+          include: { asaasCharge: true },
+        });
+        if (!currentInst || currentInst.status === 'PAID' || currentInst.status === 'RENEGOTIATED') {
+          throw {
+            status: 400,
+            code: 'INSTALLMENT_ALREADY_PAID',
+            message: 'Parcelas já quitadas ou renegociadas não podem ser editadas.',
+          };
+        }
+
+        const nextChargesCents = Math.min(currentInst.chargesCents || 0, nextAmountCents);
+        const nextPrincipalCents = Math.max(0, nextAmountCents - nextChargesCents);
+        const nextStatus =
+          currentInst.paidCents > 0
+            ? 'PARTIALLY_PAID'
+            : nextDueDate < todayBrtStart
+              ? 'OVERDUE'
+              : 'PENDING';
+
+        const updatedInstallment = await tx.creditInstallment.update({
+          where: { id: installmentId },
+          data: {
+            dueDate: nextDueDate,
+            amountCents: nextAmountCents,
+            principalCents: nextPrincipalCents,
+            chargesCents: nextChargesCents,
+            status: nextStatus,
+          },
+          include: { asaasCharge: true },
+        });
+
+        const allActiveInsts = await tx.creditInstallment.findMany({
+          where: {
+            agreementId: agreement.id,
+            status: { not: 'RENEGOTIATED' },
+          },
+        });
+
+        const totalActiveAmountCents = allActiveInsts.reduce((s, i) => s + i.amountCents, 0);
+        const totalUnpaidCents = allActiveInsts.reduce(
+          (s, i) => s + Math.max(0, i.amountCents - i.paidCents),
+          0
+        );
+        const totalUnpaidChargesCents = allActiveInsts.reduce(
+          (s, i) => s + Math.max(0, (i.chargesCents || 0) - (i.paidChargesCents || 0)),
+          0
+        );
+        const newRemainingPrincipalCents = Math.max(0, totalUnpaidCents - totalUnpaidChargesCents);
+        const newFinancedPrincipalCents = Math.max(
+          0,
+          totalActiveAmountCents - (agreement.renegotiationChargesCents || 0)
+        );
+        const newTotalSaleCents = agreement.downPaymentCents + newFinancedPrincipalCents;
+
+        const updatedAgreement = await tx.creditAgreement.update({
+          where: { id: agreement.id },
+          data: {
+            totalSaleCents: newTotalSaleCents,
+            financedPrincipalCents: newFinancedPrincipalCents,
+            remainingPrincipalCents: newRemainingPrincipalCents,
+            remainingChargesCents: totalUnpaidChargesCents,
+          },
+        });
+
+        await recordOperationalAuditEvent(
+          {
+            companyId,
+            category: 'CONTRACT',
+            action: 'CREDIT_INSTALLMENT_UPDATED',
+            entityType: 'CREDIT_INSTALLMENT',
+            entityReference: `CRD-${String(agreementId).slice(0, 8).toUpperCase()}#P${currentInst.installmentNumber}`,
+            entityId: currentInst.id,
+            previousValues: {
+              dueDate: currentInst.dueDate.toISOString(),
+              amountCents: currentInst.amountCents,
+              status: currentInst.status,
+              agreementRemainingPrincipalCents: agreement.remainingPrincipalCents,
+            },
+            newValues: {
+              dueDate: updatedInstallment.dueDate.toISOString(),
+              amountCents: updatedInstallment.amountCents,
+              status: updatedInstallment.status,
+              agreementRemainingPrincipalCents: updatedAgreement.remainingPrincipalCents,
+              observation: cleanNote,
+            },
+            reason:
+              cleanNote ||
+              `Alteração da Parcela #${currentInst.installmentNumber} (vencimento/valor) pelo Admin`,
+            authorUserId: currentUserId,
+            authorName: req.user?.name || 'Administrador',
+            authorRole: currentUserRole,
+            ipAddress: (req.ip || req.socket?.remoteAddress || null) as string | null,
+          },
+          tx
+        );
+
+        return { updatedInstallment, updatedAgreement };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 15000,
+      }
+    );
+
+    let asaasSync: {
+      attempted: boolean;
+      synced: boolean;
+      status: string;
+      chargeId?: string;
+      message: string;
+    } = {
+      attempted: false,
+      synced: false,
+      status: 'NO_OPEN_ASAAS_CHARGE',
+      message: 'Parcela atualizada localmente (sem boleto/cobrança Asaas em aberto).',
+    };
+
+    if (openAsaasCharge) {
+      const hasLocalTestOverride =
+        process.env.NODE_ENV === 'test' &&
+        Boolean(
+          process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE &&
+            /^http:\/\/(127\.0\.0\.1|localhost):\d+\/v3\/?$/.test(
+              process.env.ASAAS_SANDBOX_BASE_URL_OVERRIDE.trim()
+            )
+        );
+      const isSimMode =
+        (process.env.EXTERNAL_SERVICES_DISABLED === 'true' || process.env.NODE_ENV === 'test') &&
+        !hasLocalTestOverride;
+
+      const chargeCfg = await getCompanyAsaasConfigForExistingCharge(
+        companyId,
+        openAsaasCharge.externalId
+      );
+      const canCallAsaas =
+        chargeCfg.mode !== 'DISABLED' &&
+        (Boolean(chargeCfg.apiKey && chargeCfg.apiKey.trim()) || isSimMode);
+
+      if (!canCallAsaas) {
+        asaasSync = {
+          attempted: false,
+          synced: false,
+          status: 'ASAAS_DISABLED',
+          chargeId: openAsaasCharge.externalId,
+          message: 'Parcela atualizada localmente (integração Asaas inativa para envio).',
+        };
+      } else {
+        const valueReais = Number((nextAmountCents / 100.0).toFixed(2));
+        try {
+          await updateAsaasPayment(companyId, openAsaasCharge.externalId, {
+            dueDate: nextDueDateYmd,
+            value: valueReais,
+          });
+          const nextChargeStatus =
+            nextDueDate >= todayBrtStart ? 'PENDING' : openAsaasCharge.status;
+          await prisma.asaasCharge.update({
+            where: { id: openAsaasCharge.id },
+            data: {
+              dueDate: nextDueDate,
+              nominalValueCents: nextAmountCents,
+              status: nextChargeStatus,
+              isManualPaymentSync: true,
+            },
+          });
+          asaasSync = {
+            attempted: true,
+            synced: true,
+            status: 'UPDATED',
+            chargeId: openAsaasCharge.externalId,
+            message: 'Parcela e boleto/cobrança Asaas atualizados com sucesso.',
+          };
+        } catch (asaasErr: any) {
+          const errMsg = asaasErr?.message || String(asaasErr);
+          asaasSync = {
+            attempted: true,
+            synced: false,
+            status: 'SYNC_FAILED',
+            chargeId: openAsaasCharge.externalId,
+            message: `Parcela atualizada localmente, porém o Asaas recusou ou falhou ao atualizar o boleto (${errMsg}).`,
+          };
+        }
+      }
+    }
+
+    const refreshedInstallment = await prisma.creditInstallment.findUnique({
+      where: { id: installmentId },
+      include: { asaasCharge: true },
+    });
+
+    res.json({
+      success: true,
+      installment: refreshedInstallment || txResult.updatedInstallment,
+      agreement: {
+        id: txResult.updatedAgreement.id,
+        totalSaleCents: txResult.updatedAgreement.totalSaleCents,
+        financedPrincipalCents: txResult.updatedAgreement.financedPrincipalCents,
+        remainingPrincipalCents: txResult.updatedAgreement.remainingPrincipalCents,
+        remainingPrincipal: Number(
+          (txResult.updatedAgreement.remainingPrincipalCents / 100).toFixed(2)
+        ),
+        remainingChargesCents: txResult.updatedAgreement.remainingChargesCents,
+      },
+      asaasSync,
+    });
+  } catch (error: any) {
+    if (error?.status && error?.message) {
+      res.status(error.status).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
+      return;
+    }
+    console.error('Error updating credit installment:', error);
+    res.status(500).json({ error: error.message || 'Erro ao atualizar parcela do crediário' });
   }
 });
 

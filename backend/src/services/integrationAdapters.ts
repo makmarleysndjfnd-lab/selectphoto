@@ -1,5 +1,11 @@
-import { GoogleGenAI } from '@google/genai';
 import { validateExternalUrl } from './vaultService';
+import {
+  DEFAULT_GEMINI_SEARCH_MODEL,
+  GEMINI_FALLBACK_CANDIDATES,
+  createGoogleGenAiClient,
+  isGeminiModelNotFoundError,
+  listAvailableGeminiModels,
+} from './geminiModelService';
 
 export interface ConnectionTestResult {
   success: boolean;
@@ -11,6 +17,7 @@ export interface ConnectionTestResult {
 export interface AdapterTestOptions {
   mockResponse?: boolean;
   mockLatencyMs?: number;
+  model?: string;
 }
 
 /**
@@ -37,36 +44,66 @@ export async function testGeminiConnection(
     };
   }
 
+  const preferredModel = options?.model || DEFAULT_GEMINI_SEARCH_MODEL;
+
   // Injeção de mock controlada exclusivamente por opção explícita em teste
   if (options?.mockResponse) {
     return {
       success: true,
-      message: 'Conexão com Gemini validada com sucesso (Ambiente de Teste Controlado).',
+      message: `Conexão com Gemini (${preferredModel}) validada com sucesso (Ambiente de Teste Controlado).`,
       latencyMs: options.mockLatencyMs ?? 15,
-      details: { model: 'gemini-2.5-flash', status: 'READY', simulated: true },
+      details: { model: preferredModel, status: 'READY', simulated: true },
     };
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    // Operação mínima: prompt de 1 token para validar autenticação e cota
-    const response: any = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: 'Responda apenas OK',
-      config: {
-        maxOutputTokens: 32,
-        temperature: 0,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    });
+    const ai = createGoogleGenAiClient(apiKey);
+    let queue = [preferredModel, ...GEMINI_FALLBACK_CANDIDATES.filter((m) => m !== preferredModel)];
+    const tried: string[] = [];
+    let discoveredOnce = false;
+    let response: any = null;
+    let activeModel = preferredModel;
+    let lastErr: any = null;
+
+    while (queue.length > 0) {
+      const candidate = queue.shift()!;
+      if (!candidate || tried.includes(candidate)) continue;
+      tried.push(candidate);
+      try {
+        response = await ai.models.generateContent({
+          model: candidate,
+          contents: 'Responda apenas OK',
+          config: {
+            maxOutputTokens: 32,
+            temperature: 0,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        });
+        activeModel = candidate;
+        break;
+      } catch (err: any) {
+        lastErr = err;
+        if (!isGeminiModelNotFoundError(err)) throw err;
+        if (!discoveredOnce) {
+          discoveredOnce = true;
+          try {
+            const listed = await listAvailableGeminiModels({ apiKey, aiClient: ai });
+            const discoveredIds = listed.map((m) => m.id).filter((id) => !tried.includes(id));
+            queue = [...discoveredIds, ...queue.filter((id) => !discoveredIds.includes(id) && !tried.includes(id))];
+          } catch {}
+        }
+      }
+    }
+
+    if (!response) throw lastErr || new Error('Nenhum modelo Gemini respondeu ao teste.');
 
     const latencyMs = Date.now() - start;
     if (response && response.text) {
       return {
         success: true,
-        message: 'Conexão com Gemini estabelecida e autenticada com sucesso.',
+        message: `Conexão com Gemini (${activeModel}) estabelecida e autenticada com sucesso.`,
         latencyMs,
-        details: { model: 'gemini-2.5-flash', status: 'READY' },
+        details: { model: activeModel, status: 'READY' },
       };
     }
 

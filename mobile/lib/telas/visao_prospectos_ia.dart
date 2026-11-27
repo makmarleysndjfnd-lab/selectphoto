@@ -106,7 +106,13 @@ class _StateProspectsViewState extends State<StateProspectsView>
       final data = await api.fetchStateRadar(state, force: force);
       if (!mounted) return;
       setState(() {
-        _stateData[state] = (data['events'] as List?) ?? [];
+        final rawList = data['events'];
+        _stateData[state] = rawList is List
+            ? rawList
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : <dynamic>[];
         _stateMeta[state] = {
           'cached': data['cached'] == true,
           'source': data['source']?.toString() ?? '',
@@ -119,8 +125,10 @@ class _StateProspectsViewState extends State<StateProspectsView>
       });
     } catch (e) {
       if (!mounted) return;
+      final clean = e.toString().replaceFirst('Exception: ', '').trim();
       setState(() {
-        _errors[state] = e.toString().replaceFirst('Exception: ', '');
+        _errors[state] =
+            clean.isNotEmpty ? clean : 'Falha ao consultar o Radar Estadual.';
         _isLoading[state] = false;
       });
     }
@@ -193,13 +201,15 @@ class _StateProspectsViewState extends State<StateProspectsView>
 
   int _computeDuration(Map<dynamic, dynamic> evt) {
     try {
-      final sRaw = evt['startDate']?.toString() ?? '';
-      final eRaw = evt['endDate']?.toString() ?? '';
+      final sRaw = evt['startDate']?.toString().trim() ?? '';
+      final eRaw = evt['endDate']?.toString().trim() ?? '';
       if (sRaw.isNotEmpty && eRaw.isNotEmpty) {
-        final s = DateTime.parse(sRaw.split('T')[0]);
-        final e = DateTime.parse(eRaw.split('T')[0]);
-        final diff = e.difference(s).inDays + 1;
-        return diff >= 1 ? diff : 1;
+        final s = DateTime.tryParse(sRaw.split('T').first);
+        final e = DateTime.tryParse(eRaw.split('T').first);
+        if (s != null && e != null) {
+          final diff = e.difference(s).inDays + 1;
+          return diff >= 1 ? diff : 1;
+        }
       }
     } catch (_) {}
     final rawDays = evt['durationDays'];

@@ -6,7 +6,13 @@ import {
   addDaysToDateIso,
 } from './eventSearchConfigService';
 
-export const DEFAULT_GEMINI_SEARCH_MODEL = 'gemini-2.5-flash';
+import {
+  DEFAULT_GEMINI_SEARCH_MODEL,
+  extractGeminiHttpStatus,
+  isGeminiModelNotFoundError,
+} from './geminiModelService';
+
+export { DEFAULT_GEMINI_SEARCH_MODEL };
 export const DEFAULT_STEP1_TIMEOUT_MS = 55000;
 export const DEFAULT_STEP2_TIMEOUT_MS = 35000;
 
@@ -256,30 +262,75 @@ export function extractCleanJsonPayload(rawText: string): string {
   return candidate;
 }
 
+const PT_MONTH_MAP: Record<string, number> = {
+  jan: 1,
+  janeiro: 1,
+  fev: 2,
+  fevereiro: 2,
+  mar: 3,
+  marco: 3,
+  março: 3,
+  abr: 4,
+  abril: 4,
+  mai: 5,
+  maio: 5,
+  jun: 6,
+  junho: 6,
+  jul: 7,
+  julho: 7,
+  ago: 8,
+  agosto: 8,
+  set: 9,
+  setembro: 9,
+  out: 10,
+  outubro: 10,
+  nov: 11,
+  novembro: 11,
+  dez: 12,
+  dezembro: 12,
+};
+
 export function normalizeIsoDateString(raw: unknown): string | null {
   if (raw === undefined || raw === null) return null;
   const cleaned = String(raw).trim();
   if (!cleaned) return null;
 
-  const head = cleaned.split('T')[0].trim();
+  // Remove sufixo ISO/hora após 'T' ou espaço seguido de HH:MM
+  const head = cleaned
+    .split('T')[0]
+    .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?.*$/, '')
+    .trim();
 
   let year = 0;
   let month = 0;
   let day = 0;
 
-  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(head);
+  const isoMatch = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(head);
   if (isoMatch) {
     year = Number(isoMatch[1]);
     month = Number(isoMatch[2]);
     day = Number(isoMatch[3]);
   } else {
-    const brMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(head);
+    const brMatch = /^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$/.exec(head);
     if (brMatch) {
       day = Number(brMatch[1]);
       month = Number(brMatch[2]);
-      year = Number(brMatch[3]);
+      const rawYear = Number(brMatch[3]);
+      year = brMatch[3].length === 2 ? 2000 + rawYear : rawYear;
     } else {
-      return null;
+      const ptMatch =
+        /^(\d{1,2})\s+(?:de\s+)?([a-zçãéíóú]+)\s+(?:de\s+)?(\d{4})$/i.exec(head);
+      if (ptMatch) {
+        day = Number(ptMatch[1]);
+        const monthKey = ptMatch[2]
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+        month = PT_MONTH_MAP[monthKey] || 0;
+        year = Number(ptMatch[3]);
+      } else {
+        return null;
+      }
     }
   }
 
@@ -1067,6 +1118,139 @@ DOSSIÊ PESQUISADO NO PASSO 1:
 ${params.step1ResearchText || '(Sem texto retornado no Passo 1)'}`;
 }
 
+function isConfigOrSchemaRejectionError(err: any): boolean {
+  if (!err || isGeminiModelNotFoundError(err)) return false;
+  if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') return false;
+  const status = extractGeminiHttpStatus(err);
+  if (status === 401 || status === 403 || status === 429) return false;
+  const msg = String(err?.message || '');
+  return (
+    status === 400 ||
+    /INVALID_ARGUMENT|responseSchema|response_schema|thinkingBudget|thinkingConfig|thinking_config|JSON mode|structured output|unsupported/i.test(
+      msg
+    )
+  );
+}
+
+async function runStep1GroundedWithConfigFallback(params: {
+  aiClient: GenerativeAiModelsLike;
+  model: string;
+  prompt: string;
+  timeoutMs: number;
+  onLateResponseAfterTimeout?: () => Promise<void>;
+}): Promise<any> {
+  let timedOutStep1 = false;
+  try {
+    return await runWithTimeout(async (signal) => {
+      const callStep1 = async (includeThinking: boolean) => {
+        return await params.aiClient.models.generateContent({
+          model: params.model,
+          contents: params.prompt,
+          config: {
+            temperature: 0.1,
+            tools: [{ googleSearch: {} }],
+            ...(includeThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+            abortSignal: signal,
+          },
+        });
+      };
+
+      const p = callStep1(true).catch(async (err: any) => {
+        if (isConfigOrSchemaRejectionError(err)) {
+          return await callStep1(false);
+        }
+        throw err;
+      });
+
+      p.then(async () => {
+        if (timedOutStep1 && params.onLateResponseAfterTimeout) {
+          await params.onLateResponseAfterTimeout();
+        }
+      }).catch(() => {});
+
+      return await p;
+    }, params.timeoutMs);
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
+      timedOutStep1 = true;
+    }
+    throw err;
+  }
+}
+
+async function runStep2StructuredWithFallback(params: {
+  aiClient: GenerativeAiModelsLike;
+  model: string;
+  prompt: string;
+  schema: Schema;
+  timeoutMs: number;
+  step1Usage: StepTokenUsage;
+  errorPrefix: string;
+}): Promise<any> {
+  try {
+    return await runWithTimeout(async (signal) => {
+      try {
+        return await params.aiClient.models.generateContent({
+          model: params.model,
+          contents: params.prompt,
+          config: {
+            temperature: 0.0,
+            responseMimeType: 'application/json',
+            responseSchema: params.schema,
+            thinkingConfig: { thinkingBudget: 0 },
+            abortSignal: signal,
+          },
+        });
+      } catch (primaryErr: any) {
+        if (!isConfigOrSchemaRejectionError(primaryErr)) {
+          throw primaryErr;
+        }
+        // Fallback 1: remove responseSchema e thinkingConfig, mantendo responseMimeType: application/json
+        try {
+          return await params.aiClient.models.generateContent({
+            model: params.model,
+            contents: params.prompt,
+            config: {
+              temperature: 0.0,
+              responseMimeType: 'application/json',
+              abortSignal: signal,
+            },
+          });
+        } catch (mimeErr: any) {
+          if (!isConfigOrSchemaRejectionError(mimeErr)) {
+            throw mimeErr;
+          }
+          // Fallback 2: extração JSON limpa apenas via texto (compatível com qualquer modelo)
+          return await params.aiClient.models.generateContent({
+            model: params.model,
+            contents: `${params.prompt}\n\nRetorne APENAS o objeto JSON válido, sem texto fora do JSON.`,
+            config: {
+              temperature: 0.0,
+              abortSignal: signal,
+            },
+          });
+        }
+      }
+    }, params.timeoutMs);
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
+      throw err;
+    }
+    if (isGeminiModelNotFoundError(err)) {
+      throw err;
+    }
+    const partialTokens = combineStepUsage(params.step1Usage, {
+      promptTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
+    throw new EventSearchExtractionError(
+      `${params.errorPrefix}: ${err?.message || err}`,
+      partialTokens
+    );
+  }
+}
+
 export async function runTwoStepCityEventSearch(params: {
   aiClient: GenerativeAiModelsLike;
   city: string;
@@ -1091,39 +1275,19 @@ export async function runTwoStepCityEventSearch(params: {
   });
 
   // ── PASSO 1: Pesquisa Web com Google Search Grounding ─────────────────────
-  let timedOutStep1 = false;
-  let step1Resp: any;
-  try {
-    step1Resp = await runWithTimeout(async (signal) => {
-      const p = params.aiClient.models.generateContent({
-        model,
-        contents: step1Prompt,
-        config: {
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingBudget: 0 },
-          abortSignal: signal,
-        },
-      });
-      p.then(async () => {
-        if (timedOutStep1 && params.onLateResponseAfterTimeout) {
-          await params.onLateResponseAfterTimeout();
-        }
-      }).catch(() => {});
-      return await p;
-    }, step1TimeoutMs);
-  } catch (err: any) {
-    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
-      timedOutStep1 = true;
-    }
-    throw err;
-  }
+  const step1Resp = await runStep1GroundedWithConfigFallback({
+    aiClient: params.aiClient,
+    model,
+    prompt: step1Prompt,
+    timeoutMs: step1TimeoutMs,
+    onLateResponseAfterTimeout: params.onLateResponseAfterTimeout,
+  });
 
   const step1Usage = readStepUsage(step1Resp);
   const step1Text = String(step1Resp?.text || '').slice(0, 60000);
   const grounding = extractGroundingMetadataInfo(step1Resp);
 
-  // ── PASSO 2: Extração Estruturada JSON estrita (sem tools) ────────────────
+  // ── PASSO 2: Extração Estruturada JSON (com fallback seguro caso schema/thinking falhem) ──
   const step2Prompt = buildStep2ExtractionPrompt({
     mode: 'CITY',
     city: params.city,
@@ -1134,35 +1298,15 @@ export async function runTwoStepCityEventSearch(params: {
     groundingSources: grounding.groundingSources,
   });
 
-  let step2Resp: any;
-  try {
-    step2Resp = await runWithTimeout(async (signal) => {
-      return await params.aiClient.models.generateContent({
-        model,
-        contents: step2Prompt,
-        config: {
-          temperature: 0.0,
-          responseMimeType: 'application/json',
-          responseSchema: CITY_EXTRACTION_SCHEMA,
-          thinkingConfig: { thinkingBudget: 0 },
-          abortSignal: signal,
-        },
-      });
-    }, step2TimeoutMs);
-  } catch (err: any) {
-    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
-      throw err;
-    }
-    const partialTokens = combineStepUsage(step1Usage, {
-      promptTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-    });
-    throw new EventSearchExtractionError(
-      `Falha na chamada de extração estruturada (Passo 2): ${err?.message || err}`,
-      partialTokens
-    );
-  }
+  const step2Resp = await runStep2StructuredWithFallback({
+    aiClient: params.aiClient,
+    model,
+    prompt: step2Prompt,
+    schema: CITY_EXTRACTION_SCHEMA,
+    timeoutMs: step2TimeoutMs,
+    step1Usage,
+    errorPrefix: 'Falha na chamada de extração estruturada (Passo 2)',
+  });
 
   const step2Usage = readStepUsage(step2Resp);
   const combinedTokens = combineStepUsage(step1Usage, step2Usage);
@@ -1254,33 +1398,13 @@ export async function runTwoStepStateRadarSearch(params: {
     referenceDate,
   });
 
-  let timedOutStep1 = false;
-  let step1Resp: any;
-  try {
-    step1Resp = await runWithTimeout(async (signal) => {
-      const p = params.aiClient.models.generateContent({
-        model,
-        contents: step1Prompt,
-        config: {
-          temperature: 0.1,
-          tools: [{ googleSearch: {} }],
-          thinkingConfig: { thinkingBudget: 0 },
-          abortSignal: signal,
-        },
-      });
-      p.then(async () => {
-        if (timedOutStep1 && params.onLateResponseAfterTimeout) {
-          await params.onLateResponseAfterTimeout();
-        }
-      }).catch(() => {});
-      return await p;
-    }, step1TimeoutMs);
-  } catch (err: any) {
-    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
-      timedOutStep1 = true;
-    }
-    throw err;
-  }
+  const step1Resp = await runStep1GroundedWithConfigFallback({
+    aiClient: params.aiClient,
+    model,
+    prompt: step1Prompt,
+    timeoutMs: step1TimeoutMs,
+    onLateResponseAfterTimeout: params.onLateResponseAfterTimeout,
+  });
 
   const step1Usage = readStepUsage(step1Resp);
   const step1Text = String(step1Resp?.text || '').slice(0, 60000);
@@ -1296,35 +1420,15 @@ export async function runTwoStepStateRadarSearch(params: {
     groundingSources: grounding.groundingSources,
   });
 
-  let step2Resp: any;
-  try {
-    step2Resp = await runWithTimeout(async (signal) => {
-      return await params.aiClient.models.generateContent({
-        model,
-        contents: step2Prompt,
-        config: {
-          temperature: 0.0,
-          responseMimeType: 'application/json',
-          responseSchema: STATE_RADAR_EXTRACTION_SCHEMA,
-          thinkingConfig: { thinkingBudget: 0 },
-          abortSignal: signal,
-        },
-      });
-    }, step2TimeoutMs);
-  } catch (err: any) {
-    if (err?.name === 'AbortError' || err?.message === 'AI_TIMEOUT') {
-      throw err;
-    }
-    const partialTokens = combineStepUsage(step1Usage, {
-      promptTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-    });
-    throw new EventSearchExtractionError(
-      `Falha na chamada de extração estruturada do Radar (Passo 2): ${err?.message || err}`,
-      partialTokens
-    );
-  }
+  const step2Resp = await runStep2StructuredWithFallback({
+    aiClient: params.aiClient,
+    model,
+    prompt: step2Prompt,
+    schema: STATE_RADAR_EXTRACTION_SCHEMA,
+    timeoutMs: step2TimeoutMs,
+    step1Usage,
+    errorPrefix: 'Falha na chamada de extração estruturada do Radar (Passo 2)',
+  });
 
   const step2Usage = readStepUsage(step2Resp);
   const combinedTokens = combineStepUsage(step1Usage, step2Usage);

@@ -757,39 +757,41 @@ export async function handleCreditPaymentReversalCommission(params: {
 }) {
   const { paymentId, companyId, authorId, reversalReason, tx } = params;
 
-  const commission = await tx.creditCommission.findFirst({
+  const commissions = await tx.creditCommission.findMany({
     where: { paymentId, companyId },
     include: { monthlyClosing: true },
   });
 
-  if (!commission) return;
+  if (!commissions || commissions.length === 0) return;
 
-  // Se já está vinculado a um fechamento mensal persistido (fechado ou pago):
-  if (commission.monthlyClosingId && commission.monthlyClosing) {
-    // Gerar ajuste negativo rastreável para a próxima competência
-    await tx.creditCommissionAdjustment.create({
-      data: {
-        companyId,
-        sellerId: commission.sellerId,
-        agreementId: commission.agreementId,
-        paymentId,
-        commissionId: commission.id,
-        amountCents: -commission.amountCents, // Valor negativo para débito rastreável
-        reason: `Estorno tardio de parcela paga na competência ${commission.monthlyClosing.competence}: ${reversalReason}`,
-        status: 'PENDING',
-      },
-    });
-  } else {
-    // Competência ainda aberta: cancela a comissão diretamente
-    await tx.creditCommission.update({
-      where: { id: commission.id },
-      data: {
-        isReversed: true,
-        reversedAt: new Date(),
-        reversalReason,
-        status: 'CANCELLED',
-      },
-    });
+  for (const commission of commissions) {
+    // Se já está vinculado a um fechamento mensal persistido (fechado ou pago):
+    if (commission.monthlyClosingId && commission.monthlyClosing) {
+      // Gerar ajuste negativo rastreável para a próxima competência
+      await tx.creditCommissionAdjustment.create({
+        data: {
+          companyId,
+          sellerId: commission.sellerId,
+          agreementId: commission.agreementId,
+          paymentId,
+          commissionId: commission.id,
+          amountCents: -commission.amountCents, // Valor negativo para débito rastreável
+          reason: `Estorno tardio de parcela paga na competência ${commission.monthlyClosing.competence}: ${reversalReason}`,
+          status: 'PENDING',
+        },
+      });
+    } else {
+      // Competência ainda aberta: cancela a comissão diretamente
+      await tx.creditCommission.update({
+        where: { id: commission.id },
+        data: {
+          isReversed: true,
+          reversedAt: new Date(),
+          reversalReason,
+          status: 'CANCELLED',
+        },
+      });
+    }
   }
 }
 
