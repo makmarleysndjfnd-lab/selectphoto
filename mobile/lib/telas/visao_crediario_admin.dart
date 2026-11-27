@@ -1723,7 +1723,7 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
             ),
           ),
           const SizedBox(height: 10),
-          _buildInstallmentsTable(
+          _buildInstallmentsTableInteractive(
             installments,
             a,
             selectedInstallmentIds: selectedInstallmentIds,
@@ -1774,13 +1774,6 @@ class _VisaoCrediarioAdminState extends State<VisaoCrediarioAdmin> with SingleTi
         ),
       ],
     );
-  }
-
-  Widget _buildInstallmentsTable(
-    List installments, [
-    Map<String, dynamic>? agreement,
-  ]) {
-    return _buildInstallmentsTableInteractive(installments, agreement);
   }
 
   Widget _buildInstallmentsTableInteractive(
